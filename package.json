@@ -1,0 +1,15 @@
+{
+  "name": "humanlayer-channels",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.20.0",
+  "scripts": {
+    "lint": "oxlint .",
+    "check": "pnpm lint"
+  },
+  "devDependencies": {
+    "@oxlint/plugins": "1.80.0",
+    "oxlint": "1.80.0"
+  }
+}
