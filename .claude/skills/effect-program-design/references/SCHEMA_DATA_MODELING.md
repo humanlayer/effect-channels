@@ -33,12 +33,12 @@ Give the schema value and its structural type the same domain name. The interfac
 without maintaining a second field list.
 
 ```ts
-import * as Schema from "effect/Schema"
+import * as Schema from "effect/Schema";
 
 export const Widget = Schema.Struct({
   id: Schema.String,
   name: Schema.NonEmptyString,
-})
+});
 export interface Widget extends Schema.Schema.Type<typeof Widget> {}
 ```
 
@@ -47,15 +47,15 @@ part of a public contract. Raw string IDs are acceptable. When branding is worth
 constrain the scalar first so the brand cannot bless malformed strings:
 
 ```ts
-export const WidgetId = Schema.String.check(
-  Schema.isPattern(/^widget_[A-Za-z0-9]+$/),
-).pipe(Schema.brand("WidgetId"))
-export type WidgetId = Schema.Schema.Type<typeof WidgetId>
+export const WidgetId = Schema.String.check(Schema.isPattern(/^widget_[A-Za-z0-9]+$/)).pipe(
+  Schema.brand("WidgetId"),
+);
+export type WidgetId = Schema.Schema.Type<typeof WidgetId>;
 
 export const GetWidgetInput = Schema.Struct({
   organizationId: Schema.String,
   widgetId: WidgetId,
-})
+});
 export interface GetWidgetInput extends Schema.Schema.Type<typeof GetWidgetInput> {}
 ```
 
@@ -66,40 +66,38 @@ encoding is part of the contract. Dispatch trusted variants with their generated
 manually compare `_tag`.
 
 ```ts
-import { Data, Match } from "effect"
-import * as Schema from "effect/Schema"
+import { Data, Match } from "effect";
+import * as Schema from "effect/Schema";
 
 type DispatchDecision = Data.TaggedEnum<{
-  Send: { readonly message: string }
-  Skip: { readonly reason: string }
-}>
-const DispatchDecision = Data.taggedEnum<DispatchDecision>()
+  Send: { readonly message: string };
+  Skip: { readonly reason: string };
+}>;
+const DispatchDecision = Data.taggedEnum<DispatchDecision>();
 
 const describeDispatchDecision = Match.type<DispatchDecision>().pipe(
   Match.tagsExhaustive({
     Send: ({ message }) => message,
     Skip: ({ reason }) => reason,
   }),
-)
+);
 
 export const Delivery = Schema.TaggedUnion({
   Sent: { providerId: Schema.String },
   Rejected: { reason: Schema.String },
-})
-export type Delivery = typeof Delivery.Type
+});
+export type Delivery = typeof Delivery.Type;
 
 const Created = Schema.Struct({
   type: Schema.tag("created"),
   id: Schema.String,
-})
+});
 const Deleted = Schema.Struct({
   type: Schema.tag("deleted"),
   id: Schema.String,
-})
-export const ProviderEvent = Schema.Union([Created, Deleted]).pipe(
-  Schema.toTaggedUnion("type"),
-)
-export type ProviderEvent = typeof ProviderEvent.Type
+});
+export const ProviderEvent = Schema.Union([Created, Deleted]).pipe(Schema.toTaggedUnion("type"));
+export type ProviderEvent = typeof ProviderEvent.Type;
 ```
 
 For a standalone `_tag` boundary case, use `Schema.TaggedStruct("Sent", fields)`. For a complete `_tag` union, prefer
@@ -135,9 +133,9 @@ Construction is different from decoding:
   from its type-side constructor input.
 
 ```ts
-const decoded = Schema.decodeUnknownEffect(ProviderEvent)(unknownPayload)
-const trusted = GetWidgetInput.make({ organizationId, widgetId })
-const checked = GetWidgetInput.makeEffect({ organizationId, widgetId })
+const decoded = Schema.decodeUnknownEffect(ProviderEvent)(unknownPayload);
+const trusted = GetWidgetInput.make({ organizationId, widgetId });
+const checked = GetWidgetInput.makeEffect({ organizationId, widgetId });
 ```
 
 ## Parse at boundaries

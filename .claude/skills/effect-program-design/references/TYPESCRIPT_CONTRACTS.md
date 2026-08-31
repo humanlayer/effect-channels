@@ -34,11 +34,11 @@ Predicates make narrowing reusable and composable. Useful defaults include `isSt
 `isNotNullish`, `isObject`, `hasProperty`, `Struct`, `Tuple`, `and`, `or`, and `compose`.
 
 ```ts
-import { Predicate } from "effect"
+import { Predicate } from "effect";
 
-const names = values.filter(Predicate.isString)
-const present = values.filter(Predicate.isNotNullish)
-const hasMessage = Predicate.Struct({ message: Predicate.isString })
+const names = values.filter(Predicate.isString);
+const present = values.filter(Predicate.isNotNullish);
+const hasMessage = Predicate.Struct({ message: Predicate.isString });
 ```
 
 Use `Match` when trusted data requires multiple behavioral branches. Closed discriminated unions must be handled
@@ -46,18 +46,18 @@ exhaustively. Prefer `tagsExhaustive` for `_tag` unions, `discriminatorsExhausti
 `Match.type`/`Match.value` pipeline ending in `Match.exhaustive` for more general patterns.
 
 ```ts
-import { Match } from "effect"
+import { Match } from "effect";
 
 type DispatchDecision =
   | { readonly _tag: "Send"; readonly message: string }
-  | { readonly _tag: "Skip"; readonly reason: string }
+  | { readonly _tag: "Skip"; readonly reason: string };
 
 const describeDispatchDecision = Match.type<DispatchDecision>().pipe(
   Match.tagsExhaustive({
     Send: ({ message }) => message,
     Skip: ({ reason }) => reason,
   }),
-)
+);
 ```
 
 Never compare `_tag` manually. For failures in an Effect error channel, use `Effect.catchTag`, `Effect.catchTags`,

@@ -1,10 +1,10 @@
 ---
 name: effect-program-design
 description: >-
-    Design, write, review, and test production Effect v4 programs: deep services and layers, schemas,
-    tagged errors, observability, Config, persistence, resources, concurrency, schedules, workers,
-    streams, caches, HTTP clients, Effect platform services (Node filesystem/path/crypto/process/socket),
-    and Effect Atom integrations. Use for any Effect application or adapter work.
+  Design, write, review, and test production Effect v4 programs: deep services and layers, schemas,
+  tagged errors, observability, Config, persistence, resources, concurrency, schedules, workers,
+  streams, caches, HTTP clients, Effect platform services (Node filesystem/path/crypto/process/socket),
+  and Effect Atom integrations. Use for any Effect application or adapter work.
 ---
 
 # Effect Program Design
@@ -50,6 +50,7 @@ Read only the references relevant to the task; read all matching branches when w
 - Effect Atom or React reactive Effect state: `references/EFFECT_ATOM.md`.
 - TypeScript safety, Predicate refinements, Match dispatch, naming, collections, imports, and escape hatches:
   `references/TYPESCRIPT_CONTRACTS.md`.
+
 ## The creed
 
 1. **Deep modules.** The interface is the cost and the hidden implementation is the benefit. Public operations use
@@ -64,12 +65,12 @@ Read only the references relevant to the task; read all matching branches when w
    Use Effect's logging APIs rather than passing loggers through domain interfaces. Report failures through the
    repository's configured observability capability, when one exists, before remapping or transforming them.
 
-    ```typescript
-    someEffect.pipe(
-	Effect.tapError(Effect.logError),
-	Effect.tapError((error) => errorReporter.capture(error)),
-    )
-    ```
+   ```typescript
+   someEffect.pipe(
+     Effect.tapError(Effect.logError),
+     Effect.tapError((error) => errorReporter.capture(error)),
+   );
+   ```
 
 5. **Test at real seams.** Use the repository's Effect-compatible test integration, layers, deterministic test services, and real infrastructure where
    behavior depends on it. Assert both the result/error and externally visible end state.

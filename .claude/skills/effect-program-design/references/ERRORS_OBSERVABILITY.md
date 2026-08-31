@@ -23,16 +23,16 @@ the typed catch APIs, not as permission for an untyped catch-all. Never manually
 
 ```ts
 program.pipe(
-	Effect.catchTag('WidgetTokenRevokedError', (error) =>
-		Effect.fail(new WidgetNeedsReauthError({ organizationId: error.organizationId })),
-	),
+  Effect.catchTag("WidgetTokenRevokedError", (error) =>
+    Effect.fail(new WidgetNeedsReauthError({ organizationId: error.organizationId })),
+  ),
 
-	// PREFERRED
-	Effect.catchTags({
-		WidgetRateLimitedError: (error) => Effect.fail(new WidgetUnavailableError({ cause: error })),
-		WidgetTransportError: (error) => Effect.fail(new WidgetUnavailableError({ cause: error })),
-	}),
-)
+  // PREFERRED
+  Effect.catchTags({
+    WidgetRateLimitedError: (error) => Effect.fail(new WidgetUnavailableError({ cause: error })),
+    WidgetTransportError: (error) => Effect.fail(new WidgetUnavailableError({ cause: error })),
+  }),
+);
 ```
 
 Use `catchCause` only for a deliberate top-level safety net that must include defects, such as best-effort delivery.
@@ -57,16 +57,14 @@ The required order is:
 
 ```ts
 providerCall.pipe(
-	Effect.tapError((error) =>
-		Effect.logError('Widget provider call failed', error).pipe(
-			Effect.annotateLogs(attributes),
-			Effect.andThen(errorReporter.capture(error, attributes)),
-		),
-	),
-	Effect.catchTags({
-		/* narrow */
-	}),
-)
+  Effect.tapError((error) =>
+    Effect.logError("Widget provider call failed", error).pipe(
+      Effect.annotateLogs(attributes),
+      Effect.andThen(errorReporter.capture(error, attributes)),
+    ),
+  ),
+  Effect.catchTags({/* narrow */}),
+);
 ```
 
 Do not send expected validation or control-flow outcomes to an external error reporter. Capture integration failures,

@@ -8,23 +8,23 @@ service logic. Load config during implementing-layer construction so bad/missing
 typed config error instead of surprising a later request.
 
 ```ts
-import { Config, ConfigProvider, Effect, Layer, Redacted } from "effect"
+import { Config, ConfigProvider, Effect, Layer, Redacted } from "effect";
 
 const WidgetConfig = Config.all({
   apiKey: Config.redacted("WIDGET_API_KEY"),
   baseUrl: Config.url("WIDGET_API_BASE_URL"),
   timeoutMs: Config.number("WIDGET_TIMEOUT_MS").pipe(Config.withDefault(5_000)),
   model: Config.option(Config.string("WIDGET_MODEL")),
-})
+});
 
 export const WidgetClientLive = Layer.effect(
   WidgetClient,
   Effect.gen(function* () {
-    const config = yield* WidgetConfig
-    const http = yield* HttpClient.HttpClient
-    return makeWidgetClient({ http, config })
+    const config = yield* WidgetConfig;
+    const http = yield* HttpClient.HttpClient;
+    return makeWidgetClient({ http, config });
   }),
-)
+);
 ```
 
 ## Recipe chooser
@@ -59,7 +59,7 @@ const TestConfig = ConfigProvider.layer(
     WIDGET_API_BASE_URL: "https://widget.test",
     WIDGET_TIMEOUT_MS: 10,
   }),
-)
+);
 ```
 
 Provide this layer at the real test seam with `Effect.provide`; do not mutate `process.env` between tests. If the app

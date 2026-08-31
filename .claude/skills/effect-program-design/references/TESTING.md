@@ -18,20 +18,20 @@ Verify test APIs against the project's installed Effect version and test integra
 - `Layer.mock` is allowed only in test files or dedicated test utilities. Never put mock layers in production source.
 
 ```ts
-import { describe, it } from "@effect/vitest"
-import { Effect } from "effect"
-import { expect } from "vitest"
+import { describe, it } from "@effect/vitest";
+import { Effect } from "effect";
+import { expect } from "vitest";
 
 it.effect("returns the domain result and persists state", () =>
   Effect.gen(function* () {
-    const service = yield* WidgetService
-    const result = yield* service.create({ organizationId, name: "one" })
+    const service = yield* WidgetService;
+    const result = yield* service.create({ organizationId, name: "one" });
 
-    expect(result.name).toBe("one")
-    const rows = yield* Effect.promise(() => db.select().from(widgets))
-    expect(rows).toMatchObject([{ id: result.id, name: "one" }])
+    expect(result.name).toBe("one");
+    const rows = yield* Effect.promise(() => db.select().from(widgets));
+    expect(rows).toMatchObject([{ id: result.id, name: "one" }]);
   }).pipe(Effect.provide(makeLayer())),
-)
+);
 ```
 
 ## Synchronize; never hope
@@ -59,28 +59,28 @@ clock**. Running a sleeping/retrying effect inline before adjusting deadlocks; a
 can miss the deadline under test.
 
 ```ts
-import { Deferred, Effect, Fiber, Ref, Schedule } from "effect"
-import { TestClock } from "effect/testing"
+import { Deferred, Effect, Fiber, Ref, Schedule } from "effect";
+import { TestClock } from "effect/testing";
 
 it.effect("retries after the configured delay", () =>
   Effect.gen(function* () {
-    const attempts = yield* Ref.make(0)
-    const attempted = yield* Deferred.make<void>()
+    const attempts = yield* Ref.make(0);
+    const attempted = yield* Deferred.make<void>();
 
     const operation = Ref.updateAndGet(attempts, (n) => n + 1).pipe(
       Effect.tap(() => Deferred.succeed(attempted, undefined)),
       Effect.flatMap(() => Effect.fail("unavailable" as const)),
       Effect.retry({ times: 1, schedule: Schedule.spaced("1 second") }),
-    )
+    );
 
-    const fiber = yield* operation.pipe(Effect.forkChild)
-    yield* Deferred.await(attempted)
-    yield* TestClock.adjust("1 second")
-    yield* Fiber.await(fiber)
+    const fiber = yield* operation.pipe(Effect.forkChild);
+    yield* Deferred.await(attempted);
+    yield* TestClock.adjust("1 second");
+    yield* Fiber.await(fiber);
 
-    expect(yield* Ref.get(attempts)).toBe(2)
+    expect(yield* Ref.get(attempts)).toBe(2);
   }),
-)
+);
 ```
 
 For a test that only needs a timer to be registered, forking before `TestClock.adjust` is sufficient. For richer
@@ -91,7 +91,7 @@ Use `it.live` when the subject explicitly integrates with the live clock or anot
 would invalidate what is being tested:
 
 ```ts
-it.live("uses the platform's live clock", () => liveClockIntegrationCheck)
+it.live("uses the platform's live clock", () => liveClockIntegrationCheck);
 ```
 
 Keep such tests rare and use generous semantic bounds rather than exact timing assertions.
@@ -107,8 +107,8 @@ Conceptually:
 
 ```ts
 interface TestMailerControl {
-  readonly requests: Queue.Queue<SendMailInput>
-  readonly responses: Queue.Queue<Effect.Effect<void, MailerError>>
+  readonly requests: Queue.Queue<SendMailInput>;
+  readonly responses: Queue.Queue<Effect.Effect<void, MailerError>>;
 }
 
 // A test-only layer allocates both queues, exposes TestMailerControl, and implements

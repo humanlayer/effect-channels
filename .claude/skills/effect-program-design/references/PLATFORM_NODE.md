@@ -11,14 +11,11 @@ justify leaking Node values through a service interface.
 
 ```ts
 // main.ts — runtime edge
-import { NodeRuntime, NodeServices } from "@effect/platform-node"
-import { Effect } from "effect"
-import { program } from "./program.js"
+import { NodeRuntime, NodeServices } from "@effect/platform-node";
+import { Effect } from "effect";
+import { program } from "./program.js";
 
-program.pipe(
-  Effect.provide(NodeServices.layer),
-  NodeRuntime.runMain
-)
+program.pipe(Effect.provide(NodeServices.layer), NodeRuntime.runMain);
 ```
 
 `NodeServices.layer` provides exactly the core bundle:
@@ -40,13 +37,13 @@ Use `NodeRuntime.runMain`, not `Effect.runPromise`, for a Node process entry poi
 handling, interrupts the main fiber, runs finalizers, reports failures, and sets the process exit status.
 
 ```ts
-import { NodeRuntime } from "@effect/platform-node"
-import { Layer } from "effect"
+import { NodeRuntime } from "@effect/platform-node";
+import { Layer } from "effect";
 
 NodeRuntime.runMain(Layer.launch(AppLive), {
   // Set only if failure reporting is handled elsewhere.
-  disableErrorReporting: true
-})
+  disableErrorReporting: true,
+});
 ```
 
 Do not call `process.exit()` during normal shutdown: it skips finalizers. `Layer.launch` is the standard conversion
@@ -57,14 +54,11 @@ for an application represented by long-lived layers.
 Application effects yield `HttpClient.HttpClient`. Select the transport at the edge:
 
 ```ts
-import { NodeHttpClient, NodeRuntime } from "@effect/platform-node"
-import { Effect } from "effect"
-import { program } from "./program.js"
+import { NodeHttpClient, NodeRuntime } from "@effect/platform-node";
+import { Effect } from "effect";
+import { program } from "./program.js";
 
-program.pipe(
-  Effect.provide(NodeHttpClient.layerUndici),
-  NodeRuntime.runMain
-)
+program.pipe(Effect.provide(NodeHttpClient.layerUndici), NodeRuntime.runMain);
 ```
 
 - `NodeHttpClient.layerUndici` provides a scoped Undici dispatcher and `HttpClient`.
@@ -79,21 +73,23 @@ Routes remain neutral. Creating the native server is an allowed edge operation b
 `HttpServer` layer:
 
 ```ts
-import { NodeHttpServer, NodeRuntime } from "@effect/platform-node"
-import { Layer } from "effect"
-import { HttpRouter, HttpServerResponse } from "effect/unstable/http"
-import { createServer } from "node:http"
+import { NodeHttpServer, NodeRuntime } from "@effect/platform-node";
+import { Layer } from "effect";
+import { HttpRouter, HttpServerResponse } from "effect/unstable/http";
+import { createServer } from "node:http";
 
-const Routes = HttpRouter.add("GET", "/health", HttpServerResponse.text("ok"))
+const Routes = HttpRouter.add("GET", "/health", HttpServerResponse.text("ok"));
 
 const HttpLive = HttpRouter.serve(Routes).pipe(
-  Layer.provide(NodeHttpServer.layer(createServer, {
-    port: 3000,
-    gracefulShutdownTimeout: "10 seconds"
-  }))
-)
+  Layer.provide(
+    NodeHttpServer.layer(createServer, {
+      port: 3000,
+      gracefulShutdownTimeout: "10 seconds",
+    }),
+  ),
+);
 
-NodeRuntime.runMain(Layer.launch(HttpLive))
+NodeRuntime.runMain(Layer.launch(HttpLive));
 ```
 
 `NodeHttpServer.layer` provides the server plus Node HTTP support and core Node services. Use `layerServer` when
@@ -106,20 +102,15 @@ neutral web handler (`HttpRouter.toWebHandler`) rather than introducing Node HTT
 At the edge, either provide `NodeServices.layer` once or provide the narrow implementation:
 
 ```ts
-import {
-  NodeCrypto,
-  NodeFileSystem,
-  NodePath,
-  NodeTerminal
-} from "@effect/platform-node"
-import { Layer } from "effect"
+import { NodeCrypto, NodeFileSystem, NodePath, NodeTerminal } from "@effect/platform-node";
+import { Layer } from "effect";
 
 export const PlatformLive = Layer.mergeAll(
   NodeFileSystem.layer,
   NodePath.layer,
   NodeCrypto.layer,
-  NodeTerminal.layer
-)
+  NodeTerminal.layer,
+);
 ```
 
 Usually prefer `NodeServices.layer`, because the Node child-process layer itself needs filesystem/path services.
@@ -131,16 +122,18 @@ these Node layer modules.
 Node socket layers implement the neutral `Socket`/`SocketServer` contracts:
 
 ```ts
-import { NodeSocket } from "@effect/platform-node"
-import { Effect } from "effect"
-import { session } from "./session.js"
+import { NodeSocket } from "@effect/platform-node";
+import { Effect } from "effect";
+import { session } from "./session.js";
 
 const main = session.pipe(
-  Effect.provide(NodeSocket.layerWebSocket("wss://example.test/events", {
-    openTimeout: "10 seconds",
-    closeCodeIsError: (code) => code !== 1000
-  }))
-)
+  Effect.provide(
+    NodeSocket.layerWebSocket("wss://example.test/events", {
+      openTimeout: "10 seconds",
+      closeCodeIsError: (code) => code !== 1000,
+    }),
+  ),
+);
 ```
 
 - `NodeSocket.layerWebSocket` provides `Socket.Socket` and chooses global WebSocket when available, otherwise `ws`.
@@ -158,15 +151,15 @@ services.
 `NodeRedis`, and quits the client when the layer scope closes. Application code should require only `Redis.Redis`.
 
 ```ts
-import { NodeRedis, NodeRuntime } from "@effect/platform-node"
-import { Config, Effect } from "effect"
+import { NodeRedis, NodeRuntime } from "@effect/platform-node";
+import { Config, Effect } from "effect";
 
 const RedisLive = NodeRedis.layerConfig({
   host: Config.string("REDIS_HOST"),
-  port: Config.integer("REDIS_PORT")
-})
+  port: Config.integer("REDIS_PORT"),
+});
 
-program.pipe(Effect.provide(RedisLive), NodeRuntime.runMain)
+program.pipe(Effect.provide(RedisLive), NodeRuntime.runMain);
 ```
 
 Use `NodeRedis.NodeRedis` only in an isolated adapter that genuinely needs an ioredis-only feature. Never expose its
@@ -178,12 +171,12 @@ The parent process provides the neutral worker platform and spawner. The only le
 import is the composition callback that constructs the host worker:
 
 ```ts
-import { NodeWorker } from "@effect/platform-node"
-import * as WorkerThreads from "node:worker_threads"
+import { NodeWorker } from "@effect/platform-node";
+import * as WorkerThreads from "node:worker_threads";
 
 export const WorkerPlatformLive = NodeWorker.layer(
-  (_id) => new WorkerThreads.Worker(new URL("./worker-entry.js", import.meta.url))
-)
+  (_id) => new WorkerThreads.Worker(new URL("./worker-entry.js", import.meta.url)),
+);
 ```
 
 The worker entry point provides `NodeWorkerRunner.layer` to the neutral worker runner. Keep request/response
@@ -197,19 +190,19 @@ Prefer Effect `Stream`/`Sink` throughout application code. Use `NodeStream` only
 or requires `node:stream`:
 
 ```ts
-import { NodeStream } from "@effect/platform-node"
-import { Schema } from "effect"
-import { Readable } from "node:stream"
+import { NodeStream } from "@effect/platform-node";
+import { Schema } from "effect";
+import { Readable } from "node:stream";
 
 class InputError extends Schema.TaggedError<InputError>()("InputError", {
-  cause: Schema.Defect
+  cause: Schema.Defect,
 }) {}
 
 export const input = NodeStream.fromReadable({
   evaluate: () => Readable.from(["a", "b"]),
   onError: (cause) => new InputError({ cause }),
-  closeOnDone: true
-})
+  closeOnDone: true,
+});
 ```
 
 Key adapters in the installed version:
@@ -230,14 +223,10 @@ const RuntimeLive = Layer.mergeAll(
   NodeServices.layer,
   NodeHttpClient.layerUndici,
   RedisLive,
-  WorkerPlatformLive
-)
+  WorkerPlatformLive,
+);
 
-AppLive.pipe(
-  Layer.provide(RuntimeLive),
-  Layer.launch,
-  NodeRuntime.runMain
-)
+AppLive.pipe(Layer.provide(RuntimeLive), Layer.launch, NodeRuntime.runMain);
 ```
 
 Build platform resources once in the application scope. Do not provide fresh HTTP dispatchers, Redis clients,

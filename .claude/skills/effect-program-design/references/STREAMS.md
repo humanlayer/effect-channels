@@ -30,8 +30,8 @@ Map SDK/event payloads to parsed domain values and typed adapter errors before c
 
 ```ts
 export type GatewayShape = {
-  readonly events: Stream.Stream<GatewayEvent, GatewayConnectionError>
-}
+  readonly events: Stream.Stream<GatewayEvent, GatewayConnectionError>;
+};
 ```
 
 Do not expose raw SDK events, a queue's enqueue capability, or `unknown` errors. Narrow the internal error vocabulary
@@ -46,7 +46,7 @@ const widgets = Stream.paginate(initialCursor, (cursor) =>
   fetchPage(cursor).pipe(
     Effect.map(({ items, nextCursor }) => [items, Option.fromNullable(nextCursor)] as const),
   ),
-)
+);
 ```
 
 The exact element shape returned by the step should follow the pinned signature/types; let TypeScript verify it.
@@ -60,16 +60,16 @@ The layer that starts a consumer owns its lifetime. Fork in its scope so release
 ```ts
 export const ProjectionWorkerLive = Layer.effectDiscard(
   Effect.gen(function* () {
-    const gateway = yield* GatewayService
+    const gateway = yield* GatewayService;
 
     yield* gateway.events.pipe(
       Stream.filter(isRelevantEvent),
       Stream.mapEffect(projectEvent, { concurrency: 8 }),
       Stream.runDrain,
       Effect.forkScoped,
-    )
+    );
   }),
-)
+);
 ```
 
 If a service method must fork into the layer lifetime, acquire/capture `Scope.Scope` inside the implementing layer
@@ -104,7 +104,7 @@ const supervised = source.pipe(
   Stream.catchTags({
     RecoverableDisconnectError: () => reconnectingSource,
   }),
-)
+);
 ```
 
 Reconnect schedules must be bounded or intentionally supervised, jittered, and must not duplicate subscriptions or

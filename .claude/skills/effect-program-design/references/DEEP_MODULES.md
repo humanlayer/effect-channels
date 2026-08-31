@@ -47,13 +47,11 @@ Do not bury every operation inside a large `Layer.effect` constructor. A substan
 remain independently testable and should state its dependencies in `R`:
 
 ```ts
-const listWidgets = Effect.fn("widget.list_widgets")(function* (
-  input: ListWidgetsInput,
-) {
-  const db = yield* Database
-  const provider = yield* WidgetProvider
+const listWidgets = Effect.fn("widget.list_widgets")(function* (input: ListWidgetsInput) {
+  const db = yield* Database;
+  const provider = yield* WidgetProvider;
   // orchestration
-})
+});
 ```
 
 It may live beside a small layer or be extracted to a concern file. The important property is that tests can exercise

@@ -4,11 +4,11 @@ Use this reference for outgoing HTTP, provider adapters, response decoding, retr
 imports against the project's installed Effect v4 declarations. HTTP remains unstable in v4:
 
 ```ts
-import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient"
-import * as HttpClient from "effect/unstable/http/HttpClient"
-import * as HttpClientError from "effect/unstable/http/HttpClientError"
-import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest"
-import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse"
+import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
+import * as HttpClient from "effect/unstable/http/HttpClient";
+import * as HttpClientError from "effect/unstable/http/HttpClientError";
+import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
+import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 ```
 
 The concrete fetch transport is `FetchHttpClient.layer`; do not use the older/nonexistent `HttpClient.layer`.
@@ -30,20 +30,16 @@ authorization header at this adapter edge.
 
 ```ts
 const makeProviderClient = Effect.gen(function* () {
-  const client = yield* HttpClient.HttpClient
-  const apiKey = yield* Config.redacted("WIDGET_API_KEY")
-  const baseUrl = yield* Config.url("WIDGET_API_BASE_URL")
+  const client = yield* HttpClient.HttpClient;
+  const apiKey = yield* Config.redacted("WIDGET_API_KEY");
+  const baseUrl = yield* Config.url("WIDGET_API_BASE_URL");
 
   return client.pipe(
-    HttpClient.mapRequest(
-      HttpClientRequest.prependUrl(baseUrl.toString()),
-    ),
-    HttpClient.mapRequest(
-      HttpClientRequest.bearerToken(Redacted.value(apiKey)),
-    ),
+    HttpClient.mapRequest(HttpClientRequest.prependUrl(baseUrl.toString())),
+    HttpClient.mapRequest(HttpClientRequest.bearerToken(Redacted.value(apiKey))),
     HttpClient.mapRequest(HttpClientRequest.acceptJson),
-  )
-})
+  );
+});
 ```
 
 Never log the configured request object if it can contain authorization headers/query credentials. Never put the
@@ -64,7 +60,7 @@ const listWidgets = (client: HttpClient.HttpClient) =>
     Effect.mapError(mapHttpFailure),
     Effect.tapError((error) => captureProviderFailure(error, { operation: "list_widgets" })),
     Effect.withSpan("widget.api.list_widgets"),
-  )
+  );
 ```
 
 Check/classify status before decoding a success schema. If provider error bodies carry actionable codes, decode them
@@ -99,7 +95,7 @@ status/decode/typed-error discipline.
 const execute = Effect.tryPromise({
   try: (signal) => fetch(url, { signal, headers }),
   catch: (cause) => new ProviderTransportError({ operation: "request", cause }),
-})
+});
 ```
 
 Do not consume a body twice. Parse unknown JSON through Schema at the boundary. Avoid capturing raw request/response

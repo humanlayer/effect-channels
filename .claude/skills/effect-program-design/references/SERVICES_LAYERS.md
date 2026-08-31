@@ -20,14 +20,14 @@ Construct a service with `Layer.effect`/`Layer.scoped` (or the installed equival
 
 ```ts
 export const WidgetServiceLive = Layer.effect(
-	WidgetService,
-	Effect.gen(function* () {
-		const provider = yield* WidgetProvider
-		return WidgetService.of({
-			list: (input) => listWidgets(input).pipe(Effect.provideService(WidgetProvider, provider)),
-		})
-	}),
-)
+  WidgetService,
+  Effect.gen(function* () {
+    const provider = yield* WidgetProvider;
+    return WidgetService.of({
+      list: (input) => listWidgets(input).pipe(Effect.provideService(WidgetProvider, provider)),
+    });
+  }),
+);
 ```
 
 Prefer leaving dependencies in a substantial operation's `R` channel and satisfying them at runtime composition.
@@ -48,15 +48,17 @@ the same file or be extracted by concern. Do not extract trivial wrappers merely
 Both forms below are valid stable operation boundaries:
 
 ```ts
-const getStatus = Effect.fn('widget.get_status')(function* (input: GetStatusInput) {
-	// ...
-})
+const getStatus = Effect.fn("widget.get_status")(function* (input: GetStatusInput) {
+  // ...
+});
 
 // PREFERRED
 const getStatusAlternative = (input: GetStatusInput) =>
-	Effect.gen(function* () {
-		// ...
-	}).pipe(Effect.withSpan('widget.get_status', { attributes: { organization_id: input.organizationId } }))
+  Effect.gen(function* () {
+    // ...
+  }).pipe(
+    Effect.withSpan("widget.get_status", { attributes: { organization_id: input.organizationId } }),
+  );
 ```
 
 Use safe span attributes. Never annotate credentials, tokens, request bodies containing secrets, or unrestricted raw

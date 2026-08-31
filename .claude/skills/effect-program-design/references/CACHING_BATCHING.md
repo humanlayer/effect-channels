@@ -25,10 +25,10 @@ const makeLookup = Effect.gen(function* () {
     capacity: 500,
     timeToLive: "10 minutes",
     lookup: (organizationId: string) => loadConnection(organizationId),
-  })
+  });
 
-  return (organizationId: string) => Cache.get(cache, organizationId)
-})
+  return (organizationId: string) => Cache.get(cache, organizationId);
+});
 ```
 
 Dependencies belong in `R` and are supplied when constructing the owning layer. Do not acquire an SDK client or
@@ -41,21 +41,18 @@ Use `ScopedCache` when each cached value itself owns a scope (connection/client/
 for success-only caching or bounded negative caching.
 
 ```ts
-const cache = yield* Cache.makeWith(
-  (key: string) => resolveUncached(key),
-  {
+const cache =
+  yield *
+  Cache.makeWith((key: string) => resolveUncached(key), {
     capacity: 300,
     timeToLive: (exit) =>
-      Exit.isSuccess(exit) && exit.value.cacheable
-        ? "10 minutes"
-        : Duration.zero,
-  },
-)
+      Exit.isSuccess(exit) && exit.value.cacheable ? "10 minutes" : Duration.zero,
+  });
 ```
 
 Default to zero TTL for transient typed failures and degraded fallback values. A short negative TTL can protect an
 upstream for stable `NotFound` results, but never cache auth revocation or outages so long that recovery is hidden.
-If the lookup fails, capture transport/provider evidence *before* any fallback turns it into a successful degraded
+If the lookup fails, capture transport/provider evidence _before_ any fallback turns it into a successful degraded
 value; otherwise the cache can hide both the incident and its origin.
 
 ## Invalidation and consistency
@@ -75,30 +72,30 @@ batch endpoint, DataLoader-style API). The resolver receives pending requests an
 
 ```ts
 interface GetWidget extends Request.Request<Widget, WidgetLookupError> {
-  readonly _tag: "GetWidget"
-  readonly id: string
+  readonly _tag: "GetWidget";
+  readonly id: string;
 }
 
-const GetWidget = Request.tagged<GetWidget>("GetWidget")
+const GetWidget = Request.tagged<GetWidget>("GetWidget");
 
 const resolver = RequestResolver.make<GetWidget>((entries) =>
   fetchWidgets(entries.map((entry) => entry.request.id)).pipe(
     Effect.flatMap((byId) =>
       Effect.sync(() => {
         for (const entry of entries) {
-          const widget = byId.get(entry.request.id)
+          const widget = byId.get(entry.request.id);
           entry.completeUnsafe(
             widget === undefined
               ? Exit.fail(new WidgetNotFoundError({ id: entry.request.id }))
               : Exit.succeed(widget),
-          )
+          );
         }
       }),
     ),
   ),
-).pipe(RequestResolver.batchN(100))
+).pipe(RequestResolver.batchN(100));
 
-const getWidget = (id: string) => Effect.request(GetWidget({ id }), resolver)
+const getWidget = (id: string) => Effect.request(GetWidget({ id }), resolver);
 ```
 
 Treat that as a shape, not permission to skip boundary discipline: the batch adapter still decodes untrusted data,

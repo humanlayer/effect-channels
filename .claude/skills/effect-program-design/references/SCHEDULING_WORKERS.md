@@ -24,7 +24,7 @@ do not hold a database transaction open during backoff or a network call. Ask th
 retry safety is unclear.
 
 ```ts
-import { Effect, Schedule } from "effect"
+import { Effect, Schedule } from "effect";
 
 const retryTransient = Schedule.exponential("100 millis").pipe(
   Schedule.jittered,
@@ -34,13 +34,13 @@ const retryTransient = Schedule.exponential("100 millis").pipe(
       Effect.annotateLogs({ operation: error.operation }),
     ),
   ),
-)
+);
 
 const call = request(input).pipe(
   // First restrict the channel to the exact retryable tag(s), or design the adapter
   // method so its error channel contains only retryable failures here.
   Effect.retry(retryTransient),
-)
+);
 ```
 
 Add jitter to distributed retries. Keep the final typed failure visible. Use `Effect.retryOrElse` only when the
@@ -53,7 +53,7 @@ const resilient = request(input).pipe(
       Effect.andThen(Effect.fail(new WidgetUnavailableError({ cause: error }))),
     ),
   ),
-)
+);
 ```
 
 Do not retry defects or interruptions. `Effect.retry` naturally operates on the typed error channel. Do not
@@ -61,7 +61,7 @@ Do not retry defects or interruptions. `Effect.retry` naturally operates on the 
 
 ## Polling worker
 
-Handle expected pass errors *inside* the pass, after capture, so repetition can continue. Leave defects and
+Handle expected pass errors _inside_ the pass, after capture, so repetition can continue. Leave defects and
 interruptions to supervision unless the explicit top-level policy says otherwise.
 
 ```ts
@@ -71,14 +71,11 @@ const pass: Effect.Effect<void, never, WorkerDeps> = runPass.pipe(
     QueueTemporarilyUnavailableError: () => Effect.void,
     ItemLeaseLostError: () => Effect.void,
   }),
-)
+);
 
-const worker = pass.pipe(
-  Effect.repeat(Schedule.spaced("1 second")),
-  Effect.asVoid,
-)
+const worker = pass.pipe(Effect.repeat(Schedule.spaced("1 second")), Effect.asVoid);
 
-export const WorkerLive = Layer.effectDiscard(worker.pipe(Effect.forkScoped))
+export const WorkerLive = Layer.effectDiscard(worker.pipe(Effect.forkScoped));
 ```
 
 Capture the raw tagged error before converting it to `void` or a smaller public error. A worker declared
@@ -91,14 +88,16 @@ causes, but do not swallow interruption during shutdown.
 Use bounded concurrency and isolate an item only when skip/retry-later is the product policy.
 
 ```ts
-yield* Effect.forEach(
-  items,
-  (item) => processItem(item).pipe(
-    Effect.tapError((error) => captureItemFailure(error, { itemId: item.id })),
-    Effect.catchTags({ ItemRejectedError: () => Effect.void }),
-  ),
-  { concurrency: 5, discard: true },
-)
+yield *
+  Effect.forEach(
+    items,
+    (item) =>
+      processItem(item).pipe(
+        Effect.tapError((error) => captureItemFailure(error, { itemId: item.id })),
+        Effect.catchTags({ ItemRejectedError: () => Effect.void }),
+      ),
+    { concurrency: 5, discard: true },
+  );
 ```
 
 Claim work atomically, make repeated handling idempotent, and avoid fetching an unbounded batch. Prefer a bounded
@@ -110,7 +109,7 @@ If a typed error carries `retryAfterMs`, combine it with backoff using `Schedule
 `Schedule.modifyDelay`. The v4 callback is `(output, delay)`, not an object parameter.
 
 ```ts
-import { Duration, Effect, Schedule } from "effect"
+import { Duration, Effect, Schedule } from "effect";
 
 const policy = Schedule.exponential("200 millis").pipe(
   Schedule.jittered,
@@ -123,7 +122,7 @@ const policy = Schedule.exponential("200 millis").pipe(
         : Duration.max(Duration.fromInputUnsafe(delay), Duration.millis(error.retryAfterMs)),
     ),
   ),
-)
+);
 ```
 
 For HTTP-wide transient classification or proactive rate limiting, also read `HTTP_CLIENTS.md`.

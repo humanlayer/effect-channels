@@ -12,18 +12,18 @@ Do not import `node:fs`, `node:path`, `node:crypto`, `node:child_process`, `node
 Node API in `Effect.tryPromise`; use the existing service so dependencies, errors, interruption, scopes, and tests
 remain explicit. A runtime adapter may use a native constructor only to build the corresponding Effect layer.
 
-| Need | Application contract | Import |
-| --- | --- | --- |
-| Files/directories | `FileSystem.FileSystem` | `effect` |
-| Paths | `Path.Path` | `effect` |
-| Secure random/UUID/digest | `Crypto.Crypto` | `effect` |
-| Interactive terminal | `Terminal.Terminal` | `effect` |
-| HTTP client/server | `HttpClient`, `HttpRouter`, `HttpServer` | `effect/unstable/http` |
-| Child process | `ChildProcess`, `ChildProcessSpawner` | `effect/unstable/process` |
-| TCP/Unix/WebSocket | `Socket.Socket`, `SocketServer.SocketServer` | `effect/unstable/socket` |
-| Redis | `Redis.Redis` | `effect/unstable/persistence` |
-| Workers | `Worker` / worker RPC abstractions | `effect/unstable/workers` |
-| Streaming data | `Stream`, `Sink`, `Channel` | `effect` |
+| Need                      | Application contract                         | Import                        |
+| ------------------------- | -------------------------------------------- | ----------------------------- |
+| Files/directories         | `FileSystem.FileSystem`                      | `effect`                      |
+| Paths                     | `Path.Path`                                  | `effect`                      |
+| Secure random/UUID/digest | `Crypto.Crypto`                              | `effect`                      |
+| Interactive terminal      | `Terminal.Terminal`                          | `effect`                      |
+| HTTP client/server        | `HttpClient`, `HttpRouter`, `HttpServer`     | `effect/unstable/http`        |
+| Child process             | `ChildProcess`, `ChildProcessSpawner`        | `effect/unstable/process`     |
+| TCP/Unix/WebSocket        | `Socket.Socket`, `SocketServer.SocketServer` | `effect/unstable/socket`      |
+| Redis                     | `Redis.Redis`                                | `effect/unstable/persistence` |
+| Workers                   | `Worker` / worker RPC abstractions           | `effect/unstable/workers`     |
+| Streaming data            | `Stream`, `Sink`, `Channel`                  | `effect`                      |
 
 Also use `Config` rather than `process.env`, `Effect.log`/`Console` rather than `console.*`, and the Effect CLI
 abstractions rather than reading `process.argv` directly.
@@ -37,14 +37,14 @@ backpressured `stream`/`sink`, and scoped file/temp resources. `Path` handles OS
 Never concatenate path segments manually.
 
 ```ts
-import { Effect, FileSystem, Path } from "effect"
+import { Effect, FileSystem, Path } from "effect";
 
-export const readSettings = Effect.gen(function*() {
-  const fs = yield* FileSystem.FileSystem
-  const path = yield* Path.Path
-  const file = path.join("config", "settings.json")
-  return yield* fs.readFileString(file)
-})
+export const readSettings = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const file = path.join("config", "settings.json");
+  return yield* fs.readFileString(file);
+});
 // Effect<string, PlatformError, FileSystem | Path>
 ```
 
@@ -58,12 +58,12 @@ Use `Crypto.Crypto` for cryptographically secure bytes, UUID v4/v7, secure rando
 SHA-1/256/384/512 digests. Do not use SHA-1 for new security-sensitive designs.
 
 ```ts
-import { Crypto, Effect } from "effect"
+import { Crypto, Effect } from "effect";
 
-export const makeArtifactId = Effect.gen(function*() {
-  const crypto = yield* Crypto.Crypto
-  return yield* crypto.randomUUIDv7
-})
+export const makeArtifactId = Effect.gen(function* () {
+  const crypto = yield* Crypto.Crypto;
+  return yield* crypto.randomUUIDv7;
+});
 ```
 
 The service is intentionally not a complete replacement for every host cryptography primitive. If the required
@@ -76,13 +76,13 @@ Use `Terminal.Terminal` for TTY input/output (`display`, `readLine`, dimensions 
 for the interactive UI.
 
 ```ts
-import { Effect, Terminal } from "effect"
+import { Effect, Terminal } from "effect";
 
-export const askName = Effect.gen(function*() {
-  const terminal = yield* Terminal.Terminal
-  yield* terminal.display("Name: ")
-  return yield* terminal.readLine
-})
+export const askName = Effect.gen(function* () {
+  const terminal = yield* Terminal.Terminal;
+  yield* terminal.display("Name: ");
+  return yield* terminal.readLine;
+});
 ```
 
 ## HTTP
@@ -93,16 +93,17 @@ Client transport errors are typed HTTP errors and should be captured, then narro
 service.
 
 ```ts
-import { Effect, Schema } from "effect"
-import { HttpClient, HttpClientResponse } from "effect/unstable/http"
+import { Effect, Schema } from "effect";
+import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
-const User = Schema.Struct({ id: Schema.String, name: Schema.String })
+const User = Schema.Struct({ id: Schema.String, name: Schema.String });
 
-export const getUser = (id: string) => Effect.gen(function*() {
-  const client = yield* HttpClient.HttpClient
-  const response = yield* client.get(`https://example.test/users/${encodeURIComponent(id)}`)
-  return yield* HttpClientResponse.schemaBodyJson(User)(response)
-})
+export const getUser = (id: string) =>
+  Effect.gen(function* () {
+    const client = yield* HttpClient.HttpClient;
+    const response = yield* client.get(`https://example.test/users/${encodeURIComponent(id)}`);
+    return yield* HttpClientResponse.schemaBodyJson(User)(response);
+  });
 ```
 
 Servers are expressed with `HttpRouter`/`HttpServer` (or `effect/unstable/httpapi` for schema-first APIs). Route
@@ -116,16 +117,14 @@ strings. Argument arrays avoid shell quoting and injection. `string`/`lines` col
 scoped handle for streaming or interaction.
 
 ```ts
-import { Effect, String } from "effect"
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
+import { Effect, String } from "effect";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-export const gitHead = Effect.gen(function*() {
-  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
-  const output = yield* spawner.string(
-    ChildProcess.make("git", ["rev-parse", "HEAD"])
-  )
-  return String.trim(output)
-})
+export const gitHead = Effect.gen(function* () {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const output = yield* spawner.string(ChildProcess.make("git", ["rev-parse", "HEAD"]));
+  return String.trim(output);
+});
 ```
 
 `spawner.spawn(command)` requires `Scope`. Consume `handle.stdout`, `stderr`, or `all` as Effect streams and inspect
@@ -138,15 +137,15 @@ the application-facing contract for TCP, Unix sockets, and WebSocket-backed tran
 `WebSocket`, `net.Socket`, or `ws` in application code.
 
 ```ts
-import { Effect } from "effect"
-import { Socket } from "effect/unstable/socket"
+import { Effect } from "effect";
+import { Socket } from "effect/unstable/socket";
 
-export const session = Effect.gen(function*() {
-  const socket = yield* Socket.Socket
-  const write = yield* socket.writer // scoped acquisition
-  yield* write("hello")
-  yield* socket.runString((message) => Effect.logDebug("socket message", message))
-}).pipe(Effect.scoped)
+export const session = Effect.gen(function* () {
+  const socket = yield* Socket.Socket;
+  const write = yield* socket.writer; // scoped acquisition
+  yield* write("hello");
+  yield* socket.runString((message) => Effect.logDebug("socket message", message));
+}).pipe(Effect.scoped);
 ```
 
 `socket.writer` is scoped. Reading fails with typed `SocketError`; close behavior is configurable and v4 currently
@@ -159,13 +158,14 @@ Application code yields the neutral `Redis.Redis` service and calls `send` or a 
 yield `NodeRedis`, expose an `ioredis` client, or construct connections.
 
 ```ts
-import { Effect } from "effect"
-import { Redis } from "effect/unstable/persistence"
+import { Effect } from "effect";
+import { Redis } from "effect/unstable/persistence";
 
-export const readLease = (key: string) => Effect.gen(function*() {
-  const redis = yield* Redis.Redis
-  return yield* redis.send<string | null>("GET", key)
-})
+export const readLease = (key: string) =>
+  Effect.gen(function* () {
+    const redis = yield* Redis.Redis;
+    return yield* redis.send<string | null>("GET", key);
+  });
 ```
 
 For persisted Effect request results, prefer the higher-level `Persistence` layers over hand-written Redis key

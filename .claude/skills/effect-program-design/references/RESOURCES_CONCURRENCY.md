@@ -19,7 +19,7 @@ explicit shutdown. Small clients with no lifecycle need not be artificially scop
 Use bounded concurrency for fan-out over runtime-sized collections:
 
 ```ts
-yield* Effect.forEach(items, processItem, { concurrency: 8 })
+yield * Effect.forEach(items, processItem, { concurrency: 8 });
 ```
 
 Choose the bound from downstream limits, connection-pool capacity, ordering needs, and memory pressure. Start known,
