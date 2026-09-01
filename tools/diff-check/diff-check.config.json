@@ -1,0 +1,44 @@
+{
+  "baseRef": "origin/main",
+  "oxlintConfigPath": "./diff-check.oxlintrc.json",
+  "sourceExtensions": [".ts", ".tsx"],
+  "excludePathPrefixes": ["dist/", "coverage/", "vendor/", "node_modules/"],
+  "changedFileRules": [
+    {
+      "rule": "diff/key-file-change",
+      "severity": "error",
+      "matchers": [
+        {
+          "_tag": "File",
+          "path": "package.json",
+          "message": "Root dependency or script policy changed."
+        },
+        {
+          "_tag": "File",
+          "path": "bun.lock",
+          "message": "The dependency lockfile changed."
+        },
+        {
+          "_tag": "File",
+          "path": "vite.config.ts",
+          "message": "The Vite+ runtime policy changed."
+        },
+        {
+          "_tag": "File",
+          "path": "oxlint.config.ts",
+          "message": "The standalone Oxlint policy changed."
+        },
+        {
+          "_tag": "File",
+          "path": "typed-lint.config.ts",
+          "message": "The typed lint policy changed."
+        },
+        {
+          "_tag": "Directory",
+          "path": "tools/",
+          "message": "Vendored tooling or policy runtime changed."
+        }
+      ]
+    }
+  ]
+}

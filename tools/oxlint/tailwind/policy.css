@@ -1,0 +1,10 @@
+@import 'tailwindcss';
+
+@source "../../../**/*.{ts,tsx}";
+
+@theme {
+	--*: initial;
+	--color-transparent: transparent;
+	--color-current: currentColor;
+	--spacing: 0.25rem;
+}
