@@ -2,6 +2,9 @@ import { recommended } from '@effect/tsgo/oxlint-presets'
 import { defineConfig } from 'vite-plus'
 
 export default defineConfig({
+	staged: {
+		'*': 'vp check --fix',
+	},
 	test: {
 		exclude: ['tools/oxlint/anti-slop/**'],
 		passWithNoTests: true,
@@ -14,6 +17,7 @@ export default defineConfig({
 			typeCheck: true,
 		},
 		jsPlugins: [
+			{ name: 'vite-plus', specifier: 'vite-plus/oxlint-plugin' },
 			{ name: 'anti-slop', specifier: './tools/oxlint/anti-slop/index.ts' },
 			{
 				name: 'anti-slop-effect',
@@ -30,6 +34,7 @@ export default defineConfig({
 			'.continue/**',
 			'.cursor/**',
 			'.gemini/**',
+			'.humanlayer/**',
 			'.opencode/**',
 			'.pi/**',
 			'.roo/**',
@@ -37,6 +42,7 @@ export default defineConfig({
 			'tools/oxlint/anti-slop/**',
 		],
 		rules: {
+			'vite-plus/prefer-vite-plus-imports': 'error',
 			'anti-slop/no-chained-type-assertions': 'error',
 			'anti-slop/no-comments': 'error',
 			'anti-slop/no-conditional-empty-object-spread': 'error',
@@ -68,6 +74,16 @@ export default defineConfig({
 		singleQuote: true,
 		semi: false,
 		sortImports: true,
-		ignorePatterns: ['**/node_modules/**', '**/dist/**', '.claude/**', 'tools/oxlint/anti-slop/**'],
+		ignorePatterns: [
+			'**/node_modules/**',
+			'**/dist/**',
+			'.agents/**',
+			'.claude/**',
+			'.humanlayer/**',
+			'tools/oxlint/anti-slop/**',
+		],
+	},
+	run: {
+		cache: true,
 	},
 })
