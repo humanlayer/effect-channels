@@ -244,16 +244,25 @@ export class Channels extends Context.Service<
 					})
 
 				const dispatchMessage = (event: MessageEvent) =>
-					Match.value(event.delivery).pipe(
-						Match.tagsExhaustive({
-							NewMentionDelivery: () =>
-								Effect.forEach(mentionHandlers, (handler) => handler(event.thread, event.message), {
-									discard: true,
+					Effect.annotateCurrentSpan({ thread_id: event.thread.ref.id }).pipe(
+						Effect.andThen(
+							Match.value(event.delivery).pipe(
+								Match.tagsExhaustive({
+									NewMentionDelivery: () =>
+										Effect.forEach(
+											mentionHandlers,
+											(handler) => handler(event.thread, event.message),
+											{
+												discard: true,
+											},
+										),
+									SubscribedMessageDelivery: () =>
+										unimplemented('Channels.dispatch.subscribedMessage'),
+									DirectMessageDelivery: () => unimplemented('Channels.dispatch.directMessage'),
+									PatternMessageDelivery: () => unimplemented('Channels.dispatch.patternMessage'),
 								}),
-							SubscribedMessageDelivery: () => unimplemented('Channels.dispatch.subscribedMessage'),
-							DirectMessageDelivery: () => unimplemented('Channels.dispatch.directMessage'),
-							PatternMessageDelivery: () => unimplemented('Channels.dispatch.patternMessage'),
-						}),
+							),
+						),
 					)
 
 				const dispatch = (event: InboundEvent) =>
@@ -271,6 +280,7 @@ export class Channels extends Context.Service<
 						Effect.withSpan('channels.delivery', {
 							attributes: {
 								provider: event.provider,
+								org_id: event.orgId,
 								tenant: event.tenant,
 								idempotency_key: event.idempotencyKey,
 							},
@@ -279,16 +289,27 @@ export class Channels extends Context.Service<
 
 				const post = Effect.fn('channels.post')(function* (input: PostInput) {
 					const address = yield* addressFromThreadId(input.threadId)
+					yield* Effect.annotateCurrentSpan({
+						operation: 'post',
+						provider: address.provider,
+						tenant: address.tenant,
+						thread_id: input.threadId,
+					})
 					const provider = yield* registry.byThreadId({ threadId: input.threadId })
 					const organization = yield* organizations
 						.resolve({ source: address.provider, tenant: address.tenant })
-						.pipe(Effect.mapError(() => UnknownTenant.make(address)))
+						.pipe(
+							Effect.tapError((error) => Effect.logError('organization lookup failed', error)),
+							Effect.mapError(() => UnknownTenant.make(address)),
+						)
 					if (Option.isNone(organization)) {
 						return yield* UnknownTenant.make(address)
 					}
+					yield* Effect.annotateCurrentSpan({ org_id: organization.value })
 					const allowed = yield* gate
 						.allowed({ orgId: organization.value, source: address.provider, tenant: address.tenant })
 						.pipe(
+							Effect.tapError((error) => Effect.logError('channels gate failed', error)),
 							Effect.mapError(() =>
 								PostFailed.make({
 									provider: address.provider,
@@ -304,18 +325,25 @@ export class Channels extends Context.Service<
 							tenant: address.tenant,
 						})
 					}
-					const sent = yield* provider.post(input)
-					yield* observerBestEffort(
-						observer.outboundSent({
-							orgId: organization.value,
-							provider: address.provider,
-							tenant: address.tenant,
-							threadId: input.threadId,
-							operation: 'post',
-							ok: true,
-							degraded: sent.ref.degraded,
-						}),
-					)
+					const reportOutbound = (outcome: {
+						readonly ok: boolean
+						readonly degraded: ReadonlyArray<string>
+					}) =>
+						observerBestEffort(
+							observer.outboundSent({
+								orgId: organization.value,
+								provider: address.provider,
+								tenant: address.tenant,
+								threadId: input.threadId,
+								operation: 'post',
+								ok: outcome.ok,
+								degraded: outcome.degraded,
+							}),
+						)
+					const sent = yield* provider
+						.post(input)
+						.pipe(Effect.tapError(() => reportOutbound({ ok: false, degraded: [] })))
+					yield* reportOutbound({ ok: true, degraded: sent.ref.degraded })
 					return sent
 				})
 
@@ -360,19 +388,27 @@ export class Channels extends Context.Service<
 					unsubscribe: subscriptions.unsubscribe,
 					run: coordinator.run(dispatch).pipe(
 						Effect.catchTags({
-							ConversationLeaseLost: () =>
-								Effect.fail(
-									ChannelsRunError.make({
-										operation: 'ConversationCoordinator.run',
-										message: 'conversation lease lost',
-									}),
+							ConversationLeaseLost: (error) =>
+								Effect.logError('channels worker lost its conversation lease', error).pipe(
+									Effect.andThen(
+										Effect.fail(
+											ChannelsRunError.make({
+												operation: 'ConversationCoordinator.run',
+												message: 'conversation lease lost',
+											}),
+										),
+									),
 								),
-							ConversationCoordinatorUnavailable: () =>
-								Effect.fail(
-									ChannelsRunError.make({
-										operation: 'ConversationCoordinator.run',
-										message: 'conversation coordinator unavailable',
-									}),
+							ConversationCoordinatorUnavailable: (error) =>
+								Effect.logError('channels conversation coordinator unavailable', error).pipe(
+									Effect.andThen(
+										Effect.fail(
+											ChannelsRunError.make({
+												operation: 'ConversationCoordinator.run',
+												message: 'conversation coordinator unavailable',
+											}),
+										),
+									),
 								),
 						}),
 					),

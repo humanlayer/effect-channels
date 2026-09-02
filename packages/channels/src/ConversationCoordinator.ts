@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Match, Queue, Schedule } from 'effect'
+import { Context, Duration, Effect, Layer, Match, Queue, Ref, Schedule } from 'effect'
 
 import type { ConversationCoordinatorUnavailable, ConversationLeaseLost } from './Errors.ts'
 import type { InboundEvent } from './Events.ts'
@@ -16,6 +16,40 @@ const defaultOptions = ConversationCoordinatorOptionsSchema.make({
 	retryMaxMs: 30_000,
 	alertAfterAttempts: 3,
 })
+
+const deliverWithRetry = <E, R>(input: {
+	readonly options: ConversationCoordinatorOptions
+	readonly threadId: ThreadId
+	readonly event: InboundEvent
+	readonly handler: (event: InboundEvent) => Effect.Effect<void, E, R>
+}): Effect.Effect<void, E, R> =>
+	Effect.gen(function* () {
+		const attempts = yield* Ref.make(0)
+		const backoff = Schedule.exponential(input.options.retryBaseMs).pipe(
+			Schedule.modifyDelay((metadata) =>
+				Effect.succeed(Duration.min(metadata.duration, Duration.millis(input.options.retryMaxMs))),
+			),
+		)
+		yield* input.handler(input.event).pipe(
+			Effect.tapError((error) =>
+				Effect.gen(function* () {
+					const attempt = yield* Ref.updateAndGet(attempts, (count) => count + 1)
+					const capture =
+						attempt >= input.options.alertAfterAttempts
+							? Effect.logError('channels conversation delivery keeps failing', error)
+							: Effect.logWarning('channels conversation delivery failed; retrying', error)
+					yield* capture.pipe(
+						Effect.annotateLogs({
+							thread_id: input.threadId,
+							idempotency_key: input.event.idempotencyKey,
+							attempt,
+						}),
+					)
+				}),
+			),
+			Effect.retry(backoff),
+		)
+	})
 
 const eventThreadId = Match.type<InboundEvent>().pipe(
 	Match.tagsExhaustive({
@@ -80,8 +114,7 @@ export class ConversationCoordinator extends Context.Service<
 								mailboxes.delete(threadId)
 								return Effect.void
 							}
-							return handler(event).pipe(
-								Effect.retry({ schedule: Schedule.spaced(options.retryBaseMs) }),
+							return deliverWithRetry({ options, threadId, event, handler }).pipe(
 								Effect.tap(() => Effect.sync(() => mailbox.shift())),
 								Effect.andThen(drain(threadId)),
 							)

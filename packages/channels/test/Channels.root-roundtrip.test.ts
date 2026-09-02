@@ -1,15 +1,29 @@
 import { NodeCrypto } from '@effect/platform-node'
 import { assert, it } from '@effect/vitest'
-import { Deferred, Effect, Fiber, Layer, Option, Queue, Redacted, Ref, Schema } from 'effect'
-import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http'
+import {
+	Clock,
+	ConfigProvider,
+	Context,
+	Deferred,
+	Effect,
+	Fiber,
+	Layer,
+	Option,
+	Queue,
+	Redacted,
+	Ref,
+	Schema,
+} from 'effect'
+import { TestClock } from 'effect/testing'
+import { HttpClient, HttpClientRequest, HttpClientResponse, HttpRouter } from 'effect/unstable/http'
 import { Persistence } from 'effect/unstable/persistence'
 
 import { SlackEventCallback } from '../../slack/src/Schema.ts'
 import { SlackClient } from '../../slack/src/SlackClient.ts'
-import { normalizeSlackMessage } from '../../slack/src/SlackNormalize.ts'
 import { SlackProvider } from '../../slack/src/SlackProvider.ts'
+import { SlackRoutes } from '../../slack/src/SlackRoutes.ts'
 import { SlackTenantCredentials } from '../../slack/src/SlackTenantCredentials.ts'
-import { appMentionCallback } from '../../slack/test/support.ts'
+import { appMentionCallback, signSlackBody } from '../../slack/test/support.ts'
 import {
 	Channels,
 	ChannelsGate,
@@ -22,7 +36,10 @@ import {
 	OrgId,
 	ProviderRegistry,
 	Subscriptions,
+	ThreadId,
 } from '../src/index.ts'
+
+const testRootThreadId = ThreadId.make('slack:v1:T_TEST:C_TEST:100.1')
 
 const SlackPostBody = Schema.Struct({
 	channel: Schema.String,
@@ -30,7 +47,9 @@ const SlackPostBody = Schema.Struct({
 	text: Schema.String,
 })
 
-it.effect('delivers one mention, subscribes explicitly, and posts in the Slack root thread', () =>
+const webhookUrl = 'http://channels.test/api/v1/integrations/slack/webhook'
+
+it.effect('delivers one signed mention end to end, subscribes explicitly, and posts in the Slack root thread', () =>
 	Effect.gen(function* () {
 		const requests = yield* Queue.unbounded<string>()
 		const completed = yield* Deferred.make<void>()
@@ -91,20 +110,51 @@ it.effect('delivers one mention, subscribes explicitly, and posts in the Slack r
 				}),
 			)
 			const worker = yield* Effect.forkChild(channels.run)
+
+			const routeLayer = SlackRoutes.layer.pipe(
+				HttpRouter.provideRequest(NodeCrypto.layer),
+				Layer.provide(
+					ConfigProvider.layer(
+						ConfigProvider.fromUnknown({
+							SLACK_SIGNING_SECRET: 'test-signing-secret',
+							SLACK_BOT_USER_ID: 'U_BOT',
+						}),
+					),
+				),
+			)
+			const { dispose, handler } = HttpRouter.toWebHandler(routeLayer, { disableLogger: true })
+			yield* Effect.addFinalizer(() => Effect.promise(dispose))
+
 			const callback = yield* Schema.decodeEffect(SlackEventCallback)(appMentionCallback)
-			const normalized = yield* normalizeSlackMessage({
-				callback,
-				botUserId: 'U_BOT',
-			})
-			yield* ingress.acceptMessage(normalized)
-			yield* ingress.acceptMessage(normalized)
+			const body = yield* Schema.encodeEffect(Schema.fromJsonString(SlackEventCallback))(callback)
+			const currentTime = yield* Clock.currentTimeMillis.pipe(TestClock.withLive)
+			const timestamp = Math.floor(currentTime / 1000).toString()
+			const signature = yield* signSlackBody(body, timestamp)
+			const deliver = Effect.promise(() =>
+				handler(
+					new Request(webhookUrl, {
+						method: 'POST',
+						headers: {
+							'content-type': 'application/json',
+							'x-slack-request-timestamp': timestamp,
+							'x-slack-signature': signature,
+						},
+						body,
+					}),
+					Context.make(Ingress, ingress),
+				),
+			)
+			const first = yield* deliver
+			const redelivery = yield* deliver
 			yield* Deferred.await(completed)
 			const requestBody = yield* Queue.take(requests)
 			const decodedBody = yield* Schema.decodeEffect(Schema.fromJsonString(SlackPostBody))(requestBody)
-			const subscribed = yield* channels.isSubscribed({ threadId: normalized.thread.ref.id })
+			const subscribed = yield* channels.isSubscribed({ threadId: testRootThreadId })
 			const count = yield* Ref.get(handlerCount)
 			yield* Fiber.interrupt(worker)
 
+			assert.strictEqual(first.status, 200)
+			assert.strictEqual(redelivery.status, 200)
 			assert.deepStrictEqual(decodedBody, {
 				channel: 'C_TEST',
 				thread_ts: '100.1',

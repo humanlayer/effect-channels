@@ -78,7 +78,7 @@ export class Thread extends Schema.TaggedClass<Thread>()('Thread', {
 		)
 	}
 
-	getParticipants(): Effect.Effect<ReadonlyArray<Author>, never> {
+	getParticipants(): Effect.Effect<ReadonlyArray<Author>, UnknownProvider | HistoryFailed, Channels> {
 		return unimplemented('Thread.getParticipants')
 	}
 

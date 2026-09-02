@@ -71,6 +71,7 @@ export class Ingress extends Context.Service<
 					)
 					return IngressDropped.make({ reason: 'unknown_organization' })
 				}
+				yield* Effect.annotateCurrentSpan({ org_id: organization.value })
 				const allowed = yield* gate
 					.allowed({ orgId: organization.value, source: message.provider, tenant: message.tenant })
 					.pipe(
@@ -90,6 +91,7 @@ export class Ingress extends Context.Service<
 					return IngressDropped.make({ reason: 'bot' })
 				}
 				const subscribed = yield* subscriptions.isSubscribed({ threadId: message.thread.ref.id }).pipe(
+					Effect.tapError((error) => Effect.logError('subscription lookup failed', error)),
 					Effect.mapError(() =>
 						IngressError.make({
 							operation: 'Subscriptions.isSubscribed',

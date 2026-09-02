@@ -8,7 +8,7 @@
 	"scripts": {
 		"build": "vp run -r build",
 		"dev": "vp run -r --parallel dev",
-		"test": "vp test",
+		"test": "vp run -r test",
 		"check": "vp check",
 		"lint": "vp lint",
 		"lint:fix": "vp lint --fix",

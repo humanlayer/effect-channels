@@ -27,3 +27,17 @@ export const appMentionCallback = {
 		channel: 'C_TEST',
 	},
 }
+
+export const reactionAddedCallback = {
+	type: 'event_callback' as const,
+	team_id: 'T_TEST',
+	event_id: 'Ev_TEST_2',
+	event_time: 1_788_000_000,
+	event: {
+		type: 'reaction_added' as const,
+		user: 'U_HUMAN',
+		reaction: 'thumbsup',
+		item: { type: 'message' as const, channel: 'C_TEST', ts: '100.1' },
+		event_ts: '101.1',
+	},
+}

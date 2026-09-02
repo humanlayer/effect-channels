@@ -23,14 +23,15 @@
     "packages/channels": {
       "name": "@humanlayer/channels",
       "version": "0.0.0",
-      "dependencies": {
-        "effect": "catalog:",
-      },
       "devDependencies": {
         "@effect/platform-node": "catalog:",
         "@effect/vitest": "catalog:",
+        "effect": "catalog:",
         "typescript": "catalog:",
         "vitest": "catalog:",
+      },
+      "peerDependencies": {
+        "effect": "^4.0.0-rc.110",
       },
     },
     "packages/slack": {
@@ -38,13 +39,16 @@
       "version": "0.0.0",
       "dependencies": {
         "@humanlayer/channels": "workspace:*",
-        "effect": "catalog:",
       },
       "devDependencies": {
         "@effect/platform-node": "catalog:",
         "@effect/vitest": "catalog:",
+        "effect": "catalog:",
         "typescript": "catalog:",
         "vitest": "catalog:",
+      },
+      "peerDependencies": {
+        "effect": "^4.0.0-rc.110",
       },
     },
   },

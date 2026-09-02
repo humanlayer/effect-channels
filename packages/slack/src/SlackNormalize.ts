@@ -51,6 +51,10 @@ export const normalizeSlackMessage = Effect.fn('slack.normalize.message')(functi
 	const authorId = event.user ?? event.bot_id ?? 'unknown'
 	const isMe = event.user === input.botUserId || event.bot_id === input.botUserId
 	const text = (event.text ?? '').replaceAll(`<@${input.botUserId}>`, '').trim()
+	const messageTsMillis = Number(event.ts) * 1000
+	const sentAtMillis = Number.isFinite(messageTsMillis)
+		? Math.round(messageTsMillis)
+		: input.callback.event_time * 1000
 	const message = Message.make({
 		ref: MessageRef.make(event.ts),
 		threadRef,
@@ -63,7 +67,7 @@ export const normalizeSlackMessage = Effect.fn('slack.normalize.message')(functi
 			isBot: event.bot_id === undefined ? 'unknown' : true,
 			isMe,
 		},
-		metadata: { sentAt: DateTime.makeUnsafe({ epochMilliseconds: input.callback.event_time * 1000 }) },
+		metadata: { sentAt: DateTime.makeUnsafe({ epochMilliseconds: sentAtMillis }) },
 		attachments:
 			event.files?.map((file) =>
 				Attachment.make({

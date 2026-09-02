@@ -57,9 +57,10 @@ const toTransportError = (operation: string, status?: number) => {
 const makePostMessage = Effect.fn('slack.api.post_message')(function* (input: SlackPostMessageInputType) {
 	const client = yield* HttpClient.HttpClient
 	const credentialsService = yield* SlackTenantCredentials
-	const credentials = yield* credentialsService
-		.load({ teamId: input.teamId })
-		.pipe(Effect.mapError(() => toTransportError('chat.postMessage')))
+	const credentials = yield* credentialsService.load({ teamId: input.teamId }).pipe(
+		Effect.tapError((error) => Effect.logError('Slack credential lookup failed', error)),
+		Effect.mapError(() => toTransportError('chat.postMessage')),
+	)
 	if (Option.isNone(credentials)) {
 		return yield* UnknownTenant.make({ provider: 'slack', tenant: TenantId.make(input.teamId) })
 	}
