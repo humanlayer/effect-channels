@@ -26,6 +26,8 @@ export const SlackTenantCreds = Schema.Struct({
 	botToken: Schema.Redacted(Schema.String, { disallowJsonEncode: true }),
 	refreshToken: Schema.optionalKey(Schema.Redacted(Schema.String, { disallowJsonEncode: true })),
 	expiresAt: Schema.optionalKey(Schema.DateTimeUtc),
+	botUserId: Schema.optionalKey(Schema.String),
+	botId: Schema.optionalKey(Schema.String),
 })
 export type SlackTenantCreds = typeof SlackTenantCreds.Type
 
@@ -312,6 +314,93 @@ export const SlackEphemeralInput = Schema.Struct({
 	payload: Schema.Json,
 })
 export type SlackEphemeralInput = typeof SlackEphemeralInput.Type
+
+export const SlackBotIdentity = Schema.Struct({
+	botUserId: Schema.optionalKey(Schema.String),
+	botId: Schema.optionalKey(Schema.String),
+})
+export type SlackBotIdentity = typeof SlackBotIdentity.Type
+
+export const SlackChannelAddress = Schema.Struct({
+	teamId: SlackTeamId,
+	channelId: SlackChannelId,
+})
+export type SlackChannelAddress = typeof SlackChannelAddress.Type
+
+export const SlackHistoryMessage = Schema.Struct({
+	type: Schema.optionalKey(Schema.String),
+	subtype: Schema.optionalKey(Schema.String),
+	user: Schema.optionalKey(Schema.NonEmptyString),
+	bot_id: Schema.optionalKey(Schema.NonEmptyString),
+	text: Schema.optionalKey(Schema.String),
+	ts: SlackMessageTs,
+	thread_ts: Schema.optionalKey(SlackMessageTs),
+	reply_count: Schema.optionalKey(Schema.Natural),
+	latest_reply: Schema.optionalKey(SlackMessageTs),
+	files: Schema.optionalKey(Schema.Array(SlackFileMetadata)),
+})
+export type SlackHistoryMessage = typeof SlackHistoryMessage.Type
+
+export const SlackResponseMetadata = Schema.Struct({
+	next_cursor: Schema.optionalKey(Schema.String),
+})
+export type SlackResponseMetadata = typeof SlackResponseMetadata.Type
+
+export const SlackOkResponse = Schema.Struct({
+	ok: Schema.Boolean,
+	error: Schema.optionalKey(Schema.String),
+})
+export type SlackOkResponse = typeof SlackOkResponse.Type
+
+export const SlackConversationsPageResponse = Schema.Struct({
+	ok: Schema.Boolean,
+	error: Schema.optionalKey(Schema.String),
+	messages: Schema.optionalKey(Schema.Array(SlackHistoryMessage)),
+	has_more: Schema.optionalKey(Schema.Boolean),
+	response_metadata: Schema.optionalKey(SlackResponseMetadata),
+})
+export type SlackConversationsPageResponse = typeof SlackConversationsPageResponse.Type
+
+export const SlackChannelSnapshot = Schema.Struct({
+	id: SlackChannelId,
+	name: Schema.optionalKey(Schema.String),
+	is_im: Schema.optionalKey(Schema.Boolean),
+	is_mpim: Schema.optionalKey(Schema.Boolean),
+	is_private: Schema.optionalKey(Schema.Boolean),
+	num_members: Schema.optionalKey(Schema.Natural),
+})
+export type SlackChannelSnapshot = typeof SlackChannelSnapshot.Type
+
+export const SlackConversationsInfoResponse = Schema.Struct({
+	ok: Schema.Boolean,
+	error: Schema.optionalKey(Schema.String),
+	channel: Schema.optionalKey(SlackChannelSnapshot),
+})
+export type SlackConversationsInfoResponse = typeof SlackConversationsInfoResponse.Type
+
+export const SlackUserProfileSnapshot = Schema.Struct({
+	display_name: Schema.optionalKey(Schema.String),
+	real_name: Schema.optionalKey(Schema.String),
+	email: Schema.optionalKey(Schema.String),
+	image_192: Schema.optionalKey(Schema.URLFromString),
+})
+export type SlackUserProfileSnapshot = typeof SlackUserProfileSnapshot.Type
+
+export const SlackUserSnapshot = Schema.Struct({
+	id: Schema.NonEmptyString,
+	name: Schema.optionalKey(Schema.String),
+	real_name: Schema.optionalKey(Schema.String),
+	is_bot: Schema.optionalKey(Schema.Boolean),
+	profile: Schema.optionalKey(SlackUserProfileSnapshot),
+})
+export type SlackUserSnapshot = typeof SlackUserSnapshot.Type
+
+export const SlackUsersInfoResponse = Schema.Struct({
+	ok: Schema.Boolean,
+	error: Schema.optionalKey(Schema.String),
+	user: Schema.optionalKey(SlackUserSnapshot),
+})
+export type SlackUsersInfoResponse = typeof SlackUsersInfoResponse.Type
 
 export const SlackSignatureInput = Schema.Struct({
 	body: Schema.String,

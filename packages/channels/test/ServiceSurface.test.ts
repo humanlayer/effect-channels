@@ -50,13 +50,9 @@ const expectDefect = <A, E, R>(operation: string, effect: Effect.Effect<A, E, R>
 		}
 	})
 
-it.effect('names every Phase 1 core placeholder', () =>
+it.effect('names every Phase 2 core placeholder', () =>
 	Effect.gen(function* () {
 		const channels = yield* Channels
-		yield* expectDefect(
-			'Channels.onSubscribedMessage',
-			channels.onSubscribedMessage(() => Effect.void),
-		)
 		yield* expectDefect(
 			'Channels.onNewMessage',
 			channels.onNewMessage(/^hello/, () => Effect.void),
@@ -97,12 +93,9 @@ it.effect('names every Phase 1 core placeholder', () =>
 			'Channels.onCommand',
 			channels.onCommand(() => Effect.void),
 		)
-		yield* expectDefect('Channels.postToChannel', channels.postToChannel({ channel, content }))
 		yield* expectDefect('Channels.edit', channels.edit({ threadId, messageRef, content }))
 		yield* expectDefect('Channels.delete', channels.delete({ threadId, messageRef }))
 		yield* expectDefect('Channels.stream', channels.stream({ threadId }, Stream.empty))
-		yield* expectDefect('Channels.startThreadTyping', channels.startThreadTyping({ threadId }))
-		yield* expectDefect('Channels.startChannelTyping', channels.startChannelTyping({ channel }))
 		yield* expectDefect(
 			'Channels.addReaction',
 			channels.addReaction({ threadId, messageRef, emoji: Emoji.ThumbsUp }),
@@ -110,25 +103,6 @@ it.effect('names every Phase 1 core placeholder', () =>
 		yield* expectDefect(
 			'Channels.removeReaction',
 			channels.removeReaction({ threadId, messageRef, emoji: Emoji.ThumbsUp }),
-		)
-		yield* expectDefect('Channels.messages', channels.messages({ threadId }))
-		yield* expectDefect('Channels.messageStream', Stream.runDrain(channels.messageStream({ threadId })))
-		yield* expectDefect('Channels.containerMessages', channels.containerMessages({ channel }))
-		yield* expectDefect(
-			'Channels.containerMessageStream',
-			Stream.runDrain(channels.containerMessageStream({ channel })),
-		)
-		yield* expectDefect('Channels.channelThreads', channels.channelThreads({ channel }))
-		yield* expectDefect('Channels.channelThreadStream', Stream.runDrain(channels.channelThreadStream({ channel })))
-		yield* expectDefect(
-			'Channels.context',
-			channels.context({ event: testMessageEvent, policy: ThreadContext.make({ threadLimit: 10 }) }),
-		)
-		yield* expectDefect('Channels.info', channels.info({ threadId }))
-		yield* expectDefect('Channels.channelInfo', channels.channelInfo({ channel }))
-		yield* expectDefect(
-			'Channels.getUser',
-			channels.getUser({ provider: 'slack', tenant: TenantId.make('T_TEST'), userId: UserId.make('U_TEST') }),
 		)
 		yield* expectDefect('Channels.subject', channels.subject({ message: testMessage }))
 		yield* expectDefect('Channels.downloadAttachment', channels.downloadAttachment({ attachment }))
@@ -140,7 +114,41 @@ it.effect('names every Phase 1 core placeholder', () =>
 			'Channels.postEphemeral',
 			channels.postEphemeral({ threadId, user: testAuthor, content, fallback: EphemeralNoFallback.make({}) }),
 		)
-		yield* expectDefect('Thread.getParticipants', testThread.getParticipants())
+	}).pipe(Effect.provide(ChannelsLayer)),
+)
+
+it.effect('routes implemented Phase 2 operations to typed errors instead of placeholders', () =>
+	Effect.gen(function* () {
+		const channels = yield* Channels
+		const expectUnknownProvider = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+			Effect.gen(function* () {
+				const exit = yield* Effect.exit(effect)
+				assert.strictEqual(Exit.isFailure(exit), true)
+				if (Exit.isFailure(exit)) {
+					assert.ok(
+						Cause.pretty(exit.cause).includes('UnknownProvider'),
+						`expected UnknownProvider, got: ${Cause.pretty(exit.cause)}`,
+					)
+				}
+			})
+		yield* expectUnknownProvider(channels.postToChannel({ channel, content }))
+		yield* expectUnknownProvider(channels.messages({ threadId }))
+		yield* expectUnknownProvider(Stream.runDrain(channels.messageStream({ threadId })))
+		yield* expectUnknownProvider(channels.containerMessages({ channel }))
+		yield* expectUnknownProvider(Stream.runDrain(channels.containerMessageStream({ channel })))
+		yield* expectUnknownProvider(channels.channelThreads({ channel }))
+		yield* expectUnknownProvider(Stream.runDrain(channels.channelThreadStream({ channel })))
+		yield* expectUnknownProvider(
+			channels.context({ event: testMessageEvent, policy: ThreadContext.make({ threadLimit: 10 }) }),
+		)
+		yield* expectUnknownProvider(channels.info({ threadId }))
+		yield* expectUnknownProvider(channels.channelInfo({ channel }))
+		yield* expectUnknownProvider(
+			channels.getUser({ provider: 'slack', tenant: TenantId.make('T_TEST'), userId: UserId.make('U_TEST') }),
+		)
+		yield* expectUnknownProvider(testThread.getParticipants())
+		yield* channels.startThreadTyping({ threadId })
+		yield* channels.startChannelTyping({ channel })
 	}).pipe(Effect.provide(ChannelsLayer)),
 )
 

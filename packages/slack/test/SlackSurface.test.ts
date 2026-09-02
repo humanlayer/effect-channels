@@ -58,13 +58,9 @@ const clientLayer = SlackClient.layer.pipe(
 	Layer.provide(Layer.merge(Layer.succeed(HttpClient.HttpClient, deadHttpClient), credentialsLayer)),
 )
 
-it.effect('names every Phase 1 SlackClient placeholder', () =>
+it.effect('names every Phase 2 SlackClient placeholder', () =>
 	Effect.gen(function* () {
 		const client = yield* SlackClient
-		yield* expectDefect(
-			'SlackClient.setSessionStatus',
-			client.setSessionStatus({ teamId, channelId, threadTs: messageTs, status: 'processing' }),
-		)
 		yield* expectDefect(
 			'SlackClient.startStream',
 			client.startStream({ teamId, channelId, threadTs: messageTs, chunks: [] }),
@@ -84,11 +80,6 @@ it.effect('names every Phase 1 SlackClient placeholder', () =>
 			'SlackClient.removeReaction',
 			client.removeReaction({ teamId, channelId, ts: messageTs, emoji: 'thumbsup' }),
 		)
-		yield* expectDefect('SlackClient.replies', client.replies({ teamId, channelId, threadTs: messageTs }))
-		yield* expectDefect('SlackClient.history', client.history({ teamId, channelId }))
-		yield* expectDefect('SlackClient.channelInfo', client.channelInfo({ teamId, channelId }))
-		yield* expectDefect('SlackClient.listThreads', client.listThreads({ teamId, channelId }))
-		yield* expectDefect('SlackClient.getUser', client.getUser({ teamId, userId }))
 		yield* expectDefect('SlackClient.uploadFiles', client.uploadFiles({ teamId, channelId, files: [] }))
 		yield* expectDefect('SlackClient.downloadFile', client.downloadFile({ teamId, attachment }))
 		yield* expectDefect('SlackClient.openDM', client.openDM({ teamId, userId }))
@@ -100,31 +91,25 @@ it.effect('names every Phase 1 SlackClient placeholder', () =>
 	}).pipe(Effect.provide(clientLayer)),
 )
 
-it.effect('names every Phase 1 native Slack placeholder', () =>
+it.effect('names every Phase 2 native Slack placeholder', () =>
 	Effect.gen(function* () {
 		const slack = yield* Slack
 		yield* expectDefect('Slack.createThread', slack.createThread({ teamId, channelId, content }))
 		yield* expectDefect('Slack.post', slack.post({ threadId, payload: {} }))
-		yield* expectDefect(
-			'Slack.setSessionStatus',
-			slack.setSessionStatus({ teamId, channelId, threadTs: messageTs, status: 'processing' }),
-		)
 		yield* expectDefect('Slack.postEphemeral', slack.postEphemeral({ threadId, userId, payload: {} }))
 		yield* expectDefect('Slack.api', slack.api({ teamId, method: 'chat.scheduleMessage', payload: {} }))
 	}).pipe(Effect.provide(Slack.layer.pipe(Layer.provide(clientLayer)))),
 )
 
-it.effect('names every Phase 1 Slack provider placeholder', () =>
+it.effect('names every Phase 2 Slack provider placeholder', () =>
 	Effect.gen(function* () {
 		const provider = yield* SlackProvider
-		yield* expectDefect('SlackProvider.postToChannel', provider.postToChannel({ channel, content }))
 		yield* expectDefect(
 			'SlackProvider.edit',
 			provider.edit({ threadId, messageRef: MessageRef.make('100.2'), content }),
 		)
 		yield* expectDefect('SlackProvider.delete', provider.delete({ threadId, messageRef: MessageRef.make('100.2') }))
 		yield* expectDefect('SlackProvider.stream', provider.stream({ threadId }, Stream.empty))
-		yield* expectDefect('SlackProvider.startThreadTyping', provider.startThreadTyping({ threadId }))
 		yield* expectDefect('SlackProvider.startChannelTyping', provider.startChannelTyping({ channel }))
 		yield* expectDefect(
 			'SlackProvider.addReaction',
@@ -134,21 +119,6 @@ it.effect('names every Phase 1 Slack provider placeholder', () =>
 			'SlackProvider.removeReaction',
 			provider.removeReaction({ threadId, messageRef: MessageRef.make('100.2'), emoji: Emoji.ThumbsUp }),
 		)
-		yield* expectDefect('SlackProvider.messages', provider.messages({ threadId }))
-		yield* expectDefect('SlackProvider.messageStream', Stream.runDrain(provider.messageStream({ threadId })))
-		yield* expectDefect('SlackProvider.containerMessages', provider.containerMessages({ channel }))
-		yield* expectDefect(
-			'SlackProvider.containerMessageStream',
-			Stream.runDrain(provider.containerMessageStream({ channel })),
-		)
-		yield* expectDefect('SlackProvider.channelThreads', provider.channelThreads({ channel }))
-		yield* expectDefect(
-			'SlackProvider.channelThreadStream',
-			Stream.runDrain(provider.channelThreadStream({ channel })),
-		)
-		yield* expectDefect('SlackProvider.info', provider.info({ threadId }))
-		yield* expectDefect('SlackProvider.channelInfo', provider.channelInfo({ channel }))
-		yield* expectDefect('SlackProvider.getUser', provider.getUser({ provider: 'slack', tenant, userId }))
 		yield* expectDefect('SlackProvider.subject', provider.subject({ message: testMessage }))
 		yield* expectDefect('SlackProvider.downloadAttachment', provider.downloadAttachment({ attachment }))
 		yield* expectDefect('SlackProvider.openDM', provider.openDM({ provider: 'slack', tenant, user: testAuthor }))
@@ -181,7 +151,7 @@ const stubClientLayer = Layer.succeed(
 	SlackClient,
 	SlackClient.of({
 		postMessage: () => Effect.succeed(SlackSentMessage.make({ channelId, ts: SlackMessageTs.make('100.9') })),
-		setSessionStatus: () => unimplemented('test.SlackClient.setSessionStatus'),
+		setSessionStatus: () => Effect.void,
 		startStream: () => unimplemented('test.SlackClient.startStream'),
 		appendStream: () => unimplemented('test.SlackClient.appendStream'),
 		stopStream: () => unimplemented('test.SlackClient.stopStream'),
@@ -207,17 +177,17 @@ it.effect('advertises support only for implemented operations', () =>
 		const provider = yield* SlackProvider
 		assert.deepStrictEqual(provider.capabilities, {
 			threadPost: true,
-			channelPost: false,
+			channelPost: true,
 			edit: false,
 			delete: false,
 			streaming: 'unsupported',
-			typing: { thread: false, channel: false },
-			history: { thread: false, channelMessages: false, channelThreads: false },
+			typing: { thread: true, channel: false },
+			history: { thread: true, channelMessages: true, channelThreads: true },
 			reactions: { add: false, remove: false, events: false },
 			files: { read: false, upload: false },
 			actions: false,
-			threadInfo: false,
-			channelInfo: false,
+			threadInfo: true,
+			channelInfo: true,
 			createThread: false,
 			directMessages: { ingress: false, open: false },
 			ephemeral: { native: false, dmFallback: false },

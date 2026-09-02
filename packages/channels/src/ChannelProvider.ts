@@ -12,6 +12,7 @@ import type {
 	ThreadGone,
 	UnknownTenant,
 	UnsupportedContextScope,
+	UserLookupFailed,
 } from './Errors.ts'
 import type { Message } from './Message.ts'
 import type {
@@ -82,7 +83,7 @@ export type ChannelProviderFields = {
 	) => Stream.Stream<ThreadSummary, HistoryFailed | UnsupportedContextScope>
 	readonly info: (input: InfoInput) => Effect.Effect<ThreadInfo, ThreadGone>
 	readonly channelInfo: (input: ChannelInfoInput) => Effect.Effect<ChannelInfo, ChannelGone>
-	readonly getUser: (input: GetUserInput) => Effect.Effect<UserProfile, UnknownTenant>
+	readonly getUser: (input: GetUserInput) => Effect.Effect<UserProfile, UnknownTenant | UserLookupFailed>
 	readonly subject: (input: SubjectInput) => Effect.Effect<Option.Option<MessageSubject>, SubjectFailed>
 	readonly downloadAttachment: (
 		input: DownloadAttachmentInput,

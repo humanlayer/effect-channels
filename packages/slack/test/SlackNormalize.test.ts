@@ -1,6 +1,6 @@
 import { NodeCrypto } from '@effect/platform-node'
 import { assert, it } from '@effect/vitest'
-import { Effect, Schema } from 'effect'
+import { Effect, Option, Schema } from 'effect'
 
 import { SlackEventCallback } from '../src/Schema.ts'
 import { normalizeSlackMessage } from '../src/SlackNormalize.ts'
@@ -9,7 +9,8 @@ import { appMentionCallback } from './support.ts'
 it.effect('normalizes a root app mention into queue-safe schema classes', () =>
 	Effect.gen(function* () {
 		const callback = yield* Schema.decodeEffect(SlackEventCallback)(appMentionCallback)
-		const normalized = yield* normalizeSlackMessage({ callback, botUserId: 'U_BOT' })
+		const result = yield* normalizeSlackMessage({ callback, identity: { botUserId: 'U_BOT' } })
+		const normalized = Option.getOrThrow(result)
 
 		assert.strictEqual(normalized.provider, 'slack')
 		assert.strictEqual(normalized.tenant, 'T_TEST')

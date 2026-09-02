@@ -7,7 +7,7 @@ import { HttpRouter } from 'effect/unstable/http'
 
 import { SlackEventCallback } from '../src/Schema.ts'
 import { SlackRoutes } from '../src/SlackRoutes.ts'
-import { appMentionCallback, reactionAddedCallback, signSlackBody } from './support.ts'
+import { appMentionCallback, reactionAddedCallback, signSlackBody, testCredentialsLayer } from './support.ts'
 
 const routeLayer = SlackRoutes.layer.pipe(
 	HttpRouter.provideRequest(NodeCrypto.layer),
@@ -19,6 +19,7 @@ const routeLayer = SlackRoutes.layer.pipe(
 			}),
 		),
 	),
+	Layer.provide(testCredentialsLayer),
 )
 
 const signedRequest = (callback: SlackEventCallback) =>

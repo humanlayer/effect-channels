@@ -2,6 +2,7 @@ import { Context, Effect, Layer, Match, Option, Stream } from 'effect'
 
 import { ChannelsGate } from './ChannelsGate.ts'
 import { ChannelsObserver } from './ChannelsObserver.ts'
+import { loadConversationContext } from './Context.ts'
 import { ConversationCoordinator } from './ConversationCoordinator.ts'
 import { ConversationSignals } from './ConversationSignals.ts'
 import {
@@ -20,6 +21,7 @@ import {
 	UnknownProvider,
 	UnknownTenant,
 	UnsupportedContextScope,
+	type UserLookupFailed,
 } from './Errors.ts'
 import type {
 	ActionEvent,
@@ -33,6 +35,14 @@ import type {
 	ReactionEvent,
 	SubscriptionTransition,
 } from './Events.ts'
+import {
+	channelMessagePage,
+	channelMessageStream as historyChannelMessageStream,
+	channelThreadPage,
+	channelThreadStream as historyChannelThreadStream,
+	threadMessagePage,
+	threadMessageStream as historyThreadMessageStream,
+} from './History.ts'
 import { unimplemented } from './internal/unimplemented.ts'
 import type { Message } from './Message.ts'
 import type {
@@ -66,8 +76,17 @@ import type {
 import { QueueDelivery } from './Operations.ts'
 import { Organizations } from './Organizations.ts'
 import { ProviderRegistry, providerNameFromThreadId } from './ProviderRegistry.ts'
-import type { ChannelInfo, FileData, MessageSubject, ThreadInfo, UserProfile } from './Schema.ts'
-import { TenantId as TenantIdSchema } from './Schema.ts'
+import type {
+	ChannelInfo,
+	FileData,
+	MessageSubject,
+	OrgId,
+	ProviderName,
+	TenantId,
+	ThreadInfo,
+	UserProfile,
+} from './Schema.ts'
+import { TenantId as TenantIdSchema, ThreadId as ThreadIdSchema } from './Schema.ts'
 import type { SentMessage } from './SentMessage.ts'
 import type { StreamChunk } from './StreamChunk.ts'
 import { Subscriptions } from './Subscriptions.ts'
@@ -75,7 +94,9 @@ import type { Thread } from './Thread.ts'
 
 type RegisteredMessageHandler = (thread: Thread, message: Message) => Effect.Effect<void, ChannelsRunError>
 
-const addressFromThreadId = (threadId: string) =>
+type EgressAddress = { readonly provider: ProviderName; readonly tenant: TenantId }
+
+const addressFromThreadId = (threadId: string): Effect.Effect<EgressAddress, UnknownProvider> =>
 	Effect.try({
 		try: () => {
 			const provider = providerNameFromThreadId(threadId)
@@ -182,7 +203,9 @@ export class Channels extends Context.Service<
 		readonly channelInfo: (
 			input: ChannelInfoInput,
 		) => Effect.Effect<ChannelInfo, UnknownProvider | import('./Errors.ts').ChannelGone>
-		readonly getUser: (input: GetUserInput) => Effect.Effect<UserProfile, UnknownProvider | UnknownTenant>
+		readonly getUser: (
+			input: GetUserInput,
+		) => Effect.Effect<UserProfile, UnknownProvider | UnknownTenant | UserLookupFailed>
 		readonly subject: (
 			input: SubjectInput,
 		) => Effect.Effect<Option.Option<MessageSubject>, UnknownProvider | SubjectFailed>
@@ -225,39 +248,34 @@ export class Channels extends Context.Service<
 				const observer = yield* ChannelsObserver
 				const subscriptions = yield* Subscriptions
 				const mentionHandlers: Array<RegisteredMessageHandler> = []
+				const subscribedHandlers: Array<RegisteredMessageHandler> = []
 
-				const onNewMention = <E, R>(
-					handler: (thread: Thread, message: Message) => Effect.Effect<void, E, R>,
-				): Effect.Effect<void, never, R> =>
-					Effect.map(Effect.context<R>(), (context) => {
-						mentionHandlers.push((thread, message) =>
-							handler(thread, message).pipe(
-								Effect.provide(context),
-								Effect.mapError(() =>
-									ChannelsRunError.make({
-										operation: 'Channels.onNewMention',
-										message: 'registered handler failed',
-									}),
+				const registerMessageHandler =
+					(handlers: Array<RegisteredMessageHandler>, operation: string) =>
+					<E, R>(
+						handler: (thread: Thread, message: Message) => Effect.Effect<void, E, R>,
+					): Effect.Effect<void, never, R> =>
+						Effect.map(Effect.context<R>(), (context) => {
+							handlers.push((thread, message) =>
+								handler(thread, message).pipe(
+									Effect.provide(context),
+									Effect.mapError(() =>
+										ChannelsRunError.make({ operation, message: 'registered handler failed' }),
+									),
 								),
-							),
-						)
-					})
+							)
+						})
+
+				const runMessageHandlers = (handlers: ReadonlyArray<RegisteredMessageHandler>, event: MessageEvent) =>
+					Effect.forEach(handlers, (handler) => handler(event.thread, event.message), { discard: true })
 
 				const dispatchMessage = (event: MessageEvent) =>
 					Effect.annotateCurrentSpan({ thread_id: event.thread.ref.id }).pipe(
 						Effect.andThen(
 							Match.value(event.delivery).pipe(
 								Match.tagsExhaustive({
-									NewMentionDelivery: () =>
-										Effect.forEach(
-											mentionHandlers,
-											(handler) => handler(event.thread, event.message),
-											{
-												discard: true,
-											},
-										),
-									SubscribedMessageDelivery: () =>
-										unimplemented('Channels.dispatch.subscribedMessage'),
+									NewMentionDelivery: () => runMessageHandlers(mentionHandlers, event),
+									SubscribedMessageDelivery: () => runMessageHandlers(subscribedHandlers, event),
 									DirectMessageDelivery: () => unimplemented('Channels.dispatch.directMessage'),
 									PatternMessageDelivery: () => unimplemented('Channels.dispatch.patternMessage'),
 								}),
@@ -287,6 +305,41 @@ export class Channels extends Context.Service<
 						}),
 					)
 
+				const authorizeEgress = <E>(input: {
+					readonly address: EgressAddress
+					readonly onGateLookupFailed: () => E
+				}): Effect.Effect<OrgId, UnknownTenant | TenantDisabled | E> =>
+					Effect.gen(function* () {
+						const organization = yield* organizations
+							.resolve({ source: input.address.provider, tenant: input.address.tenant })
+							.pipe(
+								Effect.tapError((error) => Effect.logError('organization lookup failed', error)),
+								Effect.mapError(() => UnknownTenant.make(input.address)),
+							)
+						if (Option.isNone(organization)) {
+							return yield* UnknownTenant.make(input.address)
+						}
+						yield* Effect.annotateCurrentSpan({ org_id: organization.value })
+						const allowed = yield* gate
+							.allowed({
+								orgId: organization.value,
+								source: input.address.provider,
+								tenant: input.address.tenant,
+							})
+							.pipe(
+								Effect.tapError((error) => Effect.logError('channels gate failed', error)),
+								Effect.mapError(input.onGateLookupFailed),
+							)
+						if (!allowed) {
+							return yield* TenantDisabled.make({
+								orgId: organization.value,
+								provider: input.address.provider,
+								tenant: input.address.tenant,
+							})
+						}
+						return organization.value
+					})
+
 				const post = Effect.fn('channels.post')(function* (input: PostInput) {
 					const address = yield* addressFromThreadId(input.threadId)
 					yield* Effect.annotateCurrentSpan({
@@ -296,42 +349,22 @@ export class Channels extends Context.Service<
 						thread_id: input.threadId,
 					})
 					const provider = yield* registry.byThreadId({ threadId: input.threadId })
-					const organization = yield* organizations
-						.resolve({ source: address.provider, tenant: address.tenant })
-						.pipe(
-							Effect.tapError((error) => Effect.logError('organization lookup failed', error)),
-							Effect.mapError(() => UnknownTenant.make(address)),
-						)
-					if (Option.isNone(organization)) {
-						return yield* UnknownTenant.make(address)
-					}
-					yield* Effect.annotateCurrentSpan({ org_id: organization.value })
-					const allowed = yield* gate
-						.allowed({ orgId: organization.value, source: address.provider, tenant: address.tenant })
-						.pipe(
-							Effect.tapError((error) => Effect.logError('channels gate failed', error)),
-							Effect.mapError(() =>
-								PostFailed.make({
-									provider: address.provider,
-									threadId: input.threadId,
-									message: 'gate lookup failed',
-								}),
-							),
-						)
-					if (!allowed) {
-						return yield* TenantDisabled.make({
-							orgId: organization.value,
-							provider: address.provider,
-							tenant: address.tenant,
-						})
-					}
+					const orgId = yield* authorizeEgress({
+						address,
+						onGateLookupFailed: () =>
+							PostFailed.make({
+								provider: address.provider,
+								threadId: input.threadId,
+								message: 'gate lookup failed',
+							}),
+					})
 					const reportOutbound = (outcome: {
 						readonly ok: boolean
 						readonly degraded: ReadonlyArray<string>
 					}) =>
 						observerBestEffort(
 							observer.outboundSent({
-								orgId: organization.value,
+								orgId,
 								provider: address.provider,
 								tenant: address.tenant,
 								threadId: input.threadId,
@@ -347,9 +380,198 @@ export class Channels extends Context.Service<
 					return sent
 				})
 
+				const postToChannel = Effect.fn('channels.post')(function* (input: ChannelPostInput) {
+					const address: EgressAddress = {
+						provider: input.channel.provider,
+						tenant: input.channel.tenant,
+					}
+					const fallbackThreadId = ThreadIdSchema.make(input.channel.id)
+					yield* Effect.annotateCurrentSpan({
+						operation: 'post_to_channel',
+						provider: address.provider,
+						tenant: address.tenant,
+					})
+					const provider = yield* registry.byChannel({ channel: input.channel })
+					const orgId = yield* authorizeEgress({
+						address,
+						onGateLookupFailed: () =>
+							PostFailed.make({
+								provider: address.provider,
+								threadId: fallbackThreadId,
+								message: 'gate lookup failed',
+							}),
+					})
+					const reportOutbound = (outcome: {
+						readonly ok: boolean
+						readonly degraded: ReadonlyArray<string>
+						readonly threadId: typeof fallbackThreadId
+					}) =>
+						observerBestEffort(
+							observer.outboundSent({
+								orgId,
+								provider: address.provider,
+								tenant: address.tenant,
+								threadId: outcome.threadId,
+								operation: 'post_to_channel',
+								ok: outcome.ok,
+								degraded: outcome.degraded,
+							}),
+						)
+					const sent = yield* provider
+						.postToChannel(input)
+						.pipe(
+							Effect.tapError(() =>
+								reportOutbound({ ok: false, degraded: [], threadId: fallbackThreadId }),
+							),
+						)
+					yield* reportOutbound({ ok: true, degraded: sent.ref.degraded, threadId: sent.ref.threadId })
+					return sent
+				})
+
+				const typingAllowed = (address: EgressAddress) =>
+					organizations.resolve({ source: address.provider, tenant: address.tenant }).pipe(
+						Effect.flatMap(
+							Option.match({
+								onNone: () => Effect.succeed(false),
+								onSome: (orgId) =>
+									gate.allowed({ orgId, source: address.provider, tenant: address.tenant }),
+							}),
+						),
+						Effect.tapError((error) => Effect.logWarning('channels typing authorization failed', error)),
+						Effect.orElseSucceed(() => false),
+					)
+
+				const startThreadTyping = Effect.fn('channels.typing.start')(function* (input: StartThreadTypingInput) {
+					yield* Effect.gen(function* () {
+						const address = yield* addressFromThreadId(input.threadId)
+						yield* Effect.annotateCurrentSpan({
+							operation: 'start_thread_typing',
+							provider: address.provider,
+							tenant: address.tenant,
+							thread_id: input.threadId,
+						})
+						const provider = yield* registry.byThreadId({ threadId: input.threadId })
+						if (!provider.capabilities.typing.thread) {
+							yield* Effect.logDebug('provider does not support thread typing; skipping')
+							return
+						}
+						const allowed = yield* typingAllowed(address)
+						if (!allowed) {
+							return
+						}
+						yield* provider.startThreadTyping(input)
+					}).pipe(
+						Effect.tapError((error) => Effect.logWarning('channels thread typing skipped', error)),
+						Effect.ignore,
+					)
+				})
+
+				const startChannelTyping = Effect.fn('channels.typing.start')(function* (
+					input: StartChannelTypingInput,
+				) {
+					yield* Effect.gen(function* () {
+						const address: EgressAddress = {
+							provider: input.channel.provider,
+							tenant: input.channel.tenant,
+						}
+						yield* Effect.annotateCurrentSpan({
+							operation: 'start_channel_typing',
+							provider: address.provider,
+							tenant: address.tenant,
+						})
+						const provider = yield* registry.byChannel({ channel: input.channel })
+						if (!provider.capabilities.typing.channel) {
+							yield* Effect.logDebug('provider does not support channel typing; skipping')
+							return
+						}
+						const allowed = yield* typingAllowed(address)
+						if (!allowed) {
+							return
+						}
+						yield* provider.startChannelTyping(input)
+					}).pipe(
+						Effect.tapError((error) => Effect.logWarning('channels channel typing skipped', error)),
+						Effect.ignore,
+					)
+				})
+
+				const messages = (input: MessagesInput) =>
+					registry
+						.byThreadId({ threadId: input.threadId })
+						.pipe(Effect.flatMap((provider) => threadMessagePage(provider, input)))
+
+				const messageStream = (input: MessagesInput) =>
+					Stream.unwrap(
+						Effect.map(registry.byThreadId({ threadId: input.threadId }), (provider) =>
+							historyThreadMessageStream(provider, input),
+						),
+					)
+
+				const containerMessages = (input: ContainerMessagesInput) =>
+					registry
+						.byChannel({ channel: input.channel })
+						.pipe(Effect.flatMap((provider) => channelMessagePage(provider, input)))
+
+				const containerMessageStream = (input: ContainerMessagesInput) =>
+					Stream.unwrap(
+						Effect.map(registry.byChannel({ channel: input.channel }), (provider) =>
+							historyChannelMessageStream(provider, input),
+						),
+					)
+
+				const channelThreads = (input: ChannelThreadsInput) =>
+					registry
+						.byChannel({ channel: input.channel })
+						.pipe(Effect.flatMap((provider) => channelThreadPage(provider, input)))
+
+				const channelThreadStream = (input: ChannelThreadsInput) =>
+					Stream.unwrap(
+						Effect.map(registry.byChannel({ channel: input.channel }), (provider) =>
+							historyChannelThreadStream(provider, input),
+						),
+					)
+
+				const context = Effect.fn('channels.context')(function* (input: LoadContextInput) {
+					yield* Effect.annotateCurrentSpan({
+						operation: 'context',
+						provider: input.event.provider,
+						org_id: input.event.orgId,
+						tenant: input.event.tenant,
+						thread_id: input.event.thread.ref.id,
+					})
+					const provider = yield* registry.byName({ provider: input.event.provider })
+					return yield* loadConversationContext(provider, input)
+				})
+
+				const info = Effect.fn('channels.info')(function* (input: InfoInput) {
+					yield* Effect.annotateCurrentSpan({ operation: 'info', thread_id: input.threadId })
+					const provider = yield* registry.byThreadId({ threadId: input.threadId })
+					return yield* provider.info(input)
+				})
+
+				const channelInfo = Effect.fn('channels.channel_info')(function* (input: ChannelInfoInput) {
+					yield* Effect.annotateCurrentSpan({
+						operation: 'channel_info',
+						provider: input.channel.provider,
+						tenant: input.channel.tenant,
+					})
+					const provider = yield* registry.byChannel({ channel: input.channel })
+					return yield* provider.channelInfo(input)
+				})
+
+				const getUser = Effect.fn('channels.get_user')(function* (input: GetUserInput) {
+					yield* Effect.annotateCurrentSpan({
+						operation: 'get_user',
+						provider: input.provider,
+						tenant: input.tenant,
+					})
+					const provider = yield* registry.byName({ provider: input.provider })
+					return yield* provider.getUser(input)
+				})
+
 				return Channels.of({
-					onNewMention,
-					onSubscribedMessage: () => unimplemented('Channels.onSubscribedMessage'),
+					onNewMention: registerMessageHandler(mentionHandlers, 'Channels.onNewMention'),
+					onSubscribedMessage: registerMessageHandler(subscribedHandlers, 'Channels.onSubscribedMessage'),
 					onNewMessage: () => unimplemented('Channels.onNewMessage'),
 					onDirectMessage: () => unimplemented('Channels.onDirectMessage'),
 					onMessageUpdated: () => unimplemented('Channels.onMessageUpdated'),
@@ -361,24 +583,24 @@ export class Channels extends Context.Service<
 					onAnyReaction: () => unimplemented('Channels.onAnyReaction'),
 					onCommand: () => unimplemented('Channels.onCommand'),
 					post,
-					postToChannel: () => unimplemented('Channels.postToChannel'),
+					postToChannel,
 					edit: () => unimplemented('Channels.edit'),
 					delete: () => unimplemented('Channels.delete'),
 					stream: () => unimplemented('Channels.stream'),
-					startThreadTyping: () => unimplemented('Channels.startThreadTyping'),
-					startChannelTyping: () => unimplemented('Channels.startChannelTyping'),
+					startThreadTyping,
+					startChannelTyping,
 					addReaction: () => unimplemented('Channels.addReaction'),
 					removeReaction: () => unimplemented('Channels.removeReaction'),
-					messages: () => unimplemented('Channels.messages'),
-					messageStream: () => Stream.fromEffect(unimplemented('Channels.messageStream')),
-					containerMessages: () => unimplemented('Channels.containerMessages'),
-					containerMessageStream: () => Stream.fromEffect(unimplemented('Channels.containerMessageStream')),
-					channelThreads: () => unimplemented('Channels.channelThreads'),
-					channelThreadStream: () => Stream.fromEffect(unimplemented('Channels.channelThreadStream')),
-					context: () => unimplemented('Channels.context'),
-					info: () => unimplemented('Channels.info'),
-					channelInfo: () => unimplemented('Channels.channelInfo'),
-					getUser: () => unimplemented('Channels.getUser'),
+					messages,
+					messageStream,
+					containerMessages,
+					containerMessageStream,
+					channelThreads,
+					channelThreadStream,
+					context,
+					info,
+					channelInfo,
+					getUser,
 					subject: () => unimplemented('Channels.subject'),
 					downloadAttachment: () => unimplemented('Channels.downloadAttachment'),
 					openDM: () => unimplemented('Channels.openDM'),

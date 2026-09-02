@@ -1,6 +1,7 @@
 export * from './Errors.ts'
 export * from './Schema.ts'
 export * from './Slack.ts'
+export * from './SlackBotIdentity.ts'
 export * from './SlackClient.ts'
 export * from './SlackNormalize.ts'
 export * from './SlackProvider.ts'

@@ -127,6 +127,16 @@ export class Ingress extends Context.Service<
 						}),
 					),
 				)
+				if (subscribed) {
+					yield* subscriptions.subscribe({ threadId: message.thread.ref.id }).pipe(
+						Effect.tapError((error) =>
+							Effect.logWarning('subscription renewal failed', error).pipe(
+								Effect.annotateLogs(attributes),
+							),
+						),
+						Effect.ignore,
+					)
+				}
 				return IngressAccepted.make({ idempotencyKey: message.idempotencyKey })
 			})
 

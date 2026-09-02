@@ -1,17 +1,20 @@
 import { Ingress } from '@humanlayer/channels'
-import { Config, Effect, Layer, Match, Schema } from 'effect'
+import { Config, Effect, Layer, Match, Option, Schema } from 'effect'
 import type { Redacted } from 'effect'
 import { HttpRouter, HttpServerResponse } from 'effect/unstable/http'
 
 import { SlackWebhookError } from './Errors.ts'
-import type { SlackEventCallback } from './Schema.ts'
+import type { SlackBotIdentity, SlackEventCallback } from './Schema.ts'
 import { SlackEventsRequest } from './Schema.ts'
+import { mergeSlackBotIdentity, slackBotIdentity } from './SlackBotIdentity.ts'
 import { normalizeSlackMessage } from './SlackNormalize.ts'
 import { verifySlackSignature } from './SlackSignature.ts'
+import { SlackTenantCredentials } from './SlackTenantCredentials.ts'
 
 type SlackRoutesConfig = {
 	readonly signingSecret: Redacted.Redacted<string>
-	readonly botUserId: string
+	readonly identity: SlackBotIdentity
+	readonly credentials: SlackTenantCredentials['Service']
 }
 
 const webhookErrorResponse = (error: SlackWebhookError) => {
@@ -27,11 +30,33 @@ const webhookErrorResponse = (error: SlackWebhookError) => {
 	return Effect.succeed(HttpServerResponse.empty({ status }))
 }
 
-const acceptMessageEvent = (callback: SlackEventCallback, botUserId: string) =>
+const resolveBotIdentity = (config: SlackRoutesConfig, callback: SlackEventCallback) =>
+	config.credentials.load({ teamId: callback.team_id }).pipe(
+		Effect.map((creds) => mergeSlackBotIdentity(config.identity, creds)),
+		Effect.tapError((error) =>
+			Effect.logWarning('Slack tenant identity lookup failed, using the configured bot identity', error).pipe(
+				Effect.annotateLogs({ provider: 'slack', tenant: callback.team_id, event_id: callback.event_id }),
+			),
+		),
+		Effect.catchTag('CredentialStoreError', () => Effect.succeed(config.identity)),
+	)
+
+const acceptMessageEvent = (config: SlackRoutesConfig, callback: SlackEventCallback) =>
 	Effect.gen(function* () {
 		const ingress = yield* Ingress
-		const normalized = yield* normalizeSlackMessage({ callback, botUserId })
-		yield* ingress.acceptMessage(normalized)
+		const identity = yield* resolveBotIdentity(config, callback)
+		const normalized = yield* normalizeSlackMessage({ callback, identity })
+		if (Option.isNone(normalized)) {
+			yield* Effect.logInfo('acknowledging and dropping ineligible Slack message subtype').pipe(
+				Effect.annotateLogs({
+					provider: 'slack',
+					event_type: callback.event.type,
+					event_id: callback.event_id,
+				}),
+			)
+			return HttpServerResponse.empty({ status: 200 })
+		}
+		yield* ingress.acceptMessage(normalized.value)
 		return HttpServerResponse.empty({ status: 200 })
 	})
 
@@ -65,8 +90,8 @@ const routes = (config: SlackRoutesConfig) =>
 					event_callback: (callback) =>
 						Match.value(callback.event).pipe(
 							Match.discriminatorsExhaustive('type')({
-								app_mention: () => acceptMessageEvent(callback, config.botUserId),
-								message: () => acceptMessageEvent(callback, config.botUserId),
+								app_mention: () => acceptMessageEvent(config, callback),
+								message: () => acceptMessageEvent(config, callback),
 								reaction_added: () => acknowledgeUnsupported(callback),
 								reaction_removed: () => acknowledgeUnsupported(callback),
 								agent_session_stopped: () => acknowledgeUnsupported(callback),
@@ -89,9 +114,12 @@ const routes = (config: SlackRoutesConfig) =>
 export const SlackRoutes = {
 	layer: Layer.unwrap(
 		Effect.gen(function* () {
+			const credentials = yield* SlackTenantCredentials
 			const signingSecret = yield* Config.redacted('SLACK_SIGNING_SECRET')
 			const botUserId = yield* Config.string('SLACK_BOT_USER_ID')
-			return routes({ signingSecret, botUserId })
+			const botId = yield* Config.option(Config.string('SLACK_BOT_ID'))
+			const identity = slackBotIdentity({ botUserId, botId: Option.getOrUndefined(botId) })
+			return routes({ signingSecret, identity, credentials })
 		}),
 	),
 }

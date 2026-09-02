@@ -13,7 +13,6 @@ import type {
 	TenantDisabled,
 } from './Errors.ts'
 import type { SubscriptionTransition } from './Events.ts'
-import { unimplemented } from './internal/unimplemented.ts'
 import { Message } from './Message.ts'
 import type { MessageHistoryOptions, MessagePage } from './Operations.ts'
 import { MessageHistoryOptions as MessageHistoryOptionsSchema, MessagesInput } from './Operations.ts'
@@ -79,7 +78,26 @@ export class Thread extends Schema.TaggedClass<Thread>()('Thread', {
 	}
 
 	getParticipants(): Effect.Effect<ReadonlyArray<Author>, UnknownProvider | HistoryFailed, Channels> {
-		return unimplemented('Thread.getParticipants')
+		const currentAuthor = this.currentMessage?.author
+		const allMessages = this.allMessages
+		return Effect.gen(function* () {
+			const seen = new Map<string, Author>()
+			const consider = (author: Author) => {
+				if (author.isMe || author.isBot === true || seen.has(author.userId)) {
+					return
+				}
+				seen.set(author.userId, author)
+			}
+			if (currentAuthor !== undefined) {
+				consider(currentAuthor)
+			}
+			yield* Stream.runForEach(allMessages, (message) => Effect.sync(() => consider(message.author)))
+			return [...seen.values()]
+		}).pipe(
+			Effect.withSpan('channels.participants', {
+				attributes: { provider: this.ref.channel.provider, thread_id: this.ref.id, operation: 'participants' },
+			}),
+		)
 	}
 
 	fetchMetadata(): Effect.Effect<ThreadInfo, UnknownProvider | ThreadGone, Channels> {

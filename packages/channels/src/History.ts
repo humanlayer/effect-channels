@@ -1,0 +1,170 @@
+import { Effect, Option, Stream } from 'effect'
+
+import type { ChannelProvider } from './ChannelProvider.ts'
+import { HistoryFailed, UnsupportedContextScope } from './Errors.ts'
+import type { Message } from './Message.ts'
+import type {
+	ChannelThreadsInput,
+	ContainerMessagesInput,
+	MessageHistoryOptions,
+	MessagePage,
+	MessagesInput,
+	ThreadPage,
+	ThreadSummary,
+} from './Operations.ts'
+
+interface HistoryOptionsDraft {
+	limit?: number
+	cursor?: string
+	direction?: 'forward' | 'backward'
+}
+
+interface ContainerMessagesDraft {
+	channel: ContainerMessagesInput['channel']
+	before?: ContainerMessagesInput['before']
+	options?: MessageHistoryOptions
+}
+
+export const historyOptionsWithCursor = (
+	options: MessageHistoryOptions | undefined,
+	cursor: string | undefined,
+): MessageHistoryOptions | undefined => {
+	if (options === undefined && cursor === undefined) {
+		return undefined
+	}
+	const next: HistoryOptionsDraft = {}
+	if (options?.limit !== undefined) {
+		next.limit = options.limit
+	}
+	if (options?.direction !== undefined) {
+		next.direction = options.direction
+	}
+	if (cursor !== undefined) {
+		next.cursor = cursor
+	}
+	return next
+}
+
+export const messagePageStream = <E, R>(
+	initialOptions: MessageHistoryOptions | undefined,
+	page: (options: MessageHistoryOptions | undefined) => Effect.Effect<MessagePage, E, R>,
+): Stream.Stream<Message, E, R> =>
+	Stream.paginate<string | undefined, Message, E, R>(initialOptions?.cursor, (cursor) =>
+		Effect.map(
+			page(historyOptionsWithCursor(initialOptions, cursor)),
+			(result) =>
+				[
+					result.messages,
+					result.nextCursor === undefined || result.messages.length === 0
+						? Option.none<string | undefined>()
+						: Option.some(result.nextCursor),
+				] as const,
+		),
+	)
+
+export const threadSummaryPageStream = <E, R>(
+	initialOptions: MessageHistoryOptions | undefined,
+	page: (options: MessageHistoryOptions | undefined) => Effect.Effect<ThreadPage, E, R>,
+): Stream.Stream<ThreadSummary, E, R> =>
+	Stream.paginate<string | undefined, ThreadSummary, E, R>(initialOptions?.cursor, (cursor) =>
+		Effect.map(
+			page(historyOptionsWithCursor(initialOptions, cursor)),
+			(result) =>
+				[
+					result.threads,
+					result.nextCursor === undefined || result.threads.length === 0
+						? Option.none<string | undefined>()
+						: Option.some(result.nextCursor),
+				] as const,
+		),
+	)
+
+export const threadMessagePage = (
+	provider: ChannelProvider,
+	input: MessagesInput,
+): Effect.Effect<MessagePage, HistoryFailed> => {
+	const page: Effect.Effect<MessagePage, HistoryFailed> = provider.capabilities.history.thread
+		? provider.messages(input)
+		: Effect.fail(
+				HistoryFailed.make({ provider: provider.name, message: 'provider does not support thread history' }),
+			)
+	return page.pipe(
+		Effect.withSpan('channels.history.thread_page', {
+			attributes: { provider: provider.name, thread_id: input.threadId, operation: 'thread_page' },
+		}),
+	)
+}
+
+export const threadMessageStream = (
+	provider: ChannelProvider,
+	input: MessagesInput,
+): Stream.Stream<Message, HistoryFailed> =>
+	messagePageStream(input.options, (options) =>
+		threadMessagePage(
+			provider,
+			options === undefined ? { threadId: input.threadId } : { threadId: input.threadId, options },
+		),
+	)
+
+export const containerInputWithOptions = (
+	input: ContainerMessagesInput,
+	options: MessageHistoryOptions | undefined,
+): ContainerMessagesInput => {
+	const next: ContainerMessagesDraft = { channel: input.channel }
+	if (input.before !== undefined) {
+		next.before = input.before
+	}
+	if (options !== undefined) {
+		next.options = options
+	}
+	return next
+}
+
+export const channelMessagePage = (
+	provider: ChannelProvider,
+	input: ContainerMessagesInput,
+): Effect.Effect<MessagePage, HistoryFailed | UnsupportedContextScope> => {
+	const page: Effect.Effect<MessagePage, HistoryFailed | UnsupportedContextScope> = provider.capabilities.history
+		.channelMessages
+		? provider.containerMessages(input)
+		: Effect.fail(UnsupportedContextScope.make({ provider: provider.name, scope: 'channel_messages' }))
+	return page.pipe(
+		Effect.withSpan('channels.history.channel_page', {
+			attributes: { provider: provider.name, tenant: input.channel.tenant, operation: 'channel_page' },
+		}),
+	)
+}
+
+export const channelMessageStream = (
+	provider: ChannelProvider,
+	input: ContainerMessagesInput,
+): Stream.Stream<Message, HistoryFailed | UnsupportedContextScope> =>
+	messagePageStream(input.options, (options) =>
+		channelMessagePage(provider, containerInputWithOptions(input, options)),
+	)
+
+export const channelThreadPage = (
+	provider: ChannelProvider,
+	input: ChannelThreadsInput,
+): Effect.Effect<ThreadPage, HistoryFailed | UnsupportedContextScope> => {
+	const page: Effect.Effect<ThreadPage, HistoryFailed | UnsupportedContextScope> = provider.capabilities.history
+		.channelThreads
+		? provider.channelThreads(input)
+		: Effect.fail(UnsupportedContextScope.make({ provider: provider.name, scope: 'channel_threads' }))
+	return page.pipe(
+		Effect.withSpan('channels.history.channel_threads', {
+			attributes: { provider: provider.name, tenant: input.channel.tenant, operation: 'channel_threads' },
+		}),
+	)
+}
+
+export const channelThreadStream = (
+	provider: ChannelProvider,
+	input: ChannelThreadsInput,
+): Stream.Stream<ThreadSummary, HistoryFailed | UnsupportedContextScope> =>
+	threadSummaryPageStream(input.options, (options) =>
+		channelThreadPage(
+			provider,
+			options === undefined ? { channel: input.channel } : { channel: input.channel, options },
+		),
+	)

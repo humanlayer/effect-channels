@@ -1,6 +1,6 @@
 import { Schema } from 'effect'
 
-import { OrgId, ProviderName, TenantId, ThreadId } from './Schema.ts'
+import { OrgId, ProviderName, TenantId, ThreadId, UserId } from './Schema.ts'
 
 export class UnknownProvider extends Schema.TaggedError<UnknownProvider>()('UnknownProvider', {
 	provider: Schema.String,
@@ -73,6 +73,13 @@ export class ChannelGone extends Schema.TaggedError<ChannelGone>()('ChannelGone'
 export class SubjectFailed extends Schema.TaggedError<SubjectFailed>()('SubjectFailed', {
 	provider: ProviderName,
 	message: Schema.String,
+}) {}
+
+export class UserLookupFailed extends Schema.TaggedError<UserLookupFailed>()('UserLookupFailed', {
+	provider: ProviderName,
+	tenant: TenantId,
+	userId: UserId,
+	reason: Schema.Literals(['not_found', 'transport', 'api']),
 }) {}
 
 export class FileReadFailed extends Schema.TaggedError<FileReadFailed>()('FileReadFailed', {

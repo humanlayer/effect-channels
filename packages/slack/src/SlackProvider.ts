@@ -1,34 +1,66 @@
 import {
 	Capabilities,
+	ChannelGone,
 	ChannelProvider,
+	HistoryFailed,
 	Message,
 	MessageRef,
 	PostFailed,
 	SentMessage,
 	SentRef,
+	ThreadGone,
+	ThreadId,
+	ThreadInfo,
 	UserId,
+	UserLookupFailed,
+	containerInputWithOptions,
+	messagePageStream,
+	threadSummaryPageStream,
 	unimplemented,
 } from '@humanlayer/channels'
-import type { Content, InlineContentNode } from '@humanlayer/channels'
-import { Clock, Context, DateTime, Effect, Layer, Match, Stream } from 'effect'
+import type {
+	ChannelPostInput,
+	ChannelThreadsInput,
+	ContainerMessagesInput,
+	Content,
+	GetUserInput,
+	InfoInput,
+	InlineContentNode,
+	MessagesInput,
+	PostInput,
+	StartThreadTypingInput,
+} from '@humanlayer/channels'
+import { Clock, Context, DateTime, Effect, HashSet, Layer, Match, Ref } from 'effect'
 
-import { SlackPostMessageInput } from './Schema.ts'
+import {
+	SlackChannelInfoInput,
+	SlackGetUserInput,
+	SlackHistoryInput,
+	SlackListThreadsInput,
+	SlackMessageTs,
+	SlackPostMessageInput,
+	SlackRepliesInput,
+	SlackTeamId,
+	SlackThreadRef,
+	type SlackChannelId,
+	type SlackThreadRef as SlackThreadRefType,
+} from './Schema.ts'
 import { SlackClient } from './SlackClient.ts'
-import { decodeSlackThreadId, slackThreadRef } from './SlackThreadId.ts'
+import { decodeSlackChannelId, decodeSlackThreadId, slackThreadRef } from './SlackThreadId.ts'
 
 const SlackCapabilities = Capabilities.make({
 	threadPost: true,
-	channelPost: false,
+	channelPost: true,
 	edit: false,
 	delete: false,
 	streaming: 'unsupported',
-	typing: { thread: false, channel: false },
-	history: { thread: false, channelMessages: false, channelThreads: false },
+	typing: { thread: true, channel: false },
+	history: { thread: true, channelMessages: true, channelThreads: true },
 	reactions: { add: false, remove: false, events: false },
 	files: { read: false, upload: false },
 	actions: false,
-	threadInfo: false,
-	channelInfo: false,
+	threadInfo: true,
+	channelInfo: true,
 	createThread: false,
 	directMessages: { ingress: false, open: false },
 	ephemeral: { native: false, dmFallback: false },
@@ -75,12 +107,110 @@ const renderContent = Match.type<Content>().pipe(
 	}),
 )
 
+interface HistoryRequestFields {
+	limit?: number
+	cursor?: string
+	direction?: 'forward' | 'backward'
+}
+
+interface SlackHistoryFields extends HistoryRequestFields {
+	teamId: SlackTeamId
+	channelId: SlackChannelId
+	before?: SlackMessageTs
+}
+
+interface SlackThreadListFields {
+	teamId: SlackTeamId
+	channelId: SlackChannelId
+	limit?: number
+	cursor?: string
+}
+
+const historyRequestFields = (options: MessagesInput['options']): HistoryRequestFields => {
+	const fields: HistoryRequestFields = {}
+	if (options?.limit !== undefined) {
+		fields.limit = options.limit
+	}
+	if (options?.cursor !== undefined) {
+		fields.cursor = options.cursor
+	}
+	if (options?.direction !== undefined) {
+		fields.direction = options.direction
+	}
+	return fields
+}
+
 export class SlackProvider extends Context.Service<SlackProvider, ChannelProvider>()('channels/SlackProvider') {
 	static readonly layer = Layer.effect(
 		SlackProvider,
 		Effect.gen(function* () {
 			const client = yield* SlackClient
-			const post = Effect.fn('slack.provider.post')(function* (input: Parameters<ChannelProvider['post']>[0]) {
+			const typingThreads = yield* Ref.make(HashSet.empty<ThreadId>())
+
+			const restoreActiveStatus = (ref: SlackThreadRefType, threadId: ThreadId) =>
+				client
+					.setSessionStatus({
+						teamId: ref.teamId,
+						channelId: ref.channelId,
+						threadTs: ref.threadTs,
+						status: 'active',
+					})
+					.pipe(
+						Effect.tapError((error) =>
+							Effect.logWarning('Slack session status restore failed', error).pipe(
+								Effect.annotateLogs({ provider: 'slack', thread_id: threadId }),
+							),
+						),
+						Effect.ignore,
+						Effect.withSpan('channels.typing.end', {
+							attributes: { provider: 'slack', thread_id: threadId, operation: 'typing_end' },
+						}),
+					)
+
+			const endTypingIfStarted = (ref: SlackThreadRefType, threadId: ThreadId) =>
+				Ref.modify(
+					typingThreads,
+					(threads) => [HashSet.has(threads, threadId), HashSet.remove(threads, threadId)] as const,
+				).pipe(Effect.flatMap((started) => (started ? restoreActiveStatus(ref, threadId) : Effect.void)))
+
+			const sentFromSlack = (input: {
+				readonly threadRef: ReturnType<typeof slackThreadRef>
+				readonly sentThreadId: ThreadId
+				readonly text: string
+				readonly degraded: ReadonlyArray<string>
+				readonly channelId: string
+				readonly ts: string
+			}) =>
+				Effect.gen(function* () {
+					const now = yield* Clock.currentTimeMillis
+					const message = Message.make({
+						ref: MessageRef.make(input.ts),
+						threadRef: input.threadRef,
+						text: input.text,
+						markdown: input.text,
+						author: {
+							userId: UserId.make('self'),
+							userName: 'self',
+							fullName: 'self',
+							isBot: true,
+							isMe: true,
+						},
+						metadata: { sentAt: DateTime.makeUnsafe({ epochMilliseconds: now }) },
+						attachments: [],
+						raw: { channel: input.channelId, ts: input.ts },
+					})
+					return SentMessage.make({
+						ref: SentRef.make({
+							threadId: input.sentThreadId,
+							messageRef: message.ref,
+							provider: 'slack',
+							degraded: input.degraded,
+						}),
+						message,
+					})
+				})
+
+			const post = Effect.fn('slack.provider.post')(function* (input: PostInput) {
 				const ref = yield* decodeSlackThreadId(input.threadId).pipe(
 					Effect.catchTag('InvalidSlackThreadId', () =>
 						Effect.fail(
@@ -93,19 +223,79 @@ export class SlackProvider extends Context.Service<SlackProvider, ChannelProvide
 					),
 				)
 				const rendered = renderContent(input.content)
+				const send = Effect.gen(function* () {
+					const sent = yield* client
+						.postMessage(
+							SlackPostMessageInput.make({
+								teamId: ref.teamId,
+								channelId: ref.channelId,
+								threadTs: ref.threadTs,
+								text: rendered.text,
+							}),
+						)
+						.pipe(
+							Effect.tapError((error) =>
+								Effect.logError('Slack provider post failed', error).pipe(
+									Effect.annotateLogs({ provider: 'slack', thread_id: input.threadId }),
+								),
+							),
+							Effect.catchTags({
+								SlackTransportError: () =>
+									Effect.fail(
+										PostFailed.make({
+											provider: 'slack',
+											threadId: input.threadId,
+											message: 'Slack transport failed',
+										}),
+									),
+								SlackApiError: () =>
+									Effect.fail(
+										PostFailed.make({
+											provider: 'slack',
+											threadId: input.threadId,
+											message: 'Slack API rejected the post',
+										}),
+									),
+							}),
+						)
+					return yield* sentFromSlack({
+						threadRef: slackThreadRef(ref, false),
+						sentThreadId: input.threadId,
+						text: rendered.text,
+						degraded: rendered.degraded,
+						channelId: sent.channelId,
+						ts: sent.ts,
+					})
+				})
+				return yield* send.pipe(Effect.ensuring(endTypingIfStarted(ref, input.threadId)))
+			})
+
+			const postToChannel = Effect.fn('slack.provider.post_to_channel')(function* (input: ChannelPostInput) {
+				const errorThreadId = ThreadId.make(input.channel.id)
+				const address = yield* decodeSlackChannelId(input.channel.id).pipe(
+					Effect.catchTag('InvalidSlackThreadId', () =>
+						Effect.fail(
+							PostFailed.make({
+								provider: 'slack',
+								threadId: errorThreadId,
+								message: 'invalid Slack channel id',
+							}),
+						),
+					),
+				)
+				const rendered = renderContent(input.content)
 				const sent = yield* client
 					.postMessage(
 						SlackPostMessageInput.make({
-							teamId: ref.teamId,
-							channelId: ref.channelId,
-							threadTs: ref.threadTs,
+							teamId: address.teamId,
+							channelId: address.channelId,
 							text: rendered.text,
 						}),
 					)
 					.pipe(
 						Effect.tapError((error) =>
-							Effect.logError('Slack provider post failed', error).pipe(
-								Effect.annotateLogs({ provider: 'slack', thread_id: input.threadId }),
+							Effect.logError('Slack provider channel post failed', error).pipe(
+								Effect.annotateLogs({ provider: 'slack', tenant: address.teamId }),
 							),
 						),
 						Effect.catchTags({
@@ -113,7 +303,7 @@ export class SlackProvider extends Context.Service<SlackProvider, ChannelProvide
 								Effect.fail(
 									PostFailed.make({
 										provider: 'slack',
-										threadId: input.threadId,
+										threadId: errorThreadId,
 										message: 'Slack transport failed',
 									}),
 								),
@@ -121,62 +311,257 @@ export class SlackProvider extends Context.Service<SlackProvider, ChannelProvide
 								Effect.fail(
 									PostFailed.make({
 										provider: 'slack',
-										threadId: input.threadId,
+										threadId: errorThreadId,
 										message: 'Slack API rejected the post',
 									}),
 								),
 						}),
 					)
-				const threadRef = slackThreadRef(ref, false)
-				const now = yield* Clock.currentTimeMillis
-				const message = Message.make({
-					ref: MessageRef.make(sent.ts),
+				const threadRef = slackThreadRef(
+					SlackThreadRef.make({ teamId: address.teamId, channelId: sent.channelId, threadTs: sent.ts }),
+					true,
+				)
+				return yield* sentFromSlack({
 					threadRef,
+					sentThreadId: threadRef.id,
 					text: rendered.text,
-					markdown: rendered.text,
-					author: {
-						userId: UserId.make('self'),
-						userName: 'self',
-						fullName: 'self',
-						isBot: true,
-						isMe: true,
-					},
-					metadata: { sentAt: DateTime.makeUnsafe({ epochMilliseconds: now }) },
-					attachments: [],
-					raw: { channel: sent.channelId, ts: sent.ts },
+					degraded: rendered.degraded,
+					channelId: sent.channelId,
+					ts: sent.ts,
 				})
-				return SentMessage.make({
-					ref: SentRef.make({
-						threadId: input.threadId,
-						messageRef: message.ref,
-						provider: 'slack',
-						degraded: rendered.degraded,
+			})
+
+			const startThreadTyping = (input: StartThreadTypingInput) =>
+				Effect.gen(function* () {
+					const ref = yield* decodeSlackThreadId(input.threadId)
+					yield* Ref.update(typingThreads, HashSet.add(input.threadId))
+					yield* client.setSessionStatus({
+						teamId: ref.teamId,
+						channelId: ref.channelId,
+						threadTs: ref.threadTs,
+						status: 'processing',
+					})
+				}).pipe(
+					Effect.tapError((error) =>
+						Effect.logWarning('Slack thread typing failed', error).pipe(
+							Effect.annotateLogs({ provider: 'slack', thread_id: input.threadId }),
+						),
+					),
+					Effect.ignore,
+				)
+
+			const messages = Effect.fn('slack.provider.messages')(function* (input: MessagesInput) {
+				const ref = yield* decodeSlackThreadId(input.threadId).pipe(
+					Effect.catchTag('InvalidSlackThreadId', () =>
+						Effect.fail(HistoryFailed.make({ provider: 'slack', message: 'invalid Slack thread id' })),
+					),
+				)
+				return yield* client
+					.replies(
+						SlackRepliesInput.make({
+							teamId: ref.teamId,
+							channelId: ref.channelId,
+							threadTs: ref.threadTs,
+							...historyRequestFields(input.options),
+						}),
+					)
+					.pipe(
+						Effect.tapError((error) =>
+							Effect.logError('Slack thread history failed', error).pipe(
+								Effect.annotateLogs({ provider: 'slack', thread_id: input.threadId }),
+							),
+						),
+						Effect.catchTags({
+							UnknownTenant: () =>
+								Effect.fail(
+									HistoryFailed.make({ provider: 'slack', message: 'unknown Slack workspace' }),
+								),
+							SlackTransportError: () =>
+								Effect.fail(
+									HistoryFailed.make({ provider: 'slack', message: 'Slack transport failed' }),
+								),
+							SlackApiError: () =>
+								Effect.fail(
+									HistoryFailed.make({
+										provider: 'slack',
+										message: 'Slack API rejected the history request',
+									}),
+								),
+						}),
+					)
+			})
+
+			const containerMessages = Effect.fn('slack.provider.container_messages')(function* (
+				input: ContainerMessagesInput,
+			) {
+				const address = yield* decodeSlackChannelId(input.channel.id).pipe(
+					Effect.catchTag('InvalidSlackThreadId', () =>
+						Effect.fail(HistoryFailed.make({ provider: 'slack', message: 'invalid Slack channel id' })),
+					),
+				)
+				const fields: SlackHistoryFields = {
+					teamId: address.teamId,
+					channelId: address.channelId,
+					...historyRequestFields(input.options),
+				}
+				if (input.before !== undefined) {
+					fields.before = SlackMessageTs.make(input.before)
+				}
+				return yield* client.history(SlackHistoryInput.make(fields)).pipe(
+					Effect.tapError((error) =>
+						Effect.logError('Slack channel history failed', error).pipe(
+							Effect.annotateLogs({ provider: 'slack', tenant: address.teamId }),
+						),
+					),
+					Effect.catchTags({
+						UnknownTenant: () =>
+							Effect.fail(HistoryFailed.make({ provider: 'slack', message: 'unknown Slack workspace' })),
+						SlackTransportError: () =>
+							Effect.fail(HistoryFailed.make({ provider: 'slack', message: 'Slack transport failed' })),
+						SlackApiError: () =>
+							Effect.fail(
+								HistoryFailed.make({
+									provider: 'slack',
+									message: 'Slack API rejected the history request',
+								}),
+							),
 					}),
-					message,
-				})
+				)
+			})
+
+			const channelThreads = Effect.fn('slack.provider.channel_threads')(function* (input: ChannelThreadsInput) {
+				const address = yield* decodeSlackChannelId(input.channel.id).pipe(
+					Effect.catchTag('InvalidSlackThreadId', () =>
+						Effect.fail(HistoryFailed.make({ provider: 'slack', message: 'invalid Slack channel id' })),
+					),
+				)
+				const fields: SlackThreadListFields = { teamId: address.teamId, channelId: address.channelId }
+				if (input.options?.limit !== undefined) {
+					fields.limit = input.options.limit
+				}
+				if (input.options?.cursor !== undefined) {
+					fields.cursor = input.options.cursor
+				}
+				return yield* client.listThreads(SlackListThreadsInput.make(fields)).pipe(
+					Effect.tapError((error) =>
+						Effect.logError('Slack channel thread listing failed', error).pipe(
+							Effect.annotateLogs({ provider: 'slack', tenant: address.teamId }),
+						),
+					),
+					Effect.catchTags({
+						UnknownTenant: () =>
+							Effect.fail(HistoryFailed.make({ provider: 'slack', message: 'unknown Slack workspace' })),
+						SlackTransportError: () =>
+							Effect.fail(HistoryFailed.make({ provider: 'slack', message: 'Slack transport failed' })),
+						SlackApiError: () =>
+							Effect.fail(
+								HistoryFailed.make({
+									provider: 'slack',
+									message: 'Slack API rejected the thread listing',
+								}),
+							),
+					}),
+				)
+			})
+
+			const info = Effect.fn('slack.provider.info')(function* (input: InfoInput) {
+				return yield* Effect.gen(function* () {
+					const ref = yield* decodeSlackThreadId(input.threadId)
+					const channelInfo = yield* client.channelInfo(
+						SlackChannelInfoInput.make({ teamId: ref.teamId, channelId: ref.channelId }),
+					)
+					const threadRef = slackThreadRef(ref, false)
+					return channelInfo.name === undefined
+						? ThreadInfo.make({ thread: threadRef })
+						: ThreadInfo.make({ thread: threadRef, title: channelInfo.name })
+				}).pipe(
+					Effect.tapError((error) =>
+						Effect.logError('Slack thread info failed', error).pipe(
+							Effect.annotateLogs({ provider: 'slack', thread_id: input.threadId }),
+						),
+					),
+					Effect.mapError(() => ThreadGone.make({ threadId: input.threadId })),
+				)
+			})
+
+			const channelInfo = Effect.fn('slack.provider.channel_info')(function* (input: {
+				readonly channel: ContainerMessagesInput['channel']
+			}) {
+				return yield* Effect.gen(function* () {
+					const address = yield* decodeSlackChannelId(input.channel.id)
+					return yield* client.channelInfo(
+						SlackChannelInfoInput.make({ teamId: address.teamId, channelId: address.channelId }),
+					)
+				}).pipe(
+					Effect.tapError((error) =>
+						Effect.logError('Slack channel info failed', error).pipe(
+							Effect.annotateLogs({ provider: 'slack', tenant: input.channel.tenant }),
+						),
+					),
+					Effect.mapError(() => ChannelGone.make({ channelId: input.channel.id })),
+				)
+			})
+
+			const getUser = Effect.fn('slack.provider.get_user')(function* (input: GetUserInput) {
+				const teamId = SlackTeamId.make(input.tenant)
+				const lookupFailed = (reason: UserLookupFailed['reason']) =>
+					Effect.fail(
+						UserLookupFailed.make({
+							provider: 'slack',
+							tenant: input.tenant,
+							userId: input.userId,
+							reason,
+						}),
+					)
+				return yield* client.getUser(SlackGetUserInput.make({ teamId, userId: input.userId })).pipe(
+					Effect.tapError((error) =>
+						Effect.logError('Slack user lookup failed', error).pipe(
+							Effect.annotateLogs({ provider: 'slack', tenant: input.tenant }),
+						),
+					),
+					Effect.catchTags({
+						SlackTransportError: () => lookupFailed('transport'),
+						SlackApiError: (error) => lookupFailed(error.code === 'user_not_found' ? 'not_found' : 'api'),
+					}),
+				)
 			})
 
 			return new ChannelProvider({
 				name: 'slack',
 				capabilities: SlackCapabilities,
 				post,
-				postToChannel: () => unimplemented('SlackProvider.postToChannel'),
+				postToChannel,
 				edit: () => unimplemented('SlackProvider.edit'),
 				delete: () => unimplemented('SlackProvider.delete'),
 				stream: () => unimplemented('SlackProvider.stream'),
-				startThreadTyping: () => unimplemented('SlackProvider.startThreadTyping'),
+				startThreadTyping,
 				startChannelTyping: () => unimplemented('SlackProvider.startChannelTyping'),
 				addReaction: () => unimplemented('SlackProvider.addReaction'),
 				removeReaction: () => unimplemented('SlackProvider.removeReaction'),
-				messages: () => unimplemented('SlackProvider.messages'),
-				messageStream: () => Stream.fromEffect(unimplemented('SlackProvider.messageStream')),
-				containerMessages: () => unimplemented('SlackProvider.containerMessages'),
-				containerMessageStream: () => Stream.fromEffect(unimplemented('SlackProvider.containerMessageStream')),
-				channelThreads: () => unimplemented('SlackProvider.channelThreads'),
-				channelThreadStream: () => Stream.fromEffect(unimplemented('SlackProvider.channelThreadStream')),
-				info: () => unimplemented('SlackProvider.info'),
-				channelInfo: () => unimplemented('SlackProvider.channelInfo'),
-				getUser: () => unimplemented('SlackProvider.getUser'),
+				messages,
+				messageStream: (input) =>
+					messagePageStream(input.options, (options) =>
+						messages(
+							options === undefined
+								? { threadId: input.threadId }
+								: { threadId: input.threadId, options },
+						),
+					),
+				containerMessages,
+				containerMessageStream: (input) =>
+					messagePageStream(input.options, (options) =>
+						containerMessages(containerInputWithOptions(input, options)),
+					),
+				channelThreads,
+				channelThreadStream: (input) =>
+					threadSummaryPageStream(input.options, (options) =>
+						channelThreads(
+							options === undefined ? { channel: input.channel } : { channel: input.channel, options },
+						),
+					),
+				info,
+				channelInfo,
+				getUser,
 				subject: () => unimplemented('SlackProvider.subject'),
 				downloadAttachment: () => unimplemented('SlackProvider.downloadAttachment'),
 				openDM: () => unimplemented('SlackProvider.openDM'),
