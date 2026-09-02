@@ -70,6 +70,11 @@ export class ChannelGone extends Schema.TaggedError<ChannelGone>()('ChannelGone'
 	channelId: Schema.String,
 }) {}
 
+export class MetadataFailed extends Schema.TaggedError<MetadataFailed>()('MetadataFailed', {
+	provider: ProviderName,
+	message: Schema.String,
+}) {}
+
 export class SubjectFailed extends Schema.TaggedError<SubjectFailed>()('SubjectFailed', {
 	provider: ProviderName,
 	message: Schema.String,

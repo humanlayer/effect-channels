@@ -58,6 +58,6 @@ it.effect('encodes authenticated threaded chat.postMessage requests', () =>
 
 		assert.strictEqual(recorded.authorization, 'Bearer xoxb-test-token')
 		assert.deepStrictEqual(body, { channel: 'C_TEST', thread_ts: '100.1', text: 'threaded reply' })
-		assert.deepStrictEqual(sent, { channelId: 'C_TEST', ts: '100.2' })
+		assert.deepStrictEqual(sent, { channelId: SlackChannelId.make('C_TEST'), ts: SlackMessageTs.make('100.2') })
 	}),
 )

@@ -1,5 +1,5 @@
 import { assert, it } from '@effect/vitest'
-import { MarkdownContent, ThreadId } from '@humanlayer/channels'
+import { MarkdownContent, ThreadId, UserId } from '@humanlayer/channels'
 import { DateTime, Effect, Layer, Queue, Schema } from 'effect'
 
 import { expectTaggedFailure } from '../../channels/test/support.ts'
@@ -14,6 +14,7 @@ import {
 	testChannelRef,
 	testRootThreadId,
 	testTeamId,
+	unknownTenantCredentialsLayer,
 	type RecordedSlackRequest,
 } from './support.ts'
 
@@ -71,7 +72,7 @@ const providerLayerFor = <E>(harness: { readonly layer: Layer.Layer<SlackClient,
 it.effect('posts a channel root message without thread_ts and returns a new thread reference', () =>
 	Effect.gen(function* () {
 		const harness = yield* makeSlackClientHarness(() =>
-			slackJsonResponse('{"ok":true,"channel":"C_TEST","ts":"500.1"}'),
+			slackJsonResponse('{"ok":true,"channel":"C_TEST","ts":"500.1","message":{"user":"U_BOT"}}'),
 		)
 		const sent = yield* Effect.flatMap(SlackProvider, (provider) =>
 			provider.postToChannel({
@@ -90,6 +91,13 @@ it.effect('posts a channel root message without thread_ts and returns a new thre
 		assert.deepStrictEqual(sent.ref.degraded, [])
 		assert.strictEqual(sent.message.threadRef.isNew, true)
 		assert.deepStrictEqual(sent.message.threadRef.channel, testChannelRef)
+		assert.deepStrictEqual(sent.message.author, {
+			userId: UserId.make('U_BOT'),
+			userName: 'U_BOT',
+			fullName: 'U_BOT',
+			isBot: true,
+			isMe: true,
+		})
 		assert.strictEqual(yield* Queue.size(harness.requests), 0)
 	}),
 )
@@ -150,22 +158,24 @@ it.effect('lists channel threads from conversations.history roots with replies, 
 			),
 			[300_300, 200_200, undefined],
 		)
-		assert.strictEqual(page.nextCursor, 'more')
+		assert.strictEqual(page.nextCursor, '100.1')
 
 		const limited = yield* Effect.flatMap(SlackClient, (client) =>
 			client.listThreads(
-				SlackListThreadsInput.make({ teamId: testTeamId, channelId: testChannelId, limit: 1, cursor: 'more' }),
+				SlackListThreadsInput.make({ teamId: testTeamId, channelId: testChannelId, limit: 1, cursor: '100.1' }),
 			),
 		).pipe(Effect.provide(harness.layer))
 		assert.deepStrictEqual(params(yield* Queue.take(harness.requests)), {
 			channel: 'C_TEST',
 			limit: '3',
-			cursor: 'more',
+			latest: '100.1',
+			inclusive: 'false',
 		})
 		assert.deepStrictEqual(
 			limited.threads.map((summary) => summary.thread.id),
 			['slack:v1:T_TEST:C_TEST:300.1'],
 		)
+		assert.strictEqual(limited.nextCursor, '300.1')
 	}),
 )
 
@@ -188,8 +198,8 @@ it.effect('caps the thread listing over-fetch at 200 and defaults the page size 
 it.effect('passes provider thread listing options through and maps failures to HistoryFailed', () =>
 	Effect.gen(function* () {
 		const harness = yield* makeSlackClientHarness((request) =>
-			request.url.searchParams.get('cursor') === 'broken'
-				? slackJsonResponse('{"ok":false,"error":"invalid_cursor"}')
+			request.url.searchParams.get('latest') === 'broken'
+				? slackJsonResponse('{"ok":false,"error":"invalid_ts_latest"}')
 				: threadListResponse(),
 		)
 		yield* Effect.gen(function* () {
@@ -198,19 +208,89 @@ it.effect('passes provider thread listing options through and maps failures to H
 			assert.deepStrictEqual(params(yield* Queue.take(harness.requests)), {
 				channel: 'C_TEST',
 				limit: '6',
-				cursor: 'c',
+				latest: 'c',
+				inclusive: 'false',
 			})
 			assert.deepStrictEqual(
 				page.threads.map((summary) => summary.thread.id),
 				['slack:v1:T_TEST:C_TEST:300.1', 'slack:v1:T_TEST:C_TEST:200.1'],
 			)
-			assert.strictEqual(page.nextCursor, 'more')
+			assert.strictEqual(page.nextCursor, '200.1')
 
 			const error = yield* expectTaggedFailure('HistoryFailed')(
 				provider.channelThreads({ channel: testChannelRef, options: { cursor: 'broken' } }),
 			)
 			assert.strictEqual(error.provider, 'slack')
 		}).pipe(Effect.provide(providerLayerFor(harness)))
+	}),
+)
+
+const busyChannelNewestFirst = [
+	{ type: 'message', user: 'U_A', text: 'root five', ts: '500.1', thread_ts: '500.1', reply_count: 1 },
+	{ type: 'message', user: 'U_B', text: 'chatter', ts: '450.1' },
+	{ type: 'message', user: 'U_C', text: 'root four', ts: '400.1', thread_ts: '400.1', reply_count: 2 },
+	{ type: 'message', user: 'U_D', text: 'root three', ts: '300.1', thread_ts: '300.1', reply_count: 3 },
+	{ type: 'message', user: 'U_E', text: 'root two', ts: '200.1', thread_ts: '200.1', reply_count: 1 },
+	{ type: 'message', user: 'U_F', text: 'chatter', ts: '150.1' },
+	{ type: 'message', user: 'U_G', text: 'root one', ts: '100.1', thread_ts: '100.1', reply_count: 4 },
+]
+
+const busyChannelWindow = (request: RecordedSlackRequest) => {
+	const latest = request.url.searchParams.get('latest')
+	const cursor = request.url.searchParams.get('cursor')
+	const limit = Number(request.url.searchParams.get('limit') ?? '100')
+	const source =
+		latest !== null
+			? busyChannelNewestFirst.filter((message) => Number(message.ts) < Number(latest))
+			: cursor !== null
+				? busyChannelNewestFirst.slice(6)
+				: busyChannelNewestFirst
+	const page = source.slice(0, limit)
+	const hasMore = source.length > page.length
+	return slackJsonResponse(
+		JSON.stringify({
+			ok: true,
+			messages: page,
+			has_more: hasMore,
+			response_metadata: hasMore ? { next_cursor: 'opaque-w2' } : undefined,
+		}),
+	)
+}
+
+const collectAllThreads = (limit: number) =>
+	Effect.gen(function* () {
+		const client = yield* SlackClient
+		const ids: Array<string> = []
+		let cursor: string | undefined
+		for (let page = 0; page < 6; page++) {
+			const result = yield* client.listThreads(
+				cursor === undefined
+					? SlackListThreadsInput.make({ teamId: testTeamId, channelId: testChannelId, limit })
+					: SlackListThreadsInput.make({ teamId: testTeamId, channelId: testChannelId, limit, cursor }),
+			)
+			assert.isAtMost(result.threads.length, limit)
+			for (const summary of result.threads) {
+				ids.push(summary.thread.id)
+			}
+			if (result.nextCursor === undefined) {
+				return ids
+			}
+			cursor = result.nextCursor
+		}
+		return ids
+	})
+
+it.effect('returns every thread across pages when a window holds more roots than the page limit', () =>
+	Effect.gen(function* () {
+		const harness = yield* makeSlackClientHarness(busyChannelWindow)
+		const ids = yield* collectAllThreads(2).pipe(Effect.provide(harness.layer))
+		assert.deepStrictEqual(ids, [
+			'slack:v1:T_TEST:C_TEST:500.1',
+			'slack:v1:T_TEST:C_TEST:400.1',
+			'slack:v1:T_TEST:C_TEST:300.1',
+			'slack:v1:T_TEST:C_TEST:200.1',
+			'slack:v1:T_TEST:C_TEST:100.1',
+		])
 	}),
 )
 
@@ -240,5 +320,34 @@ it.effect('titles thread info with the channel name and maps lookup failures to 
 			)
 			assert.strictEqual(channelGone.channelId, goneChannel.id)
 		}).pipe(Effect.provide(providerLayerFor(harness)))
+	}),
+)
+
+it.effect('narrows non-gone metadata failures to MetadataFailed instead of lying with ThreadGone', () =>
+	Effect.gen(function* () {
+		const ratelimited = yield* makeSlackClientHarness(() => slackJsonResponse('{"ok":false,"error":"ratelimited"}'))
+		yield* Effect.gen(function* () {
+			const provider = yield* SlackProvider
+			const infoError = yield* expectTaggedFailure('MetadataFailed')(
+				provider.info({ threadId: ThreadId.make(testRootThreadId) }),
+			)
+			assert.strictEqual(infoError.provider, 'slack')
+			const channelError = yield* expectTaggedFailure('MetadataFailed')(
+				provider.channelInfo({ channel: testChannelRef }),
+			)
+			assert.strictEqual(channelError.provider, 'slack')
+		}).pipe(Effect.provide(providerLayerFor(ratelimited)))
+
+		const unknownTenant = yield* makeSlackClientHarness(
+			() => slackJsonResponse('{"ok":true}'),
+			unknownTenantCredentialsLayer,
+		)
+		yield* Effect.gen(function* () {
+			const provider = yield* SlackProvider
+			const error = yield* expectTaggedFailure('MetadataFailed')(
+				provider.info({ threadId: ThreadId.make(testRootThreadId) }),
+			)
+			assert.strictEqual(error.message, 'unknown Slack workspace')
+		}).pipe(Effect.provide(providerLayerFor(unknownTenant)))
 	}),
 )

@@ -5,6 +5,7 @@ import {
 	HistoryFailed,
 	Message,
 	MessageRef,
+	MetadataFailed,
 	PostFailed,
 	SentMessage,
 	SentRef,
@@ -180,18 +181,20 @@ export class SlackProvider extends Context.Service<SlackProvider, ChannelProvide
 				readonly degraded: ReadonlyArray<string>
 				readonly channelId: string
 				readonly ts: string
+				readonly botUserId: string | undefined
 			}) =>
 				Effect.gen(function* () {
 					const now = yield* Clock.currentTimeMillis
+					const authorId = input.botUserId ?? 'self'
 					const message = Message.make({
 						ref: MessageRef.make(input.ts),
 						threadRef: input.threadRef,
 						text: input.text,
 						markdown: input.text,
 						author: {
-							userId: UserId.make('self'),
-							userName: 'self',
-							fullName: 'self',
+							userId: UserId.make(authorId),
+							userName: authorId,
+							fullName: authorId,
 							isBot: true,
 							isMe: true,
 						},
@@ -265,6 +268,7 @@ export class SlackProvider extends Context.Service<SlackProvider, ChannelProvide
 						degraded: rendered.degraded,
 						channelId: sent.channelId,
 						ts: sent.ts,
+						botUserId: sent.botUserId,
 					})
 				})
 				return yield* send.pipe(Effect.ensuring(endTypingIfStarted(ref, input.threadId)))
@@ -328,6 +332,7 @@ export class SlackProvider extends Context.Service<SlackProvider, ChannelProvide
 					degraded: rendered.degraded,
 					channelId: sent.channelId,
 					ts: sent.ts,
+					botUserId: sent.botUserId,
 				})
 			})
 
@@ -464,42 +469,62 @@ export class SlackProvider extends Context.Service<SlackProvider, ChannelProvide
 				)
 			})
 
+			const metadataFailed = (message: string) => Effect.fail(MetadataFailed.make({ provider: 'slack', message }))
+
 			const info = Effect.fn('slack.provider.info')(function* (input: InfoInput) {
-				return yield* Effect.gen(function* () {
-					const ref = yield* decodeSlackThreadId(input.threadId)
-					const channelInfo = yield* client.channelInfo(
-						SlackChannelInfoInput.make({ teamId: ref.teamId, channelId: ref.channelId }),
-					)
-					const threadRef = slackThreadRef(ref, false)
-					return channelInfo.name === undefined
-						? ThreadInfo.make({ thread: threadRef })
-						: ThreadInfo.make({ thread: threadRef, title: channelInfo.name })
-				}).pipe(
-					Effect.tapError((error) =>
-						Effect.logError('Slack thread info failed', error).pipe(
-							Effect.annotateLogs({ provider: 'slack', thread_id: input.threadId }),
-						),
+				const ref = yield* decodeSlackThreadId(input.threadId).pipe(
+					Effect.catchTag('InvalidSlackThreadId', () =>
+						Effect.fail(ThreadGone.make({ threadId: input.threadId })),
 					),
-					Effect.mapError(() => ThreadGone.make({ threadId: input.threadId })),
 				)
+				const channelInfo = yield* client
+					.channelInfo(SlackChannelInfoInput.make({ teamId: ref.teamId, channelId: ref.channelId }))
+					.pipe(
+						Effect.tapError((error) =>
+							Effect.logError('Slack thread info failed', error).pipe(
+								Effect.annotateLogs({ provider: 'slack', thread_id: input.threadId }),
+							),
+						),
+						Effect.catchTags({
+							UnknownTenant: () => metadataFailed('unknown Slack workspace'),
+							SlackTransportError: () => metadataFailed('Slack transport failed'),
+							SlackApiError: (error) =>
+								error.code === 'channel_not_found'
+									? Effect.fail(ThreadGone.make({ threadId: input.threadId }))
+									: metadataFailed('Slack API rejected the metadata request'),
+						}),
+					)
+				const threadRef = slackThreadRef(ref, false)
+				return channelInfo.name === undefined
+					? ThreadInfo.make({ thread: threadRef })
+					: ThreadInfo.make({ thread: threadRef, title: channelInfo.name })
 			})
 
 			const channelInfo = Effect.fn('slack.provider.channel_info')(function* (input: {
 				readonly channel: ContainerMessagesInput['channel']
 			}) {
-				return yield* Effect.gen(function* () {
-					const address = yield* decodeSlackChannelId(input.channel.id)
-					return yield* client.channelInfo(
-						SlackChannelInfoInput.make({ teamId: address.teamId, channelId: address.channelId }),
-					)
-				}).pipe(
-					Effect.tapError((error) =>
-						Effect.logError('Slack channel info failed', error).pipe(
-							Effect.annotateLogs({ provider: 'slack', tenant: input.channel.tenant }),
-						),
+				const address = yield* decodeSlackChannelId(input.channel.id).pipe(
+					Effect.catchTag('InvalidSlackThreadId', () =>
+						Effect.fail(ChannelGone.make({ channelId: input.channel.id })),
 					),
-					Effect.mapError(() => ChannelGone.make({ channelId: input.channel.id })),
 				)
+				return yield* client
+					.channelInfo(SlackChannelInfoInput.make({ teamId: address.teamId, channelId: address.channelId }))
+					.pipe(
+						Effect.tapError((error) =>
+							Effect.logError('Slack channel info failed', error).pipe(
+								Effect.annotateLogs({ provider: 'slack', tenant: input.channel.tenant }),
+							),
+						),
+						Effect.catchTags({
+							UnknownTenant: () => metadataFailed('unknown Slack workspace'),
+							SlackTransportError: () => metadataFailed('Slack transport failed'),
+							SlackApiError: (error) =>
+								error.code === 'channel_not_found'
+									? Effect.fail(ChannelGone.make({ channelId: input.channel.id }))
+									: metadataFailed('Slack API rejected the metadata request'),
+						}),
+					)
 			})
 
 			const getUser = Effect.fn('slack.provider.get_user')(function* (input: GetUserInput) {

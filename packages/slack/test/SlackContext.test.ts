@@ -163,6 +163,50 @@ it.effect('over-fetches backward replies, returns the newest tail newest-first, 
 	}),
 )
 
+const longThreadOldestFirst: ReadonlyArray<SlackMessageFixture> = Array.from({ length: 7 }, (_, index) =>
+	reply(`100.${index + 1}`, { user: 'U_HUMAN' }, `message ${index + 1}`),
+)
+
+const longThreadServer = (request: RecordedSlackRequest) => {
+	const latest = request.url.searchParams.get('latest')
+	const cursor = request.url.searchParams.get('cursor')
+	const range =
+		latest === null
+			? longThreadOldestFirst
+			: longThreadOldestFirst.filter((message) => Number(message.ts) < Number(latest))
+	const start = cursor === null ? 0 : Number(cursor.slice('index:'.length))
+	const page = range.slice(start, start + 3)
+	const nextStart = start + 3
+	const hasMore = nextStart < range.length
+	return hasMore ? pageResponse(page, { has_more: true, next_cursor: `index:${nextStart}` }) : pageResponse(page)
+}
+
+it.effect('walks a long thread to its true end before serving the newest-first page', () =>
+	Effect.gen(function* () {
+		const harness = yield* makeSlackClientHarness(longThreadServer)
+		const backward = SlackRepliesInput.make({
+			teamId: testTeamId,
+			channelId: testChannelId,
+			threadTs: testRootTs,
+			limit: 2,
+		})
+		const collected: Array<string> = []
+		let cursor: string | undefined
+		for (let page = 0; page < 6; page++) {
+			const result = yield* replies(cursor === undefined ? backward : { ...backward, cursor }).pipe(
+				Effect.provide(harness.layer),
+			)
+			assert.isAtMost(result.messages.length, 2)
+			collected.push(...refs(result.messages))
+			if (result.nextCursor === undefined) {
+				break
+			}
+			cursor = result.nextCursor
+		}
+		assert.deepStrictEqual(collected, ['100.7', '100.6', '100.5', '100.4', '100.3', '100.2', '100.1'])
+	}),
+)
+
 it.effect('reads channel history before a message newest-first and pages by the oldest ts', () =>
 	Effect.gen(function* () {
 		const harness = yield* makeSlackClientHarness(() => pageResponse(channelNewestFirst, { has_more: true }))

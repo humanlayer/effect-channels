@@ -163,7 +163,11 @@ export const SlackPostMessageInput = Schema.Struct({
 })
 export type SlackPostMessageInput = typeof SlackPostMessageInput.Type
 
-export const SlackSentMessage = Schema.Struct({ channelId: SlackChannelId, ts: SlackMessageTs })
+export const SlackSentMessage = Schema.Struct({
+	channelId: SlackChannelId,
+	ts: SlackMessageTs,
+	botUserId: Schema.optionalKey(Schema.NonEmptyString),
+})
 export type SlackSentMessage = typeof SlackSentMessage.Type
 
 export const SlackSentMessageList = Schema.Array(SlackSentMessage)
@@ -416,10 +420,17 @@ export const SlackHmacInput = Schema.Struct({
 })
 export type SlackHmacInput = typeof SlackHmacInput.Type
 
+export const SlackPostedMessageSnapshot = Schema.Struct({
+	user: Schema.optionalKey(Schema.NonEmptyString),
+	bot_id: Schema.optionalKey(Schema.NonEmptyString),
+})
+export type SlackPostedMessageSnapshot = typeof SlackPostedMessageSnapshot.Type
+
 export const SlackPostMessageResponse = Schema.Struct({
 	ok: Schema.Boolean,
 	channel: Schema.optionalKey(SlackChannelId),
 	ts: Schema.optionalKey(SlackMessageTs),
+	message: Schema.optionalKey(SlackPostedMessageSnapshot),
 	error: Schema.optionalKey(Schema.String),
 })
 export type SlackPostMessageResponse = typeof SlackPostMessageResponse.Type

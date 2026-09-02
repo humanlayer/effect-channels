@@ -6,6 +6,7 @@ import type {
 	EditFailed,
 	FileReadFailed,
 	HistoryFailed,
+	MetadataFailed,
 	PostFailed,
 	ReactionFailed,
 	SubjectFailed,
@@ -81,8 +82,8 @@ export type ChannelProviderFields = {
 	readonly channelThreadStream: (
 		input: ChannelThreadsInput,
 	) => Stream.Stream<ThreadSummary, HistoryFailed | UnsupportedContextScope>
-	readonly info: (input: InfoInput) => Effect.Effect<ThreadInfo, ThreadGone>
-	readonly channelInfo: (input: ChannelInfoInput) => Effect.Effect<ChannelInfo, ChannelGone>
+	readonly info: (input: InfoInput) => Effect.Effect<ThreadInfo, ThreadGone | MetadataFailed>
+	readonly channelInfo: (input: ChannelInfoInput) => Effect.Effect<ChannelInfo, ChannelGone | MetadataFailed>
 	readonly getUser: (input: GetUserInput) => Effect.Effect<UserProfile, UnknownTenant | UserLookupFailed>
 	readonly subject: (input: SubjectInput) => Effect.Effect<Option.Option<MessageSubject>, SubjectFailed>
 	readonly downloadAttachment: (

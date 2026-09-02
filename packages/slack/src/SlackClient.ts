@@ -192,7 +192,10 @@ const makePostMessage = Effect.fn('slack.api.post_message')(function* (input: Sl
 	if (!Predicate.isString(decoded.channel) || !Predicate.isString(decoded.ts)) {
 		return yield* SlackApiError.make({ operation: 'chat.postMessage', code: 'missing_message_reference' })
 	}
-	return SlackSentMessage.make({ channelId: decoded.channel, ts: decoded.ts })
+	const botUserId = decoded.message?.user
+	return botUserId === undefined
+		? SlackSentMessage.make({ channelId: decoded.channel, ts: decoded.ts })
+		: SlackSentMessage.make({ channelId: decoded.channel, ts: decoded.ts, botUserId })
 })
 
 const makeSetSessionStatus = Effect.fn('slack.api.set_session_status')(function* (input: SlackSessionStatusInput) {
@@ -279,26 +282,34 @@ const makeReplies = (fallback: SlackBotIdentityType) =>
 			return messagePage(messages, cursorFromMetadata(decoded.response_metadata))
 		}
 		const fetchLimit = Math.min(1000, Math.max(limit * 2, 200))
-		const request = slackGet(token, 'conversations.replies', {
-			channel: input.channelId,
-			ts: input.threadTs,
-			limit: fetchLimit,
-			latest: input.cursor,
-			inclusive: input.cursor === undefined ? undefined : false,
-		})
-		const decoded = yield* fetchSlackJson({
-			operation: 'conversations.replies',
-			schema: SlackConversationsPageResponse,
-			request,
-		}).pipe(Effect.flatMap((response) => requireOk('conversations.replies', response)))
-		const chronological = decoded.messages ?? []
-		const startIndex = Math.max(0, chronological.length - limit)
-		const selected = chronological.slice(startIndex)
+		let buffer: ReadonlyArray<SlackHistoryMessage> = []
+		let pageCursor: string | undefined = undefined
+		while (true) {
+			const request = slackGet(token, 'conversations.replies', {
+				channel: input.channelId,
+				ts: input.threadTs,
+				limit: fetchLimit,
+				latest: input.cursor,
+				inclusive: input.cursor === undefined ? undefined : false,
+				cursor: pageCursor,
+			})
+			const decoded = yield* fetchSlackJson({
+				operation: 'conversations.replies',
+				schema: SlackConversationsPageResponse,
+				request,
+			}).pipe(Effect.flatMap((response) => requireOk('conversations.replies', response)))
+			const page = decoded.messages ?? []
+			buffer = [...buffer, ...page].slice(-(limit + 1))
+			const next = cursorFromMetadata(decoded.response_metadata)
+			if (next === undefined || page.length === 0) {
+				break
+			}
+			pageCursor = next
+		}
+		const overflow = buffer.length > limit
+		const selected = overflow ? buffer.slice(1) : buffer
 		const oldestSelected = selected.at(0)
-		const nextCursor =
-			(startIndex > 0 || decoded.has_more === true) && oldestSelected !== undefined
-				? oldestSelected.ts
-				: undefined
+		const nextCursor = overflow && oldestSelected !== undefined ? oldestSelected.ts : undefined
 		const newestFirst = [...selected].reverse()
 		const messages = normalizePageMessages({
 			identity,
@@ -414,15 +425,18 @@ const makeListThreads = (fallback: SlackBotIdentityType) =>
 		const request = slackGet(token, 'conversations.history', {
 			channel: input.channelId,
 			limit: Math.min(limit * 3, 200),
-			cursor: input.cursor,
+			latest: input.cursor,
+			inclusive: input.cursor === undefined ? undefined : false,
 		})
 		const decoded = yield* fetchSlackJson({
 			operation: 'conversations.history',
 			schema: SlackConversationsPageResponse,
 			request,
 		}).pipe(Effect.flatMap((response) => requireOk('conversations.history', response)))
-		const roots = (decoded.messages ?? []).filter((message) => (message.reply_count ?? 0) > 0).slice(0, limit)
-		const threads = roots.map((snapshot) => {
+		const fetched = decoded.messages ?? []
+		const roots = fetched.filter((message) => (message.reply_count ?? 0) > 0)
+		const returned = roots.slice(0, limit)
+		const threads = returned.map((snapshot) => {
 			const threadRef = slackThreadRef(
 				SlackThreadRef.make({ teamId: input.teamId, channelId: input.channelId, threadTs: snapshot.ts }),
 				false,
@@ -443,7 +457,15 @@ const makeListThreads = (fallback: SlackBotIdentityType) =>
 			}
 			return ThreadSummary.make(summary)
 		})
-		const nextCursor = cursorFromMetadata(decoded.response_metadata)
+		const lastReturnedRoot = returned.at(-1)
+		const oldestFetched = fetched.at(-1)
+		const hasMore = decoded.has_more === true || cursorFromMetadata(decoded.response_metadata) !== undefined
+		const nextCursor =
+			roots.length > limit && lastReturnedRoot !== undefined
+				? lastReturnedRoot.ts
+				: hasMore && oldestFetched !== undefined
+					? oldestFetched.ts
+					: undefined
 		return nextCursor === undefined ? ThreadPage.make({ threads }) : ThreadPage.make({ threads, nextCursor })
 	})
 

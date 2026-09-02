@@ -12,6 +12,7 @@ import {
 	EditFailed,
 	FileReadFailed,
 	HistoryFailed,
+	type MetadataFailed,
 	PostFailed,
 	ReactionFailed,
 	type ObserverError,
@@ -199,10 +200,10 @@ export class Channels extends Context.Service<
 		readonly context: (
 			input: LoadContextInput,
 		) => Effect.Effect<ConversationContext, UnknownProvider | ContextLoadFailed | UnsupportedContextScope>
-		readonly info: (input: InfoInput) => Effect.Effect<ThreadInfo, UnknownProvider | ThreadGone>
+		readonly info: (input: InfoInput) => Effect.Effect<ThreadInfo, UnknownProvider | ThreadGone | MetadataFailed>
 		readonly channelInfo: (
 			input: ChannelInfoInput,
-		) => Effect.Effect<ChannelInfo, UnknownProvider | import('./Errors.ts').ChannelGone>
+		) => Effect.Effect<ChannelInfo, UnknownProvider | import('./Errors.ts').ChannelGone | MetadataFailed>
 		readonly getUser: (
 			input: GetUserInput,
 		) => Effect.Effect<UserProfile, UnknownProvider | UnknownTenant | UserLookupFailed>

@@ -5,6 +5,7 @@ import { Channels } from './Channels.ts'
 import type { Content } from './Content.ts'
 import type {
 	HistoryFailed,
+	MetadataFailed,
 	PostFailed,
 	SubscriptionStoreError,
 	ThreadGone,
@@ -100,7 +101,7 @@ export class Thread extends Schema.TaggedClass<Thread>()('Thread', {
 		)
 	}
 
-	fetchMetadata(): Effect.Effect<ThreadInfo, UnknownProvider | ThreadGone, Channels> {
+	fetchMetadata(): Effect.Effect<ThreadInfo, UnknownProvider | ThreadGone | MetadataFailed, Channels> {
 		return Effect.flatMap(Channels, (channels) => channels.info({ threadId: this.ref.id }))
 	}
 }

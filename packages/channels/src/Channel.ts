@@ -5,6 +5,7 @@ import type { Content } from './Content.ts'
 import type {
 	ChannelGone,
 	HistoryFailed,
+	MetadataFailed,
 	PostFailed,
 	TenantDisabled,
 	UnknownProvider,
@@ -64,7 +65,7 @@ export class Channel extends Schema.TaggedClass<Channel>()('Channel', {
 		return Stream.unwrap(Effect.map(Channels, (channels) => channels.channelThreadStream({ channel: this.ref })))
 	}
 
-	fetchMetadata(): Effect.Effect<ChannelInfo, UnknownProvider | ChannelGone, Channels> {
+	fetchMetadata(): Effect.Effect<ChannelInfo, UnknownProvider | ChannelGone | MetadataFailed, Channels> {
 		return Effect.flatMap(Channels, (channels) => channels.channelInfo({ channel: this.ref }))
 	}
 }
