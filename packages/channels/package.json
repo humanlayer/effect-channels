@@ -1,0 +1,23 @@
+{
+	"name": "@humanlayer/channels",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"scripts": {
+		"build": "bun build ./src/index.ts --outdir ./dist --target browser --format esm --packages external",
+		"test": "vitest run",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"dependencies": {
+		"effect": "catalog:"
+	},
+	"devDependencies": {
+		"@effect/platform-node": "catalog:",
+		"@effect/vitest": "catalog:",
+		"typescript": "catalog:",
+		"vitest": "catalog:"
+	}
+}
