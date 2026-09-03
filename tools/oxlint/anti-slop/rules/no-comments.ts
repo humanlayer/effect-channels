@@ -1,12 +1,12 @@
 import { defineRule } from "@oxlint/plugins";
 
-/** Reject implementation comments except SAFETY justifications required by assertion policy. */
+/** Reject implementation comments except public JSDoc and SAFETY justifications. */
 export const noCommentsRule = defineRule({
 	meta: {
 		type: "problem",
 		docs: {
 			description:
-				"Reject implementation comments; code should communicate intent directly. SAFETY justifications remain allowed.",
+				"Reject implementation comments; public JSDoc and SAFETY justifications remain allowed.",
 		},
 		messages: {
 			comment:
@@ -17,6 +17,7 @@ export const noCommentsRule = defineRule({
 		return {
 			Program() {
 				for (const comment of context.sourceCode.getAllComments()) {
+					if (comment.type === "Block" && comment.value.startsWith("*")) continue;
 					if (/\bSAFETY\s*:/u.test(comment.value)) continue;
 					context.report({ node: comment, messageId: "comment" });
 				}

@@ -85,6 +85,7 @@ export class UserLookupFailed extends Schema.TaggedError<UserLookupFailed>()('Us
 	tenant: TenantId,
 	userId: UserId,
 	reason: Schema.Literals(['not_found', 'transport', 'api']),
+	retryable: Schema.Boolean,
 }) {}
 
 export class FileReadFailed extends Schema.TaggedError<FileReadFailed>()('FileReadFailed', {

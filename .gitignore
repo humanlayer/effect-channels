@@ -144,3 +144,6 @@ vite.config.ts.timestamp-*
 
 # Riptide artifacts (cloud-synced)
 .humanlayer/tasks/
+
+# Credentialed provider recordings are reviewed before promotion to fixtures.
+examples/slack-thread-echo/.recordings/

@@ -160,10 +160,6 @@ it.effect('names every coordinator and signal placeholder', () =>
 			coordinator.requestCancellation({ threadId, reason: 'application' }),
 		)
 		yield* expectDefect(
-			'ConversationCoordinator.layerPostgres',
-			Effect.scoped(Layer.build(ConversationCoordinator.layerPostgres())),
-		)
-		yield* expectDefect(
 			'ConversationSignals.layerDistributed',
 			Effect.scoped(Layer.build(ConversationSignals.layerDistributed)),
 		)

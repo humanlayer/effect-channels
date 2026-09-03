@@ -1,0 +1,29 @@
+{
+	"disabled": false,
+	"pathTemplate": "~/.humanlayer/workspaces/{{ TASKSLUG }}/{{ REPOBASENAME }}",
+	"branchTemplate": "{{ TASKSLUG }}",
+	"sourceRef": "origin/main",
+	"repos": [
+		{
+			"localPath": ".",
+			"description": "HumanLayer Channels coordination repository",
+			"primary": true
+		},
+		{
+			"localPath": "../flue",
+			"description": "Flue reference"
+		},
+		{
+			"localPath": "../chat",
+			"description": "Vercel Chat SDK reference"
+		},
+		{
+			"localPath": "../channels-sdk",
+			"description": "Assistant UI Channels SDK reference"
+		},
+		{
+			"localPath": "../effect",
+			"description": "Effect reference"
+		}
+	]
+}

@@ -51,6 +51,7 @@ const acceptMessageEvent = (config: SlackRoutesConfig, callback: SlackEventCallb
 				Effect.annotateLogs({
 					provider: 'slack',
 					event_type: callback.event.type,
+					event_subtype: 'subtype' in callback.event ? callback.event.subtype : undefined,
 					event_id: callback.event_id,
 				}),
 			)

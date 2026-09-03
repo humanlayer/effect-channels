@@ -1,0 +1,23 @@
+{
+	"name": "example-slack-thread-echo",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"build": "bun build ./src/server.ts --outdir ./dist --target bun --format esm --packages external",
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"live": "bun run ./test/live-smoke.ts live",
+		"record": "bun run ./test/live-smoke.ts record"
+	},
+	"dependencies": {
+		"@effect/platform-node": "catalog:",
+		"@humanlayer/channels": "workspace:*",
+		"@humanlayer/channels-app": "workspace:*",
+		"effect": "catalog:"
+	},
+	"devDependencies": {
+		"@humanlayer/channels-slack": "workspace:*",
+		"@types/bun": "catalog:",
+		"typescript": "catalog:"
+	}
+}

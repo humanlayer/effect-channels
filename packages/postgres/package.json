@@ -1,5 +1,5 @@
 {
-	"name": "@humanlayer/channels",
+	"name": "@humanlayer/channels-postgres",
 	"version": "0.0.0",
 	"private": true,
 	"type": "module",
@@ -7,14 +7,17 @@
 		".": "./src/index.ts"
 	},
 	"scripts": {
-		"build": "bun build ./src/index.ts --outdir ./dist --target browser --format esm --packages external",
+		"build": "bun build ./src/index.ts --outdir ./dist --target node --format esm --packages external",
 		"test": "vitest run --dir test",
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},
-	"devDependencies": {
-		"@effect/platform-node": "catalog:",
+	"dependencies": {
 		"@effect/sql-pg": "catalog:",
+		"@humanlayer/channels": "workspace:*"
+	},
+	"devDependencies": {
 		"@effect/vitest": "catalog:",
+		"@types/bun": "catalog:",
 		"effect": "catalog:",
 		"typescript": "catalog:",
 		"vitest": "catalog:"

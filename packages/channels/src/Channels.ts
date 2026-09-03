@@ -1,12 +1,14 @@
-import { Context, Effect, Layer, Match, Option, Stream } from 'effect'
+import { Context, Effect, Fiber, FiberMap, Layer, Match, Option, Stream } from 'effect'
 
 import { ChannelsGate } from './ChannelsGate.ts'
 import { ChannelsObserver } from './ChannelsObserver.ts'
 import { loadConversationContext } from './Context.ts'
 import { ConversationCoordinator } from './ConversationCoordinator.ts'
 import { ConversationSignals } from './ConversationSignals.ts'
+import type { Emoji } from './Emoji.ts'
 import {
 	ChannelsRunError,
+	ChannelGone,
 	ContextLoadFailed,
 	DeleteFailed,
 	EditFailed,
@@ -16,6 +18,7 @@ import {
 	PostFailed,
 	ReactionFailed,
 	type ObserverError,
+	SubscriptionStoreError,
 	SubjectFailed,
 	TenantDisabled,
 	ThreadGone,
@@ -36,6 +39,7 @@ import type {
 	ReactionEvent,
 	SubscriptionTransition,
 } from './Events.ts'
+import { MessageEvent as MessageEventSchema } from './Events.ts'
 import {
 	channelMessagePage,
 	channelMessageStream as historyChannelMessageStream,
@@ -74,7 +78,13 @@ import type {
 	ThreadPage,
 	ThreadSummary,
 } from './Operations.ts'
-import { QueueDelivery } from './Operations.ts'
+import {
+	ConversationContext as ConversationContextSchema,
+	MessagePage as MessagePageSchema,
+	QueueDelivery,
+	ThreadPage as ThreadPageSchema,
+	ThreadSummary as ThreadSummarySchema,
+} from './Operations.ts'
 import { Organizations } from './Organizations.ts'
 import { ProviderRegistry, providerNameFromThreadId } from './ProviderRegistry.ts'
 import type {
@@ -92,10 +102,24 @@ import type { SentMessage } from './SentMessage.ts'
 import type { StreamChunk } from './StreamChunk.ts'
 import { Subscriptions } from './Subscriptions.ts'
 import type { Thread } from './Thread.ts'
+import { UserDirectory } from './UserDirectory.ts'
 
 type RegisteredMessageHandler = (thread: Thread, message: Message) => Effect.Effect<void, ChannelsRunError>
 
 type EgressAddress = { readonly provider: ProviderName; readonly tenant: TenantId }
+
+const eventThreadId = Match.type<InboundEvent>().pipe(
+	Match.tagsExhaustive({
+		MessageEvent: (event) => event.thread.ref.id,
+		MessageUpdatedEvent: (event) => event.thread.ref.id,
+		MessageDeletedEvent: (event) => event.threadRef.id,
+		ConversationStoppedEvent: (event) => event.threadRef.id,
+		AssignedEvent: (event) => event.thread.ref.id,
+		ActionEvent: (event) => event.thread.ref.id,
+		ReactionEvent: (event) => event.thread.ref.id,
+		CommandEvent: (event) => event.thread?.ref.id ?? ThreadIdSchema.make(`${event.channel.ref.id}:command`),
+	}),
+)
 
 const addressFromThreadId = (threadId: string): Effect.Effect<EgressAddress, UnknownProvider> =>
 	Effect.try({
@@ -118,6 +142,12 @@ const observerBestEffort = (effect: Effect.Effect<void, ObserverError>) =>
 		Effect.asVoid,
 	)
 
+/**
+ * Provides provider-neutral channel event handlers, messaging, history, and subscriptions.
+ *
+ * @category services
+ * @since 0.0.0
+ */
 export class Channels extends Context.Service<
 	Channels,
 	{
@@ -150,7 +180,7 @@ export class Channels extends Context.Service<
 			handler: (event: ActionEvent) => Effect.Effect<void, E, R>,
 		) => Effect.Effect<void, never, R>
 		readonly onReaction: <E, R>(
-			emoji: ReadonlyArray<import('./Emoji.ts').Emoji>,
+			emoji: ReadonlyArray<Emoji>,
 			handler: (event: ReactionEvent) => Effect.Effect<void, E, R>,
 		) => Effect.Effect<void, never, R>
 		readonly onAnyReaction: <E, R>(
@@ -183,27 +213,48 @@ export class Channels extends Context.Service<
 		readonly removeReaction: (
 			input: ReactInput,
 		) => Effect.Effect<void, UnknownProvider | UnknownTenant | ReactionFailed>
+		/**
+		 * Returns one provider-backed page of messages from a thread.
+		 */
 		readonly messages: (input: MessagesInput) => Effect.Effect<MessagePage, UnknownProvider | HistoryFailed>
+		/**
+		 * Lazily reads every page of messages from a thread in the requested direction.
+		 */
 		readonly messageStream: (input: MessagesInput) => Stream.Stream<Message, UnknownProvider | HistoryFailed>
+		/**
+		 * Returns one page of messages from the channel or other container that holds a thread.
+		 */
 		readonly containerMessages: (
 			input: ContainerMessagesInput,
 		) => Effect.Effect<MessagePage, UnknownProvider | HistoryFailed | UnsupportedContextScope>
+		/**
+		 * Lazily reads every page of messages from the channel or other container that holds a thread.
+		 */
 		readonly containerMessageStream: (
 			input: ContainerMessagesInput,
 		) => Stream.Stream<Message, UnknownProvider | HistoryFailed | UnsupportedContextScope>
+		/**
+		 * Returns one page of threads from a channel.
+		 */
 		readonly channelThreads: (
 			input: ChannelThreadsInput,
 		) => Effect.Effect<ThreadPage, UnknownProvider | HistoryFailed | UnsupportedContextScope>
+		/**
+		 * Lazily reads every page of threads from a channel.
+		 */
 		readonly channelThreadStream: (
 			input: ChannelThreadsInput,
 		) => Stream.Stream<ThreadSummary, UnknownProvider | HistoryFailed | UnsupportedContextScope>
+		/**
+		 * Loads bounded thread history and, when requested, preceding channel history for a message event.
+		 */
 		readonly context: (
 			input: LoadContextInput,
 		) => Effect.Effect<ConversationContext, UnknownProvider | ContextLoadFailed | UnsupportedContextScope>
 		readonly info: (input: InfoInput) => Effect.Effect<ThreadInfo, UnknownProvider | ThreadGone | MetadataFailed>
 		readonly channelInfo: (
 			input: ChannelInfoInput,
-		) => Effect.Effect<ChannelInfo, UnknownProvider | import('./Errors.ts').ChannelGone | MetadataFailed>
+		) => Effect.Effect<ChannelInfo, UnknownProvider | ChannelGone | MetadataFailed>
 		readonly getUser: (
 			input: GetUserInput,
 		) => Effect.Effect<UserProfile, UnknownProvider | UnknownTenant | UserLookupFailed>
@@ -217,15 +268,9 @@ export class Channels extends Context.Service<
 		readonly postEphemeral: (
 			input: PostEphemeralInput,
 		) => Effect.Effect<EphemeralResult, UnknownProvider | UnknownTenant | PostFailed>
-		readonly subscribe: (
-			input: SubscriptionInput,
-		) => Effect.Effect<SubscriptionTransition, import('./Errors.ts').SubscriptionStoreError>
-		readonly isSubscribed: (
-			input: SubscriptionInput,
-		) => Effect.Effect<boolean, import('./Errors.ts').SubscriptionStoreError>
-		readonly unsubscribe: (
-			input: SubscriptionInput,
-		) => Effect.Effect<void, import('./Errors.ts').SubscriptionStoreError>
+		readonly subscribe: (input: SubscriptionInput) => Effect.Effect<SubscriptionTransition, SubscriptionStoreError>
+		readonly isSubscribed: (input: SubscriptionInput) => Effect.Effect<boolean, SubscriptionStoreError>
+		readonly unsubscribe: (input: SubscriptionInput) => Effect.Effect<void, SubscriptionStoreError>
 		readonly run: Effect.Effect<never, ChannelsRunError>
 	}
 >()('channels/Channels') {
@@ -248,6 +293,8 @@ export class Channels extends Context.Service<
 				const gate = yield* ChannelsGate
 				const observer = yield* ChannelsObserver
 				const subscriptions = yield* Subscriptions
+				const userDirectory = yield* UserDirectory
+				const activeRuns = yield* FiberMap.make<string, void, ChannelsRunError>()
 				const mentionHandlers: Array<RegisteredMessageHandler> = []
 				const subscribedHandlers: Array<RegisteredMessageHandler> = []
 
@@ -267,24 +314,27 @@ export class Channels extends Context.Service<
 							)
 						})
 
-				const runMessageHandlers = (handlers: ReadonlyArray<RegisteredMessageHandler>, event: MessageEvent) =>
-					Effect.forEach(handlers, (handler) => handler(event.thread, event.message), { discard: true })
-
 				const dispatchMessage = (event: MessageEvent) =>
-					Effect.annotateCurrentSpan({ thread_id: event.thread.ref.id }).pipe(
-						Effect.andThen(
-							Match.value(event.delivery).pipe(
-								Match.tagsExhaustive({
-									NewMentionDelivery: () => runMessageHandlers(mentionHandlers, event),
-									SubscribedMessageDelivery: () => runMessageHandlers(subscribedHandlers, event),
-									DirectMessageDelivery: () => unimplemented('Channels.dispatch.directMessage'),
-									PatternMessageDelivery: () => unimplemented('Channels.dispatch.patternMessage'),
-								}),
-							),
-						),
-					)
+					Effect.gen(function* () {
+						const { message, thread } = yield* userDirectory.hydrateDelivery(event.thread, event.message)
+						yield* Effect.annotateCurrentSpan({ thread_id: thread.ref.id })
+						yield* Match.value(event.delivery).pipe(
+							Match.tagsExhaustive({
+								NewMentionDelivery: () =>
+									Effect.forEach(mentionHandlers, (handler) => handler(thread, message), {
+										discard: true,
+									}),
+								SubscribedMessageDelivery: () =>
+									Effect.forEach(subscribedHandlers, (handler) => handler(thread, message), {
+										discard: true,
+									}),
+								DirectMessageDelivery: () => unimplemented('Channels.dispatch.directMessage'),
+								PatternMessageDelivery: () => unimplemented('Channels.dispatch.patternMessage'),
+							}),
+						)
+					})
 
-				const dispatch = (event: InboundEvent) =>
+				const dispatchDirect = (event: InboundEvent) =>
 					Match.value(event).pipe(
 						Match.tagsExhaustive({
 							MessageEvent: dispatchMessage,
@@ -305,6 +355,12 @@ export class Channels extends Context.Service<
 							},
 						}),
 					)
+
+				const dispatch = (event: InboundEvent) =>
+					Effect.gen(function* () {
+						const fiber = yield* FiberMap.run(activeRuns, eventThreadId(event), dispatchDirect(event))
+						yield* Fiber.join(fiber)
+					})
 
 				const authorizeEgress = <E>(input: {
 					readonly address: EgressAddress
@@ -497,38 +553,75 @@ export class Channels extends Context.Service<
 				})
 
 				const messages = (input: MessagesInput) =>
-					registry
-						.byThreadId({ threadId: input.threadId })
-						.pipe(Effect.flatMap((provider) => threadMessagePage(provider, input)))
+					registry.byThreadId({ threadId: input.threadId }).pipe(
+						Effect.flatMap((provider) => threadMessagePage(provider, input)),
+						Effect.flatMap((page) =>
+							Effect.map(userDirectory.hydrateMessages(page.messages), (hydrated) =>
+								page.nextCursor === undefined
+									? MessagePageSchema.make({ messages: hydrated })
+									: MessagePageSchema.make({ messages: hydrated, nextCursor: page.nextCursor }),
+							),
+						),
+					)
 
 				const messageStream = (input: MessagesInput) =>
 					Stream.unwrap(
 						Effect.map(registry.byThreadId({ threadId: input.threadId }), (provider) =>
-							historyThreadMessageStream(provider, input),
+							historyThreadMessageStream(provider, input).pipe(
+								Stream.mapEffect(userDirectory.hydrateMessage),
+							),
 						),
 					)
 
 				const containerMessages = (input: ContainerMessagesInput) =>
-					registry
-						.byChannel({ channel: input.channel })
-						.pipe(Effect.flatMap((provider) => channelMessagePage(provider, input)))
+					registry.byChannel({ channel: input.channel }).pipe(
+						Effect.flatMap((provider) => channelMessagePage(provider, input)),
+						Effect.flatMap((page) =>
+							Effect.map(userDirectory.hydrateMessages(page.messages), (hydrated) =>
+								page.nextCursor === undefined
+									? MessagePageSchema.make({ messages: hydrated })
+									: MessagePageSchema.make({ messages: hydrated, nextCursor: page.nextCursor }),
+							),
+						),
+					)
 
 				const containerMessageStream = (input: ContainerMessagesInput) =>
 					Stream.unwrap(
 						Effect.map(registry.byChannel({ channel: input.channel }), (provider) =>
-							historyChannelMessageStream(provider, input),
+							historyChannelMessageStream(provider, input).pipe(
+								Stream.mapEffect(userDirectory.hydrateMessage),
+							),
 						),
 					)
 
 				const channelThreads = (input: ChannelThreadsInput) =>
-					registry
-						.byChannel({ channel: input.channel })
-						.pipe(Effect.flatMap((provider) => channelThreadPage(provider, input)))
+					registry.byChannel({ channel: input.channel }).pipe(
+						Effect.flatMap((provider) => channelThreadPage(provider, input)),
+						Effect.flatMap((page) =>
+							Effect.map(
+								Effect.forEach(page.threads, (summary) =>
+									Effect.map(userDirectory.hydrateMessage(summary.rootMessage), (rootMessage) =>
+										ThreadSummarySchema.make({ ...summary, rootMessage }),
+									),
+								),
+								(threads) =>
+									page.nextCursor === undefined
+										? ThreadPageSchema.make({ threads })
+										: ThreadPageSchema.make({ threads, nextCursor: page.nextCursor }),
+							),
+						),
+					)
 
 				const channelThreadStream = (input: ChannelThreadsInput) =>
 					Stream.unwrap(
 						Effect.map(registry.byChannel({ channel: input.channel }), (provider) =>
-							historyChannelThreadStream(provider, input),
+							historyChannelThreadStream(provider, input).pipe(
+								Stream.mapEffect((summary) =>
+									Effect.map(userDirectory.hydrateMessage(summary.rootMessage), (rootMessage) =>
+										ThreadSummarySchema.make({ ...summary, rootMessage }),
+									),
+								),
+							),
 						),
 					)
 
@@ -541,7 +634,19 @@ export class Channels extends Context.Service<
 						thread_id: input.event.thread.ref.id,
 					})
 					const provider = yield* registry.byName({ provider: input.event.provider })
-					return yield* loadConversationContext(provider, input)
+					const loaded = yield* loadConversationContext(provider, input)
+					const hydratedEvent = yield* userDirectory.hydrateDelivery(
+						loaded.event.thread,
+						loaded.event.message,
+					)
+					const threadMessages = yield* userDirectory.hydrateMessages(loaded.threadMessages)
+					const containerMessages = yield* userDirectory.hydrateMessages(loaded.containerMessages)
+					const event = MessageEventSchema.make({
+						...loaded.event,
+						thread: hydratedEvent.thread,
+						message: hydratedEvent.message,
+					})
+					return ConversationContextSchema.make({ event, threadMessages, containerMessages })
 				})
 
 				const info = Effect.fn('channels.info')(function* (input: InfoInput) {

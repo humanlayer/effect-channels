@@ -35,6 +35,9 @@ export class Channel extends Schema.TaggedClass<Channel>()('Channel', {
 		return Effect.flatMap(Channels, (channels) => channels.startChannelTyping({ channel: this.ref }))
 	}
 
+	/**
+	 * Returns one provider-backed page of messages from this channel.
+	 */
 	listMessages(
 		options?: MessageHistoryOptions,
 	): Effect.Effect<MessagePage, UnknownProvider | HistoryFailed | UnsupportedContextScope, Channels> {
@@ -46,10 +49,16 @@ export class Channel extends Schema.TaggedClass<Channel>()('Channel', {
 		})
 	}
 
+	/**
+	 * Lazily reads channel messages newest-first.
+	 */
 	get messages(): Stream.Stream<Message, UnknownProvider | HistoryFailed | UnsupportedContextScope, Channels> {
 		return Stream.unwrap(Effect.map(Channels, (channels) => channels.containerMessageStream({ channel: this.ref })))
 	}
 
+	/**
+	 * Returns one provider-backed page of threads from this channel.
+	 */
 	listThreads(
 		options?: MessageHistoryOptions,
 	): Effect.Effect<ThreadPage, UnknownProvider | HistoryFailed | UnsupportedContextScope, Channels> {
@@ -61,6 +70,9 @@ export class Channel extends Schema.TaggedClass<Channel>()('Channel', {
 		})
 	}
 
+	/**
+	 * Lazily reads every page of threads from the channel.
+	 */
 	get threads(): Stream.Stream<ThreadSummary, UnknownProvider | HistoryFailed | UnsupportedContextScope, Channels> {
 		return Stream.unwrap(Effect.map(Channels, (channels) => channels.channelThreadStream({ channel: this.ref })))
 	}

@@ -25,6 +25,7 @@ import {
 	Thread,
 	ThreadId,
 	UserId,
+	UserDirectory,
 	unimplemented,
 	type Author,
 	type Capabilities,
@@ -34,11 +35,14 @@ import {
 
 const persistence = Persistence.layerMemory
 const subscriptions = Subscriptions.layer.pipe(Layer.provide(persistence))
+const registry = ProviderRegistry.layer
+const userDirectory = UserDirectory.layer.pipe(Layer.provide(registry))
 
 export const CoreDependencies = Layer.mergeAll(
 	ConversationCoordinator.layerMemory(),
 	ConversationSignals.layerMemory,
-	ProviderRegistry.layer,
+	registry,
+	userDirectory,
 	Organizations.layerDefault,
 	ChannelsGate.layerAllowAll,
 	ChannelsObserver.layerLogger,

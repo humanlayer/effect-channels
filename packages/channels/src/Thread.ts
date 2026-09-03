@@ -56,6 +56,9 @@ export class Thread extends Schema.TaggedClass<Thread>()('Thread', {
 		return Effect.flatMap(Channels, (channels) => channels.unsubscribe({ threadId: this.ref.id }))
 	}
 
+	/**
+	 * Returns one provider-backed page of messages from this thread.
+	 */
 	listMessages(
 		options?: MessageHistoryOptions,
 	): Effect.Effect<MessagePage, UnknownProvider | HistoryFailed, Channels> {
@@ -67,10 +70,16 @@ export class Thread extends Schema.TaggedClass<Thread>()('Thread', {
 		})
 	}
 
+	/**
+	 * Lazily reads thread messages newest-first.
+	 */
 	get messages(): Stream.Stream<Message, UnknownProvider | HistoryFailed, Channels> {
 		return Stream.unwrap(Effect.map(Channels, (channels) => channels.messageStream({ threadId: this.ref.id })))
 	}
 
+	/**
+	 * Lazily reads the complete thread oldest-first.
+	 */
 	get allMessages(): Stream.Stream<Message, UnknownProvider | HistoryFailed, Channels> {
 		const options = MessageHistoryOptionsSchema.make({ direction: 'forward' })
 		return Stream.unwrap(

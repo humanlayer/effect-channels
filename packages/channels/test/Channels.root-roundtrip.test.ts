@@ -37,6 +37,7 @@ import {
 	ProviderRegistry,
 	Subscriptions,
 	ThreadId,
+	UserDirectory,
 } from '../src/index.ts'
 
 const testRootThreadId = ThreadId.make('slack:v1:T_TEST:C_TEST:100.1')
@@ -57,13 +58,21 @@ it.effect('delivers one signed mention end to end, subscribes explicitly, and po
 		const httpClient = HttpClient.make((request) =>
 			Effect.gen(function* () {
 				const webRequest = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie)
-				yield* Queue.offer(requests, yield* Effect.promise(() => webRequest.text()))
+				const isUserLookup = webRequest.url.includes('/users.info')
+				if (!isUserLookup) {
+					yield* Queue.offer(requests, yield* Effect.promise(() => webRequest.text()))
+				}
 				return HttpClientResponse.fromWeb(
 					request,
-					new Response('{"ok":true,"channel":"C_TEST","ts":"100.2"}', {
-						status: 200,
-						headers: { 'content-type': 'application/json' },
-					}),
+					new Response(
+						isUserLookup
+							? '{"ok":true,"user":{"id":"U_HUMAN","name":"Human"}}'
+							: '{"ok":true,"channel":"C_TEST","ts":"100.2"}',
+						{
+							status: 200,
+							headers: { 'content-type': 'application/json' },
+						},
+					),
 				)
 			}),
 		)
@@ -72,6 +81,7 @@ it.effect('delivers one signed mention end to end, subscribes explicitly, and po
 		const coordinator = ConversationCoordinator.layerMemory()
 		const signals = ConversationSignals.layerMemory
 		const registry = ProviderRegistry.layer
+		const userDirectory = UserDirectory.layer.pipe(Layer.provide(registry))
 		const organizations = Organizations.make((input) =>
 			Effect.succeed(input.tenant === 'T_TEST' ? Option.some(OrgId.make('org_test')) : Option.none()),
 		)
@@ -79,6 +89,7 @@ it.effect('delivers one signed mention end to end, subscribes explicitly, and po
 			coordinator,
 			signals,
 			registry,
+			userDirectory,
 			organizations,
 			ChannelsGate.layerAllowAll,
 			ChannelsObserver.layerLogger,

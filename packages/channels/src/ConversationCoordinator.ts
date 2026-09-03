@@ -1,5 +1,6 @@
 import { Context, Duration, Effect, Layer, Match, Queue, Ref, Schedule } from 'effect'
 
+import { conversationCoordinatorPostgresLayer } from './ConversationCoordinatorPostgres.ts'
 import type { ConversationCoordinatorUnavailable, ConversationLeaseLost } from './Errors.ts'
 import type { InboundEvent } from './Events.ts'
 import { unimplemented } from './internal/unimplemented.ts'
@@ -142,7 +143,7 @@ export class ConversationCoordinator extends Context.Service<
 		)
 	}
 
-	static layerPostgres(_options: ConversationCoordinatorOptions = defaultOptions) {
-		return Layer.effect(ConversationCoordinator, unimplemented('ConversationCoordinator.layerPostgres'))
+	static layerPostgres(options: ConversationCoordinatorOptions = defaultOptions) {
+		return conversationCoordinatorPostgresLayer(ConversationCoordinator, options)
 	}
 }

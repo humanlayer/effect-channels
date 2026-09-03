@@ -1,0 +1,26 @@
+{
+	"name": "@humanlayer/channels-app",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"scripts": {
+		"build": "bun build ./src/index.ts --outdir ./dist --target node --format esm --packages external",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"dependencies": {
+		"@effect/platform-node": "catalog:",
+		"@humanlayer/channels": "workspace:*",
+		"@humanlayer/channels-postgres": "workspace:*",
+		"@humanlayer/channels-slack": "workspace:*"
+	},
+	"devDependencies": {
+		"effect": "catalog:",
+		"typescript": "catalog:"
+	},
+	"peerDependencies": {
+		"effect": "^4.0.0-rc.110"
+	}
+}

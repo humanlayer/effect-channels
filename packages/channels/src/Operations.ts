@@ -27,12 +27,24 @@ export const MessageHistoryOptions = Schema.Struct({
 	cursor: Schema.optionalKey(Schema.String),
 	direction: Schema.optionalKey(Schema.Literals(['forward', 'backward'])),
 })
+/**
+ * Selects the page size, cursor, and ordering for provider-backed message history.
+ *
+ * @category models
+ * @since 0.0.0
+ */
 export type MessageHistoryOptions = typeof MessageHistoryOptions.Type
 
 export const MessagePage = Schema.Struct({
 	messages: Schema.Array(Schema.suspend(() => Message)),
 	nextCursor: Schema.optionalKey(Schema.String),
 })
+/**
+ * Contains one page of messages and the cursor for the next page, when one exists.
+ *
+ * @category models
+ * @since 0.0.0
+ */
 export type MessagePage = typeof MessagePage.Type
 
 export const ThreadSummary = Schema.Struct({
@@ -77,6 +89,12 @@ export const MessagesInput = Schema.Struct({
 	threadId: ThreadId,
 	options: Schema.optionalKey(MessageHistoryOptions),
 })
+/**
+ * Identifies a thread and optional paging settings for thread message history.
+ *
+ * @category models
+ * @since 0.0.0
+ */
 export type MessagesInput = typeof MessagesInput.Type
 
 export const ContainerMessagesInput = Schema.Struct({
@@ -84,29 +102,59 @@ export const ContainerMessagesInput = Schema.Struct({
 	before: Schema.optionalKey(MessageRef),
 	options: Schema.optionalKey(MessageHistoryOptions),
 })
+/**
+ * Selects message history from a thread's containing channel, optionally before a message.
+ *
+ * @category models
+ * @since 0.0.0
+ */
 export type ContainerMessagesInput = typeof ContainerMessagesInput.Type
 
 export const ChannelThreadsInput = Schema.Struct({
 	channel: ChannelRef,
 	options: Schema.optionalKey(MessageHistoryOptions),
 })
+/**
+ * Identifies a channel and optional paging settings for its threads.
+ *
+ * @category models
+ * @since 0.0.0
+ */
 export type ChannelThreadsInput = typeof ChannelThreadsInput.Type
 
 export const ThreadContext = Schema.TaggedStruct('ThreadContext', {
 	threadLimit: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 })),
 })
+/**
+ * Requests bounded thread history when loading context for an event.
+ *
+ * @category models
+ * @since 0.0.0
+ */
 export type ThreadContext = typeof ThreadContext.Type
 
 export const ContainerAndThreadContext = Schema.TaggedStruct('ContainerAndThreadContext', {
 	threadLimit: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 })),
 	containerLimit: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 })),
 })
+/**
+ * Requests bounded thread history plus messages preceding the event in its containing channel.
+ *
+ * @category models
+ * @since 0.0.0
+ */
 export type ContainerAndThreadContext = typeof ContainerAndThreadContext.Type
 
 export const ContextPolicy = Schema.Union([ThreadContext, ContainerAndThreadContext])
 export type ContextPolicy = typeof ContextPolicy.Type
 
 export const LoadContextInput = Schema.Struct({ event: Schema.suspend(() => MessageEvent), policy: ContextPolicy })
+/**
+ * Selects the message event and history policy used to build conversation context.
+ *
+ * @category models
+ * @since 0.0.0
+ */
 export type LoadContextInput = typeof LoadContextInput.Type
 
 export const MessageList = Schema.Array(Schema.suspend(() => Message))
@@ -117,6 +165,12 @@ export const ConversationContext = Schema.Struct({
 	threadMessages: MessageList,
 	containerMessages: Schema.Array(Schema.suspend(() => Message)),
 })
+/**
+ * Contains the triggering event and its loaded thread and channel history.
+ *
+ * @category models
+ * @since 0.0.0
+ */
 export type ConversationContext = typeof ConversationContext.Type
 
 export const InfoInput = Schema.Struct({ threadId: ThreadId })

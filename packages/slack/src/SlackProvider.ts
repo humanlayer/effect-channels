@@ -49,6 +49,8 @@ import {
 import { SlackClient } from './SlackClient.ts'
 import { decodeSlackChannelId, decodeSlackThreadId, slackThreadRef } from './SlackThreadId.ts'
 
+const retryableUserLookupApiErrors = new Set(['ratelimited', 'internal_error', 'fatal_error', 'service_unavailable'])
+
 const SlackCapabilities = Capabilities.make({
 	threadPost: true,
 	channelPost: true,
@@ -529,13 +531,14 @@ export class SlackProvider extends Context.Service<SlackProvider, ChannelProvide
 
 			const getUser = Effect.fn('slack.provider.get_user')(function* (input: GetUserInput) {
 				const teamId = SlackTeamId.make(input.tenant)
-				const lookupFailed = (reason: UserLookupFailed['reason']) =>
+				const lookupFailed = (reason: UserLookupFailed['reason'], retryable: boolean) =>
 					Effect.fail(
 						UserLookupFailed.make({
 							provider: 'slack',
 							tenant: input.tenant,
 							userId: input.userId,
 							reason,
+							retryable,
 						}),
 					)
 				return yield* client.getUser(SlackGetUserInput.make({ teamId, userId: input.userId })).pipe(
@@ -545,8 +548,11 @@ export class SlackProvider extends Context.Service<SlackProvider, ChannelProvide
 						),
 					),
 					Effect.catchTags({
-						SlackTransportError: () => lookupFailed('transport'),
-						SlackApiError: (error) => lookupFailed(error.code === 'user_not_found' ? 'not_found' : 'api'),
+						SlackTransportError: () => lookupFailed('transport', true),
+						SlackApiError: (error) =>
+							error.code === 'user_not_found'
+								? lookupFailed('not_found', false)
+								: lookupFailed('api', retryableUserLookupApiErrors.has(error.code)),
 					}),
 				)
 			})
