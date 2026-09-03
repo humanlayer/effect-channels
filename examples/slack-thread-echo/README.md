@@ -128,6 +128,8 @@ In the Slack app settings, open **Event Subscriptions**, enable events, and past
 
 If the ngrok hostname changes after a restart, update the Request URL again. If you change scopes, reinstall the app so the bot token receives the new permissions.
 
+Slack permission/authentication failures such as `missing_scope`, `invalid_auth`, and `not_in_channel` are logged once as non-retryable and the conversation mailbox continues in FIFO order; transient transport, rate-limit, and service failures retain bounded-backoff retry.
+
 ## Run the example
 
 ```bash

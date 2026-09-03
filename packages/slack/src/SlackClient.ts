@@ -113,7 +113,11 @@ const loadTenantCredentials = (input: TenantLookup) =>
 			Effect.mapError(() => toTransportError(input.operation)),
 		)
 		if (Option.isNone(credentials)) {
-			return yield* UnknownTenant.make({ provider: 'slack', tenant: TenantId.make(input.teamId) })
+			return yield* UnknownTenant.make({
+				provider: 'slack',
+				tenant: TenantId.make(input.teamId),
+				retryability: 'non_retryable',
+			})
 		}
 		return credentials.value
 	})

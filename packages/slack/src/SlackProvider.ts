@@ -33,6 +33,7 @@ import type {
 } from '@humanlayer/channels'
 import { Clock, Context, DateTime, Effect, HashSet, Layer, Match, Ref } from 'effect'
 
+import { slackErrorRetryability } from './Errors.ts'
 import {
 	SlackChannelInfoInput,
 	SlackGetUserInput,
@@ -223,6 +224,7 @@ export class SlackProvider extends Context.Service<SlackProvider, ChannelProvide
 								provider: 'slack',
 								threadId: input.threadId,
 								message: 'invalid Slack thread id',
+								retryability: 'non_retryable',
 							}),
 						),
 					),
@@ -245,20 +247,22 @@ export class SlackProvider extends Context.Service<SlackProvider, ChannelProvide
 								),
 							),
 							Effect.catchTags({
-								SlackTransportError: () =>
+								SlackTransportError: (error) =>
 									Effect.fail(
 										PostFailed.make({
 											provider: 'slack',
 											threadId: input.threadId,
 											message: 'Slack transport failed',
+											retryability: slackErrorRetryability(error),
 										}),
 									),
-								SlackApiError: () =>
+								SlackApiError: (error) =>
 									Effect.fail(
 										PostFailed.make({
 											provider: 'slack',
 											threadId: input.threadId,
 											message: 'Slack API rejected the post',
+											retryability: slackErrorRetryability(error),
 										}),
 									),
 							}),
@@ -285,6 +289,7 @@ export class SlackProvider extends Context.Service<SlackProvider, ChannelProvide
 								provider: 'slack',
 								threadId: errorThreadId,
 								message: 'invalid Slack channel id',
+								retryability: 'non_retryable',
 							}),
 						),
 					),
@@ -305,20 +310,22 @@ export class SlackProvider extends Context.Service<SlackProvider, ChannelProvide
 							),
 						),
 						Effect.catchTags({
-							SlackTransportError: () =>
+							SlackTransportError: (error) =>
 								Effect.fail(
 									PostFailed.make({
 										provider: 'slack',
 										threadId: errorThreadId,
 										message: 'Slack transport failed',
+										retryability: slackErrorRetryability(error),
 									}),
 								),
-							SlackApiError: () =>
+							SlackApiError: (error) =>
 								Effect.fail(
 									PostFailed.make({
 										provider: 'slack',
 										threadId: errorThreadId,
 										message: 'Slack API rejected the post',
+										retryability: slackErrorRetryability(error),
 									}),
 								),
 						}),
@@ -360,7 +367,13 @@ export class SlackProvider extends Context.Service<SlackProvider, ChannelProvide
 			const messages = Effect.fn('slack.provider.messages')(function* (input: MessagesInput) {
 				const ref = yield* decodeSlackThreadId(input.threadId).pipe(
 					Effect.catchTag('InvalidSlackThreadId', () =>
-						Effect.fail(HistoryFailed.make({ provider: 'slack', message: 'invalid Slack thread id' })),
+						Effect.fail(
+							HistoryFailed.make({
+								provider: 'slack',
+								message: 'invalid Slack thread id',
+								retryability: 'non_retryable',
+							}),
+						),
 					),
 				)
 				return yield* client
@@ -381,17 +394,26 @@ export class SlackProvider extends Context.Service<SlackProvider, ChannelProvide
 						Effect.catchTags({
 							UnknownTenant: () =>
 								Effect.fail(
-									HistoryFailed.make({ provider: 'slack', message: 'unknown Slack workspace' }),
+									HistoryFailed.make({
+										provider: 'slack',
+										message: 'unknown Slack workspace',
+										retryability: 'non_retryable',
+									}),
 								),
-							SlackTransportError: () =>
+							SlackTransportError: (error) =>
 								Effect.fail(
-									HistoryFailed.make({ provider: 'slack', message: 'Slack transport failed' }),
+									HistoryFailed.make({
+										provider: 'slack',
+										message: 'Slack transport failed',
+										retryability: slackErrorRetryability(error),
+									}),
 								),
-							SlackApiError: () =>
+							SlackApiError: (error) =>
 								Effect.fail(
 									HistoryFailed.make({
 										provider: 'slack',
 										message: 'Slack API rejected the history request',
+										retryability: slackErrorRetryability(error),
 									}),
 								),
 						}),
@@ -403,7 +425,13 @@ export class SlackProvider extends Context.Service<SlackProvider, ChannelProvide
 			) {
 				const address = yield* decodeSlackChannelId(input.channel.id).pipe(
 					Effect.catchTag('InvalidSlackThreadId', () =>
-						Effect.fail(HistoryFailed.make({ provider: 'slack', message: 'invalid Slack channel id' })),
+						Effect.fail(
+							HistoryFailed.make({
+								provider: 'slack',
+								message: 'invalid Slack channel id',
+								retryability: 'non_retryable',
+							}),
+						),
 					),
 				)
 				const fields: SlackHistoryFields = {
@@ -422,14 +450,27 @@ export class SlackProvider extends Context.Service<SlackProvider, ChannelProvide
 					),
 					Effect.catchTags({
 						UnknownTenant: () =>
-							Effect.fail(HistoryFailed.make({ provider: 'slack', message: 'unknown Slack workspace' })),
-						SlackTransportError: () =>
-							Effect.fail(HistoryFailed.make({ provider: 'slack', message: 'Slack transport failed' })),
-						SlackApiError: () =>
+							Effect.fail(
+								HistoryFailed.make({
+									provider: 'slack',
+									message: 'unknown Slack workspace',
+									retryability: 'non_retryable',
+								}),
+							),
+						SlackTransportError: (error) =>
+							Effect.fail(
+								HistoryFailed.make({
+									provider: 'slack',
+									message: 'Slack transport failed',
+									retryability: slackErrorRetryability(error),
+								}),
+							),
+						SlackApiError: (error) =>
 							Effect.fail(
 								HistoryFailed.make({
 									provider: 'slack',
 									message: 'Slack API rejected the history request',
+									retryability: slackErrorRetryability(error),
 								}),
 							),
 					}),
@@ -439,7 +480,13 @@ export class SlackProvider extends Context.Service<SlackProvider, ChannelProvide
 			const channelThreads = Effect.fn('slack.provider.channel_threads')(function* (input: ChannelThreadsInput) {
 				const address = yield* decodeSlackChannelId(input.channel.id).pipe(
 					Effect.catchTag('InvalidSlackThreadId', () =>
-						Effect.fail(HistoryFailed.make({ provider: 'slack', message: 'invalid Slack channel id' })),
+						Effect.fail(
+							HistoryFailed.make({
+								provider: 'slack',
+								message: 'invalid Slack channel id',
+								retryability: 'non_retryable',
+							}),
+						),
 					),
 				)
 				const fields: SlackThreadListFields = { teamId: address.teamId, channelId: address.channelId }
@@ -457,26 +504,40 @@ export class SlackProvider extends Context.Service<SlackProvider, ChannelProvide
 					),
 					Effect.catchTags({
 						UnknownTenant: () =>
-							Effect.fail(HistoryFailed.make({ provider: 'slack', message: 'unknown Slack workspace' })),
-						SlackTransportError: () =>
-							Effect.fail(HistoryFailed.make({ provider: 'slack', message: 'Slack transport failed' })),
-						SlackApiError: () =>
+							Effect.fail(
+								HistoryFailed.make({
+									provider: 'slack',
+									message: 'unknown Slack workspace',
+									retryability: 'non_retryable',
+								}),
+							),
+						SlackTransportError: (error) =>
+							Effect.fail(
+								HistoryFailed.make({
+									provider: 'slack',
+									message: 'Slack transport failed',
+									retryability: slackErrorRetryability(error),
+								}),
+							),
+						SlackApiError: (error) =>
 							Effect.fail(
 								HistoryFailed.make({
 									provider: 'slack',
 									message: 'Slack API rejected the thread listing',
+									retryability: slackErrorRetryability(error),
 								}),
 							),
 					}),
 				)
 			})
 
-			const metadataFailed = (message: string) => Effect.fail(MetadataFailed.make({ provider: 'slack', message }))
+			const metadataFailed = (message: string, retryability: 'retryable' | 'non_retryable') =>
+				Effect.fail(MetadataFailed.make({ provider: 'slack', message, retryability }))
 
 			const info = Effect.fn('slack.provider.info')(function* (input: InfoInput) {
 				const ref = yield* decodeSlackThreadId(input.threadId).pipe(
 					Effect.catchTag('InvalidSlackThreadId', () =>
-						Effect.fail(ThreadGone.make({ threadId: input.threadId })),
+						Effect.fail(ThreadGone.make({ threadId: input.threadId, retryability: 'non_retryable' })),
 					),
 				)
 				const channelInfo = yield* client
@@ -488,12 +549,21 @@ export class SlackProvider extends Context.Service<SlackProvider, ChannelProvide
 							),
 						),
 						Effect.catchTags({
-							UnknownTenant: () => metadataFailed('unknown Slack workspace'),
-							SlackTransportError: () => metadataFailed('Slack transport failed'),
+							UnknownTenant: () => metadataFailed('unknown Slack workspace', 'non_retryable'),
+							SlackTransportError: (error) =>
+								metadataFailed('Slack transport failed', slackErrorRetryability(error)),
 							SlackApiError: (error) =>
 								error.code === 'channel_not_found'
-									? Effect.fail(ThreadGone.make({ threadId: input.threadId }))
-									: metadataFailed('Slack API rejected the metadata request'),
+									? Effect.fail(
+											ThreadGone.make({
+												threadId: input.threadId,
+												retryability: 'non_retryable',
+											}),
+										)
+									: metadataFailed(
+											'Slack API rejected the metadata request',
+											slackErrorRetryability(error),
+										),
 						}),
 					)
 				const threadRef = slackThreadRef(ref, false)
@@ -507,7 +577,7 @@ export class SlackProvider extends Context.Service<SlackProvider, ChannelProvide
 			}) {
 				const address = yield* decodeSlackChannelId(input.channel.id).pipe(
 					Effect.catchTag('InvalidSlackThreadId', () =>
-						Effect.fail(ChannelGone.make({ channelId: input.channel.id })),
+						Effect.fail(ChannelGone.make({ channelId: input.channel.id, retryability: 'non_retryable' })),
 					),
 				)
 				return yield* client
@@ -519,12 +589,21 @@ export class SlackProvider extends Context.Service<SlackProvider, ChannelProvide
 							),
 						),
 						Effect.catchTags({
-							UnknownTenant: () => metadataFailed('unknown Slack workspace'),
-							SlackTransportError: () => metadataFailed('Slack transport failed'),
+							UnknownTenant: () => metadataFailed('unknown Slack workspace', 'non_retryable'),
+							SlackTransportError: (error) =>
+								metadataFailed('Slack transport failed', slackErrorRetryability(error)),
 							SlackApiError: (error) =>
 								error.code === 'channel_not_found'
-									? Effect.fail(ChannelGone.make({ channelId: input.channel.id }))
-									: metadataFailed('Slack API rejected the metadata request'),
+									? Effect.fail(
+											ChannelGone.make({
+												channelId: input.channel.id,
+												retryability: 'non_retryable',
+											}),
+										)
+									: metadataFailed(
+											'Slack API rejected the metadata request',
+											slackErrorRetryability(error),
+										),
 						}),
 					)
 			})

@@ -2,7 +2,7 @@ import { Cause, Effect, Exit, FiberSet, Layer, Match, Option, Queue, Schema } fr
 import { SqlClient } from 'effect/unstable/sql'
 
 import type { ConversationCoordinator } from './ConversationCoordinator.ts'
-import { ConversationCoordinatorUnavailable, ConversationLeaseLost } from './Errors.ts'
+import { ConversationCoordinatorUnavailable, ConversationLeaseLost, isNonRetryableCause } from './Errors.ts'
 import { InboundEvent } from './Events.ts'
 import { unimplemented } from './internal/unimplemented.ts'
 import type { ConversationCoordinatorOptions } from './Operations.ts'
@@ -438,6 +438,17 @@ export const conversationCoordinatorPostgresLayer = (
 				)
 			}
 
+			const completeNonRetryableEvent = (claimed: ClaimedConversation) =>
+				Effect.logError('channels conversation delivery failed permanently; will not retry').pipe(
+					Effect.annotateLogs({
+						thread_id: claimed.threadId,
+						idempotency_key: claimed.event.idempotencyKey,
+						runtime_instance_id: runtimeInstanceId,
+						retryability: 'non_retryable',
+					}),
+					Effect.andThen(nextEvent(claimed)),
+				)
+
 			const heartbeat = (claimed: ClaimedConversation) =>
 				Effect.sleep(options.heartbeatEveryMs).pipe(
 					Effect.andThen(renewLease(claimed)),
@@ -466,11 +477,13 @@ export const conversationCoordinatorPostgresLayer = (
 							Match.tagsExhaustive({
 								Success: () => nextEvent(claimed),
 								Failure: ({ cause }) =>
-									Cause.hasInterruptsOnly(cause)
-										? Effect.failCause(cause)
-										: retryEvent(claimed, cause).pipe(
-												Effect.as(Option.none<ClaimedConversation>()),
-											),
+									isNonRetryableCause(cause)
+										? completeNonRetryableEvent(claimed)
+										: Cause.hasInterruptsOnly(cause)
+											? Effect.failCause(cause)
+											: retryEvent(claimed, cause).pipe(
+													Effect.as(Option.none<ClaimedConversation>()),
+												),
 							}),
 						),
 					),

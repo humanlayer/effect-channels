@@ -29,7 +29,7 @@ export class ProviderRegistry extends Context.Service<
 			Effect.suspend(() => {
 				const provider = providers.get(input.provider)
 				return provider === undefined
-					? Effect.fail(UnknownProvider.make({ provider: input.provider }))
+					? Effect.fail(UnknownProvider.make({ provider: input.provider, retryability: 'non_retryable' }))
 					: Effect.succeed(provider)
 			})
 		return ProviderRegistry.of({
@@ -45,7 +45,7 @@ export class ProviderRegistry extends Context.Service<
 			byThreadId: (input) => {
 				const provider = providerNameFromThreadId(input.threadId)
 				return provider === undefined
-					? Effect.fail(UnknownProvider.make({ provider: input.threadId }))
+					? Effect.fail(UnknownProvider.make({ provider: input.threadId, retryability: 'non_retryable' }))
 					: byName({ provider })
 			},
 			byChannel: (input) => byName({ provider: input.channel.provider }),

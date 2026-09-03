@@ -1,26 +1,49 @@
-import { Schema } from 'effect'
+import { Cause, Option, Schema } from 'effect'
 
 import { OrgId, ProviderName, TenantId, ThreadId, UserId } from './Schema.ts'
 
+export const Retryability = Schema.Literals(['retryable', 'non_retryable'])
+export type Retryability = typeof Retryability.Type
+
+export const RetryabilityMetadata = Schema.Struct({ retryability: Retryability })
+export type RetryabilityMetadata = typeof RetryabilityMetadata.Type
+
+/** Returns retryability metadata from a parsed retryability carrier. */
+export const retryabilityOf = (error: RetryabilityMetadata): Retryability => error.retryability
+
+/** Returns whether a typed failure is explicitly non-retryable. */
+export const isNonRetryableError = (error: RetryabilityMetadata): boolean => retryabilityOf(error) === 'non_retryable'
+
+/** Returns whether an Effect cause contains an explicitly non-retryable typed failure. */
+export const isNonRetryableCause = (cause: Cause.Cause<unknown>): boolean =>
+	Option.match(Cause.findErrorOption(cause), {
+		onNone: () => false,
+		onSome: (error) => Schema.is(RetryabilityMetadata)(error) && isNonRetryableError(error),
+	})
+
 export class UnknownProvider extends Schema.TaggedError<UnknownProvider>()('UnknownProvider', {
 	provider: Schema.String,
+	retryability: Schema.optionalKey(Retryability),
 }) {}
 
 export class UnknownTenant extends Schema.TaggedError<UnknownTenant>()('UnknownTenant', {
 	provider: ProviderName,
 	tenant: TenantId,
+	retryability: Schema.optionalKey(Retryability),
 }) {}
 
 export class TenantDisabled extends Schema.TaggedError<TenantDisabled>()('TenantDisabled', {
 	orgId: OrgId,
 	provider: ProviderName,
 	tenant: TenantId,
+	retryability: Schema.optionalKey(Retryability),
 }) {}
 
 export class PostFailed extends Schema.TaggedError<PostFailed>()('PostFailed', {
 	provider: ProviderName,
 	threadId: ThreadId,
 	message: Schema.String,
+	retryability: Schema.optionalKey(Retryability),
 }) {}
 
 export class EditFailed extends Schema.TaggedError<EditFailed>()('EditFailed', {
@@ -50,29 +73,35 @@ export class StatusFailed extends Schema.TaggedError<StatusFailed>()('StatusFail
 export class HistoryFailed extends Schema.TaggedError<HistoryFailed>()('HistoryFailed', {
 	provider: ProviderName,
 	message: Schema.String,
+	retryability: Schema.optionalKey(Retryability),
 }) {}
 
 export class ContextLoadFailed extends Schema.TaggedError<ContextLoadFailed>()('ContextLoadFailed', {
 	provider: ProviderName,
 	message: Schema.String,
+	retryability: Schema.optionalKey(Retryability),
 }) {}
 
 export class UnsupportedContextScope extends Schema.TaggedError<UnsupportedContextScope>()('UnsupportedContextScope', {
 	provider: ProviderName,
 	scope: Schema.String,
+	retryability: Schema.optionalKey(Retryability),
 }) {}
 
 export class ThreadGone extends Schema.TaggedError<ThreadGone>()('ThreadGone', {
 	threadId: ThreadId,
+	retryability: Schema.optionalKey(Retryability),
 }) {}
 
 export class ChannelGone extends Schema.TaggedError<ChannelGone>()('ChannelGone', {
 	channelId: Schema.String,
+	retryability: Schema.optionalKey(Retryability),
 }) {}
 
 export class MetadataFailed extends Schema.TaggedError<MetadataFailed>()('MetadataFailed', {
 	provider: ProviderName,
 	message: Schema.String,
+	retryability: Schema.optionalKey(Retryability),
 }) {}
 
 export class SubjectFailed extends Schema.TaggedError<SubjectFailed>()('SubjectFailed', {
@@ -106,6 +135,7 @@ export class SubscriptionStoreError extends Schema.TaggedError<SubscriptionStore
 export class ChannelsRunError extends Schema.TaggedError<ChannelsRunError>()('ChannelsRunError', {
 	operation: Schema.String,
 	message: Schema.String,
+	retryability: Schema.optionalKey(Retryability),
 }) {}
 
 export class ProviderAlreadyRegistered extends Schema.TaggedError<ProviderAlreadyRegistered>()(

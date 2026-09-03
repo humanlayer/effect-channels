@@ -13,7 +13,13 @@ const collectThreadMessages = (input: {
 	readonly threadLimit: number
 }): Effect.Effect<ReadonlyArray<Message>, ContextLoadFailed | UnsupportedContextScope> => {
 	if (!input.provider.capabilities.history.thread) {
-		return Effect.fail(UnsupportedContextScope.make({ provider: input.provider.name, scope: 'thread' }))
+		return Effect.fail(
+			UnsupportedContextScope.make({
+				provider: input.provider.name,
+				scope: 'thread',
+				retryability: 'non_retryable',
+			}),
+		)
 	}
 	return threadMessageStream(input.provider, {
 		threadId: input.event.thread.ref.id,
@@ -23,7 +29,13 @@ const collectThreadMessages = (input: {
 		Stream.runCollect,
 		Effect.tapError((error) => Effect.logError('conversation context thread history failed', error)),
 		Effect.catchTag('HistoryFailed', (error) =>
-			Effect.fail(ContextLoadFailed.make({ provider: error.provider, message: 'thread history fetch failed' })),
+			Effect.fail(
+				ContextLoadFailed.make({
+					provider: error.provider,
+					message: 'thread history fetch failed',
+					retryability: error.retryability ?? 'retryable',
+				}),
+			),
 		),
 	)
 }
@@ -44,7 +56,11 @@ const collectContainerMessages = (input: {
 		Effect.tapError((error) => Effect.logError('conversation context container history failed', error)),
 		Effect.catchTag('HistoryFailed', (error) =>
 			Effect.fail(
-				ContextLoadFailed.make({ provider: error.provider, message: 'container history fetch failed' }),
+				ContextLoadFailed.make({
+					provider: error.provider,
+					message: 'container history fetch failed',
+					retryability: error.retryability ?? 'retryable',
+				}),
 			),
 		),
 	)

@@ -86,7 +86,11 @@ export const threadMessagePage = (
 	const page: Effect.Effect<MessagePage, HistoryFailed> = provider.capabilities.history.thread
 		? provider.messages(input)
 		: Effect.fail(
-				HistoryFailed.make({ provider: provider.name, message: 'provider does not support thread history' }),
+				HistoryFailed.make({
+					provider: provider.name,
+					message: 'provider does not support thread history',
+					retryability: 'non_retryable',
+				}),
 			)
 	return page.pipe(
 		Effect.withSpan('channels.history.thread_page', {
@@ -127,7 +131,13 @@ export const channelMessagePage = (
 	const page: Effect.Effect<MessagePage, HistoryFailed | UnsupportedContextScope> = provider.capabilities.history
 		.channelMessages
 		? provider.containerMessages(input)
-		: Effect.fail(UnsupportedContextScope.make({ provider: provider.name, scope: 'channel_messages' }))
+		: Effect.fail(
+				UnsupportedContextScope.make({
+					provider: provider.name,
+					scope: 'channel_messages',
+					retryability: 'non_retryable',
+				}),
+			)
 	return page.pipe(
 		Effect.withSpan('channels.history.channel_page', {
 			attributes: { provider: provider.name, tenant: input.channel.tenant, operation: 'channel_page' },
@@ -150,7 +160,13 @@ export const channelThreadPage = (
 	const page: Effect.Effect<ThreadPage, HistoryFailed | UnsupportedContextScope> = provider.capabilities.history
 		.channelThreads
 		? provider.channelThreads(input)
-		: Effect.fail(UnsupportedContextScope.make({ provider: provider.name, scope: 'channel_threads' }))
+		: Effect.fail(
+				UnsupportedContextScope.make({
+					provider: provider.name,
+					scope: 'channel_threads',
+					retryability: 'non_retryable',
+				}),
+			)
 	return page.pipe(
 		Effect.withSpan('channels.history.channel_threads', {
 			attributes: { provider: provider.name, tenant: input.channel.tenant, operation: 'channel_threads' },

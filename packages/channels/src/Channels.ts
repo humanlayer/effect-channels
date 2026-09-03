@@ -1,4 +1,4 @@
-import { Context, Effect, Fiber, FiberMap, Layer, Match, Option, Stream } from 'effect'
+import { Context, Effect, Fiber, FiberMap, Layer, Match, Option, Schema, Stream } from 'effect'
 
 import { ChannelsGate } from './ChannelsGate.ts'
 import { ChannelsObserver } from './ChannelsObserver.ts'
@@ -17,6 +17,8 @@ import {
 	type MetadataFailed,
 	PostFailed,
 	ReactionFailed,
+	RetryabilityMetadata,
+	retryabilityOf,
 	type ObserverError,
 	SubscriptionStoreError,
 	SubjectFailed,
@@ -133,7 +135,7 @@ const addressFromThreadId = (threadId: string): Effect.Effect<EgressAddress, Unk
 			}
 			return { provider, tenant: TenantIdSchema.make(decodeURIComponent(encodedTenant)) }
 		},
-		catch: () => UnknownProvider.make({ provider: threadId }),
+		catch: () => UnknownProvider.make({ provider: threadId, retryability: 'non_retryable' }),
 	})
 
 const observerBestEffort = (effect: Effect.Effect<void, ObserverError>) =>
@@ -307,8 +309,14 @@ export class Channels extends Context.Service<
 							handlers.push((thread, message) =>
 								handler(thread, message).pipe(
 									Effect.provide(context),
-									Effect.mapError(() =>
-										ChannelsRunError.make({ operation, message: 'registered handler failed' }),
+									Effect.mapError((error) =>
+										ChannelsRunError.make({
+											operation,
+											message: 'registered handler failed',
+											retryability: Schema.is(RetryabilityMetadata)(error)
+												? retryabilityOf(error)
+												: 'retryable',
+										}),
 									),
 								),
 							)
@@ -371,10 +379,12 @@ export class Channels extends Context.Service<
 							.resolve({ source: input.address.provider, tenant: input.address.tenant })
 							.pipe(
 								Effect.tapError((error) => Effect.logError('organization lookup failed', error)),
-								Effect.mapError(() => UnknownTenant.make(input.address)),
+								Effect.mapError(() =>
+									UnknownTenant.make({ ...input.address, retryability: 'non_retryable' }),
+								),
 							)
 						if (Option.isNone(organization)) {
-							return yield* UnknownTenant.make(input.address)
+							return yield* UnknownTenant.make({ ...input.address, retryability: 'non_retryable' })
 						}
 						yield* Effect.annotateCurrentSpan({ org_id: organization.value })
 						const allowed = yield* gate
@@ -392,6 +402,7 @@ export class Channels extends Context.Service<
 								orgId: organization.value,
 								provider: input.address.provider,
 								tenant: input.address.tenant,
+								retryability: 'non_retryable',
 							})
 						}
 						return organization.value

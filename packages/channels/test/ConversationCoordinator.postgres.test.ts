@@ -22,7 +22,7 @@ import {
 import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
 import { SqlClient } from 'effect/unstable/sql'
 
-import { ConversationCoordinator, type InboundEvent } from '../src/index.ts'
+import { ChannelsRunError, ConversationCoordinator, type InboundEvent } from '../src/index.ts'
 import {
 	createPostgresMessageEvent,
 	postgresCoordinatorOptions,
@@ -81,6 +81,64 @@ describe.skipIf(!postgresTestsEnabled)('ConversationCoordinator.layerPostgres', 
 				{ idempotency_key: second.idempotencyKey, status: 'completed' },
 			])
 
+			yield* Deferred.succeed(releaseThird, undefined)
+			yield* Fiber.interrupt(worker)
+		}).pipe(Effect.provide(postgresTestLayer)),
+	)
+
+	it.effect('completes a non-retryable item once and advances the same-thread mailbox', () =>
+		Effect.gen(function* () {
+			const coordinator = yield* buildCoordinator()
+			const attempts = yield* Ref.make(0)
+			const processed = yield* Queue.unbounded<string>()
+			const threadKey = 'non-retryable'
+			const first = yield* createPostgresMessageEvent({ threadKey })
+			const second = yield* createPostgresMessageEvent({ threadKey })
+			const third = yield* createPostgresMessageEvent({ threadKey })
+			const reachedThird = yield* Deferred.make<void>()
+			const releaseThird = yield* Deferred.make<void>()
+			const worker = yield* Effect.forkChild(
+				coordinator.run((event) =>
+					event.idempotencyKey === first.idempotencyKey
+						? Ref.update(attempts, (count) => count + 1).pipe(
+								Effect.andThen(
+									Effect.fail(
+										ChannelsRunError.make({
+											operation: 'handler',
+											message: 'missing permission',
+											retryability: 'non_retryable',
+										}),
+									),
+								),
+							)
+						: event.idempotencyKey === second.idempotencyKey
+							? Queue.offer(processed, event.idempotencyKey).pipe(Effect.asVoid)
+							: Deferred.succeed(reachedThird, undefined).pipe(
+									Effect.andThen(Deferred.await(releaseThird)),
+								),
+				),
+			)
+			yield* coordinator.submit(first)
+			yield* coordinator.submit(second)
+			yield* coordinator.submit(third)
+			assert.strictEqual(yield* Queue.take(processed), second.idempotencyKey)
+			yield* Deferred.await(reachedThird)
+			assert.strictEqual(yield* Ref.get(attempts), 1)
+			const sql = yield* SqlClient.SqlClient
+			const rows = yield* sql<{
+				readonly attempts: number
+				readonly idempotency_key: string
+				readonly status: string
+			}>`
+				SELECT attempts, idempotency_key, status
+				FROM channels_conversation_mailbox
+				WHERE idempotency_key IN (${first.idempotencyKey}, ${second.idempotencyKey})
+				ORDER BY sequence ASC
+			`
+			assert.deepStrictEqual(rows, [
+				{ attempts: 0, idempotency_key: first.idempotencyKey, status: 'completed' },
+				{ attempts: 0, idempotency_key: second.idempotencyKey, status: 'completed' },
+			])
 			yield* Deferred.succeed(releaseThird, undefined)
 			yield* Fiber.interrupt(worker)
 		}).pipe(Effect.provide(postgresTestLayer)),

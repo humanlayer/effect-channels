@@ -1,7 +1,8 @@
-import { Context, Duration, Effect, Layer, Match, Queue, Ref, Schedule } from 'effect'
+import { Context, Duration, Effect, Layer, Match, Queue, Ref, Schedule, Schema } from 'effect'
 
 import { conversationCoordinatorPostgresLayer } from './ConversationCoordinatorPostgres.ts'
 import type { ConversationCoordinatorUnavailable, ConversationLeaseLost } from './Errors.ts'
+import { RetryabilityMetadata, isNonRetryableError } from './Errors.ts'
 import type { InboundEvent } from './Events.ts'
 import { unimplemented } from './internal/unimplemented.ts'
 import type { CancelConversationInput, ConversationCoordinatorOptions } from './Operations.ts'
@@ -32,6 +33,17 @@ const deliverWithRetry = <E, R>(input: {
 			),
 		)
 		yield* input.handler(input.event).pipe(
+			Effect.catchIf(
+				(error) => Schema.is(RetryabilityMetadata)(error) && isNonRetryableError(error),
+				() =>
+					Effect.logError('channels conversation delivery failed permanently; will not retry').pipe(
+						Effect.annotateLogs({
+							thread_id: input.threadId,
+							idempotency_key: input.event.idempotencyKey,
+							retryability: 'non_retryable',
+						}),
+					),
+			),
 			Effect.tapError((error) =>
 				Effect.gen(function* () {
 					const attempt = yield* Ref.updateAndGet(attempts, (count) => count + 1)

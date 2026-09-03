@@ -1,4 +1,5 @@
-import { Schema } from 'effect'
+import type { Retryability } from '@humanlayer/channels'
+import { Match, Schema } from 'effect'
 
 import { SlackTeamId } from './Schema.ts'
 
@@ -24,3 +25,15 @@ export class SlackApiError extends Schema.TaggedError<SlackApiError>()('SlackApi
 export class InvalidSlackThreadId extends Schema.TaggedError<InvalidSlackThreadId>()('InvalidSlackThreadId', {
 	threadId: Schema.String,
 }) {}
+
+const transientSlackApiCodes = new Set(['ratelimited', 'internal_error', 'fatal_error', 'service_unavailable'])
+
+/** Classifies Slack transport and API failures without leaking provider codes into core coordination. */
+export const slackErrorRetryability = (error: SlackTransportError | SlackApiError): Retryability =>
+	Match.value(error).pipe(
+		Match.tagsExhaustive({
+			SlackTransportError: () => 'retryable' as const,
+			SlackApiError: ({ code }) =>
+				transientSlackApiCodes.has(code) ? ('retryable' as const) : ('non_retryable' as const),
+		}),
+	)

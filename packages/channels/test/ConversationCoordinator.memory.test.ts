@@ -3,7 +3,7 @@ import { Effect, Fiber, Layer, Logger, Predicate, Queue, Ref } from 'effect'
 import { TestClock } from 'effect/testing'
 
 import type { InboundEvent } from '../src/index.ts'
-import { ConversationCoordinator, ConversationCoordinatorOptions } from '../src/index.ts'
+import { ChannelsRunError, ConversationCoordinator, ConversationCoordinatorOptions } from '../src/index.ts'
 import { makeTestMessageEvent } from './support.ts'
 
 const options = ConversationCoordinatorOptions.make({
@@ -72,5 +72,48 @@ it.effect('retries a failing conversation with capped backoff, alerts after the 
 		const alerts = records.filter((record) => record.level === 'Error' && record.text.includes('keeps failing'))
 		assert.strictEqual(warnings.length, 1)
 		assert.strictEqual(alerts.length, 3)
+	}),
+)
+
+it.effect('absorbs a non-retryable failure once and advances the mailbox in FIFO order', () =>
+	Effect.gen(function* () {
+		const records: Array<string> = []
+		const recorder = Logger.make((entry) => {
+			const first = Array.isArray(entry.message) ? entry.message.at(0) : entry.message
+			if (Predicate.isString(first)) {
+				records.push(first)
+			}
+		})
+		const program = Effect.gen(function* () {
+			const coordinator = yield* ConversationCoordinator
+			const attempts = yield* Ref.make(0)
+			const processed = yield* Queue.unbounded<string>()
+			const worker = yield* Effect.forkChild(
+				coordinator.run((event) =>
+					event.idempotencyKey === firstEvent.idempotencyKey
+						? Ref.update(attempts, (count) => count + 1).pipe(
+								Effect.andThen(
+									Effect.fail(
+										ChannelsRunError.make({
+											operation: 'handler',
+											message: 'missing permission',
+											retryability: 'non_retryable',
+										}),
+									),
+								),
+							)
+						: Queue.offer(processed, event.idempotencyKey).pipe(Effect.asVoid),
+				),
+			)
+			yield* coordinator.submit(firstEvent)
+			yield* coordinator.submit(secondEvent)
+			assert.strictEqual(yield* Queue.take(processed), secondEvent.idempotencyKey)
+			assert.strictEqual(yield* Ref.get(attempts), 1)
+			yield* Fiber.interrupt(worker)
+		})
+		yield* program.pipe(
+			Effect.provide(Layer.mergeAll(ConversationCoordinator.layerMemory(options), Logger.layer([recorder]))),
+		)
+		assert.strictEqual(records.filter((message) => message.includes('will not retry')).length, 1)
 	}),
 )
