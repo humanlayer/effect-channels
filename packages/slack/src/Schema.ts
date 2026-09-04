@@ -404,7 +404,7 @@ export const SlackUserProfileSnapshot = Schema.Struct({
 	display_name: Schema.optionalKey(Schema.String),
 	real_name: Schema.optionalKey(Schema.String),
 	email: Schema.optionalKey(Schema.String),
-	image_192: Schema.optionalKey(Schema.URLFromString),
+	image_192: Schema.optionalKey(Schema.String),
 })
 export type SlackUserProfileSnapshot = typeof SlackUserProfileSnapshot.Type
 

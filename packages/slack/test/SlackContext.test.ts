@@ -85,7 +85,7 @@ it.effect('fetches forward thread replies oldest-first with the caller cursor an
 			}),
 		).pipe(Effect.provide(harness.layer))
 		const request = yield* Queue.take(harness.requests)
-		assert.strictEqual(request.method, 'GET')
+		assert.strictEqual(request.method, 'POST')
 		assert.strictEqual(request.url.pathname, '/api/conversations.replies')
 		assert.strictEqual(request.authorization, `Bearer ${testBotToken}`)
 		assert.deepStrictEqual(params(request), { channel: 'C_TEST', ts: '100.1', limit: '2', cursor: 'abc' })

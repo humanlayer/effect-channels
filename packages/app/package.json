@@ -18,8 +18,10 @@
 		"@humanlayer/channels-slack": "workspace:*"
 	},
 	"devDependencies": {
+		"@effect/sql-pg": "catalog:",
 		"@effect/vitest": "catalog:",
 		"effect": "catalog:",
+		"emulate": "0.11.0",
 		"typescript": "catalog:",
 		"vitest": "catalog:"
 	},

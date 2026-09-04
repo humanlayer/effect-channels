@@ -37,7 +37,7 @@ import {
 	SlackTeamId,
 	type SlackConnectionLookupInput as SlackConnectionLookup,
 } from '@humanlayer/channels-slack'
-import { Cache, Config, Context, Effect, Layer, Match, Option, Schema } from 'effect'
+import { Cache, Config, ConfigProvider, Context, Effect, Layer, Match, Option, Schema } from 'effect'
 import { HttpClient, HttpRouter, HttpServerResponse } from 'effect/unstable/http'
 import { Persistence } from 'effect/unstable/persistence'
 import { SqlClient } from 'effect/unstable/sql'
@@ -224,6 +224,8 @@ export type ChannelsAppOptions<
 	readonly onSubscribedMessage?: (thread: Thread, message: Message) => Effect.Effect<void, HandlerError, Channels>
 	readonly advanced?: {
 		readonly httpClient?: Layer.Layer<HttpClient.HttpClient, HttpError>
+		readonly slackApiOrigin?: URL
+		readonly configProvider?: ConfigProvider.ConfigProvider
 	}
 }
 
@@ -251,7 +253,10 @@ export const createChannelsApp = <
 	const userDirectory = UserDirectory.make().pipe(Layer.provide(Layer.merge(registry, storage)))
 	const connectionServices = makeConnectionServices(options.providers[0])
 	const httpClient = options.advanced?.httpClient ?? NodeHttpClient.layerFetch
-	const slackClient = SlackClient.layer.pipe(Layer.provideMerge(connectionServices), Layer.provide(httpClient))
+	const slackClient = SlackClient.layerWith({ apiOrigin: options.advanced?.slackApiOrigin }).pipe(
+		Layer.provideMerge(connectionServices),
+		Layer.provide(httpClient),
+	)
 	const slackProvider = SlackProvider.layer.pipe(Layer.provideMerge(slackClient))
 	const registration = SlackRegistration.layer.pipe(Layer.provideMerge(slackProvider), Layer.provide(registry))
 	const services = Layer.mergeAll(
@@ -291,7 +296,11 @@ export const createChannelsApp = <
 		HttpRouter.provideRequest(requestServices),
 		Layer.provide(connectionServices),
 	)
-	const routes = Layer.merge(worker, providerRoutes)
+	const unconfiguredRoutes = Layer.merge(worker, providerRoutes)
+	const routes =
+		options.advanced?.configProvider === undefined
+			? unconfiguredRoutes
+			: unconfiguredRoutes.pipe(Layer.provide(ConfigProvider.layer(options.advanced.configProvider)))
 	// SAFETY: Fetch handlers are only executable for self-contained app configurations; Effect apps with requirements mount routes and provide them at the outer runtime edge.
 	const fetchRoutes = routes as Layer.Layer<
 		never,
@@ -299,9 +308,14 @@ export const createChannelsApp = <
 		HttpRouter.HttpRouter
 	>
 	let fetchHandler: ((request: Request) => Promise<Response>) | undefined
+	let disposeHandler: (() => Promise<void>) | undefined
+	let closed = false
 	const handle = (request: Request) => {
+		if (closed) {
+			return Promise.reject(new Error('Channels application is closed'))
+		}
 		if (fetchHandler === undefined) {
-			fetchHandler = HttpRouter.toWebHandler(fetchRoutes, {
+			const webHandler = HttpRouter.toWebHandler(fetchRoutes, {
 				disableLogger: true,
 				middleware: (effect) =>
 					effect.pipe(
@@ -311,9 +325,21 @@ export const createChannelsApp = <
 							),
 						),
 					),
-			}).handler
+			})
+			fetchHandler = webHandler.handler
+			disposeHandler = webHandler.dispose
 		}
 		return fetchHandler(request)
 	}
-	return { routes, handle }
+	const close = async () => {
+		if (closed) {
+			return
+		}
+		closed = true
+		const dispose = disposeHandler
+		if (dispose !== undefined) {
+			await dispose()
+		}
+	}
+	return { routes, handle, close }
 }

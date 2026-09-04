@@ -9,9 +9,8 @@
 	"scripts": {
 		"build": "vp run -r build",
 		"dev": "vp run -r --parallel dev",
-		"test": "vp run -r test",
+		"test": "vp test",
 		"test:live:slack": "bun run --cwd examples/slack-thread-echo live",
-		"record:slack": "bun run --cwd examples/slack-thread-echo record",
 		"check": "vp check",
 		"lint": "vp lint",
 		"lint:fix": "vp lint --fix",
@@ -47,7 +46,7 @@
 		"@effect/platform-node": "4.0.0-rc.110",
 		"@effect/sql-pg": "4.0.0-rc.110",
 		"@effect/vitest": "4.0.0-rc.110",
-		"vitest": "4.1.10",
+		"vitest": "4.1.11",
 		"typescript": "7.0.2",
 		"@types/bun": "^1.3.10"
 	}

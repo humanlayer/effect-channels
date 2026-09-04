@@ -98,7 +98,9 @@ const toTransportError = (operation: string, status?: number) => {
 	return SlackTransportError.make({ operation, status })
 }
 
-const slackApiUrl = (method: string) => `https://slack.com/api/${method}`
+const defaultSlackApiOrigin = new URL('https://slack.com/api')
+
+const slackApiUrl = (origin: URL, method: string) => `${origin.toString().replace(/\/$/, '')}/${method}`
 
 interface TenantLookup {
 	readonly teamId: SlackTeamId
@@ -162,9 +164,9 @@ const requireOk = <A extends { readonly ok: boolean; readonly error?: string }>(
 		? Effect.succeed(decoded)
 		: Effect.fail(SlackApiError.make({ operation, code: decoded.error ?? 'unknown_error' }))
 
-const slackGet = (token: Redacted.Redacted<string>, method: string, params: UrlParams.CoercibleRecord) =>
-	HttpClientRequest.get(slackApiUrl(method)).pipe(
-		HttpClientRequest.setUrlParams(params),
+const slackPost = (origin: URL, token: Redacted.Redacted<string>, method: string, params: UrlParams.CoercibleRecord) =>
+	HttpClientRequest.post(slackApiUrl(origin, method)).pipe(
+		HttpClientRequest.bodyUrlParams(params),
 		HttpClientRequest.bearerToken(token),
 	)
 
@@ -176,55 +178,57 @@ const cursorFromMetadata = (metadata: { readonly next_cursor?: string } | undefi
 const messagePage = (messages: ReadonlyArray<Message>, nextCursor: string | undefined) =>
 	nextCursor === undefined ? MessagePage.make({ messages }) : MessagePage.make({ messages, nextCursor })
 
-const makePostMessage = Effect.fn('slack.api.post_message')(function* (input: SlackPostMessageInput) {
-	yield* Effect.annotateCurrentSpan({ provider: 'slack', tenant: input.teamId, operation: 'chat.postMessage' })
-	const token = yield* loadBotToken({ teamId: input.teamId, operation: 'chat.postMessage' })
-	const body =
-		input.threadTs === undefined
-			? SlackPostMessageBody.make({ channel: input.channelId, text: input.text })
-			: SlackPostMessageBody.make({ channel: input.channelId, thread_ts: input.threadTs, text: input.text })
-	const request = yield* HttpClientRequest.post(slackApiUrl('chat.postMessage')).pipe(
-		HttpClientRequest.bearerToken(token),
-		HttpClientRequest.schemaBodyJson(SlackPostMessageBody)(body),
-		Effect.mapError(() => SlackApiError.make({ operation: 'chat.postMessage', code: 'request_encode_failed' })),
-	)
-	const decoded = yield* fetchSlackJson({
-		operation: 'chat.postMessage',
-		schema: SlackPostMessageResponse,
-		request,
-	}).pipe(Effect.flatMap((response) => requireOk('chat.postMessage', response)))
-	if (!Predicate.isString(decoded.channel) || !Predicate.isString(decoded.ts)) {
-		return yield* SlackApiError.make({ operation: 'chat.postMessage', code: 'missing_message_reference' })
-	}
-	const botUserId = decoded.message?.user
-	return botUserId === undefined
-		? SlackSentMessage.make({ channelId: decoded.channel, ts: decoded.ts })
-		: SlackSentMessage.make({ channelId: decoded.channel, ts: decoded.ts, botUserId })
-})
+const makePostMessage = (origin: URL) =>
+	Effect.fn('slack.api.post_message')(function* (input: SlackPostMessageInput) {
+		yield* Effect.annotateCurrentSpan({ provider: 'slack', tenant: input.teamId, operation: 'chat.postMessage' })
+		const token = yield* loadBotToken({ teamId: input.teamId, operation: 'chat.postMessage' })
+		const body =
+			input.threadTs === undefined
+				? SlackPostMessageBody.make({ channel: input.channelId, text: input.text })
+				: SlackPostMessageBody.make({ channel: input.channelId, thread_ts: input.threadTs, text: input.text })
+		const request = yield* HttpClientRequest.post(slackApiUrl(origin, 'chat.postMessage')).pipe(
+			HttpClientRequest.bearerToken(token),
+			HttpClientRequest.schemaBodyJson(SlackPostMessageBody)(body),
+			Effect.mapError(() => SlackApiError.make({ operation: 'chat.postMessage', code: 'request_encode_failed' })),
+		)
+		const decoded = yield* fetchSlackJson({
+			operation: 'chat.postMessage',
+			schema: SlackPostMessageResponse,
+			request,
+		}).pipe(Effect.flatMap((response) => requireOk('chat.postMessage', response)))
+		if (!Predicate.isString(decoded.channel) || !Predicate.isString(decoded.ts)) {
+			return yield* SlackApiError.make({ operation: 'chat.postMessage', code: 'missing_message_reference' })
+		}
+		const botUserId = decoded.message?.user
+		return botUserId === undefined
+			? SlackSentMessage.make({ channelId: decoded.channel, ts: decoded.ts })
+			: SlackSentMessage.make({ channelId: decoded.channel, ts: decoded.ts, botUserId })
+	})
 
-const makeSetSessionStatus = Effect.fn('slack.api.set_session_status')(function* (input: SlackSessionStatusInput) {
-	yield* Effect.annotateCurrentSpan({
-		provider: 'slack',
-		tenant: input.teamId,
-		operation: 'agents.sessions.setStatus',
+const makeSetSessionStatus = (origin: URL) =>
+	Effect.fn('slack.api.set_session_status')(function* (input: SlackSessionStatusInput) {
+		yield* Effect.annotateCurrentSpan({
+			provider: 'slack',
+			tenant: input.teamId,
+			operation: 'agents.sessions.setStatus',
+		})
+		const token = yield* loadBotToken({ teamId: input.teamId, operation: 'agents.sessions.setStatus' })
+		const body = SlackSessionStatusBody.make({
+			channel_id: input.channelId,
+			thread_ts: input.threadTs,
+			status: input.status,
+		})
+		const request = yield* HttpClientRequest.post(slackApiUrl(origin, 'agents.sessions.setStatus')).pipe(
+			HttpClientRequest.bearerToken(token),
+			HttpClientRequest.schemaBodyJson(SlackSessionStatusBody)(body),
+			Effect.mapError(() =>
+				SlackApiError.make({ operation: 'agents.sessions.setStatus', code: 'request_encode_failed' }),
+			),
+		)
+		yield* fetchSlackJson({ operation: 'agents.sessions.setStatus', schema: SlackOkResponse, request }).pipe(
+			Effect.flatMap((response) => requireOk('agents.sessions.setStatus', response)),
+		)
 	})
-	const token = yield* loadBotToken({ teamId: input.teamId, operation: 'agents.sessions.setStatus' })
-	const body = SlackSessionStatusBody.make({
-		channel_id: input.channelId,
-		thread_ts: input.threadTs,
-		status: input.status,
-	})
-	const request = yield* HttpClientRequest.post(slackApiUrl('agents.sessions.setStatus')).pipe(
-		HttpClientRequest.bearerToken(token),
-		HttpClientRequest.schemaBodyJson(SlackSessionStatusBody)(body),
-		Effect.mapError(() =>
-			SlackApiError.make({ operation: 'agents.sessions.setStatus', code: 'request_encode_failed' }),
-		),
-	)
-	yield* fetchSlackJson({ operation: 'agents.sessions.setStatus', schema: SlackOkResponse, request }).pipe(
-		Effect.flatMap((response) => requireOk('agents.sessions.setStatus', response)),
-	)
-})
 
 const normalizePageMessages = (input: {
 	readonly identity: SlackBotIdentityType
@@ -247,7 +251,7 @@ const normalizePageMessages = (input: {
 		return normalizeSlackHistoryMessage({ snapshot, threadRef, teamId: input.teamId, identity: input.identity })
 	})
 
-const makeReplies = (fallback: SlackBotIdentityType) =>
+const makeReplies = (fallback: SlackBotIdentityType, origin: URL) =>
 	Effect.fn('slack.api.conversations_replies')(function* (input: SlackRepliesInput) {
 		yield* Effect.annotateCurrentSpan({
 			provider: 'slack',
@@ -265,7 +269,7 @@ const makeReplies = (fallback: SlackBotIdentityType) =>
 			false,
 		)
 		if (direction === 'forward') {
-			const request = slackGet(token, 'conversations.replies', {
+			const request = slackPost(origin, token, 'conversations.replies', {
 				channel: input.channelId,
 				ts: input.threadTs,
 				limit,
@@ -289,7 +293,7 @@ const makeReplies = (fallback: SlackBotIdentityType) =>
 		let buffer: ReadonlyArray<SlackHistoryMessage> = []
 		let pageCursor: string | undefined = undefined
 		while (true) {
-			const request = slackGet(token, 'conversations.replies', {
+			const request = slackPost(origin, token, 'conversations.replies', {
 				channel: input.channelId,
 				ts: input.threadTs,
 				limit: fetchLimit,
@@ -325,7 +329,7 @@ const makeReplies = (fallback: SlackBotIdentityType) =>
 		return messagePage(messages, nextCursor)
 	})
 
-const makeHistory = (fallback: SlackBotIdentityType) =>
+const makeHistory = (fallback: SlackBotIdentityType, origin: URL) =>
 	Effect.fn('slack.api.conversations_history')(function* (input: SlackHistoryInput) {
 		yield* Effect.annotateCurrentSpan({
 			provider: 'slack',
@@ -339,7 +343,7 @@ const makeHistory = (fallback: SlackBotIdentityType) =>
 		const direction = input.direction ?? 'backward'
 		const limit = input.limit ?? 100
 		if (direction === 'forward') {
-			const request = slackGet(token, 'conversations.history', {
+			const request = slackPost(origin, token, 'conversations.history', {
 				channel: input.channelId,
 				limit,
 				oldest: input.cursor,
@@ -363,7 +367,7 @@ const makeHistory = (fallback: SlackBotIdentityType) =>
 			return messagePage(messages, nextCursor)
 		}
 		const latest = input.cursor ?? input.before
-		const request = slackGet(token, 'conversations.history', {
+		const request = slackPost(origin, token, 'conversations.history', {
 			channel: input.channelId,
 			limit,
 			latest,
@@ -386,35 +390,36 @@ const makeHistory = (fallback: SlackBotIdentityType) =>
 		return messagePage(messages, nextCursor)
 	})
 
-const makeChannelInfo = Effect.fn('slack.api.conversations_info')(function* (input: SlackChannelInfoInput) {
-	yield* Effect.annotateCurrentSpan({ provider: 'slack', tenant: input.teamId, operation: 'conversations.info' })
-	const token = yield* loadBotToken({ teamId: input.teamId, operation: 'conversations.info' })
-	const request = slackGet(token, 'conversations.info', { channel: input.channelId })
-	const decoded = yield* fetchSlackJson({
-		operation: 'conversations.info',
-		schema: SlackConversationsInfoResponse,
-		request,
-	}).pipe(Effect.flatMap((response) => requireOk('conversations.info', response)))
-	const snapshot = decoded.channel
-	if (snapshot === undefined) {
-		return yield* SlackApiError.make({ operation: 'conversations.info', code: 'channel_missing' })
-	}
-	const baseRef = slackChannelRef(input.teamId, input.channelId)
-	const channel: ChannelRef = {
-		...baseRef,
-		isDm: snapshot.is_im === true || snapshot.is_mpim === true || baseRef.isDm,
-	}
-	const info: ChannelInfoFields = { channel }
-	if (snapshot.name !== undefined) {
-		info.name = snapshot.name
-	}
-	if (snapshot.num_members !== undefined) {
-		info.memberCount = snapshot.num_members
-	}
-	return ChannelInfo.make(info)
-})
+const makeChannelInfo = (origin: URL) =>
+	Effect.fn('slack.api.conversations_info')(function* (input: SlackChannelInfoInput) {
+		yield* Effect.annotateCurrentSpan({ provider: 'slack', tenant: input.teamId, operation: 'conversations.info' })
+		const token = yield* loadBotToken({ teamId: input.teamId, operation: 'conversations.info' })
+		const request = slackPost(origin, token, 'conversations.info', { channel: input.channelId })
+		const decoded = yield* fetchSlackJson({
+			operation: 'conversations.info',
+			schema: SlackConversationsInfoResponse,
+			request,
+		}).pipe(Effect.flatMap((response) => requireOk('conversations.info', response)))
+		const snapshot = decoded.channel
+		if (snapshot === undefined) {
+			return yield* SlackApiError.make({ operation: 'conversations.info', code: 'channel_missing' })
+		}
+		const baseRef = slackChannelRef(input.teamId, input.channelId)
+		const channel: ChannelRef = {
+			...baseRef,
+			isDm: snapshot.is_im === true || snapshot.is_mpim === true || baseRef.isDm,
+		}
+		const info: ChannelInfoFields = { channel }
+		if (snapshot.name !== undefined) {
+			info.name = snapshot.name
+		}
+		if (snapshot.num_members !== undefined) {
+			info.memberCount = snapshot.num_members
+		}
+		return ChannelInfo.make(info)
+	})
 
-const makeListThreads = (fallback: SlackBotIdentityType) =>
+const makeListThreads = (fallback: SlackBotIdentityType, origin: URL) =>
 	Effect.fn('slack.api.list_threads')(function* (input: SlackListThreadsInput) {
 		yield* Effect.annotateCurrentSpan({
 			provider: 'slack',
@@ -426,7 +431,7 @@ const makeListThreads = (fallback: SlackBotIdentityType) =>
 			operation: 'conversations.history',
 		})
 		const limit = input.limit ?? 50
-		const request = slackGet(token, 'conversations.history', {
+		const request = slackPost(origin, token, 'conversations.history', {
 			channel: input.channelId,
 			limit: Math.min(limit * 3, 200),
 			latest: input.cursor,
@@ -473,14 +478,14 @@ const makeListThreads = (fallback: SlackBotIdentityType) =>
 		return nextCursor === undefined ? ThreadPage.make({ threads }) : ThreadPage.make({ threads, nextCursor })
 	})
 
-const makeGetUser = (fallback: SlackBotIdentityType) =>
+const makeGetUser = (fallback: SlackBotIdentityType, origin: URL) =>
 	Effect.fn('slack.api.users_info')(function* (input: SlackGetUserInput) {
 		yield* Effect.annotateCurrentSpan({ provider: 'slack', tenant: input.teamId, operation: 'users.info' })
 		const { token, identity } = yield* loadTenantSession(fallback, {
 			teamId: input.teamId,
 			operation: 'users.info',
 		})
-		const request = slackGet(token, 'users.info', { user: input.userId })
+		const request = slackPost(origin, token, 'users.info', { user: input.userId })
 		const decoded = yield* fetchSlackJson({
 			operation: 'users.info',
 			schema: SlackUsersInfoResponse,
@@ -504,8 +509,8 @@ const makeGetUser = (fallback: SlackBotIdentityType) =>
 		if (user.profile?.email !== undefined) {
 			profile.email = user.profile.email
 		}
-		if (user.profile?.image_192 !== undefined) {
-			profile.avatarUrl = user.profile.image_192
+		if (user.profile?.image_192 !== undefined && URL.canParse(user.profile.image_192)) {
+			profile.avatarUrl = new URL(user.profile.image_192)
 		}
 		return UserProfile.make(profile)
 	})
@@ -572,59 +577,63 @@ export class SlackClient extends Context.Service<
 		) => Effect.Effect<SlackApiResponse, UnknownTenant | SlackTransportError | SlackApiError>
 	}
 >()('channels/SlackClient') {
-	static readonly layer = Layer.effect(
-		SlackClient,
-		Effect.gen(function* () {
-			const httpClient = yield* HttpClient.HttpClient
-			const credentials = yield* SlackTenantCredentials
-			const botUserId = yield* Config.option(Config.string('SLACK_BOT_USER_ID'))
-			const botId = yield* Config.option(Config.string('SLACK_BOT_ID'))
-			const fallbackIdentity = slackBotIdentity({
-				botUserId: Option.getOrUndefined(botUserId),
-				botId: Option.getOrUndefined(botId),
-			})
-			const dependencies = Context.make(HttpClient.HttpClient, httpClient).pipe(
-				Context.add(SlackTenantCredentials, credentials),
-			)
-			const run = <A, E>(
-				operation: string,
-				teamId: SlackTeamId,
-				effect: Effect.Effect<A, E, HttpClient.HttpClient | SlackTenantCredentials>,
-			): Effect.Effect<A, E> =>
-				effect.pipe(
-					Effect.provide(dependencies),
-					Effect.tapError((error) =>
-						Effect.logError('Slack API call failed', error).pipe(
-							Effect.annotateLogs({ operation, team_id: teamId }),
-						),
-					),
+	static readonly layerWith = (options: { readonly apiOrigin?: URL } = {}) =>
+		Layer.effect(
+			SlackClient,
+			Effect.gen(function* () {
+				const apiOrigin = options.apiOrigin ?? defaultSlackApiOrigin
+				const httpClient = yield* HttpClient.HttpClient
+				const credentials = yield* SlackTenantCredentials
+				const botUserId = yield* Config.option(Config.string('SLACK_BOT_USER_ID'))
+				const botId = yield* Config.option(Config.string('SLACK_BOT_ID'))
+				const fallbackIdentity = slackBotIdentity({
+					botUserId: Option.getOrUndefined(botUserId),
+					botId: Option.getOrUndefined(botId),
+				})
+				const dependencies = Context.make(HttpClient.HttpClient, httpClient).pipe(
+					Context.add(SlackTenantCredentials, credentials),
 				)
-			const replies = makeReplies(fallbackIdentity)
-			const history = makeHistory(fallbackIdentity)
-			const listThreads = makeListThreads(fallbackIdentity)
-			const getUser = makeGetUser(fallbackIdentity)
-			return SlackClient.of({
-				postMessage: (input) => run('chat.postMessage', input.teamId, makePostMessage(input)),
-				setSessionStatus: (input) =>
-					run('agents.sessions.setStatus', input.teamId, makeSetSessionStatus(input)),
-				startStream: () => unimplemented('SlackClient.startStream'),
-				appendStream: () => unimplemented('SlackClient.appendStream'),
-				stopStream: () => unimplemented('SlackClient.stopStream'),
-				updateMessage: () => unimplemented('SlackClient.updateMessage'),
-				deleteMessage: () => unimplemented('SlackClient.deleteMessage'),
-				addReaction: () => unimplemented('SlackClient.addReaction'),
-				removeReaction: () => unimplemented('SlackClient.removeReaction'),
-				replies: (input) => run('conversations.replies', input.teamId, replies(input)),
-				history: (input) => run('conversations.history', input.teamId, history(input)),
-				channelInfo: (input) => run('conversations.info', input.teamId, makeChannelInfo(input)),
-				listThreads: (input) => run('conversations.history', input.teamId, listThreads(input)),
-				getUser: (input) => run('users.info', input.teamId, getUser(input)),
-				uploadFiles: () => unimplemented('SlackClient.uploadFiles'),
-				downloadFile: () => unimplemented('SlackClient.downloadFile'),
-				openDM: () => unimplemented('SlackClient.openDM'),
-				postEphemeral: () => unimplemented('SlackClient.postEphemeral'),
-				api: () => unimplemented('SlackClient.api'),
-			})
-		}),
-	)
+				const run = <A, E>(
+					operation: string,
+					teamId: SlackTeamId,
+					effect: Effect.Effect<A, E, HttpClient.HttpClient | SlackTenantCredentials>,
+				): Effect.Effect<A, E> =>
+					effect.pipe(
+						Effect.provide(dependencies),
+						Effect.tapError((error) =>
+							Effect.logError('Slack API call failed', error).pipe(
+								Effect.annotateLogs({ operation, team_id: teamId }),
+							),
+						),
+					)
+				const replies = makeReplies(fallbackIdentity, apiOrigin)
+				const history = makeHistory(fallbackIdentity, apiOrigin)
+				const listThreads = makeListThreads(fallbackIdentity, apiOrigin)
+				const getUser = makeGetUser(fallbackIdentity, apiOrigin)
+				return SlackClient.of({
+					postMessage: (input) => run('chat.postMessage', input.teamId, makePostMessage(apiOrigin)(input)),
+					setSessionStatus: (input) =>
+						run('agents.sessions.setStatus', input.teamId, makeSetSessionStatus(apiOrigin)(input)),
+					startStream: () => unimplemented('SlackClient.startStream'),
+					appendStream: () => unimplemented('SlackClient.appendStream'),
+					stopStream: () => unimplemented('SlackClient.stopStream'),
+					updateMessage: () => unimplemented('SlackClient.updateMessage'),
+					deleteMessage: () => unimplemented('SlackClient.deleteMessage'),
+					addReaction: () => unimplemented('SlackClient.addReaction'),
+					removeReaction: () => unimplemented('SlackClient.removeReaction'),
+					replies: (input) => run('conversations.replies', input.teamId, replies(input)),
+					history: (input) => run('conversations.history', input.teamId, history(input)),
+					channelInfo: (input) => run('conversations.info', input.teamId, makeChannelInfo(apiOrigin)(input)),
+					listThreads: (input) => run('conversations.history', input.teamId, listThreads(input)),
+					getUser: (input) => run('users.info', input.teamId, getUser(input)),
+					uploadFiles: () => unimplemented('SlackClient.uploadFiles'),
+					downloadFile: () => unimplemented('SlackClient.downloadFile'),
+					openDM: () => unimplemented('SlackClient.openDM'),
+					postEphemeral: () => unimplemented('SlackClient.postEphemeral'),
+					api: () => unimplemented('SlackClient.api'),
+				})
+			}),
+		)
+
+	static readonly layer = SlackClient.layerWith()
 }

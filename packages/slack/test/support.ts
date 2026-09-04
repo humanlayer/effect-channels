@@ -99,9 +99,15 @@ export const makeSlackClientHarness = (
 			Effect.gen(function* () {
 				const webRequest = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie)
 				const body = yield* Effect.promise(() => webRequest.text())
+				const url = new URL(webRequest.url)
+				if (webRequest.headers.get('content-type')?.startsWith('application/x-www-form-urlencoded')) {
+					for (const [key, value] of new URLSearchParams(body)) {
+						url.searchParams.set(key, value)
+					}
+				}
 				const recorded: RecordedSlackRequest = {
 					method: webRequest.method,
-					url: new URL(webRequest.url),
+					url,
 					authorization: webRequest.headers.get('authorization'),
 					body,
 				}

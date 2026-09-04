@@ -53,7 +53,7 @@ it.effect('decodes users.info into a UserProfile with email and avatar', () =>
 		const harness = yield* makeSlackClientHarness(usersInfoResponse)
 		const profile = yield* getUser('U_HUMAN').pipe(Effect.provide(harness.layer))
 		const request = yield* Queue.take(harness.requests)
-		assert.strictEqual(request.method, 'GET')
+		assert.strictEqual(request.method, 'POST')
 		assert.strictEqual(request.url.pathname, '/api/users.info')
 		assert.strictEqual(request.authorization, `Bearer ${testBotToken}`)
 		assert.deepStrictEqual(params(request), { user: 'U_HUMAN' })

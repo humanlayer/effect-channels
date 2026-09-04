@@ -6,8 +6,19 @@ export default defineConfig({
 		'*': 'vp check --fix',
 	},
 	test: {
-		exclude: ['tools/oxlint/anti-slop/**'],
+		include: ['packages/*/test/**/*.test.ts', 'examples/*/test/**/*.test.ts'],
+		exclude: [
+			'**/node_modules/**',
+			'**/dist/**',
+			'tools/oxlint/anti-slop/**',
+			'packages/channels/test/ConversationCoordinator.postgres.test.ts',
+			'packages/channels/test/Channels.ha.test.ts',
+			'packages/postgres/test/**',
+			'packages/app/test/SlackEmulator.postgres.test.ts',
+			'examples/slack-multi-tenant/test/**',
+		],
 		passWithNoTests: true,
+		silent: 'passed-only',
 	},
 	lint: {
 		extends: [recommended],

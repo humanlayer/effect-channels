@@ -113,7 +113,7 @@ it.effect('decodes conversations.info into ChannelInfo and flags DMs', () =>
 			client.channelInfo(SlackChannelInfoInput.make({ teamId: testTeamId, channelId: testChannelId })),
 		).pipe(Effect.provide(harness.layer))
 		const request = yield* Queue.take(harness.requests)
-		assert.strictEqual(request.method, 'GET')
+		assert.strictEqual(request.method, 'POST')
 		assert.strictEqual(request.url.pathname, '/api/conversations.info')
 		assert.deepStrictEqual(params(request), { channel: 'C_TEST' })
 		assert.deepStrictEqual(info, { channel: testChannelRef, name: 'general', memberCount: 12 })

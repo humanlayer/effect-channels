@@ -144,7 +144,7 @@ A root mention is delivered to `onNewMention`, where the example explicitly subs
 
 `src/server.ts` shows the Effect HTTP path: `HttpRouter.serve(routes)` plus the chosen server layer. The same `app.handle(request)` is a Fetch-compatible entry whose runtime and delivery worker are initialized once and owned internally.
 
-## Credentialed acceptance
+## Optional real-Slack smoke check
 
 ```bash
 bun run test:live:slack
@@ -156,14 +156,6 @@ While it runs:
 2. Repeat in the configured private channel.
 3. Have another bot or integration create a root message, then mention this bot inside that thread.
 
-The live harness uses the same single application layer and asserts explicit subscription, threaded replies, typing/status cleanup, provider-backed thread/channel history, participants, metadata, top-level channel posting, own-echo suppression, and integration-authored thread history. Inspect the successful handler logs, then stop it with SIGINT after all three scenarios pass.
-
-## Record accepted exchanges
-
-```bash
-bun run record:slack
-```
-
-Record mode runs the same assertions and writes `.recordings/slack-acceptance.json` during graceful shutdown. The ignored recording contains selected inbound/outbound protocol data with configured secrets, Slack tokens, Slack identifiers, email addresses, profile fields, and message text sanitized. Inspect it manually before promoting individual exchanges to Phase 5 fixtures. Never commit raw recordings.
+The live harness is a minimal manual smoke check for credentials and Slack app configuration. The required integration coverage is emulator-first and runs without Slack credentials under `packages/app`; see the [root testing notes](../../README.md#slack-provider-testing). Recordings are not required by the test workflow.
 
 SIGINT and SIGTERM interrupt the worker and close the HTTP server, Postgres resources, and provider clients through the one Effect scope.
