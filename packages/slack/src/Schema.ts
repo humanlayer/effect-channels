@@ -4,6 +4,7 @@ import {
 	Content,
 	FileUpload,
 	MessagePage,
+	OrgId,
 	StreamChunk,
 	ThreadId,
 	ThreadPage,
@@ -30,6 +31,23 @@ export const SlackTenantCreds = Schema.Struct({
 	botId: Schema.optionalKey(Schema.String),
 })
 export type SlackTenantCreds = typeof SlackTenantCreds.Type
+
+export const SlackConnectionLookupInput = Schema.Struct({ workspaceId: SlackTeamId })
+export type SlackConnectionLookupInput = typeof SlackConnectionLookupInput.Type
+
+export const SlackConnectionCredentials = Schema.Struct({
+	botToken: Schema.Redacted(Schema.String, { disallowJsonEncode: true }),
+	botUserId: Schema.NonEmptyString,
+	botId: Schema.NonEmptyString,
+})
+export type SlackConnectionCredentials = typeof SlackConnectionCredentials.Type
+
+export const SlackConnection = Schema.Struct({
+	organizationId: OrgId,
+	enabled: Schema.Boolean,
+	credentials: SlackConnectionCredentials,
+})
+export type SlackConnection = typeof SlackConnection.Type
 
 export const SlackLoadCredentialsInput = Schema.Struct({ teamId: SlackTeamId })
 export type SlackLoadCredentialsInput = typeof SlackLoadCredentialsInput.Type

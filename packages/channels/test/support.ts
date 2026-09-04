@@ -26,6 +26,7 @@ import {
 	ThreadId,
 	UserId,
 	UserDirectory,
+	UserProfileCache,
 	unimplemented,
 	type Author,
 	type Capabilities,
@@ -36,7 +37,7 @@ import {
 const persistence = Persistence.layerMemory
 const subscriptions = Subscriptions.layer.pipe(Layer.provide(persistence))
 const registry = ProviderRegistry.layer
-const userDirectory = UserDirectory.layer.pipe(Layer.provide(registry))
+const userDirectory = UserDirectory.make().pipe(Layer.provide(Layer.merge(registry, UserProfileCache.layerMemory)))
 
 export const CoreDependencies = Layer.mergeAll(
 	ConversationCoordinator.layerMemory(),

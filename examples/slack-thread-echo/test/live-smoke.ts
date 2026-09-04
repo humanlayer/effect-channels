@@ -2,7 +2,7 @@ import { createServer } from 'node:http'
 
 import { NodeFileSystem, NodeHttpClient, NodeHttpServer, NodeRuntime } from '@effect/platform-node'
 import { MarkdownContent, type Message, type Thread } from '@humanlayer/channels'
-import { createChannelsApp, postgres, slack } from '@humanlayer/channels-app'
+import { ChannelsStorage, createChannelsApp, slack } from '@humanlayer/channels-app'
 import { Config, Effect, Layer, Stream } from 'effect'
 import { HttpRouter } from 'effect/unstable/http'
 
@@ -62,7 +62,7 @@ const recordingHttp = RecordingHttpClient.pipe(
 )
 const app = createChannelsApp({
 	providers: [slack()],
-	storage: postgres(),
+	storage: ChannelsStorage.postgres(),
 	onNewMention,
 	onSubscribedMessage,
 	advanced: { httpClient: recordingHttp },

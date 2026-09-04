@@ -1,29 +1,26 @@
 {
-	"name": "@humanlayer/channels-app",
+	"name": "example-slack-multi-tenant",
 	"version": "0.0.0",
 	"private": true,
 	"type": "module",
-	"exports": {
-		".": "./src/index.ts"
-	},
 	"scripts": {
-		"build": "bun build ./src/index.ts --outdir ./dist --target node --format esm --packages external",
+		"build": "bun build ./src/server.ts --outdir ./dist --target bun --format esm --packages external",
+		"seed": "bun run ./test/seed.ts",
 		"test": "vitest run --dir test",
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},
 	"dependencies": {
 		"@effect/platform-node": "catalog:",
+		"@effect/sql-pg": "catalog:",
 		"@humanlayer/channels": "workspace:*",
-		"@humanlayer/channels-postgres": "workspace:*",
-		"@humanlayer/channels-slack": "workspace:*"
+		"@humanlayer/channels-app": "workspace:*",
+		"@humanlayer/channels-slack": "workspace:*",
+		"effect": "catalog:"
 	},
 	"devDependencies": {
 		"@effect/vitest": "catalog:",
-		"effect": "catalog:",
+		"@types/bun": "catalog:",
 		"typescript": "catalog:",
 		"vitest": "catalog:"
-	},
-	"peerDependencies": {
-		"effect": "^4.0.0-rc.110"
 	}
 }

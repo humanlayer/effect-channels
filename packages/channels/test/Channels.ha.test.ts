@@ -12,6 +12,7 @@ import {
 	ProviderRegistry,
 	Subscriptions,
 	UserDirectory,
+	UserProfileCache,
 } from '../src/index.ts'
 import {
 	createPostgresMessageEvent,
@@ -30,7 +31,7 @@ const applicationLayer = () => {
 	const dependencies = Layer.mergeAll(
 		ConversationSignals.layerMemory,
 		registry,
-		UserDirectory.layer.pipe(Layer.provide(registry)),
+		UserDirectory.make().pipe(Layer.provide(Layer.merge(registry, UserProfileCache.layerMemory))),
 		Organizations.layerDefault,
 		ChannelsGate.layerAllowAll,
 		ChannelsObserver.layerLogger,

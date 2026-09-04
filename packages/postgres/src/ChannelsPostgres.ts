@@ -3,24 +3,37 @@ import { ConversationCoordinator, type ConversationCoordinatorOptions } from '@h
 import { Config, Layer } from 'effect'
 import { Persistence } from 'effect/unstable/persistence'
 
+import { userProfileCachePostgresLayer, type UserProfileCachePostgresOptions } from './UserProfileCachePostgres.ts'
+
 export type ChannelsPostgresOptions = {
 	readonly database: PgClient.PgPoolConfig
 	readonly coordinator?: ConversationCoordinatorOptions
+	readonly userProfileCache?: UserProfileCachePostgresOptions
 }
 
-const services = (coordinator?: ConversationCoordinatorOptions) =>
-	Layer.merge(
+const services = (coordinator?: ConversationCoordinatorOptions, userProfileCache?: UserProfileCachePostgresOptions) =>
+	Layer.mergeAll(
 		coordinator === undefined
 			? ConversationCoordinator.layerPostgres()
 			: ConversationCoordinator.layerPostgres(coordinator),
 		Persistence.layerSql,
+		userProfileCachePostgresLayer(userProfileCache),
 	)
 
-export const layer = (options: ChannelsPostgresOptions) =>
-	services(options.coordinator).pipe(Layer.provideMerge(PgClient.layer(options.database)))
+/** Provides Channels Postgres storage services from an ambient shared SqlClient. */
+export const layerFromClient = (
+	coordinator?: ConversationCoordinatorOptions,
+	userProfileCache?: UserProfileCachePostgresOptions,
+) => services(coordinator, userProfileCache)
 
-export const layerConfig = (coordinator?: ConversationCoordinatorOptions) =>
-	services(coordinator).pipe(
+export const layer = (options: ChannelsPostgresOptions) =>
+	services(options.coordinator, options.userProfileCache).pipe(Layer.provideMerge(PgClient.layer(options.database)))
+
+export const layerConfig = (
+	coordinator?: ConversationCoordinatorOptions,
+	userProfileCache?: UserProfileCachePostgresOptions,
+) =>
+	services(coordinator, userProfileCache).pipe(
 		Layer.provideMerge(
 			PgClient.layerConfig({
 				url: Config.redacted('DATABASE_URL'),

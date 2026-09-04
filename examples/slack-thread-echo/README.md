@@ -2,14 +2,14 @@
 
 A minimal Effect-native Slack app using the same shape as a typical multi-provider chat SDK application:
 
-1. call `createChannelsApp` with `slack()` and `postgres()`;
+1. call `createChannelsApp` with `slack()` and `ChannelsStorage.postgres()`;
 2. provide Effect handlers using neutral `Thread` and `Message` values;
 3. export `app.handle` for Fetch hosts or mount `app.routes` with Effect HTTP.
 
 ```ts
 const app = createChannelsApp({
 	providers: [slack()],
-	storage: postgres(),
+	storage: ChannelsStorage.postgres(),
 	onNewMention: (thread, message) =>
 		Effect.gen(function* () {
 			yield* thread.subscribe()
@@ -23,7 +23,11 @@ export const routes = app.routes
 
 The high-level constructor owns provider registration, credentials, persistence, ingress, subscriptions, delivery workers, and the standard HTTP/client layers. Lower-level services remain available for custom composition, but ordinary application code does not wire them.
 
+Both storage constructors return opaque high-level configuration owned by `createChannelsApp`; advanced Effect applications use the low-level exports from `@humanlayer/channels` and `@humanlayer/channels-postgres` directly. `ChannelsStorage.memory()` configures in-process coordination, subscriptions, and an Effect Cache for development. `ChannelsStorage.postgres()` reads `DATABASE_URL`, runs idempotent Channels migrations, and configures durable conversation coordination, subscription persistence, and an eight-day shared profile cache without requiring Redis.
+
 Inbound and provider-history messages arrive with `message.author` hydrated through the provider user directory when available; failed profile lookups safely retain the provider ID-based author, while `Channels.getUser` remains available for explicit lookups.
+
+This storage API intentionally stops at channel mechanics. A multi-tenant Connections facade for installation records and credential callbacks is the next separate design step; this example still uses the existing Config-backed Slack credentials.
 
 The ordinary app is only [`src/app.ts`](./src/app.ts) and [`src/server.ts`](./src/server.ts). Credentialed acceptance and recording code lives under [`test/`](./test/) and is not part of the production example.
 

@@ -38,6 +38,7 @@ import {
 	Subscriptions,
 	ThreadId,
 	UserDirectory,
+	UserProfileCache,
 } from '../src/index.ts'
 
 const testRootThreadId = ThreadId.make('slack:v1:T_TEST:C_TEST:100.1')
@@ -81,7 +82,9 @@ it.effect('delivers one signed mention end to end, subscribes explicitly, and po
 		const coordinator = ConversationCoordinator.layerMemory()
 		const signals = ConversationSignals.layerMemory
 		const registry = ProviderRegistry.layer
-		const userDirectory = UserDirectory.layer.pipe(Layer.provide(registry))
+		const userDirectory = UserDirectory.make().pipe(
+			Layer.provide(Layer.merge(registry, UserProfileCache.layerMemory)),
+		)
 		const organizations = Organizations.make((input) =>
 			Effect.succeed(input.tenant === 'T_TEST' ? Option.some(OrgId.make('org_test')) : Option.none()),
 		)
