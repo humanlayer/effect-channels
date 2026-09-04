@@ -686,6 +686,40 @@ export class Channels extends Context.Service<
 					return yield* provider.getUser(input)
 				})
 
+				const downloadAttachment = Effect.fn('channels.download_attachment')(function* (
+					input: DownloadAttachmentInput,
+				) {
+					const address: EgressAddress = {
+						provider: input.attachment.provider,
+						tenant: input.attachment.tenant,
+					}
+					yield* Effect.annotateCurrentSpan({
+						operation: 'download_attachment',
+						provider: address.provider,
+						tenant: address.tenant,
+						attachment_id: input.attachment.id,
+					})
+					const provider = yield* registry.byName({ provider: address.provider })
+					if (!provider.capabilities.files.read) {
+						return yield* FileReadFailed.make({
+							provider: address.provider,
+							message: 'provider does not support attachment downloads',
+						})
+					}
+					yield* authorizeEgress({
+						address,
+						onGateLookupFailed: () =>
+							FileReadFailed.make({ provider: address.provider, message: 'gate lookup failed' }),
+					}).pipe(
+						Effect.catchTag('TenantDisabled', () =>
+							Effect.fail(
+								FileReadFailed.make({ provider: address.provider, message: 'tenant disabled' }),
+							),
+						),
+					)
+					return yield* provider.downloadAttachment(input)
+				})
+
 				return Channels.of({
 					onNewMention: registerMessageHandler(mentionHandlers, 'Channels.onNewMention'),
 					onSubscribedMessage: registerMessageHandler(subscribedHandlers, 'Channels.onSubscribedMessage'),
@@ -719,7 +753,7 @@ export class Channels extends Context.Service<
 					channelInfo,
 					getUser,
 					subject: () => unimplemented('Channels.subject'),
-					downloadAttachment: () => unimplemented('Channels.downloadAttachment'),
+					downloadAttachment,
 					openDM: () => unimplemented('Channels.openDM'),
 					postEphemeral: () => unimplemented('Channels.postEphemeral'),
 					subscribe: subscriptions.subscribe,

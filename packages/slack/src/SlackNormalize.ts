@@ -11,17 +11,11 @@ import {
 	type Author,
 	type ThreadRef,
 } from '@humanlayer/channels'
-import { Crypto, DateTime, Effect, Option } from 'effect'
+import { Crypto, DateTime, Effect, Option, Schema } from 'effect'
 
 import { SlackWebhookError } from './Errors.ts'
-import type {
-	SlackBotIdentity,
-	SlackEventCallback,
-	SlackFileMetadata,
-	SlackHistoryMessage,
-	SlackTeamId,
-} from './Schema.ts'
-import { SlackThreadRef } from './Schema.ts'
+import type { SlackBotIdentity, SlackFileMetadata, SlackTeamId } from './Schema.ts'
+import { SlackEventCallback, SlackHistoryMessage, SlackThreadRef } from './Schema.ts'
 import { slackThreadRef } from './SlackThreadId.ts'
 
 const ineligibleMessageSubtypes = new Set([
@@ -45,6 +39,19 @@ const ineligibleMessageSubtypes = new Set([
 	'ekm_access_denied',
 	'tombstone',
 ])
+
+interface SlackAttachmentRefFields {
+	provider: 'slack'
+	tenant: ReturnType<typeof TenantId.make>
+	id: string
+	kind: string
+	providerLocator: { readonly id: string }
+	name?: string
+	mimeType?: string
+	size?: number
+	width?: number
+	height?: number
+}
 
 const digestIdempotencyKey = (address: { readonly channelId: string; readonly messageTs: string }) =>
 	Effect.gen(function* () {
@@ -87,20 +94,28 @@ export const slackFileAttachments = (
 	teamId: SlackTeamId,
 	files: ReadonlyArray<SlackFileMetadata> | undefined,
 ): Array<Attachment> =>
-	files?.map((file) =>
-		Attachment.make({
-			ref: AttachmentRef.make({
-				provider: 'slack',
-				tenant: TenantId.make(teamId),
-				id: file.id,
-				kind: 'file',
-				name: file.name,
-				mimeType: file.mimetype,
-				size: file.size,
-				providerLocator: { id: file.id },
-			}),
-		}),
-	) ?? []
+	files?.map((file) => {
+		const fields: SlackAttachmentRefFields = {
+			provider: 'slack',
+			tenant: TenantId.make(teamId),
+			id: file.id,
+			kind: file.mimetype?.startsWith('image/')
+				? 'image'
+				: file.mimetype?.startsWith('video/')
+					? 'video'
+					: file.mimetype?.startsWith('audio/')
+						? 'audio'
+						: 'file',
+			providerLocator: { id: file.id },
+		}
+		if (file.name !== undefined) fields.name = file.name
+		if (file.mimetype !== undefined) fields.mimeType = file.mimetype
+		if (file.size !== undefined) fields.size = file.size
+		if (file.original_w !== undefined) fields.width = file.original_w
+		if (file.original_h !== undefined) fields.height = file.original_h
+		const ref = AttachmentRef.make(fields)
+		return Attachment.make({ ref })
+	}) ?? []
 
 const slackAuthor = (
 	identity: SlackBotIdentity,
@@ -132,7 +147,7 @@ export const normalizeSlackHistoryMessage = (input: {
 		author: slackAuthor(input.identity, input.snapshot),
 		metadata: { sentAt: slackTsToDateTime(input.snapshot.ts, 0) },
 		attachments: slackFileAttachments(input.teamId, input.snapshot.files),
-		raw: input.snapshot,
+		raw: Schema.encodeSync(SlackHistoryMessage)(input.snapshot),
 	})
 }
 
@@ -161,6 +176,9 @@ export const normalizeSlackMessage = Effect.fn('slack.normalize.message')(functi
 		input.identity.botUserId === undefined
 			? rawText.trim()
 			: rawText.replaceAll(`<@${input.identity.botUserId}>`, '').trim()
+	const rawCallback = yield* Schema.encodeEffect(SlackEventCallback)(input.callback).pipe(
+		Effect.mapError(() => SlackWebhookError.make({ reason: 'decode' })),
+	)
 	const message = Message.make({
 		ref: MessageRef.make(event.ts),
 		threadRef,
@@ -169,7 +187,7 @@ export const normalizeSlackMessage = Effect.fn('slack.normalize.message')(functi
 		author: slackAuthor(input.identity, event),
 		metadata: { sentAt: slackTsToDateTime(event.ts, input.callback.event_time * 1000) },
 		attachments: slackFileAttachments(input.callback.team_id, event.files),
-		raw: event,
+		raw: rawCallback.event,
 	})
 	const thread = Thread.make({ ref: threadRef, currentMessage: message, recentMessages: [message] })
 	const idempotencyKey = yield* digestIdempotencyKey({ channelId: event.channel, messageTs: event.ts })
@@ -181,7 +199,7 @@ export const normalizeSlackMessage = Effect.fn('slack.normalize.message')(functi
 			thread,
 			message,
 			mentioned: event.type === 'app_mention',
-			raw: input.callback,
+			raw: rawCallback,
 		}),
 	)
 })

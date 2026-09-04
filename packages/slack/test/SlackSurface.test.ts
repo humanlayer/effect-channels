@@ -28,13 +28,6 @@ const threadId = ThreadId.make('slack:v1:T_TEST:C_TEST:100.1')
 const tenant = TenantId.make('T_TEST')
 const userId = UserId.make('U_TEST')
 const channel = { id: ChannelId.make('slack:v1:T_TEST:C_TEST'), provider: 'slack' as const, tenant, isDm: false }
-const attachment = {
-	provider: 'slack' as const,
-	tenant,
-	id: 'F_TEST',
-	kind: 'file',
-	providerLocator: { id: 'F_TEST' },
-}
 const content = MarkdownContent.make({ markdown: 'hello' })
 
 const expectDefect = <A, E>(operation: string, effect: Effect.Effect<A, E>) =>
@@ -80,8 +73,6 @@ it.effect('names every Phase 2 SlackClient placeholder', () =>
 			'SlackClient.removeReaction',
 			client.removeReaction({ teamId, channelId, ts: messageTs, emoji: 'thumbsup' }),
 		)
-		yield* expectDefect('SlackClient.uploadFiles', client.uploadFiles({ teamId, channelId, files: [] }))
-		yield* expectDefect('SlackClient.downloadFile', client.downloadFile({ teamId, attachment }))
 		yield* expectDefect('SlackClient.openDM', client.openDM({ teamId, userId }))
 		yield* expectDefect(
 			'SlackClient.postEphemeral',
@@ -120,7 +111,6 @@ it.effect('names every Phase 2 Slack provider placeholder', () =>
 			provider.removeReaction({ threadId, messageRef: MessageRef.make('100.2'), emoji: Emoji.ThumbsUp }),
 		)
 		yield* expectDefect('SlackProvider.subject', provider.subject({ message: testMessage }))
-		yield* expectDefect('SlackProvider.downloadAttachment', provider.downloadAttachment({ attachment }))
 		yield* expectDefect('SlackProvider.openDM', provider.openDM({ provider: 'slack', tenant, user: testAuthor }))
 		yield* expectDefect(
 			'SlackProvider.postEphemeral',
@@ -184,7 +174,7 @@ it.effect('advertises support only for implemented operations', () =>
 			typing: { thread: true, channel: false },
 			history: { thread: true, channelMessages: true, channelThreads: true },
 			reactions: { add: false, remove: false, events: false },
-			files: { read: false, upload: false },
+			files: { read: true, upload: true },
 			actions: false,
 			threadInfo: true,
 			channelInfo: true,

@@ -38,12 +38,36 @@ export const HistoryResponse = Schema.Struct({
 			user: Schema.optionalKey(Schema.String),
 			thread_ts: Schema.optionalKey(Schema.String),
 			reply_count: Schema.optionalKey(Schema.Finite),
+			files: Schema.optionalKey(
+				Schema.Array(
+					Schema.Struct({
+						id: Schema.String,
+						name: Schema.optionalKey(Schema.String),
+						mimetype: Schema.optionalKey(Schema.String),
+						size: Schema.optionalKey(Schema.Finite),
+						url_private: Schema.optionalKey(Schema.String),
+						url_private_download: Schema.optionalKey(Schema.String),
+					}),
+				),
+			),
 		}),
 	),
 	has_more: Schema.optionalKey(Schema.Boolean),
 	response_metadata: Schema.optionalKey(Schema.Struct({ next_cursor: Schema.optionalKey(Schema.String) })),
 })
 const OkResponse = Schema.Struct({ ok: Schema.Literal(true) })
+
+export const FileInfoResponse = Schema.Struct({
+	ok: Schema.Literal(true),
+	file: Schema.Struct({
+		id: Schema.String,
+		name: Schema.String,
+		mimetype: Schema.String,
+		size: Schema.Finite,
+		url_private: Schema.String,
+		url_private_download: Schema.String,
+	}),
+})
 
 export const slackEmulatorBotToken = 'xoxb-channels-emulator'
 export const slackEmulatorAliceToken = 'xoxp-alice-emulator'

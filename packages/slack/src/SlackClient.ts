@@ -14,7 +14,7 @@ import {
 	type ThreadRef,
 } from '@humanlayer/channels'
 import type { FileData } from '@humanlayer/channels'
-import { Config, Context, Effect, Layer, Option, Predicate, Schema } from 'effect'
+import { Config, Context, Effect, Layer, Option, Predicate, Schema, Stream } from 'effect'
 import type { DateTime, Redacted } from 'effect'
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http'
 import type { UrlParams } from 'effect/unstable/http'
@@ -23,16 +23,21 @@ import { SlackApiError, SlackTransportError } from './Errors.ts'
 import {
 	SlackConversationsInfoResponse,
 	SlackConversationsPageResponse,
+	SlackCompleteUploadResponse,
+	SlackFileInfoResponse,
+	SlackGetUploadUrlResponse,
 	SlackOkResponse,
 	SlackPostMessageResponse,
 	SlackSentMessage,
+	SlackChannelId,
+	SlackMessageTs,
 	SlackThreadRef,
 	SlackUsersInfoResponse,
 	type SlackApiInput,
 	type SlackApiResponse,
 	type SlackAppendStreamInput,
 	type SlackBotIdentity as SlackBotIdentityType,
-	type SlackChannelId,
+	type SlackCompletedFile,
 	type SlackChannelInfoInput,
 	type SlackDeleteMessageInput,
 	type SlackFileDownloadInput,
@@ -72,6 +77,18 @@ const SlackSessionStatusBody = Schema.Struct({
 	status: Schema.String,
 })
 
+const SlackCompleteUploadFile = Schema.Struct({
+	id: Schema.NonEmptyString,
+	title: Schema.optionalKey(Schema.String),
+})
+
+const SlackCompleteUploadBody = Schema.Struct({
+	files: Schema.Array(SlackCompleteUploadFile),
+	channel_id: SlackChannelId,
+	thread_ts: Schema.optionalKey(Schema.String),
+	initial_comment: Schema.optionalKey(Schema.String),
+})
+
 interface ChannelInfoFields {
 	channel: ChannelRef
 	name?: string
@@ -100,7 +117,29 @@ const toTransportError = (operation: string, status?: number) => {
 
 const defaultSlackApiOrigin = new URL('https://slack.com/api')
 
+export const slackFileLimits = {
+	maxFilesPerMessage: 10,
+	maxFileBytes: 20 * 1024 * 1024,
+	maxTotalUploadBytes: 100 * 1024 * 1024,
+	maxDownloadBytes: 20 * 1024 * 1024,
+	maxRedirects: 3,
+} as const
+
+const slackFileOrigins = new Set([
+	'https://files.slack.com',
+	'https://files.slack-gov.com',
+	'https://slack-files.com',
+	'https://slack-files-gov.com',
+	'https://slack.com',
+	'https://slack-gov.com',
+])
+
 const slackApiUrl = (origin: URL, method: string) => `${origin.toString().replace(/\/$/, '')}/${method}`
+
+const isTrustedSlackFileUrl = (url: URL, apiOrigin: URL) =>
+	url.protocol === 'https:'
+		? slackFileOrigins.has(url.origin) || url.origin === apiOrigin.origin
+		: url.protocol === 'http:' && url.origin === apiOrigin.origin
 
 interface TenantLookup {
 	readonly teamId: SlackTeamId
@@ -515,6 +554,223 @@ const makeGetUser = (fallback: SlackBotIdentityType, origin: URL) =>
 		return UserProfile.make(profile)
 	})
 
+const fileLimitError = (operation: string, code: string) => SlackApiError.make({ operation, code })
+
+const validateUploadFiles = (input: SlackFileUploadInput) =>
+	Effect.gen(function* () {
+		if (input.files.length === 0) {
+			return yield* fileLimitError('files.uploadV2', 'no_files')
+		}
+		if (input.files.length > slackFileLimits.maxFilesPerMessage) {
+			return yield* fileLimitError('files.uploadV2', 'too_many_files')
+		}
+		let total = 0
+		for (const file of input.files) {
+			if (file.data.byteLength > slackFileLimits.maxFileBytes) {
+				return yield* fileLimitError('files.uploadV2', 'file_too_large')
+			}
+			total += file.data.byteLength
+		}
+		if (total > slackFileLimits.maxTotalUploadBytes) {
+			return yield* fileLimitError('files.uploadV2', 'upload_too_large')
+		}
+	})
+
+const shareTimestamp = (file: SlackCompletedFile, channelId: SlackChannelId) =>
+	file.shares?.public?.[channelId]?.[0]?.ts ?? file.shares?.private?.[channelId]?.[0]?.ts
+
+const makeUploadFiles = (origin: URL) =>
+	Effect.fn('slack.api.upload_files')(function* (input: SlackFileUploadInput) {
+		yield* Effect.annotateCurrentSpan({ provider: 'slack', tenant: input.teamId, operation: 'files.uploadV2' })
+		yield* validateUploadFiles(input)
+		const token = yield* loadBotToken({ teamId: input.teamId, operation: 'files.uploadV2' })
+		const client = yield* HttpClient.HttpClient
+		const tickets = yield* Effect.forEach(
+			input.files,
+			(file) =>
+				Effect.gen(function* () {
+					const request = slackPost(origin, token, 'files.getUploadURLExternal', {
+						filename: file.filename,
+						length: file.data.byteLength,
+					})
+					const decoded = yield* fetchSlackJson({
+						operation: 'files.getUploadURLExternal',
+						schema: SlackGetUploadUrlResponse,
+						request,
+					}).pipe(Effect.flatMap((response) => requireOk('files.getUploadURLExternal', response)))
+					if (decoded.upload_url === undefined || decoded.file_id === undefined) {
+						return yield* SlackApiError.make({
+							operation: 'files.getUploadURLExternal',
+							code: 'missing_upload_ticket',
+						})
+					}
+					if (!isTrustedSlackFileUrl(decoded.upload_url, origin)) {
+						return yield* SlackApiError.make({
+							operation: 'files.getUploadURLExternal',
+							code: 'untrusted_upload_url',
+						})
+					}
+					return { file, fileId: decoded.file_id, uploadUrl: decoded.upload_url }
+				}),
+			{ concurrency: 4 },
+		)
+		yield* Effect.forEach(
+			tickets,
+			(ticket) => {
+				const request = HttpClientRequest.post(ticket.uploadUrl).pipe(
+					HttpClientRequest.bodyUint8Array(
+						ticket.file.data,
+						ticket.file.mimeType ?? 'application/octet-stream',
+					),
+				)
+				return client.execute(request).pipe(
+					Effect.mapError(() => toTransportError('files.uploadV2.binary')),
+					Effect.flatMap((response) =>
+						response.status >= 200 && response.status < 300
+							? Effect.void
+							: Effect.fail(toTransportError('files.uploadV2.binary', response.status)),
+					),
+				)
+			},
+			{ concurrency: 4, discard: true },
+		)
+		const files = tickets.map((ticket) =>
+			SlackCompleteUploadFile.make({ id: ticket.fileId, title: ticket.file.filename }),
+		)
+		const completeFields =
+			input.threadTs === undefined
+				? input.initialComment === undefined || input.initialComment === ''
+					? SlackCompleteUploadBody.make({ files, channel_id: input.channelId })
+					: SlackCompleteUploadBody.make({
+							files,
+							channel_id: input.channelId,
+							initial_comment: input.initialComment,
+						})
+				: input.initialComment === undefined || input.initialComment === ''
+					? SlackCompleteUploadBody.make({ files, channel_id: input.channelId, thread_ts: input.threadTs })
+					: SlackCompleteUploadBody.make({
+							files,
+							channel_id: input.channelId,
+							thread_ts: input.threadTs,
+							initial_comment: input.initialComment,
+						})
+		const request = yield* HttpClientRequest.post(slackApiUrl(origin, 'files.completeUploadExternal')).pipe(
+			HttpClientRequest.bearerToken(token),
+			HttpClientRequest.schemaBodyJson(SlackCompleteUploadBody)(completeFields),
+			Effect.mapError(() =>
+				SlackApiError.make({ operation: 'files.completeUploadExternal', code: 'request_encode_failed' }),
+			),
+		)
+		const completed = yield* fetchSlackJson({
+			operation: 'files.completeUploadExternal',
+			schema: SlackCompleteUploadResponse,
+			request,
+		}).pipe(Effect.flatMap((response) => requireOk('files.completeUploadExternal', response)))
+		if (completed.files === undefined || completed.files.length !== tickets.length) {
+			return yield* SlackApiError.make({
+				operation: 'files.completeUploadExternal',
+				code: 'missing_completed_files',
+			})
+		}
+		return completed.files.map((file) => {
+			const timestamp = shareTimestamp(file, input.channelId) ?? `file:${file.id}`
+			return SlackSentMessage.make({
+				channelId: input.channelId,
+				ts: SlackMessageTs.make(timestamp),
+				fileId: file.id,
+			})
+		})
+	})
+
+interface DownloadAccumulator {
+	readonly chunks: ReadonlyArray<Uint8Array>
+	readonly size: number
+}
+
+const combineChunks = (chunks: ReadonlyArray<Uint8Array>, size: number) => {
+	const output = new Uint8Array(size)
+	let offset = 0
+	for (const chunk of chunks) {
+		output.set(chunk, offset)
+		offset += chunk.byteLength
+	}
+	return output
+}
+
+const makeDownloadFile = (origin: URL) =>
+	Effect.fn('slack.api.download_file')(function* (input: SlackFileDownloadInput) {
+		yield* Effect.annotateCurrentSpan({ provider: 'slack', tenant: input.teamId, operation: 'files.download' })
+		if (input.attachment.provider !== 'slack' || String(input.attachment.tenant) !== String(input.teamId)) {
+			return yield* SlackApiError.make({ operation: 'files.download', code: 'invalid_attachment_origin' })
+		}
+		if (input.attachment.size !== undefined && input.attachment.size > slackFileLimits.maxDownloadBytes) {
+			return yield* SlackApiError.make({ operation: 'files.download', code: 'file_too_large' })
+		}
+		const token = yield* loadBotToken({ teamId: input.teamId, operation: 'files.download' })
+		const infoRequest = slackPost(origin, token, 'files.info', { file: input.attachment.id })
+		const info = yield* fetchSlackJson({
+			operation: 'files.info',
+			schema: SlackFileInfoResponse,
+			request: infoRequest,
+		}).pipe(Effect.flatMap((response) => requireOk('files.info', response)))
+		if (info.file?.size !== undefined && info.file.size > slackFileLimits.maxDownloadBytes) {
+			return yield* SlackApiError.make({ operation: 'files.download', code: 'file_too_large' })
+		}
+		const downloadUrl = info.file?.url_private_download ?? info.file?.url_private
+		if (downloadUrl === undefined || !isTrustedSlackFileUrl(downloadUrl, origin)) {
+			return yield* SlackApiError.make({ operation: 'files.download', code: 'untrusted_download_url' })
+		}
+		const client = yield* HttpClient.HttpClient
+		const download = (url: URL, redirects: number): Effect.Effect<FileData, SlackTransportError | SlackApiError> =>
+			Effect.gen(function* () {
+				if (!isTrustedSlackFileUrl(url, origin)) {
+					return yield* SlackApiError.make({ operation: 'files.download', code: 'untrusted_redirect' })
+				}
+				const response = yield* client
+					.execute(HttpClientRequest.get(url).pipe(HttpClientRequest.bearerToken(token)))
+					.pipe(Effect.mapError(() => toTransportError('files.download')))
+				const location = response.headers.location
+				if (response.status >= 300 && response.status < 400 && location !== undefined) {
+					if (redirects >= slackFileLimits.maxRedirects) {
+						return yield* SlackApiError.make({ operation: 'files.download', code: 'too_many_redirects' })
+					}
+					const next = yield* Effect.try({
+						try: () => new URL(location, url),
+						catch: () => SlackApiError.make({ operation: 'files.download', code: 'invalid_redirect' }),
+					})
+					if (!isTrustedSlackFileUrl(next, origin)) {
+						return yield* SlackApiError.make({ operation: 'files.download', code: 'untrusted_redirect' })
+					}
+					return yield* download(next, redirects + 1)
+				}
+				if (response.status < 200 || response.status >= 300) {
+					return yield* toTransportError('files.download', response.status)
+				}
+				const contentType = response.headers['content-type'] ?? ''
+				if (contentType.toLowerCase().includes('text/html')) {
+					return yield* SlackApiError.make({ operation: 'files.download', code: 'unexpected_html' })
+				}
+				const declaredSize = Number(response.headers['content-length'])
+				if (Number.isFinite(declaredSize) && declaredSize > slackFileLimits.maxDownloadBytes) {
+					return yield* SlackApiError.make({ operation: 'files.download', code: 'file_too_large' })
+				}
+				const accumulated = yield* response.stream.pipe(
+					Stream.mapError(() => toTransportError('files.download')),
+					Stream.runFoldEffect(
+						(): DownloadAccumulator => ({ chunks: [], size: 0 }),
+						(accumulator, chunk) => {
+							const size = accumulator.size + chunk.byteLength
+							return size > slackFileLimits.maxDownloadBytes
+								? Effect.fail(fileLimitError('files.download', 'file_too_large'))
+								: Effect.succeed({ chunks: [...accumulator.chunks, chunk], size })
+						},
+					),
+				)
+				return combineChunks(accumulated.chunks, accumulated.size)
+			})
+		return yield* download(downloadUrl, 0)
+	})
+
 export class SlackClient extends Context.Service<
 	SlackClient,
 	{
@@ -610,6 +866,8 @@ export class SlackClient extends Context.Service<
 				const history = makeHistory(fallbackIdentity, apiOrigin)
 				const listThreads = makeListThreads(fallbackIdentity, apiOrigin)
 				const getUser = makeGetUser(fallbackIdentity, apiOrigin)
+				const uploadFiles = makeUploadFiles(apiOrigin)
+				const downloadFile = makeDownloadFile(apiOrigin)
 				return SlackClient.of({
 					postMessage: (input) => run('chat.postMessage', input.teamId, makePostMessage(apiOrigin)(input)),
 					setSessionStatus: (input) =>
@@ -626,8 +884,8 @@ export class SlackClient extends Context.Service<
 					channelInfo: (input) => run('conversations.info', input.teamId, makeChannelInfo(apiOrigin)(input)),
 					listThreads: (input) => run('conversations.history', input.teamId, listThreads(input)),
 					getUser: (input) => run('users.info', input.teamId, getUser(input)),
-					uploadFiles: () => unimplemented('SlackClient.uploadFiles'),
-					downloadFile: () => unimplemented('SlackClient.downloadFile'),
+					uploadFiles: (input) => run('files.uploadV2', input.teamId, uploadFiles(input)),
+					downloadFile: (input) => run('files.download', input.teamId, downloadFile(input)),
 					openDM: () => unimplemented('SlackClient.openDM'),
 					postEphemeral: () => unimplemented('SlackClient.postEphemeral'),
 					api: () => unimplemented('SlackClient.api'),

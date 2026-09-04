@@ -60,6 +60,8 @@ export const SlackFileMetadata = Schema.Struct({
 	name: Schema.optionalKey(Schema.String),
 	mimetype: Schema.optionalKey(Schema.String),
 	size: Schema.optionalKey(Schema.Natural),
+	original_w: Schema.optionalKey(Schema.Natural),
+	original_h: Schema.optionalKey(Schema.Natural),
 	url_private: Schema.optionalKey(Schema.URLFromString),
 	url_private_download: Schema.optionalKey(Schema.URLFromString),
 })
@@ -185,6 +187,7 @@ export const SlackSentMessage = Schema.Struct({
 	channelId: SlackChannelId,
 	ts: SlackMessageTs,
 	botUserId: Schema.optionalKey(Schema.NonEmptyString),
+	fileId: Schema.optionalKey(Schema.NonEmptyString),
 })
 export type SlackSentMessage = typeof SlackSentMessage.Type
 
@@ -292,6 +295,7 @@ export const SlackFileUploadInput = Schema.Struct({
 	teamId: SlackTeamId,
 	channelId: SlackChannelId,
 	threadTs: Schema.optionalKey(SlackMessageTs),
+	initialComment: Schema.optionalKey(Schema.String),
 	files: Schema.Array(FileUpload),
 })
 export type SlackFileUploadInput = typeof SlackFileUploadInput.Type
@@ -452,6 +456,51 @@ export const SlackPostMessageResponse = Schema.Struct({
 	error: Schema.optionalKey(Schema.String),
 })
 export type SlackPostMessageResponse = typeof SlackPostMessageResponse.Type
+
+export const SlackGetUploadUrlResponse = Schema.Struct({
+	ok: Schema.Boolean,
+	error: Schema.optionalKey(Schema.String),
+	upload_url: Schema.optionalKey(Schema.URLFromString),
+	file_id: Schema.optionalKey(Schema.NonEmptyString),
+})
+export type SlackGetUploadUrlResponse = typeof SlackGetUploadUrlResponse.Type
+
+export const SlackFileShare = Schema.Struct({
+	ts: SlackMessageTs,
+	thread_ts: Schema.optionalKey(SlackMessageTs),
+})
+export type SlackFileShare = typeof SlackFileShare.Type
+
+export const SlackFileShares = Schema.Struct({
+	public: Schema.optionalKey(Schema.Record(Schema.String, Schema.Array(SlackFileShare))),
+	private: Schema.optionalKey(Schema.Record(Schema.String, Schema.Array(SlackFileShare))),
+})
+export type SlackFileShares = typeof SlackFileShares.Type
+
+export const SlackCompletedFile = Schema.Struct({
+	id: Schema.NonEmptyString,
+	name: Schema.optionalKey(Schema.String),
+	mimetype: Schema.optionalKey(Schema.String),
+	size: Schema.optionalKey(Schema.Natural),
+	url_private: Schema.optionalKey(Schema.URLFromString),
+	url_private_download: Schema.optionalKey(Schema.URLFromString),
+	shares: Schema.optionalKey(SlackFileShares),
+})
+export type SlackCompletedFile = typeof SlackCompletedFile.Type
+
+export const SlackCompleteUploadResponse = Schema.Struct({
+	ok: Schema.Boolean,
+	error: Schema.optionalKey(Schema.String),
+	files: Schema.optionalKey(Schema.Array(SlackCompletedFile)),
+})
+export type SlackCompleteUploadResponse = typeof SlackCompleteUploadResponse.Type
+
+export const SlackFileInfoResponse = Schema.Struct({
+	ok: Schema.Boolean,
+	error: Schema.optionalKey(Schema.String),
+	file: Schema.optionalKey(SlackCompletedFile),
+})
+export type SlackFileInfoResponse = typeof SlackFileInfoResponse.Type
 
 export type SlackRepliesOutput = MessagePage
 export type SlackHistoryOutput = MessagePage

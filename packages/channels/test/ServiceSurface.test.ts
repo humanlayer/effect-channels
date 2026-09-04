@@ -28,13 +28,6 @@ const channel = {
 	tenant: TenantId.make('T_TEST'),
 	isDm: false,
 }
-const attachment = {
-	provider: 'slack' as const,
-	tenant: TenantId.make('T_TEST'),
-	id: 'F_TEST',
-	kind: 'file',
-	providerLocator: { id: 'F_TEST' },
-}
 const content = MarkdownContent.make({ markdown: 'hello' })
 const messageRef = MessageRef.make('100.2')
 
@@ -105,7 +98,6 @@ it.effect('names every Phase 2 core placeholder', () =>
 			channels.removeReaction({ threadId, messageRef, emoji: Emoji.ThumbsUp }),
 		)
 		yield* expectDefect('Channels.subject', channels.subject({ message: testMessage }))
-		yield* expectDefect('Channels.downloadAttachment', channels.downloadAttachment({ attachment }))
 		yield* expectDefect(
 			'Channels.openDM',
 			channels.openDM({ provider: 'slack', tenant: TenantId.make('T_TEST'), user: testAuthor }),

@@ -1,7 +1,10 @@
 import {
+	Attachment,
+	AttachmentRef,
 	Capabilities,
 	ChannelGone,
 	ChannelProvider,
+	FileReadFailed,
 	HistoryFailed,
 	Message,
 	MessageRef,
@@ -12,6 +15,7 @@ import {
 	ThreadGone,
 	ThreadId,
 	ThreadInfo,
+	TenantId,
 	UserId,
 	UserLookupFailed,
 	containerInputWithOptions,
@@ -24,6 +28,7 @@ import type {
 	ChannelThreadsInput,
 	ContainerMessagesInput,
 	Content,
+	FileUpload,
 	GetUserInput,
 	InfoInput,
 	InlineContentNode,
@@ -36,6 +41,8 @@ import { Clock, Context, DateTime, Effect, HashSet, Layer, Match, Ref } from 'ef
 import { slackErrorRetryability } from './Errors.ts'
 import {
 	SlackChannelInfoInput,
+	SlackFileDownloadInput,
+	SlackFileUploadInput,
 	SlackGetUserInput,
 	SlackHistoryInput,
 	SlackListThreadsInput,
@@ -45,6 +52,7 @@ import {
 	SlackTeamId,
 	SlackThreadRef,
 	type SlackChannelId,
+	type SlackSentMessage as SlackSentMessageRef,
 	type SlackThreadRef as SlackThreadRefType,
 } from './Schema.ts'
 import { SlackClient } from './SlackClient.ts'
@@ -61,7 +69,7 @@ const SlackCapabilities = Capabilities.make({
 	typing: { thread: true, channel: false },
 	history: { thread: true, channelMessages: true, channelThreads: true },
 	reactions: { add: false, remove: false, events: false },
-	files: { read: false, upload: false },
+	files: { read: true, upload: true },
 	actions: false,
 	threadInfo: true,
 	channelInfo: true,
@@ -82,14 +90,13 @@ const renderContent = Match.type<Content>().pipe(
 	Match.tagsExhaustive({
 		PlainTextContent: (content) => ({
 			text: content.text,
-			degraded: content.files === undefined || content.files.length === 0 ? [] : ['files'],
+			files: content.files ?? [],
+			degraded: [],
 		}),
 		MarkdownContent: (content) => ({
 			text: content.markdown,
-			degraded: [
-				...(content.actions === undefined || content.actions.length === 0 ? [] : ['actions']),
-				...(content.files === undefined || content.files.length === 0 ? [] : ['files']),
-			],
+			files: content.files ?? [],
+			degraded: [...(content.actions === undefined || content.actions.length === 0 ? [] : ['actions'])],
 		}),
 		StructuredContent: (content) => ({
 			text: content.blocks
@@ -102,10 +109,10 @@ const renderContent = Match.type<Content>().pipe(
 					),
 				)
 				.join('\n\n'),
+			files: content.files ?? [],
 			degraded: [
 				'structured_content',
 				...(content.actions === undefined || content.actions.length === 0 ? [] : ['actions']),
-				...(content.files === undefined || content.files.length === 0 ? [] : ['files']),
 			],
 		}),
 	}),
@@ -128,6 +135,17 @@ interface SlackThreadListFields {
 	channelId: SlackChannelId
 	limit?: number
 	cursor?: string
+}
+
+interface UploadedAttachmentFields {
+	provider: 'slack'
+	tenant: ReturnType<typeof TenantId.make>
+	id: string
+	kind: string
+	name: string
+	size: number
+	providerLocator: { readonly id: string }
+	mimeType?: string
 }
 
 const historyRequestFields = (options: MessagesInput['options']): HistoryRequestFields => {
@@ -185,6 +203,8 @@ export class SlackProvider extends Context.Service<SlackProvider, ChannelProvide
 				readonly channelId: string
 				readonly ts: string
 				readonly botUserId: string | undefined
+				readonly attachments?: ReadonlyArray<Attachment>
+				readonly raw?: Message['raw']
 			}) =>
 				Effect.gen(function* () {
 					const now = yield* Clock.currentTimeMillis
@@ -202,8 +222,8 @@ export class SlackProvider extends Context.Service<SlackProvider, ChannelProvide
 							isMe: true,
 						},
 						metadata: { sentAt: DateTime.makeUnsafe({ epochMilliseconds: now }) },
-						attachments: [],
-						raw: { channel: input.channelId, ts: input.ts },
+						attachments: input.attachments ?? [],
+						raw: input.raw ?? { channel: input.channelId, ts: input.ts },
 					})
 					return SentMessage.make({
 						ref: SentRef.make({
@@ -213,6 +233,29 @@ export class SlackProvider extends Context.Service<SlackProvider, ChannelProvide
 							degraded: input.degraded,
 						}),
 						message,
+					})
+				})
+
+			const uploadedAttachments = (
+				teamId: SlackTeamId,
+				files: ReadonlyArray<FileUpload>,
+				uploaded: ReadonlyArray<SlackSentMessageRef>,
+			) =>
+				files.map((file, index) => {
+					const uploadedFile = uploaded[index]
+					const id = uploadedFile?.fileId ?? `upload:${index}`
+					const fields: UploadedAttachmentFields = {
+						provider: 'slack',
+						tenant: TenantId.make(teamId),
+						id,
+						kind: file.mimeType?.startsWith('image/') ? 'image' : 'file',
+						name: file.filename,
+						size: file.data.byteLength,
+						providerLocator: { id },
+					}
+					if (file.mimeType !== undefined) fields.mimeType = file.mimeType
+					return Attachment.make({
+						ref: AttachmentRef.make(fields),
 					})
 				})
 
@@ -231,6 +274,70 @@ export class SlackProvider extends Context.Service<SlackProvider, ChannelProvide
 				)
 				const rendered = renderContent(input.content)
 				const send = Effect.gen(function* () {
+					if (rendered.files.length > 0) {
+						const uploaded = yield* client
+							.uploadFiles(
+								SlackFileUploadInput.make({
+									teamId: ref.teamId,
+									channelId: ref.channelId,
+									threadTs: ref.threadTs,
+									initialComment: rendered.text,
+									files: rendered.files,
+								}),
+							)
+							.pipe(
+								Effect.tapError((error) =>
+									Effect.logError('Slack provider file upload failed', error).pipe(
+										Effect.annotateLogs({ provider: 'slack', thread_id: input.threadId }),
+									),
+								),
+								Effect.catchTags({
+									SlackTransportError: (error) =>
+										Effect.fail(
+											PostFailed.make({
+												provider: 'slack',
+												threadId: input.threadId,
+												message: 'Slack file upload transport failed',
+												retryability: slackErrorRetryability(error),
+											}),
+										),
+									SlackApiError: (error) =>
+										Effect.fail(
+											PostFailed.make({
+												provider: 'slack',
+												threadId: input.threadId,
+												message: 'Slack API rejected the file upload',
+												retryability: slackErrorRetryability(error),
+											}),
+										),
+								}),
+							)
+						const first = uploaded.at(0)
+						if (first === undefined) {
+							return yield* PostFailed.make({
+								provider: 'slack',
+								threadId: input.threadId,
+								message: 'Slack returned no uploaded files',
+								retryability: 'non_retryable',
+							})
+						}
+						const attachments = uploadedAttachments(ref.teamId, rendered.files, uploaded)
+						return yield* sentFromSlack({
+							threadRef: slackThreadRef(ref, false),
+							sentThreadId: input.threadId,
+							text: rendered.text,
+							degraded: rendered.degraded,
+							channelId: first.channelId,
+							ts: first.ts,
+							botUserId: first.botUserId,
+							attachments,
+							raw: {
+								channel: first.channelId,
+								ts: first.ts,
+								files: uploaded.flatMap((file) => (file.fileId === undefined ? [] : [file.fileId])),
+							},
+						})
+					}
 					const sent = yield* client
 						.postMessage(
 							SlackPostMessageInput.make({
@@ -295,6 +402,72 @@ export class SlackProvider extends Context.Service<SlackProvider, ChannelProvide
 					),
 				)
 				const rendered = renderContent(input.content)
+				if (rendered.files.length > 0) {
+					const uploaded = yield* client
+						.uploadFiles(
+							SlackFileUploadInput.make({
+								teamId: address.teamId,
+								channelId: address.channelId,
+								initialComment: rendered.text,
+								files: rendered.files,
+							}),
+						)
+						.pipe(
+							Effect.tapError((error) =>
+								Effect.logError('Slack provider channel file upload failed', error).pipe(
+									Effect.annotateLogs({ provider: 'slack', tenant: address.teamId }),
+								),
+							),
+							Effect.catchTags({
+								SlackTransportError: (error) =>
+									Effect.fail(
+										PostFailed.make({
+											provider: 'slack',
+											threadId: errorThreadId,
+											message: 'Slack file upload transport failed',
+											retryability: slackErrorRetryability(error),
+										}),
+									),
+								SlackApiError: (error) =>
+									Effect.fail(
+										PostFailed.make({
+											provider: 'slack',
+											threadId: errorThreadId,
+											message: 'Slack API rejected the file upload',
+											retryability: slackErrorRetryability(error),
+										}),
+									),
+							}),
+						)
+					const first = uploaded.at(0)
+					if (first === undefined) {
+						return yield* PostFailed.make({
+							provider: 'slack',
+							threadId: errorThreadId,
+							message: 'Slack returned no uploaded files',
+							retryability: 'non_retryable',
+						})
+					}
+					const threadRef = slackThreadRef(
+						SlackThreadRef.make({ teamId: address.teamId, channelId: first.channelId, threadTs: first.ts }),
+						true,
+					)
+					return yield* sentFromSlack({
+						threadRef,
+						sentThreadId: threadRef.id,
+						text: rendered.text,
+						degraded: rendered.degraded,
+						channelId: first.channelId,
+						ts: first.ts,
+						botUserId: first.botUserId,
+						attachments: uploadedAttachments(address.teamId, rendered.files, uploaded),
+						raw: {
+							channel: first.channelId,
+							ts: first.ts,
+							files: uploaded.flatMap((file) => (file.fileId === undefined ? [] : [file.fileId])),
+						},
+					})
+				}
 				const sent = yield* client
 					.postMessage(
 						SlackPostMessageInput.make({
@@ -636,6 +809,31 @@ export class SlackProvider extends Context.Service<SlackProvider, ChannelProvide
 				)
 			})
 
+			const downloadAttachment = Effect.fn('slack.provider.download_attachment')(function* (input: {
+				readonly attachment: AttachmentRef
+			}) {
+				const teamId = SlackTeamId.make(input.attachment.tenant)
+				return yield* client
+					.downloadFile(SlackFileDownloadInput.make({ teamId, attachment: input.attachment }))
+					.pipe(
+						Effect.tapError((error) =>
+							Effect.logError('Slack attachment download failed', error).pipe(
+								Effect.annotateLogs({ provider: 'slack', tenant: input.attachment.tenant }),
+							),
+						),
+						Effect.catchTags({
+							SlackTransportError: () =>
+								Effect.fail(
+									FileReadFailed.make({ provider: 'slack', message: 'Slack file transport failed' }),
+								),
+							SlackApiError: () =>
+								Effect.fail(
+									FileReadFailed.make({ provider: 'slack', message: 'Slack file download failed' }),
+								),
+						}),
+					)
+			})
+
 			return new ChannelProvider({
 				name: 'slack',
 				capabilities: SlackCapabilities,
@@ -673,7 +871,7 @@ export class SlackProvider extends Context.Service<SlackProvider, ChannelProvide
 				channelInfo,
 				getUser,
 				subject: () => unimplemented('SlackProvider.subject'),
-				downloadAttachment: () => unimplemented('SlackProvider.downloadAttachment'),
+				downloadAttachment,
 				openDM: () => unimplemented('SlackProvider.openDM'),
 				postEphemeral: () => unimplemented('SlackProvider.postEphemeral'),
 			})

@@ -106,7 +106,7 @@ export SLACK_BOT_ID='B...' # optional, but recommended
 export PORT=3000
 ```
 
-The manifest requests `app_mentions:read`, `chat:write`, `channels:history`, `groups:history`, and `users:read`; subscribes to `app_mention`, `message.channels`, and `message.groups`; and enables the current Agent view used by `agents.sessions.setStatus`.
+The manifest mirrors the scopes used by the HumanLayer Slack app for this slice: mention and message history access across channel surfaces, channel/user lookup, message posting, Agent status, and file read/write. It subscribes to `app_mention`, `message.channels`, `message.groups`, and `agent_session_stopped`, and enables the current Agent view used by `agents.sessions.setStatus`. Slack does not add newly declared scopes to an existing installation automatically: after changing the manifest, reinstall the app and replace `SLACK_BOT_TOKEN` if Slack issues a new token.
 
 ### 6. Start the server and configure ngrok
 
@@ -142,6 +142,8 @@ bun --cwd examples/slack-thread-echo run src/server.ts
 
 A root mention is delivered to `onNewMention`, where the example explicitly subscribes before replying. Later unmentioned thread replies are delivered to `onSubscribedMessage`.
 
+The example also demonstrates neutral file uploads. Include the standalone word **image** in a mention or subscribed thread reply (for example, `@Channels Thread Echo show me an image`) and the response attaches a generated SVG using `FileUpload.make(...)` on `MarkdownContent.files`. The image is generated in memory, so the example does not need a checked-in binary asset. The same content API supports file-only and multiple-file posts; see [`src/live-files.ts`](./src/live-files.ts) for those acceptance checks.
+
 `src/server.ts` shows the Effect HTTP path: `HttpRouter.serve(routes)` plus the chosen server layer. The same `app.handle(request)` is a Fetch-compatible entry whose runtime and delivery worker are initialized once and owned internally.
 
 ## Optional real-Slack smoke check
@@ -157,5 +159,9 @@ While it runs:
 3. Have another bot or integration create a root message, then mention this bot inside that thread.
 
 The live harness is a minimal manual smoke check for credentials and Slack app configuration. The required integration coverage is emulator-first and runs without Slack credentials under `packages/app`; see the [root testing notes](../../README.md#slack-provider-testing). Recordings are not required by the test workflow.
+
+For the optional file-specific acceptance sequence, call `runLiveFileChecks(thread)` from
+[`src/live-files.ts`](./src/live-files.ts) in a temporary handler. It verifies text-plus-file,
+multiple-file, file-only, and authenticated download behavior without committing binary fixtures.
 
 SIGINT and SIGTERM interrupt the worker and close the HTTP server, Postgres resources, and provider clients through the one Effect scope.
