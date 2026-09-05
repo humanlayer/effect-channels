@@ -33,9 +33,11 @@ it.effect('dispatches updates, deletes, and filtered typed reactions once', () =
 		const updates = yield* Queue.unbounded<MessageUpdatedEvent>()
 		const deletes = yield* Queue.unbounded<MessageDeletedEvent>()
 		const reactions = yield* Queue.unbounded<ReactionEvent>()
+		const heartReactions = yield* Queue.unbounded<ReactionEvent>()
 		yield* channels.onMessageUpdated((event) => Queue.offer(updates, event).pipe(Effect.asVoid))
 		yield* channels.onMessageDeleted((event) => Queue.offer(deletes, event).pipe(Effect.asVoid))
 		yield* channels.onReaction([Emoji.ThumbsUp], (event) => Queue.offer(reactions, event).pipe(Effect.asVoid))
+		yield* channels.onReaction([Emoji.Heart], (event) => Queue.offer(heartReactions, event).pipe(Effect.asVoid))
 		const worker = yield* Effect.forkChild(channels.run)
 
 		const updated = NormalizedMessageUpdated.make({
@@ -95,6 +97,17 @@ it.effect('dispatches updates, deletes, and filtered typed reactions once', () =
 		})
 		yield* ingress.acceptReaction(reaction)
 		assert.strictEqual((yield* Queue.take(reactions)).emoji.name, Emoji.ThumbsUp.name)
+		assert.strictEqual(yield* Queue.size(heartReactions), 0)
+
+		const heartReaction = NormalizedReaction.make({
+			...reaction,
+			idempotencyKey: IdempotencyKey.make(`evt_${'5'.repeat(32)}`),
+			emoji: Emoji.Heart,
+			rawEmoji: 'heart',
+		})
+		yield* ingress.acceptReaction(heartReaction)
+		assert.strictEqual((yield* Queue.take(heartReactions)).emoji.name, Emoji.Heart.name)
+		assert.strictEqual(yield* Queue.size(reactions), 0)
 
 		yield* Fiber.interrupt(worker)
 	}).pipe(Effect.provide(ChannelsWithIngressLayer)),

@@ -90,10 +90,16 @@ export const app = createChannelsApp({
 		}),
 	onMessageUpdated: (event) => Effect.logInfo(`Message ${event.message.ref} was edited in ${event.thread.ref.id}`),
 	onMessageDeleted: (event) => Effect.logInfo(`Message ${event.messageRef} was deleted from ${event.threadRef.id}`),
-	onReaction: {
-		emoji: [Emoji.ThumbsUp, Emoji.Heart, Emoji.Check],
-		handler: (event) => Effect.logInfo(`${event.actor.fullName} reacted with ${event.rawEmoji}`),
-	},
+	onReaction: [
+		{
+			emojis: [Emoji.ThumbsUp],
+			handler: (event) => Effect.logInfo(`${event.actor.fullName} approved with ${event.rawEmoji}`),
+		},
+		{
+			emojis: [Emoji.Heart, Emoji.Check],
+			handler: (event) => Effect.logInfo(`${event.actor.fullName} reacted with ${event.rawEmoji}`),
+		},
+	],
 	onConversationStopped: (event) => Effect.logInfo(`Slack stopped the active response in ${event.threadRef.id}`),
 })
 

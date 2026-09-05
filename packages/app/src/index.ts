@@ -113,6 +113,12 @@ export const ChannelsStorage = {
 export const postgres = (coordinator?: ConversationCoordinatorOptions) =>
 	ChannelsStorage.postgres(coordinator === undefined ? {} : { coordinator })
 
+/** Associates one or more typed emoji with a reaction event handler. */
+export type ReactionHandlerRegistration<HandlerError> = {
+	readonly emojis: ReadonlyArray<Emoji>
+	readonly handler: (event: ReactionEvent) => Effect.Effect<void, HandlerError, Channels>
+}
+
 /** @internal */
 export const makeConnectionServices = <ConnectionError, ConnectionRequirements>(
 	provider: SlackProviderConfig<ConnectionError, ConnectionRequirements>,
@@ -226,10 +232,7 @@ export type ChannelsAppOptions<
 		readonly onSubscribedMessage?: (thread: Thread, message: Message) => Effect.Effect<void, HandlerError, Channels>
 		readonly onMessageUpdated?: (event: MessageUpdatedEvent) => Effect.Effect<void, HandlerError, Channels>
 		readonly onMessageDeleted?: (event: MessageDeletedEvent) => Effect.Effect<void, HandlerError, Channels>
-		readonly onReaction?: {
-			readonly emoji: ReadonlyArray<Emoji>
-			readonly handler: (event: ReactionEvent) => Effect.Effect<void, HandlerError, Channels>
-		}
+		readonly onReaction?: ReadonlyArray<ReactionHandlerRegistration<HandlerError>>
 		readonly onAnyReaction?: (event: ReactionEvent) => Effect.Effect<void, HandlerError, Channels>
 		readonly onConversationStopped?: (
 			event: ConversationStoppedEvent,
@@ -239,10 +242,7 @@ export type ChannelsAppOptions<
 	readonly onSubscribedMessage?: (thread: Thread, message: Message) => Effect.Effect<void, HandlerError, Channels>
 	readonly onMessageUpdated?: (event: MessageUpdatedEvent) => Effect.Effect<void, HandlerError, Channels>
 	readonly onMessageDeleted?: (event: MessageDeletedEvent) => Effect.Effect<void, HandlerError, Channels>
-	readonly onReaction?: {
-		readonly emoji: ReadonlyArray<Emoji>
-		readonly handler: (event: ReactionEvent) => Effect.Effect<void, HandlerError, Channels>
-	}
+	readonly onReaction?: ReadonlyArray<ReactionHandlerRegistration<HandlerError>>
 	readonly onAnyReaction?: (event: ReactionEvent) => Effect.Effect<void, HandlerError, Channels>
 	readonly onConversationStopped?: (event: ConversationStoppedEvent) => Effect.Effect<void, HandlerError, Channels>
 	readonly advanced?: {
@@ -317,7 +317,11 @@ export const createChannelsApp = <
 				const onConversationStopped = options.handlers?.onConversationStopped ?? options.onConversationStopped
 				if (onMessageUpdated !== undefined) yield* channels.onMessageUpdated(onMessageUpdated)
 				if (onMessageDeleted !== undefined) yield* channels.onMessageDeleted(onMessageDeleted)
-				if (onReaction !== undefined) yield* channels.onReaction(onReaction.emoji, onReaction.handler)
+				if (onReaction !== undefined) {
+					for (const registration of onReaction) {
+						yield* channels.onReaction(registration.emojis, registration.handler)
+					}
+				}
 				if (onAnyReaction !== undefined) yield* channels.onAnyReaction(onAnyReaction)
 				if (onConversationStopped !== undefined) yield* channels.onConversationStopped(onConversationStopped)
 			})

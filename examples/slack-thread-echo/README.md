@@ -144,7 +144,7 @@ A root mention is delivered to `onNewMention`, where the example explicitly subs
 
 The example also demonstrates neutral file uploads. Include the standalone word **image** in a mention or subscribed thread reply (for example, `@Channels Thread Echo show me an image`) and the response attaches a generated SVG using `FileUpload.make(...)` on `MarkdownContent.files`. The image is generated in memory, so the example does not need a checked-in binary asset. The same content API supports file-only and multiple-file posts; see [`src/live-files.ts`](./src/live-files.ts) for those acceptance checks.
 
-Phase 7 lifecycle APIs are active in the same handler. Include `reaction` to add `Emoji.Check` to your incoming message, `edit` to update the bot response through `SentMessage.edit(...)`, or `delete` to remove it through `SentMessage.delete()`. The app also registers `onMessageUpdated`, `onMessageDeleted`, and a typed `onReaction` filter for `Emoji.ThumbsUp`, `Emoji.Heart`, and `Emoji.Check`.
+Phase 7 lifecycle APIs are active in the same handler. Include `reaction` to add `Emoji.Check` to your incoming message, `edit` to update the bot response through `SentMessage.edit(...)`, or `delete` to remove it through `SentMessage.delete()`. The app also registers `onMessageUpdated`, `onMessageDeleted`, and multiple typed `onReaction` entries: one handler for `Emoji.ThumbsUp` and another for `Emoji.Heart` or `Emoji.Check`.
 
 Include the standalone word `stream` (case-insensitive) to receive an Effect `Stream` response. Slack uses native streaming when available and transparently falls back to one post with throttled edits otherwise.
 
