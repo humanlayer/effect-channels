@@ -73,7 +73,10 @@ export type EditInput = typeof EditInput.Type
 export const DeleteInput = Schema.Struct({ threadId: ThreadId, messageRef: MessageRef })
 export type DeleteInput = typeof DeleteInput.Type
 
-export const StreamInput = Schema.Struct({ threadId: ThreadId })
+export const StreamInput = Schema.Struct({
+	threadId: ThreadId,
+	recipientUserId: Schema.optionalKey(UserId),
+})
 export type StreamInput = typeof StreamInput.Type
 
 export const StartThreadTypingInput = Schema.Struct({ threadId: ThreadId })

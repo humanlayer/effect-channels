@@ -1,16 +1,14 @@
 import { assert, it } from '@effect/vitest'
 import {
 	ChannelId,
-	Emoji,
 	EphemeralNoFallback,
 	MarkdownContent,
-	MessageRef,
 	TenantId,
 	ThreadId,
 	UserId,
 	unimplemented,
 } from '@humanlayer/channels'
-import { Cause, ConfigProvider, Effect, Exit, Layer, Option, Redacted, Stream } from 'effect'
+import { Cause, ConfigProvider, Effect, Exit, Layer, Option, Redacted } from 'effect'
 import { HttpClient } from 'effect/unstable/http'
 
 import { testAuthor, testMessage } from '../../channels/test/support.ts'
@@ -22,8 +20,6 @@ import { SlackTenantCredentials } from '../src/SlackTenantCredentials.ts'
 
 const teamId = SlackTeamId.make('T_TEST')
 const channelId = SlackChannelId.make('C_TEST')
-const messageTs = SlackMessageTs.make('100.1')
-const streamRef = { channelId, messageTs, threadTs: messageTs }
 const threadId = ThreadId.make('slack:v1:T_TEST:C_TEST:100.1')
 const tenant = TenantId.make('T_TEST')
 const userId = UserId.make('U_TEST')
@@ -54,25 +50,6 @@ const clientLayer = SlackClient.layer.pipe(
 it.effect('names every Phase 2 SlackClient placeholder', () =>
 	Effect.gen(function* () {
 		const client = yield* SlackClient
-		yield* expectDefect(
-			'SlackClient.startStream',
-			client.startStream({ teamId, channelId, threadTs: messageTs, chunks: [] }),
-		)
-		yield* expectDefect('SlackClient.appendStream', client.appendStream({ teamId, stream: streamRef, chunks: [] }))
-		yield* expectDefect('SlackClient.stopStream', client.stopStream({ teamId, stream: streamRef, chunks: [] }))
-		yield* expectDefect(
-			'SlackClient.updateMessage',
-			client.updateMessage({ teamId, channelId, ts: messageTs, text: 'edited' }),
-		)
-		yield* expectDefect('SlackClient.deleteMessage', client.deleteMessage({ teamId, channelId, ts: messageTs }))
-		yield* expectDefect(
-			'SlackClient.addReaction',
-			client.addReaction({ teamId, channelId, ts: messageTs, emoji: 'thumbsup' }),
-		)
-		yield* expectDefect(
-			'SlackClient.removeReaction',
-			client.removeReaction({ teamId, channelId, ts: messageTs, emoji: 'thumbsup' }),
-		)
 		yield* expectDefect('SlackClient.openDM', client.openDM({ teamId, userId }))
 		yield* expectDefect(
 			'SlackClient.postEphemeral',
@@ -95,21 +72,7 @@ it.effect('names every Phase 2 native Slack placeholder', () =>
 it.effect('names every Phase 2 Slack provider placeholder', () =>
 	Effect.gen(function* () {
 		const provider = yield* SlackProvider
-		yield* expectDefect(
-			'SlackProvider.edit',
-			provider.edit({ threadId, messageRef: MessageRef.make('100.2'), content }),
-		)
-		yield* expectDefect('SlackProvider.delete', provider.delete({ threadId, messageRef: MessageRef.make('100.2') }))
-		yield* expectDefect('SlackProvider.stream', provider.stream({ threadId }, Stream.empty))
 		yield* expectDefect('SlackProvider.startChannelTyping', provider.startChannelTyping({ channel }))
-		yield* expectDefect(
-			'SlackProvider.addReaction',
-			provider.addReaction({ threadId, messageRef: MessageRef.make('100.2'), emoji: Emoji.ThumbsUp }),
-		)
-		yield* expectDefect(
-			'SlackProvider.removeReaction',
-			provider.removeReaction({ threadId, messageRef: MessageRef.make('100.2'), emoji: Emoji.ThumbsUp }),
-		)
 		yield* expectDefect('SlackProvider.subject', provider.subject({ message: testMessage }))
 		yield* expectDefect('SlackProvider.openDM', provider.openDM({ provider: 'slack', tenant, user: testAuthor }))
 		yield* expectDefect(
@@ -168,12 +131,12 @@ it.effect('advertises support only for implemented operations', () =>
 		assert.deepStrictEqual(provider.capabilities, {
 			threadPost: true,
 			channelPost: true,
-			edit: false,
-			delete: false,
-			streaming: 'unsupported',
+			edit: true,
+			delete: true,
+			streaming: 'native',
 			typing: { thread: true, channel: false },
 			history: { thread: true, channelMessages: true, channelThreads: true },
-			reactions: { add: false, remove: false, events: false },
+			reactions: { add: true, remove: true, events: true },
 			files: { read: true, upload: true },
 			actions: false,
 			threadInfo: true,

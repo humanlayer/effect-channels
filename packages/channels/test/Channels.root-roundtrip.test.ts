@@ -136,6 +136,7 @@ it.effect('delivers one signed mention end to end, subscribes explicitly, and po
 					),
 				),
 				Layer.provide(credentials),
+				Layer.provide(slackClient),
 			)
 			const { dispose, handler } = HttpRouter.toWebHandler(routeLayer, { disableLogger: true })
 			yield* Effect.addFinalizer(() => Effect.promise(dispose))

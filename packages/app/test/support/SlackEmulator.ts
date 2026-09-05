@@ -87,15 +87,24 @@ export interface SignedSlackWebhookEvent {
 	readonly team_id: string
 	readonly event_id: string
 	readonly event_time: number
-	readonly event: {
-		readonly type: 'app_mention' | 'message'
-		readonly channel: string
-		readonly ts: string
-		readonly text: string
-		readonly user: string
-		readonly thread_ts?: string
-		readonly bot_id?: string
-	}
+	readonly event:
+		| {
+				readonly type: 'app_mention' | 'message'
+				readonly channel: string
+				readonly ts: string
+				readonly text: string
+				readonly user: string
+				readonly thread_ts?: string
+				readonly bot_id?: string
+		  }
+		| {
+				readonly type: 'agent_session_stopped'
+				readonly channel: string
+				readonly thread_ts: string
+				readonly user: string
+				readonly event_ts: string
+				readonly streaming_message_ts: ReadonlyArray<string>
+		  }
 }
 
 const availablePort = Effect.tryPromise({

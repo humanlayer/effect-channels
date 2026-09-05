@@ -60,10 +60,10 @@ export type ChannelProviderFields = {
 	readonly postToChannel: (input: ChannelPostInput) => Effect.Effect<SentMessage, UnknownTenant | PostFailed>
 	readonly edit: (input: EditInput) => Effect.Effect<SentMessage, UnknownTenant | EditFailed>
 	readonly delete: (input: DeleteInput) => Effect.Effect<void, UnknownTenant | DeleteFailed>
-	readonly stream: (
+	readonly stream: <E, R>(
 		input: StreamInput,
-		chunks: Stream.Stream<StreamChunk>,
-	) => Effect.Effect<SentMessage, UnknownTenant | PostFailed>
+		chunks: Stream.Stream<StreamChunk, E, R>,
+	) => Effect.Effect<SentMessage, UnknownTenant | PostFailed, R>
 	readonly startThreadTyping: (input: StartThreadTypingInput) => Effect.Effect<void>
 	readonly startChannelTyping: (input: StartChannelTypingInput) => Effect.Effect<void>
 	readonly addReaction: (input: ReactInput) => Effect.Effect<void, UnknownTenant | ReactionFailed>

@@ -20,6 +20,7 @@ import { MessageHistoryOptions as MessageHistoryOptionsSchema, MessagesInput } f
 import type { Author, ThreadInfo } from './Schema.ts'
 import { ThreadRef } from './Schema.ts'
 import type { SentMessage } from './SentMessage.ts'
+import type { StreamChunk } from './StreamChunk.ts'
 
 export class Thread extends Schema.TaggedClass<Thread>()('Thread', {
 	ref: ThreadRef,
@@ -38,6 +39,25 @@ export class Thread extends Schema.TaggedClass<Thread>()('Thread', {
 		content: Content,
 	): Effect.Effect<SentMessage, UnknownProvider | UnknownTenant | TenantDisabled | PostFailed, Channels> {
 		return Effect.flatMap(Channels, (channels) => channels.post({ threadId: this.ref.id, content }))
+	}
+
+	stream<E, R>(
+		chunks: Stream.Stream<StreamChunk, E, R>,
+	): Effect.Effect<SentMessage, UnknownProvider | UnknownTenant | TenantDisabled | PostFailed, Channels | R> {
+		return Effect.flatMap(Channels, (channels) => {
+			const currentAuthor = this.currentMessage?.author
+			const recipientUserId =
+				currentAuthor !== undefined &&
+				!currentAuthor.isMe &&
+				currentAuthor.isBot !== true &&
+				currentAuthor.userId !== 'unknown'
+					? currentAuthor.userId
+					: undefined
+			return channels.stream(
+				recipientUserId === undefined ? { threadId: this.ref.id } : { threadId: this.ref.id, recipientUserId },
+				chunks,
+			)
+		})
 	}
 
 	startTyping(): Effect.Effect<void, never, Channels> {

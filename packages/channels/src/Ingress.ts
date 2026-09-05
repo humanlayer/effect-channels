@@ -5,17 +5,26 @@ import { ChannelsObserver } from './ChannelsObserver.ts'
 import { ConversationCoordinator } from './ConversationCoordinator.ts'
 import { IngressError, type ObserverError } from './Errors.ts'
 import type {
+	InboundEvent,
 	NormalizedConversationStopped,
 	NormalizedMessage,
 	NormalizedMessageDeleted,
 	NormalizedMessageUpdated,
 	NormalizedReaction,
 } from './Events.ts'
-import { MessageEvent, NewMentionDelivery, SubscribedMessageDelivery } from './Events.ts'
-import { unimplemented } from './internal/unimplemented.ts'
+import {
+	ConversationStoppedEvent,
+	MessageDeletedEvent,
+	MessageEvent,
+	MessageUpdatedEvent,
+	NewMentionDelivery,
+	ReactionEvent,
+	SubscribedMessageDelivery,
+} from './Events.ts'
 import type { IngressResult } from './Operations.ts'
 import { IngressAccepted, IngressDropped } from './Operations.ts'
 import { Organizations } from './Organizations.ts'
+import type { OrgId, ProviderName, TenantId } from './Schema.ts'
 import { Subscriptions } from './Subscriptions.ts'
 
 const observerBestEffort = (effect: Effect.Effect<void, ObserverError>) =>
@@ -140,12 +149,124 @@ export class Ingress extends Context.Service<
 				return IngressAccepted.make({ idempotencyKey: message.idempotencyKey })
 			})
 
+			const acceptLifecycle = Effect.fn('channels.ingress')(function* (input: {
+				readonly provider: ProviderName
+				readonly tenant: TenantId
+				readonly idempotencyKey: NormalizedMessage['idempotencyKey']
+				readonly isOwn: boolean
+				readonly makeEvent: (orgId: OrgId) => InboundEvent
+			}) {
+				const organization = yield* organizations
+					.resolve({ source: input.provider, tenant: input.tenant })
+					.pipe(
+						Effect.mapError(() =>
+							IngressError.make({
+								operation: 'Organizations.resolve',
+								provider: input.provider,
+								message: 'organization lookup failed',
+							}),
+						),
+					)
+				if (Option.isNone(organization)) return IngressDropped.make({ reason: 'unknown_organization' })
+				const allowed = yield* gate
+					.allowed({ orgId: organization.value, source: input.provider, tenant: input.tenant })
+					.pipe(
+						Effect.mapError(() =>
+							IngressError.make({
+								operation: 'ChannelsGate.allowed',
+								provider: input.provider,
+								message: 'gate lookup failed',
+							}),
+						),
+					)
+				if (!allowed) return IngressDropped.make({ reason: 'tenant_disabled' })
+				if (input.isOwn) return IngressDropped.make({ reason: 'bot' })
+				const event = input.makeEvent(organization.value)
+				yield* observerBestEffort(observer.eventReceived(event))
+				yield* coordinator.submit(event).pipe(
+					Effect.mapError(() =>
+						IngressError.make({
+							operation: 'ConversationCoordinator.submit',
+							provider: input.provider,
+							message: 'conversation admission failed',
+						}),
+					),
+				)
+				return IngressAccepted.make({ idempotencyKey: input.idempotencyKey })
+			})
+
+			const acceptMessageUpdated = (event: NormalizedMessageUpdated) =>
+				acceptLifecycle({
+					...event,
+					isOwn: event.message.author.isMe,
+					makeEvent: (orgId) => MessageUpdatedEvent.make({ orgId, ...event }),
+				})
+
+			const acceptMessageDeleted = (event: NormalizedMessageDeleted) =>
+				acceptLifecycle({
+					...event,
+					isOwn: event.previousMessage?.author.isMe ?? false,
+					makeEvent: (orgId) => MessageDeletedEvent.make({ orgId, ...event }),
+				})
+
+			const acceptReaction = (event: NormalizedReaction) =>
+				acceptLifecycle({
+					...event,
+					isOwn: event.actor.isMe,
+					makeEvent: (orgId) => ReactionEvent.make({ orgId, ...event }),
+				})
+
+			const acceptConversationStopped = Effect.fn('channels.ingress.conversation_stopped')(function* (
+				event: NormalizedConversationStopped,
+			) {
+				const organization = yield* organizations
+					.resolve({ source: event.provider, tenant: event.tenant })
+					.pipe(
+						Effect.tapError((error) =>
+							Effect.logError('organization lookup failed for provider stop', error),
+						),
+						Effect.mapError(() =>
+							IngressError.make({
+								operation: 'Organizations.resolve',
+								provider: event.provider,
+								message: 'organization lookup failed',
+							}),
+						),
+					)
+				if (Option.isNone(organization)) return IngressDropped.make({ reason: 'unknown_organization' })
+				const allowed = yield* gate
+					.allowed({ orgId: organization.value, source: event.provider, tenant: event.tenant })
+					.pipe(
+						Effect.mapError(() =>
+							IngressError.make({
+								operation: 'ChannelsGate.allowed',
+								provider: event.provider,
+								message: 'gate lookup failed',
+							}),
+						),
+					)
+				if (!allowed) return IngressDropped.make({ reason: 'tenant_disabled' })
+				const stopped = ConversationStoppedEvent.make({ orgId: organization.value, ...event })
+				const accepted = yield* coordinator.submitCancellation(stopped).pipe(
+					Effect.mapError(() =>
+						IngressError.make({
+							operation: 'ConversationCoordinator.submitCancellation',
+							provider: event.provider,
+							message: 'conversation stop admission failed',
+						}),
+					),
+				)
+				if (!accepted) return IngressAccepted.make({ idempotencyKey: event.idempotencyKey })
+				yield* observerBestEffort(observer.eventReceived(stopped))
+				return IngressAccepted.make({ idempotencyKey: event.idempotencyKey })
+			})
+
 			return Ingress.of({
 				acceptMessage,
-				acceptMessageUpdated: () => unimplemented('Ingress.acceptMessageUpdated'),
-				acceptMessageDeleted: () => unimplemented('Ingress.acceptMessageDeleted'),
-				acceptReaction: () => unimplemented('Ingress.acceptReaction'),
-				acceptConversationStopped: () => unimplemented('Ingress.acceptConversationStopped'),
+				acceptMessageUpdated,
+				acceptMessageDeleted,
+				acceptReaction,
+				acceptConversationStopped,
 			})
 		}),
 	)

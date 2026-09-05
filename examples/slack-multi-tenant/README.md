@@ -18,6 +18,10 @@ const app = createChannelsApp({
 
 Slack owns the callback input and output schemas. `loadConnection` receives `{ workspaceId: SlackTeamId }` and returns unknown data that is decoded into `{ organizationId, enabled, credentials }`; `createChannelsApp` privately adapts the callback into organization resolution, gating, credentials, and bot identity with one short shared cache. This example intentionally implements no OAuth routes or library-owned installation tables.
 
+The full app also demonstrates lifecycle handlers in a tenant-safe form: messages containing `reaction` add `Emoji.Check` to the incoming user message, while `onMessageUpdated`, `onMessageDeleted`, and `onAnyReaction` log only the workspace tenant and queue-safe event references.
+
+Messages containing the standalone word `stream` (case-insensitive) exercise the Effect streaming response path with credentials resolved for the originating workspace.
+
 The callback preserves its Effect requirements, so `loadSlackConnection` yields the application `SqlClient`; `src/server.ts` supplies one scoped `DATABASE_URL` pool to both the example repository and Channels storage.
 
 `ChannelsStorage.postgres()` is likewise opaque high-level configuration; advanced Effect applications can continue using the low-level Layers exported by `@humanlayer/channels-postgres` directly.

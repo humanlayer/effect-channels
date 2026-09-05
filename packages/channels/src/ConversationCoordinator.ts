@@ -1,10 +1,9 @@
-import { Context, Duration, Effect, Layer, Match, Queue, Ref, Schedule, Schema } from 'effect'
+import { Context, Deferred, Duration, Effect, Fiber, Layer, Match, Queue, Ref, Schedule, Schema } from 'effect'
 
 import { conversationCoordinatorPostgresLayer } from './ConversationCoordinatorPostgres.ts'
 import type { ConversationCoordinatorUnavailable, ConversationLeaseLost } from './Errors.ts'
 import { RetryabilityMetadata, isNonRetryableError } from './Errors.ts'
-import type { InboundEvent } from './Events.ts'
-import { unimplemented } from './internal/unimplemented.ts'
+import type { ConversationStoppedEvent, InboundEvent } from './Events.ts'
 import type { CancelConversationInput, ConversationCoordinatorOptions } from './Operations.ts'
 import { ConversationCoordinatorOptions as ConversationCoordinatorOptionsSchema } from './Operations.ts'
 import type { ThreadId } from './Schema.ts'
@@ -81,7 +80,10 @@ const eventThreadId = Match.type<InboundEvent>().pipe(
 export class ConversationCoordinator extends Context.Service<
 	ConversationCoordinator,
 	{
-		readonly submit: (event: InboundEvent) => Effect.Effect<void, ConversationCoordinatorUnavailable>
+		readonly submit: (event: InboundEvent) => Effect.Effect<boolean, ConversationCoordinatorUnavailable>
+		readonly submitCancellation: (
+			event: ConversationStoppedEvent,
+		) => Effect.Effect<boolean, ConversationCoordinatorUnavailable>
 		readonly requestCancellation: (
 			input: CancelConversationInput,
 		) => Effect.Effect<void, ConversationCoordinatorUnavailable>
@@ -99,11 +101,13 @@ export class ConversationCoordinator extends Context.Service<
 				const scheduled = new Set<ThreadId>()
 				const active = new Set<ThreadId>()
 				const accepted = new Set<string>()
+				const activeCancellations = new Map<ThreadId, Deferred.Deferred<void>>()
+				const pendingCancellations = new Set<ThreadId>()
 
 				const submit = (event: InboundEvent) =>
 					Effect.suspend(() => {
 						if (accepted.has(event.idempotencyKey)) {
-							return Effect.void
+							return Effect.succeed(false)
 						}
 						accepted.add(event.idempotencyKey)
 						const threadId = eventThreadId(event)
@@ -111,10 +115,10 @@ export class ConversationCoordinator extends Context.Service<
 						mailbox.push(event)
 						mailboxes.set(threadId, mailbox)
 						if (active.has(threadId) || scheduled.has(threadId)) {
-							return Effect.void
+							return Effect.succeed(true)
 						}
 						scheduled.add(threadId)
-						return Queue.offer(ready, threadId).pipe(Effect.asVoid)
+						return Queue.offer(ready, threadId).pipe(Effect.as(true))
 					})
 
 				const run = <E, R>(handler: (event: InboundEvent) => Effect.Effect<void, E, R>) => {
@@ -127,10 +131,34 @@ export class ConversationCoordinator extends Context.Service<
 								mailboxes.delete(threadId)
 								return Effect.void
 							}
-							return deliverWithRetry({ options, threadId, event, handler }).pipe(
-								Effect.tap(() => Effect.sync(() => mailbox.shift())),
-								Effect.andThen(drain(threadId)),
-							)
+							return Effect.gen(function* () {
+								const cancellation = yield* Deferred.make<void>()
+								activeCancellations.set(threadId, cancellation)
+								if (pendingCancellations.delete(threadId))
+									yield* Deferred.succeed(cancellation, undefined)
+								const deliveryFiber = yield* deliverWithRetry({
+									options,
+									threadId,
+									event,
+									handler,
+								}).pipe(Effect.forkChild)
+								const outcome = yield* Effect.raceFirst(
+									Fiber.join(deliveryFiber).pipe(Effect.as('delivered' as const)),
+									Deferred.await(cancellation).pipe(Effect.as('cancelled' as const)),
+								)
+								activeCancellations.delete(threadId)
+								if (outcome === 'cancelled') {
+									yield* Fiber.interrupt(deliveryFiber)
+									yield* Effect.logInfo('conversation event cancelled by provider').pipe(
+										Effect.annotateLogs({
+											thread_id: threadId,
+											idempotency_key: event.idempotencyKey,
+										}),
+									)
+								}
+								mailbox.shift()
+								yield* drain(threadId)
+							}).pipe(Effect.ensuring(Effect.sync(() => activeCancellations.delete(threadId))))
 						})
 
 					const claimAndDrain = Effect.flatMap(Queue.take(ready), (threadId) => {
@@ -148,7 +176,33 @@ export class ConversationCoordinator extends Context.Service<
 
 				return ConversationCoordinator.of({
 					submit,
-					requestCancellation: () => unimplemented('ConversationCoordinator.requestCancellation'),
+					submitCancellation: (event) =>
+						Effect.suspend(() => {
+							if (accepted.has(event.idempotencyKey)) return Effect.succeed(false)
+							accepted.add(event.idempotencyKey)
+							const threadId = event.threadRef.id
+							const mailbox = mailboxes.get(threadId) ?? []
+							const hadPendingWork = mailbox.length > 0
+							mailbox.push(event)
+							mailboxes.set(threadId, mailbox)
+							const activeCancellation = activeCancellations.get(threadId)
+							if (activeCancellation !== undefined) {
+								return Deferred.succeed(activeCancellation, undefined).pipe(Effect.as(true))
+							}
+							if (hadPendingWork) pendingCancellations.add(threadId)
+							if (active.has(threadId) || scheduled.has(threadId)) return Effect.succeed(true)
+							scheduled.add(threadId)
+							return Queue.offer(ready, threadId).pipe(Effect.as(true))
+						}),
+					requestCancellation: ({ threadId }) =>
+						Effect.suspend(() => {
+							const activeCancellation = activeCancellations.get(threadId)
+							if (activeCancellation !== undefined) {
+								return Deferred.succeed(activeCancellation, undefined).pipe(Effect.asVoid)
+							}
+							if ((mailboxes.get(threadId)?.length ?? 0) > 0) pendingCancellations.add(threadId)
+							return Effect.void
+						}),
 					run,
 				})
 			}),

@@ -135,9 +135,11 @@ export type SlackReactionRemovedEvent = typeof SlackReactionRemovedEvent.Type
 
 export const SlackAgentSessionStoppedEvent = Schema.Struct({
 	type: Schema.Literal('agent_session_stopped'),
-	channel_id: SlackChannelId,
+	channel: SlackChannelId,
 	thread_ts: SlackMessageTs,
-	user_id: Schema.optionalKey(Schema.NonEmptyString),
+	user: Schema.NonEmptyString,
+	event_ts: SlackMessageTs,
+	streaming_message_ts: Schema.Array(SlackMessageTs),
 })
 export type SlackAgentSessionStoppedEvent = typeof SlackAgentSessionStoppedEvent.Type
 
@@ -216,6 +218,12 @@ export const SlackStartStreamInput = Schema.Struct({
 	teamId: SlackTeamId,
 	channelId: SlackChannelId,
 	threadTs: SlackMessageTs,
+	recipient: Schema.optionalKey(
+		Schema.Struct({
+			userId: Schema.NonEmptyString,
+			teamId: SlackTeamId,
+		}),
+	),
 	chunks: Schema.Array(StreamChunk),
 })
 export type SlackStartStreamInput = typeof SlackStartStreamInput.Type

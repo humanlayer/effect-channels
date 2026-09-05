@@ -1,20 +1,27 @@
 import {
 	Attachment,
 	AttachmentRef,
+	Emoji,
 	IdempotencyKey,
 	Message,
 	MessageRef,
 	NormalizedMessage,
+	NormalizedMessageDeleted,
+	NormalizedMessageUpdated,
+	NormalizedConversationStopped,
+	NormalizedReaction,
+	ReactionAdded,
+	ReactionRemoved,
 	TenantId,
 	Thread,
 	UserId,
 	type Author,
 	type ThreadRef,
 } from '@humanlayer/channels'
-import { Crypto, DateTime, Effect, Option, Schema } from 'effect'
+import { Crypto, DateTime, Effect, Match, Option, Schema } from 'effect'
 
 import { SlackWebhookError } from './Errors.ts'
-import type { SlackBotIdentity, SlackFileMetadata, SlackTeamId } from './Schema.ts'
+import type { SlackBotIdentity, SlackFileMetadata, SlackMessageTs, SlackTeamId } from './Schema.ts'
 import { SlackEventCallback, SlackHistoryMessage, SlackThreadRef } from './Schema.ts'
 import { slackThreadRef } from './SlackThreadId.ts'
 
@@ -53,14 +60,18 @@ interface SlackAttachmentRefFields {
 	height?: number
 }
 
-const digestIdempotencyKey = (address: { readonly channelId: string; readonly messageTs: string }) =>
+const digestIdempotencyKey = (address: {
+	readonly channelId: string
+	readonly messageTs: string
+	readonly kind?: string
+}) =>
 	Effect.gen(function* () {
 		const crypto = yield* Crypto.Crypto
 		return yield* crypto
 			.digest(
 				'SHA-256',
 				new TextEncoder().encode(
-					`humanlayer-channels-event-v1\nslack\nmessage\n${address.channelId}:${address.messageTs}\n0`,
+					`humanlayer-channels-event-v1\nslack\n${address.kind ?? 'message'}\n${address.channelId}:${address.messageTs}\n0`,
 				),
 			)
 			.pipe(
@@ -202,4 +213,194 @@ export const normalizeSlackMessage = Effect.fn('slack.normalize.message')(functi
 			raw: rawCallback,
 		}),
 	)
+})
+
+const slackEmoji = (name: string) =>
+	Match.value(name).pipe(
+		Match.when('thumbsup', () => Emoji.ThumbsUp),
+		Match.when('white_check_mark', () => Emoji.Check),
+		Match.when('heart', () => Emoji.Heart),
+		Match.orElse((name) => Emoji.custom(name)),
+	)
+
+export const normalizeSlackMessageUpdated = Effect.fn('slack.normalize.message_updated')(function* (input: {
+	readonly callback: SlackEventCallback
+	readonly identity: SlackBotIdentity
+}) {
+	const event = input.callback.event
+	if (event.type !== 'message' || event.subtype !== 'message_changed' || event.message === undefined) {
+		return yield* SlackWebhookError.make({ reason: 'decode' })
+	}
+	const snapshot = event.message
+	const rootTs = snapshot.thread_ts ?? snapshot.ts
+	const threadRef = slackThreadRef(
+		SlackThreadRef.make({
+			teamId: input.callback.team_id,
+			channelId: event.channel,
+			threadTs: rootTs,
+		}),
+		snapshot.thread_ts === undefined,
+	)
+	const normalizedMessage = normalizeSlackHistoryMessage({
+		snapshot,
+		threadRef,
+		teamId: input.callback.team_id,
+		identity: input.identity,
+	})
+	const messageFields = {
+		ref: normalizedMessage.ref,
+		threadRef: normalizedMessage.threadRef,
+		text: normalizedMessage.text,
+		markdown: normalizedMessage.markdown,
+		author: normalizedMessage.author,
+		metadata: {
+			sentAt: normalizedMessage.metadata.sentAt,
+			editedAt: DateTime.makeUnsafe({ epochMilliseconds: input.callback.event_time * 1000 }),
+		},
+		attachments: normalizedMessage.attachments,
+		raw: normalizedMessage.raw,
+	} as const
+	const message =
+		normalizedMessage.replyTo === undefined
+			? Message.make(messageFields)
+			: Message.make({ ...messageFields, replyTo: normalizedMessage.replyTo })
+	const previousMessage =
+		event.previous_message === undefined
+			? undefined
+			: normalizeSlackHistoryMessage({
+					snapshot: event.previous_message,
+					threadRef,
+					teamId: input.callback.team_id,
+					identity: input.identity,
+				})
+	const raw = yield* Schema.encodeEffect(SlackEventCallback)(input.callback).pipe(
+		Effect.mapError(() => SlackWebhookError.make({ reason: 'decode' })),
+	)
+	const idempotencyKey = yield* digestIdempotencyKey({
+		channelId: event.channel,
+		messageTs: event.ts,
+		kind: 'message_updated',
+	})
+	const fields = {
+		provider: 'slack',
+		tenant: TenantId.make(input.callback.team_id),
+		idempotencyKey,
+		thread: Thread.make({ ref: threadRef, currentMessage: message, recentMessages: [message] }),
+		message,
+		raw,
+	} as const
+	return previousMessage === undefined
+		? NormalizedMessageUpdated.make(fields)
+		: NormalizedMessageUpdated.make({ ...fields, previousMessage })
+})
+
+export const normalizeSlackMessageDeleted = Effect.fn('slack.normalize.message_deleted')(function* (input: {
+	readonly callback: SlackEventCallback
+	readonly identity: SlackBotIdentity
+}) {
+	const event = input.callback.event
+	if (event.type !== 'message' || event.subtype !== 'message_deleted') {
+		return yield* SlackWebhookError.make({ reason: 'decode' })
+	}
+	const messageTs = event.deleted_ts ?? event.previous_message?.ts ?? event.ts
+	const rootTs = event.previous_message?.thread_ts ?? messageTs
+	const threadRef = slackThreadRef(
+		SlackThreadRef.make({ teamId: input.callback.team_id, channelId: event.channel, threadTs: rootTs }),
+		event.previous_message?.thread_ts === undefined,
+	)
+	const previousMessage =
+		event.previous_message === undefined
+			? undefined
+			: normalizeSlackHistoryMessage({
+					snapshot: event.previous_message,
+					threadRef,
+					teamId: input.callback.team_id,
+					identity: input.identity,
+				})
+	const raw = yield* Schema.encodeEffect(SlackEventCallback)(input.callback).pipe(
+		Effect.mapError(() => SlackWebhookError.make({ reason: 'decode' })),
+	)
+	const idempotencyKey = yield* digestIdempotencyKey({
+		channelId: event.channel,
+		messageTs,
+		kind: 'message_deleted',
+	})
+	const fields = {
+		provider: 'slack',
+		tenant: TenantId.make(input.callback.team_id),
+		idempotencyKey,
+		threadRef,
+		messageRef: MessageRef.make(messageTs),
+		deletedAt: DateTime.makeUnsafe({ epochMilliseconds: input.callback.event_time * 1000 }),
+		raw,
+	} as const
+	return previousMessage === undefined
+		? NormalizedMessageDeleted.make(fields)
+		: NormalizedMessageDeleted.make({ ...fields, previousMessage })
+})
+
+export const normalizeSlackReaction = Effect.fn('slack.normalize.reaction')(function* (input: {
+	readonly callback: SlackEventCallback
+	readonly identity: SlackBotIdentity
+	readonly parentThreadTs?: SlackMessageTs
+}) {
+	const event = input.callback.event
+	if (event.type !== 'reaction_added' && event.type !== 'reaction_removed') {
+		return yield* SlackWebhookError.make({ reason: 'decode' })
+	}
+	const threadRef = slackThreadRef(
+		SlackThreadRef.make({
+			teamId: input.callback.team_id,
+			channelId: event.item.channel,
+			threadTs: input.parentThreadTs ?? event.item.ts,
+		}),
+		false,
+	)
+	const raw = yield* Schema.encodeEffect(SlackEventCallback)(input.callback).pipe(
+		Effect.mapError(() => SlackWebhookError.make({ reason: 'decode' })),
+	)
+	const idempotencyKey = yield* digestIdempotencyKey({
+		channelId: event.item.channel,
+		messageTs: event.event_ts,
+		kind: event.type,
+	})
+	return NormalizedReaction.make({
+		provider: 'slack',
+		tenant: TenantId.make(input.callback.team_id),
+		idempotencyKey,
+		thread: Thread.fromRef(threadRef),
+		messageRef: MessageRef.make(event.item.ts),
+		change: event.type === 'reaction_added' ? ReactionAdded.make({}) : ReactionRemoved.make({}),
+		emoji: slackEmoji(event.reaction),
+		rawEmoji: event.reaction,
+		actor: slackAuthor(input.identity, { user: event.user }),
+		raw,
+	})
+})
+
+export const normalizeSlackConversationStopped = Effect.fn('slack.normalize.conversation_stopped')(function* (
+	callback: SlackEventCallback,
+) {
+	const event = callback.event
+	if (event.type !== 'agent_session_stopped') return yield* SlackWebhookError.make({ reason: 'decode' })
+	const threadRef = slackThreadRef(
+		SlackThreadRef.make({ teamId: callback.team_id, channelId: event.channel, threadTs: event.thread_ts }),
+		false,
+	)
+	const raw = yield* Schema.encodeEffect(SlackEventCallback)(callback).pipe(
+		Effect.mapError(() => SlackWebhookError.make({ reason: 'decode' })),
+	)
+	const idempotencyKey = yield* digestIdempotencyKey({
+		channelId: event.channel,
+		messageTs: event.thread_ts,
+		kind: `agent_session_stopped:${callback.event_id}`,
+	})
+	const fields = {
+		provider: 'slack',
+		tenant: TenantId.make(callback.team_id),
+		idempotencyKey,
+		threadRef,
+		raw,
+	} as const
+	return NormalizedConversationStopped.make({ ...fields, userId: UserId.make(event.user) })
 })

@@ -106,7 +106,7 @@ export SLACK_BOT_ID='B...' # optional, but recommended
 export PORT=3000
 ```
 
-The manifest mirrors the scopes used by the HumanLayer Slack app for this slice: mention and message history access across channel surfaces, channel/user lookup, message posting, Agent status, and file read/write. It subscribes to `app_mention`, `message.channels`, `message.groups`, and `agent_session_stopped`, and enables the current Agent view used by `agents.sessions.setStatus`. Slack does not add newly declared scopes to an existing installation automatically: after changing the manifest, reinstall the app and replace `SLACK_BOT_TOKEN` if Slack issues a new token.
+The manifest includes mention and message history access across channel surfaces, channel/user lookup, message posting, Agent status, file read/write, and reaction read/write. It subscribes to `app_mention`, `message.channels`, `message.groups`, `reaction_added`, `reaction_removed`, and `agent_session_stopped`, and enables the current Agent view used by `agents.sessions.setStatus`. Slack does not add newly declared scopes to an existing installation automatically: after changing the manifest, reinstall the app and replace `SLACK_BOT_TOKEN` if Slack issues a new token.
 
 ### 6. Start the server and configure ngrok
 
@@ -143,6 +143,10 @@ bun --cwd examples/slack-thread-echo run src/server.ts
 A root mention is delivered to `onNewMention`, where the example explicitly subscribes before replying. Later unmentioned thread replies are delivered to `onSubscribedMessage`.
 
 The example also demonstrates neutral file uploads. Include the standalone word **image** in a mention or subscribed thread reply (for example, `@Channels Thread Echo show me an image`) and the response attaches a generated SVG using `FileUpload.make(...)` on `MarkdownContent.files`. The image is generated in memory, so the example does not need a checked-in binary asset. The same content API supports file-only and multiple-file posts; see [`src/live-files.ts`](./src/live-files.ts) for those acceptance checks.
+
+Phase 7 lifecycle APIs are active in the same handler. Include `reaction` to add `Emoji.Check` to your incoming message, `edit` to update the bot response through `SentMessage.edit(...)`, or `delete` to remove it through `SentMessage.delete()`. The app also registers `onMessageUpdated`, `onMessageDeleted`, and a typed `onReaction` filter for `Emoji.ThumbsUp`, `Emoji.Heart`, and `Emoji.Check`.
+
+Include the standalone word `stream` (case-insensitive) to receive an Effect `Stream` response. Slack uses native streaming when available and transparently falls back to one post with throttled edits otherwise.
 
 `src/server.ts` shows the Effect HTTP path: `HttpRouter.serve(routes)` plus the chosen server layer. The same `app.handle(request)` is a Fetch-compatible entry whose runtime and delivery worker are initialized once and owned internally.
 

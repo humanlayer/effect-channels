@@ -1,10 +1,9 @@
-import { Cause, Effect, Exit, FiberSet, Layer, Match, Option, Queue, Schema } from 'effect'
+import { Cause, Effect, Exit, Fiber, FiberSet, Layer, Match, Option, Queue, Schema } from 'effect'
 import { SqlClient } from 'effect/unstable/sql'
 
 import type { ConversationCoordinator } from './ConversationCoordinator.ts'
 import { ConversationCoordinatorUnavailable, ConversationLeaseLost, isNonRetryableCause } from './Errors.ts'
-import { InboundEvent } from './Events.ts'
-import { unimplemented } from './internal/unimplemented.ts'
+import { InboundEvent, type ConversationStoppedEvent } from './Events.ts'
 import type { ConversationCoordinatorOptions } from './Operations.ts'
 import type { ThreadId } from './Schema.ts'
 import { ThreadId as ThreadIdSchema } from './Schema.ts'
@@ -19,10 +18,13 @@ const ClaimRow = Schema.Struct({
 	attempts: Schema.Int,
 	event_json: Schema.String,
 	lease_token: Schema.NonEmptyString,
+	cancellation_generation: Schema.Int,
 })
 type ClaimRow = typeof ClaimRow.Type
 
 const OwnershipRow = Schema.Struct({ thread_id: ThreadIdSchema })
+
+const RenewalRow = Schema.Struct({ cancellation_generation: Schema.Int })
 
 const NextEventRow = Schema.Struct({
 	sequence: Schema.NonEmptyString,
@@ -35,6 +37,7 @@ const decodeEvent = Schema.decodeUnknownEffect(eventJson)
 const decodeRuntimeIdentityRow = Schema.decodeUnknownEffect(RuntimeIdentityRow)
 const decodeClaimRow = Schema.decodeUnknownEffect(ClaimRow)
 const decodeOwnershipRow = Schema.decodeUnknownEffect(OwnershipRow)
+const decodeRenewalRow = Schema.decodeUnknownEffect(RenewalRow)
 const decodeNextEventRow = Schema.decodeUnknownEffect(NextEventRow)
 
 const coordinatorUnavailable = (operation: string) =>
@@ -96,6 +99,7 @@ type ClaimedConversation = {
 	readonly attempts: number
 	readonly event: InboundEvent
 	readonly leaseToken: string
+	readonly cancellationGeneration: number
 }
 
 const decodeClaim = (row: ClaimRow) =>
@@ -106,6 +110,7 @@ const decodeClaim = (row: ClaimRow) =>
 			attempts: row.attempts,
 			event,
 			leaseToken: row.lease_token,
+			cancellationGeneration: row.cancellation_generation,
 		})),
 	)
 
@@ -149,7 +154,7 @@ export const conversationCoordinatorPostgresLayer = (
 			const submit = Effect.fn('channels.conversation_coordinator.submit')(function* (event: InboundEvent) {
 				const threadId = eventThreadId(event)
 				const encoded = yield* captureAndNarrow('ConversationCoordinator.submit.encode', encodeEvent(event))
-				yield* captureAndNarrow(
+				const wasInserted = yield* captureAndNarrow(
 					'ConversationCoordinator.submit',
 					sql.withTransaction(
 						Effect.gen(function* () {
@@ -171,10 +176,68 @@ export const conversationCoordinatorPostgresLayer = (
 									WHERE thread_id = ${threadId}
 								`
 							}
+							return inserted.length > 0
 						}),
 					),
 				)
-				yield* Queue.offer(wake, undefined)
+				if (wasInserted) yield* Queue.offer(wake, undefined)
+				return wasInserted
+			})
+
+			const submitCancellation = Effect.fn('channels.conversation_coordinator.submit_cancellation')(function* (
+				event: ConversationStoppedEvent,
+			) {
+				const threadId = event.threadRef.id
+				const encoded = yield* captureAndNarrow(
+					'ConversationCoordinator.submitCancellation.encode',
+					encodeEvent(event),
+				)
+				const wasInserted = yield* captureAndNarrow(
+					'ConversationCoordinator.submitCancellation',
+					sql.withTransaction(
+						Effect.gen(function* () {
+							yield* sql`
+								INSERT INTO channels_conversations (thread_id, ready_at)
+								VALUES (${threadId}, now())
+								ON CONFLICT (thread_id) DO NOTHING
+							`
+							const inserted = yield* sql<{ readonly idempotency_key: string }>`
+								INSERT INTO channels_conversation_mailbox (thread_id, idempotency_key, event_json)
+								VALUES (${threadId}, ${event.idempotencyKey}, ${encoded}::jsonb)
+								ON CONFLICT (idempotency_key) DO NOTHING
+								RETURNING idempotency_key
+							`
+							if (inserted.length === 0) return false
+							yield* sql`
+								SELECT thread_id
+								FROM channels_conversations
+								WHERE thread_id = ${threadId}
+								FOR UPDATE
+							`
+							yield* sql`
+								UPDATE channels_conversation_mailbox AS mailbox
+								SET status = 'cancelled_by_provider', completed_at = now()
+								FROM channels_conversations AS conversation
+								WHERE conversation.thread_id = ${threadId}
+									AND conversation.active_sequence = mailbox.sequence
+									AND mailbox.status = 'pending'
+							`
+							yield* sql`
+								UPDATE channels_conversations
+								SET cancellation_generation = CASE
+										WHEN active_sequence IS NULL THEN cancellation_generation
+										ELSE cancellation_generation + 1
+									END,
+									ready_at = COALESCE(ready_at, now()),
+									updated_at = now()
+								WHERE thread_id = ${threadId}
+							`
+							return true
+						}),
+					),
+				)
+				if (wasInserted) yield* Queue.offer(wake, undefined)
+				return wasInserted
 			})
 
 			const claim = () =>
@@ -208,13 +271,15 @@ export const conversationCoordinatorPostgresLayer = (
 									updated_at = now()
 								FROM candidate
 								WHERE conversation.thread_id = candidate.thread_id
-								RETURNING conversation.thread_id, conversation.active_sequence, conversation.lease_token
+								RETURNING conversation.thread_id, conversation.active_sequence, conversation.lease_token,
+									conversation.cancellation_generation
 							)
 							SELECT claimed.thread_id,
 								claimed.active_sequence::text AS sequence,
 								mailbox.attempts,
 								mailbox.event_json::text AS event_json,
-								claimed.lease_token
+								claimed.lease_token,
+								claimed.cancellation_generation::int AS cancellation_generation
 							FROM claimed
 							JOIN channels_conversation_mailbox AS mailbox
 								ON mailbox.sequence = claimed.active_sequence
@@ -256,27 +321,36 @@ export const conversationCoordinatorPostgresLayer = (
 					}),
 				)
 
-			const renewLease = (claimed: ClaimedConversation) =>
+			const renewLease = (
+				claimed: ClaimedConversation,
+			): Effect.Effect<boolean, ConversationLeaseLost | ConversationCoordinatorUnavailable> =>
 				captureAndNarrow(
 					'ConversationCoordinator.renewLease',
-					sql<ClaimRow>`
+					sql<{ readonly cancellation_generation: number }>`
 						UPDATE channels_conversations
 						SET lease_expires_at = now() + (${options.leaseTtlMs} * interval '1 millisecond'),
 							updated_at = now()
 						WHERE thread_id = ${claimed.threadId}
 							AND lease_token = ${claimed.leaseToken}
 							AND lease_expires_at > now()
-						RETURNING thread_id,
-							active_sequence::text AS sequence,
-							0::integer AS attempts,
-							'{}'::text AS event_json,
-							lease_token
+						RETURNING cancellation_generation::int AS cancellation_generation
 					`,
 				).pipe(
-					Effect.flatMap((rows) =>
-						rows.length > 0
-							? Effect.void
-							: Effect.fail(ConversationLeaseLost.make({ threadId: claimed.threadId })),
+					Effect.flatMap(
+						(rows): Effect.Effect<boolean, ConversationLeaseLost | ConversationCoordinatorUnavailable> => {
+							const row = rows.at(0)
+							return row === undefined
+								? Effect.fail(ConversationLeaseLost.make({ threadId: claimed.threadId }))
+								: decodeRenewalRow(row).pipe(
+										Effect.map(
+											(decoded) =>
+												decoded.cancellation_generation > claimed.cancellationGeneration,
+										),
+										Effect.mapError(() =>
+											coordinatorUnavailable('ConversationCoordinator.renewLease.decode'),
+										),
+									)
+						},
 					),
 				)
 
@@ -308,7 +382,7 @@ export const conversationCoordinatorPostgresLayer = (
 					Effect.ignore,
 				)
 
-			const nextEvent = (claimed: ClaimedConversation) => {
+			const advanceEvent = (claimed: ClaimedConversation, status: 'completed' | 'cancelled_by_provider') => {
 				const operation = 'ConversationCoordinator.complete'
 				return sql
 					.withTransaction(
@@ -319,7 +393,7 @@ export const conversationCoordinatorPostgresLayer = (
 							}
 							yield* sql`
 								UPDATE channels_conversation_mailbox
-								SET status = 'completed', completed_at = now()
+								SET status = ${status}, completed_at = now()
 								WHERE sequence = ${claimed.sequence}::bigint AND status = 'pending'
 							`
 							const rows = yield* sql`
@@ -344,13 +418,15 @@ export const conversationCoordinatorPostgresLayer = (
 								return Option.none<ClaimedConversation>()
 							}
 							const decoded = yield* decodeNextEventRow(row)
-							yield* sql`
+							const generations = yield* sql<{ readonly cancellation_generation: number }>`
 								UPDATE channels_conversations
 								SET active_sequence = ${decoded.sequence}::bigint,
 									lease_expires_at = now() + (${options.leaseTtlMs} * interval '1 millisecond'),
 									updated_at = now()
 								WHERE thread_id = ${claimed.threadId} AND lease_token = ${claimed.leaseToken}
+								RETURNING cancellation_generation::int AS cancellation_generation
 							`
+							const generation = yield* decodeRenewalRow(generations.at(0))
 							return Option.some(
 								yield* decodeClaim({
 									thread_id: claimed.threadId,
@@ -358,6 +434,7 @@ export const conversationCoordinatorPostgresLayer = (
 									attempts: decoded.attempts,
 									event_json: decoded.event_json,
 									lease_token: claimed.leaseToken,
+									cancellation_generation: generation.cancellation_generation,
 								}),
 							)
 						}),
@@ -379,6 +456,7 @@ export const conversationCoordinatorPostgresLayer = (
 						}),
 					)
 			}
+			const nextEvent = (claimed: ClaimedConversation) => advanceEvent(claimed, 'completed')
 
 			const retryEvent = (claimed: ClaimedConversation, cause: Cause.Cause<unknown>) => {
 				const attempt = claimed.attempts + 1
@@ -449,7 +527,9 @@ export const conversationCoordinatorPostgresLayer = (
 					Effect.andThen(nextEvent(claimed)),
 				)
 
-			const heartbeat = (claimed: ClaimedConversation) =>
+			const heartbeat = (
+				claimed: ClaimedConversation,
+			): Effect.Effect<void, ConversationLeaseLost | ConversationCoordinatorUnavailable> =>
 				Effect.sleep(options.heartbeatEveryMs).pipe(
 					Effect.andThen(renewLease(claimed)),
 					Effect.tap(() =>
@@ -460,7 +540,7 @@ export const conversationCoordinatorPostgresLayer = (
 							}),
 						),
 					),
-					Effect.forever,
+					Effect.flatMap((cancelled) => (cancelled ? Effect.void : heartbeat(claimed))),
 				)
 
 			const deliver = <E, R>(
@@ -471,23 +551,53 @@ export const conversationCoordinatorPostgresLayer = (
 				E | ConversationLeaseLost | ConversationCoordinatorUnavailable,
 				R
 			> =>
-				Effect.exit(handler(claimed.event)).pipe(
+				Effect.gen(function* () {
+					const handlerFiber = yield* handler(claimed.event).pipe(Effect.forkChild)
+					const outcome = yield* Effect.raceFirst(
+						Fiber.await(handlerFiber).pipe(
+							Effect.map((exit) => ({ _tag: 'HandlerCompleted' as const, exit })),
+						),
+						heartbeat(claimed).pipe(Effect.as({ _tag: 'Cancelled' as const })),
+					)
+					yield* Match.value(outcome).pipe(
+						Match.tagsExhaustive({
+							Cancelled: () => Fiber.interrupt(handlerFiber),
+							HandlerCompleted: () => Effect.void,
+						}),
+					)
+					return yield* Effect.succeed(outcome)
+				}).pipe(
 					Effect.flatMap(
-						Match.type<Exit.Exit<void, E>>().pipe(
+						Match.type<
+							| { readonly _tag: 'HandlerCompleted'; readonly exit: Exit.Exit<void, E> }
+							| { readonly _tag: 'Cancelled' }
+						>().pipe(
 							Match.tagsExhaustive({
-								Success: () => nextEvent(claimed),
-								Failure: ({ cause }) =>
-									isNonRetryableCause(cause)
-										? completeNonRetryableEvent(claimed)
-										: Cause.hasInterruptsOnly(cause)
-											? Effect.failCause(cause)
-											: retryEvent(claimed, cause).pipe(
-													Effect.as(Option.none<ClaimedConversation>()),
-												),
+								Cancelled: () =>
+									Effect.logInfo('conversation event cancelled by provider').pipe(
+										Effect.annotateLogs({
+											thread_id: claimed.threadId,
+											idempotency_key: claimed.event.idempotencyKey,
+										}),
+										Effect.andThen(advanceEvent(claimed, 'cancelled_by_provider')),
+									),
+								HandlerCompleted: ({ exit }) =>
+									Match.value(exit).pipe(
+										Match.tagsExhaustive({
+											Success: () => nextEvent(claimed),
+											Failure: ({ cause }) =>
+												isNonRetryableCause(cause)
+													? completeNonRetryableEvent(claimed)
+													: Cause.hasInterruptsOnly(cause)
+														? Effect.failCause(cause)
+														: retryEvent(claimed, cause).pipe(
+																Effect.as(Option.none<ClaimedConversation>()),
+															),
+										}),
+									),
 							}),
 						),
 					),
-					Effect.raceFirst(heartbeat(claimed)),
 				)
 
 			const drain = <E, R>(
@@ -538,9 +648,25 @@ export const conversationCoordinatorPostgresLayer = (
 					}),
 				)
 
+			const requestCancellation = Effect.fn('channels.conversation_coordinator.cancel')(function* (input: {
+				readonly threadId: ThreadId
+			}) {
+				yield* captureAndNarrow(
+					'ConversationCoordinator.requestCancellation',
+					sql`
+						UPDATE channels_conversations
+						SET cancellation_generation = cancellation_generation + 1,
+							updated_at = now()
+						WHERE thread_id = ${input.threadId} AND active_sequence IS NOT NULL
+					`,
+				)
+				yield* Queue.offer(wake, undefined)
+			})
+
 			return service.of({
 				submit,
-				requestCancellation: () => unimplemented('ConversationCoordinator.requestCancellation'),
+				submitCancellation,
+				requestCancellation,
 				run,
 			})
 		}),

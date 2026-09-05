@@ -31,6 +31,8 @@
 				"groups:read",
 				"im:history",
 				"mpim:history",
+				"reactions:read",
+				"reactions:write",
 				"users:read",
 				"users:read.email",
 				"assistant:write"
@@ -40,7 +42,14 @@
 	"settings": {
 		"event_subscriptions": {
 			"request_url": "https://replace-with-your-tunnel.example/api/v1/integrations/slack/webhook",
-			"bot_events": ["agent_session_stopped", "app_mention", "message.channels", "message.groups"]
+			"bot_events": [
+				"agent_session_stopped",
+				"app_mention",
+				"message.channels",
+				"message.groups",
+				"reaction_added",
+				"reaction_removed"
+			]
 		},
 		"org_deploy_enabled": false,
 		"socket_mode_enabled": false,

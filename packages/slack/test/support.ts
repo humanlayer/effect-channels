@@ -1,5 +1,5 @@
 import { NodeCrypto } from '@effect/platform-node'
-import { Ingress, unimplemented } from '@humanlayer/channels'
+import { Ingress, MessagePage, unimplemented } from '@humanlayer/channels'
 import { Clock, ConfigProvider, Effect, Layer, Option, Queue, Redacted, Schema } from 'effect'
 import { TestClock } from 'effect/testing'
 import { HttpClient, HttpClientRequest, HttpClientResponse, HttpRouter } from 'effect/unstable/http'
@@ -36,20 +36,6 @@ export const unknownTenantCredentialsLayer = SlackTenantCredentials.make({
 	load: () => Effect.succeed(Option.none()),
 	save: () => Effect.void,
 })
-
-export const testRouteLayer = SlackRoutes.layer.pipe(
-	HttpRouter.provideRequest(NodeCrypto.layer),
-	Layer.provide(
-		ConfigProvider.layer(
-			ConfigProvider.fromUnknown({
-				SLACK_SIGNING_SECRET: 'test-signing-secret',
-				SLACK_BOT_USER_ID: 'U_BOT',
-				SLACK_BOT_ID: 'B_OURS',
-			}),
-		),
-	),
-	Layer.provide(testCredentialsLayer),
-)
 
 export const signedSlackRequest = (callback: SlackEventCallback) =>
 	Effect.gen(function* () {
@@ -148,6 +134,25 @@ export const makeStubSlackClient = (overrides: Partial<SlackClient['Service']>) 
 
 export const stubSlackClientLayer = (overrides: Partial<SlackClient['Service']>) =>
 	Layer.succeed(SlackClient, makeStubSlackClient(overrides))
+
+export const testRouteSlackClientLayer = stubSlackClientLayer({
+	replies: () => Effect.succeed(MessagePage.make({ messages: [] })),
+})
+
+export const testRouteLayer = SlackRoutes.layer.pipe(
+	HttpRouter.provideRequest(NodeCrypto.layer),
+	Layer.provide(
+		ConfigProvider.layer(
+			ConfigProvider.fromUnknown({
+				SLACK_SIGNING_SECRET: 'test-signing-secret',
+				SLACK_BOT_USER_ID: 'U_BOT',
+				SLACK_BOT_ID: 'B_OURS',
+			}),
+		),
+	),
+	Layer.provide(testCredentialsLayer),
+	Layer.provide(testRouteSlackClientLayer),
+)
 
 export const signSlackBody = (body: string, timestamp: string, secret = 'test-signing-secret') => {
 	return hmacSha256({

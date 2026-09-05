@@ -1,8 +1,23 @@
-import { Channels, FileUpload, MarkdownContent } from '@humanlayer/channels'
+import {
+	Channels,
+	Emoji,
+	FileUpload,
+	MarkdownContent,
+	MarkdownTextChunk,
+	PlanUpdateChunk,
+	TaskUpdateChunk,
+	type Message,
+	type SentMessage,
+	type Thread,
+} from '@humanlayer/channels'
 import { createChannelsApp, postgres, slack } from '@humanlayer/channels-app'
 import { Effect, Stream } from 'effect'
 
 const imageRequest = /\bimage\b/i
+const reactionRequest = /\breact(?:ion)?\b/i
+const editRequest = /\bedit\b/i
+const deleteRequest = /\bdelete\b/i
+const streamRequest = /\bstream\b/i
 const encoder = new TextEncoder()
 
 const exampleImage = () =>
@@ -21,6 +36,31 @@ const echoContent = (prefix: string, text: string) => {
 		: MarkdownContent.make({ markdown })
 }
 
+const demonstrateLifecycle = (thread: Thread, message: Message, sent: SentMessage) =>
+	Effect.gen(function* () {
+		if (reactionRequest.test(message.text)) {
+			const channels = yield* Channels
+			yield* channels.addReaction({ threadId: thread.ref.id, messageRef: message.ref, emoji: Emoji.Check })
+		}
+		if (editRequest.test(message.text)) {
+			yield* sent.edit(MarkdownContent.make({ markdown: `Edited echo: ${message.text}` }))
+		}
+		if (deleteRequest.test(message.text)) yield* sent.delete()
+	})
+
+const respond = (thread: Thread, prefix: string, text: string) =>
+	streamRequest.test(text)
+		? thread.stream(
+				Stream.make(
+					PlanUpdateChunk.make({ title: 'Streaming an Effect response' }),
+					TaskUpdateChunk.make({ id: 'compose', title: 'Compose reply', status: 'in_progress' }),
+					MarkdownTextChunk.make({ text: `${prefix}: ` }),
+					MarkdownTextChunk.make({ text }),
+					TaskUpdateChunk.make({ id: 'compose', title: 'Compose reply', status: 'complete' }),
+				).pipe(Stream.mapEffect((chunk) => Effect.sleep(600).pipe(Effect.as(chunk)))),
+			)
+		: thread.post(echoContent(prefix, text))
+
 export const app = createChannelsApp({
 	providers: [slack()],
 	storage: postgres(),
@@ -36,7 +76,8 @@ export const app = createChannelsApp({
 			yield* Effect.logInfo(`Loaded ${previousChannelMessages.messages.length} previous channel messages`)
 			yield* thread.subscribe()
 			yield* thread.startTyping()
-			yield* thread.post(echoContent('Echo', message.text))
+			const sent = yield* respond(thread, 'Echo', message.text)
+			yield* demonstrateLifecycle(thread, message, sent)
 		}),
 	onSubscribedMessage: (thread, message) =>
 		Effect.gen(function* () {
@@ -44,8 +85,16 @@ export const app = createChannelsApp({
 			const threadMessages = yield* thread.allMessages.pipe(Stream.runCollect)
 			yield* Effect.logInfo(`Loaded ${threadMessages.length} messages from the thread`)
 			yield* thread.startTyping()
-			yield* thread.post(echoContent('Echo 2', message.text))
+			const sent = yield* respond(thread, 'Echo 2', message.text)
+			yield* demonstrateLifecycle(thread, message, sent)
 		}),
+	onMessageUpdated: (event) => Effect.logInfo(`Message ${event.message.ref} was edited in ${event.thread.ref.id}`),
+	onMessageDeleted: (event) => Effect.logInfo(`Message ${event.messageRef} was deleted from ${event.threadRef.id}`),
+	onReaction: {
+		emoji: [Emoji.ThumbsUp, Emoji.Heart, Emoji.Check],
+		handler: (event) => Effect.logInfo(`${event.actor.fullName} reacted with ${event.rawEmoji}`),
+	},
+	onConversationStopped: (event) => Effect.logInfo(`Slack stopped the active response in ${event.threadRef.id}`),
 })
 
 export const handle = app.handle

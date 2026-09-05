@@ -11,10 +11,11 @@ import {
 	type Author,
 	type ChannelRef,
 	type Message,
+	type StreamChunk,
 	type ThreadRef,
 } from '@humanlayer/channels'
 import type { FileData } from '@humanlayer/channels'
-import { Config, Context, Effect, Layer, Option, Predicate, Schema, Stream } from 'effect'
+import { Config, Context, Effect, Layer, Match, Option, Predicate, Schema, Stream } from 'effect'
 import type { DateTime, Redacted } from 'effect'
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http'
 import type { UrlParams } from 'effect/unstable/http'
@@ -76,6 +77,36 @@ const SlackSessionStatusBody = Schema.Struct({
 	thread_ts: Schema.String,
 	status: Schema.String,
 })
+
+const SlackStartStreamBody = Schema.Struct({
+	channel: Schema.String,
+	thread_ts: Schema.String,
+	recipient_user_id: Schema.optionalKey(Schema.String),
+	recipient_team_id: Schema.optionalKey(Schema.String),
+	chunks: Schema.Array(Schema.Json),
+})
+
+const SlackContinueStreamBody = Schema.Struct({
+	channel: Schema.String,
+	ts: Schema.String,
+	chunks: Schema.Array(Schema.Json),
+})
+
+const toSlackStreamChunk = Match.type<StreamChunk>().pipe(
+	Match.tagsExhaustive({
+		MarkdownTextChunk: (chunk) => ({ type: 'markdown_text', text: chunk.text }),
+		TaskUpdateChunk: (chunk) => {
+			const base = { type: 'task_update', id: chunk.id, title: chunk.title, status: chunk.status }
+			if (chunk.details === undefined) {
+				return chunk.output === undefined ? base : { ...base, output: chunk.output }
+			}
+			return chunk.output === undefined
+				? { ...base, details: chunk.details }
+				: { ...base, details: chunk.details, output: chunk.output }
+		},
+		PlanUpdateChunk: (chunk) => ({ type: 'plan_update', title: chunk.title }),
+	}),
+)
 
 const SlackCompleteUploadFile = Schema.Struct({
 	id: Schema.NonEmptyString,
@@ -267,6 +298,125 @@ const makeSetSessionStatus = (origin: URL) =>
 		yield* fetchSlackJson({ operation: 'agents.sessions.setStatus', schema: SlackOkResponse, request }).pipe(
 			Effect.flatMap((response) => requireOk('agents.sessions.setStatus', response)),
 		)
+	})
+
+const streamRequest = <S extends typeof SlackStartStreamBody | typeof SlackContinueStreamBody>(
+	origin: URL,
+	token: Redacted.Redacted<string>,
+	method: string,
+	schema: S,
+	body: S['Type'],
+) =>
+	HttpClientRequest.post(slackApiUrl(origin, method)).pipe(
+		HttpClientRequest.bearerToken(token),
+		HttpClientRequest.schemaBodyJson(schema)(body),
+		Effect.mapError(() => SlackApiError.make({ operation: method, code: 'request_encode_failed' })),
+	)
+
+const makeStartStream = (origin: URL) =>
+	Effect.fn('slack.api.start_stream')(function* (input: SlackStartStreamInput) {
+		const token = yield* loadBotToken({ teamId: input.teamId, operation: 'chat.startStream' })
+		const base = {
+			channel: input.channelId,
+			thread_ts: input.threadTs,
+			chunks: input.chunks.map(toSlackStreamChunk),
+		} as const
+		const body =
+			input.recipient === undefined
+				? SlackStartStreamBody.make(base)
+				: SlackStartStreamBody.make({
+						...base,
+						recipient_user_id: input.recipient.userId,
+						recipient_team_id: input.recipient.teamId,
+					})
+		const request = yield* streamRequest(origin, token, 'chat.startStream', SlackStartStreamBody, body)
+		const decoded = yield* fetchSlackJson({
+			operation: 'chat.startStream',
+			schema: SlackPostMessageResponse,
+			request,
+		}).pipe(Effect.flatMap((response) => requireOk('chat.startStream', response)))
+		if (decoded.channel === undefined || decoded.ts === undefined) {
+			return yield* SlackApiError.make({ operation: 'chat.startStream', code: 'missing_message_reference' })
+		}
+		return { channelId: decoded.channel, messageTs: decoded.ts, threadTs: input.threadTs }
+	})
+
+const makeAppendStream = (origin: URL) =>
+	Effect.fn('slack.api.append_stream')(function* (input: SlackAppendStreamInput) {
+		const method = 'chat.appendStream'
+		const token = yield* loadBotToken({ teamId: input.teamId, operation: method })
+		const body = SlackContinueStreamBody.make({
+			channel: input.stream.channelId,
+			ts: input.stream.messageTs,
+			chunks: input.chunks.map(toSlackStreamChunk),
+		})
+		const request = yield* streamRequest(origin, token, method, SlackContinueStreamBody, body)
+		yield* fetchSlackJson({ operation: method, schema: SlackOkResponse, request }).pipe(
+			Effect.flatMap((response) => requireOk(method, response)),
+		)
+	})
+
+const makeStopStream = (origin: URL) =>
+	Effect.fn('slack.api.stop_stream')(function* (input: SlackStopStreamInput) {
+		const method = 'chat.stopStream'
+		const token = yield* loadBotToken({ teamId: input.teamId, operation: method })
+		const body = SlackContinueStreamBody.make({
+			channel: input.stream.channelId,
+			ts: input.stream.messageTs,
+			chunks: input.chunks.map(toSlackStreamChunk),
+		})
+		const request = yield* streamRequest(origin, token, method, SlackContinueStreamBody, body)
+		const decoded = yield* fetchSlackJson({ operation: method, schema: SlackPostMessageResponse, request }).pipe(
+			Effect.flatMap((response) => requireOk(method, response)),
+		)
+		if (decoded.channel === undefined || decoded.ts === undefined) {
+			return yield* SlackApiError.make({ operation: method, code: 'missing_message_reference' })
+		}
+		return decoded.message?.user === undefined
+			? SlackSentMessage.make({ channelId: decoded.channel, ts: decoded.ts })
+			: SlackSentMessage.make({ channelId: decoded.channel, ts: decoded.ts, botUserId: decoded.message.user })
+	})
+
+const makeUpdateMessage = (origin: URL) =>
+	Effect.fn('slack.api.update_message')(function* (input: SlackUpdateMessageInput) {
+		const token = yield* loadBotToken({ teamId: input.teamId, operation: 'chat.update' })
+		const decoded = yield* fetchSlackJson({
+			operation: 'chat.update',
+			schema: SlackPostMessageResponse,
+			request: slackPost(origin, token, 'chat.update', {
+				channel: input.channelId,
+				ts: input.ts,
+				text: input.text,
+			}),
+		}).pipe(Effect.flatMap((response) => requireOk('chat.update', response)))
+		if (!Predicate.isString(decoded.channel) || !Predicate.isString(decoded.ts)) {
+			return yield* SlackApiError.make({ operation: 'chat.update', code: 'missing_message_reference' })
+		}
+		return SlackSentMessage.make({ channelId: decoded.channel, ts: decoded.ts })
+	})
+
+const makeDeleteMessage = (origin: URL) =>
+	Effect.fn('slack.api.delete_message')(function* (input: SlackDeleteMessageInput) {
+		const token = yield* loadBotToken({ teamId: input.teamId, operation: 'chat.delete' })
+		yield* fetchSlackJson({
+			operation: 'chat.delete',
+			schema: SlackOkResponse,
+			request: slackPost(origin, token, 'chat.delete', { channel: input.channelId, ts: input.ts }),
+		}).pipe(Effect.flatMap((response) => requireOk('chat.delete', response)))
+	})
+
+const makeReaction = (origin: URL, method: 'reactions.add' | 'reactions.remove') =>
+	Effect.fn(`slack.api.${method}`)(function* (input: SlackReactionInput) {
+		const token = yield* loadBotToken({ teamId: input.teamId, operation: method })
+		yield* fetchSlackJson({
+			operation: method,
+			schema: SlackOkResponse,
+			request: slackPost(origin, token, method, {
+				channel: input.channelId,
+				timestamp: input.ts,
+				name: input.emoji,
+			}),
+		}).pipe(Effect.flatMap((response) => requireOk(method, response)))
 	})
 
 const normalizePageMessages = (input: {
@@ -868,17 +1018,25 @@ export class SlackClient extends Context.Service<
 				const getUser = makeGetUser(fallbackIdentity, apiOrigin)
 				const uploadFiles = makeUploadFiles(apiOrigin)
 				const downloadFile = makeDownloadFile(apiOrigin)
+				const updateMessage = makeUpdateMessage(apiOrigin)
+				const deleteMessage = makeDeleteMessage(apiOrigin)
+				const addReaction = makeReaction(apiOrigin, 'reactions.add')
+				const removeReaction = makeReaction(apiOrigin, 'reactions.remove')
+				const startStream = makeStartStream(apiOrigin)
+				const appendStream = makeAppendStream(apiOrigin)
+				const stopStream = makeStopStream(apiOrigin)
 				return SlackClient.of({
 					postMessage: (input) => run('chat.postMessage', input.teamId, makePostMessage(apiOrigin)(input)),
 					setSessionStatus: (input) =>
 						run('agents.sessions.setStatus', input.teamId, makeSetSessionStatus(apiOrigin)(input)),
-					startStream: () => unimplemented('SlackClient.startStream'),
-					appendStream: () => unimplemented('SlackClient.appendStream'),
-					stopStream: () => unimplemented('SlackClient.stopStream'),
-					updateMessage: () => unimplemented('SlackClient.updateMessage'),
-					deleteMessage: () => unimplemented('SlackClient.deleteMessage'),
-					addReaction: () => unimplemented('SlackClient.addReaction'),
-					removeReaction: () => unimplemented('SlackClient.removeReaction'),
+					startStream: (input) => run('chat.startStream', input.teamId, startStream(input)),
+					appendStream: (input) =>
+						run('chat.appendStream', input.teamId, appendStream(input).pipe(Effect.asVoid)),
+					stopStream: (input) => run('chat.stopStream', input.teamId, stopStream(input)),
+					updateMessage: (input) => run('chat.update', input.teamId, updateMessage(input)),
+					deleteMessage: (input) => run('chat.delete', input.teamId, deleteMessage(input)),
+					addReaction: (input) => run('reactions.add', input.teamId, addReaction(input)),
+					removeReaction: (input) => run('reactions.remove', input.teamId, removeReaction(input)),
 					replies: (input) => run('conversations.replies', input.teamId, replies(input)),
 					history: (input) => run('conversations.history', input.teamId, history(input)),
 					channelInfo: (input) => run('conversations.info', input.teamId, makeChannelInfo(apiOrigin)(input)),

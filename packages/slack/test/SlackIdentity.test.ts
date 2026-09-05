@@ -31,6 +31,7 @@ import {
 	signedSlackRequest,
 	slackJsonResponse,
 	testBotToken,
+	testRouteSlackClientLayer,
 	testChannelId,
 	type RecordedSlackRequest,
 } from './support.ts'
@@ -71,6 +72,7 @@ const routeLayer = SlackRoutes.layer.pipe(
 		),
 	),
 	Layer.provide(identityCredentialsLayer),
+	Layer.provide(testRouteSlackClientLayer),
 )
 
 const mentionFrom = (teamId: string, user: string, ts: string, text: string): EncodedCallback => ({

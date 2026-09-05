@@ -59,15 +59,6 @@ const ownEchoByUser = callbackWith('Ev_ECHO_USER', {
 	channel: 'C_TEST',
 })
 
-const messageChanged = callbackWith('Ev_CHANGED', {
-	type: 'message',
-	subtype: 'message_changed',
-	channel: 'C_TEST',
-	ts: '100.6',
-	message: { user: 'U_HUMAN', text: 'edited', ts: '100.2', thread_ts: '100.1' },
-	previous_message: { user: 'U_HUMAN', text: 'a reply without a mention', ts: '100.2', thread_ts: '100.1' },
-})
-
 const channelJoin = callbackWith('Ev_JOIN', {
 	type: 'message',
 	subtype: 'channel_join',
@@ -141,7 +132,6 @@ it.effect('marks other bots as bots and our own echoes as isMe by bot id or bot 
 
 it.effect('drops ineligible message subtypes before ingress', () =>
 	Effect.gen(function* () {
-		assert.strictEqual(Option.isNone(yield* normalize(messageChanged)), true)
 		assert.strictEqual(Option.isNone(yield* normalize(channelJoin)), true)
 	}).pipe(Effect.provide(NodeCrypto.layer)),
 )
@@ -161,7 +151,7 @@ it.effect('derives the same idempotency key for the app_mention and message twin
 it.effect('acknowledges ineligible subtypes at the webhook without touching ingress', () =>
 	Effect.gen(function* () {
 		const ingress = makeTestIngress({})
-		const callback = yield* Schema.decodeEffect(SlackEventCallback)(messageChanged)
+		const callback = yield* Schema.decodeEffect(SlackEventCallback)(channelJoin)
 		const request = yield* signedSlackRequest(callback)
 		const { dispose, handler } = HttpRouter.toWebHandler(testRouteLayer, { disableLogger: true })
 		yield* Effect.addFinalizer(() => Effect.promise(dispose))

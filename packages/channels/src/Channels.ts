@@ -1,4 +1,4 @@
-import { Context, Effect, Fiber, FiberMap, Layer, Match, Option, Schema, Stream } from 'effect'
+import { Context, Effect, Layer, Match, Option, Schema, Stream } from 'effect'
 
 import { ChannelsGate } from './ChannelsGate.ts'
 import { ChannelsObserver } from './ChannelsObserver.ts'
@@ -107,21 +107,9 @@ import type { Thread } from './Thread.ts'
 import { UserDirectory } from './UserDirectory.ts'
 
 type RegisteredMessageHandler = (thread: Thread, message: Message) => Effect.Effect<void, ChannelsRunError>
+type RegisteredEventHandler<A> = (event: A) => Effect.Effect<void, ChannelsRunError>
 
 type EgressAddress = { readonly provider: ProviderName; readonly tenant: TenantId }
-
-const eventThreadId = Match.type<InboundEvent>().pipe(
-	Match.tagsExhaustive({
-		MessageEvent: (event) => event.thread.ref.id,
-		MessageUpdatedEvent: (event) => event.thread.ref.id,
-		MessageDeletedEvent: (event) => event.threadRef.id,
-		ConversationStoppedEvent: (event) => event.threadRef.id,
-		AssignedEvent: (event) => event.thread.ref.id,
-		ActionEvent: (event) => event.thread.ref.id,
-		ReactionEvent: (event) => event.thread.ref.id,
-		CommandEvent: (event) => event.thread?.ref.id ?? ThreadIdSchema.make(`${event.channel.ref.id}:command`),
-	}),
-)
 
 const addressFromThreadId = (threadId: string): Effect.Effect<EgressAddress, UnknownProvider> =>
 	Effect.try({
@@ -203,10 +191,10 @@ export class Channels extends Context.Service<
 		readonly delete: (
 			input: DeleteInput,
 		) => Effect.Effect<void, UnknownProvider | UnknownTenant | TenantDisabled | DeleteFailed>
-		readonly stream: (
+		readonly stream: <E, R>(
 			input: StreamInput,
-			chunks: Stream.Stream<StreamChunk>,
-		) => Effect.Effect<SentMessage, UnknownProvider | UnknownTenant | TenantDisabled | PostFailed>
+			chunks: Stream.Stream<StreamChunk, E, R>,
+		) => Effect.Effect<SentMessage, UnknownProvider | UnknownTenant | TenantDisabled | PostFailed, R>
 		readonly startThreadTyping: (input: StartThreadTypingInput) => Effect.Effect<void>
 		readonly startChannelTyping: (input: StartChannelTypingInput) => Effect.Effect<void>
 		readonly addReaction: (
@@ -296,9 +284,15 @@ export class Channels extends Context.Service<
 				const observer = yield* ChannelsObserver
 				const subscriptions = yield* Subscriptions
 				const userDirectory = yield* UserDirectory
-				const activeRuns = yield* FiberMap.make<string, void, ChannelsRunError>()
 				const mentionHandlers: Array<RegisteredMessageHandler> = []
 				const subscribedHandlers: Array<RegisteredMessageHandler> = []
+				const updatedHandlers: Array<RegisteredEventHandler<MessageUpdatedEvent>> = []
+				const deletedHandlers: Array<RegisteredEventHandler<MessageDeletedEvent>> = []
+				const reactionHandlers: Array<{
+					readonly emoji?: ReadonlyArray<Emoji>
+					readonly handler: RegisteredEventHandler<ReactionEvent>
+				}> = []
+				const stoppedHandlers: Array<RegisteredEventHandler<ConversationStoppedEvent>> = []
 
 				const registerMessageHandler =
 					(handlers: Array<RegisteredMessageHandler>, operation: string) =>
@@ -308,6 +302,26 @@ export class Channels extends Context.Service<
 						Effect.map(Effect.context<R>(), (context) => {
 							handlers.push((thread, message) =>
 								handler(thread, message).pipe(
+									Effect.provide(context),
+									Effect.mapError((error) =>
+										ChannelsRunError.make({
+											operation,
+											message: 'registered handler failed',
+											retryability: Schema.is(RetryabilityMetadata)(error)
+												? retryabilityOf(error)
+												: 'retryable',
+										}),
+									),
+								),
+							)
+						})
+
+				const registerEventHandler =
+					<A>(handlers: Array<RegisteredEventHandler<A>>, operation: string) =>
+					<E, R>(handler: (event: A) => Effect.Effect<void, E, R>): Effect.Effect<void, never, R> =>
+						Effect.map(Effect.context<R>(), (context) => {
+							handlers.push((event) =>
+								handler(event).pipe(
 									Effect.provide(context),
 									Effect.mapError((error) =>
 										ChannelsRunError.make({
@@ -346,12 +360,28 @@ export class Channels extends Context.Service<
 					Match.value(event).pipe(
 						Match.tagsExhaustive({
 							MessageEvent: dispatchMessage,
-							MessageUpdatedEvent: () => unimplemented('Channels.dispatch.messageUpdated'),
-							MessageDeletedEvent: () => unimplemented('Channels.dispatch.messageDeleted'),
-							ConversationStoppedEvent: () => unimplemented('Channels.dispatch.conversationStopped'),
+							MessageUpdatedEvent: (updated) =>
+								Effect.forEach(updatedHandlers, (handler) => handler(updated), { discard: true }),
+							MessageDeletedEvent: (deleted) =>
+								Effect.forEach(deletedHandlers, (handler) => handler(deleted), { discard: true }),
+							ConversationStoppedEvent: (stopped) =>
+								Effect.forEach(stoppedHandlers, (handler) => handler(stopped), { discard: true }),
 							AssignedEvent: () => unimplemented('Channels.dispatch.assigned'),
 							ActionEvent: () => unimplemented('Channels.dispatch.action'),
-							ReactionEvent: () => unimplemented('Channels.dispatch.reaction'),
+							ReactionEvent: (reaction) =>
+								Effect.forEach(
+									reactionHandlers,
+									(registered) =>
+										registered.emoji === undefined ||
+										registered.emoji.some(
+											(emoji) =>
+												emoji.name === reaction.emoji.name &&
+												emoji.unicode === reaction.emoji.unicode,
+										)
+											? registered.handler(reaction)
+											: Effect.void,
+									{ discard: true },
+								),
 							CommandEvent: () => unimplemented('Channels.dispatch.command'),
 						}),
 						Effect.withSpan('channels.delivery', {
@@ -364,11 +394,7 @@ export class Channels extends Context.Service<
 						}),
 					)
 
-				const dispatch = (event: InboundEvent) =>
-					Effect.gen(function* () {
-						const fiber = yield* FiberMap.run(activeRuns, eventThreadId(event), dispatchDirect(event))
-						yield* Fiber.join(fiber)
-					})
+				const dispatch = dispatchDirect
 
 				const authorizeEgress = <E>(input: {
 					readonly address: EgressAddress
@@ -493,6 +519,44 @@ export class Channels extends Context.Service<
 							),
 						)
 					yield* reportOutbound({ ok: true, degraded: sent.ref.degraded, threadId: sent.ref.threadId })
+					return sent
+				})
+
+				const stream = Effect.fn('channels.stream')(function* <E, R>(
+					input: StreamInput,
+					chunks: Stream.Stream<StreamChunk, E, R>,
+				) {
+					const address = yield* addressFromThreadId(input.threadId)
+					yield* Effect.annotateCurrentSpan({
+						operation: 'stream',
+						provider: address.provider,
+						tenant: address.tenant,
+						thread_id: input.threadId,
+					})
+					const provider = yield* registry.byThreadId({ threadId: input.threadId })
+					const orgId = yield* authorizeEgress({
+						address,
+						onGateLookupFailed: () =>
+							PostFailed.make({
+								provider: address.provider,
+								threadId: input.threadId,
+								message: 'gate lookup failed',
+							}),
+					})
+					const report = (ok: boolean, degraded: ReadonlyArray<string>) =>
+						observerBestEffort(
+							observer.outboundSent({
+								orgId,
+								provider: address.provider,
+								tenant: address.tenant,
+								threadId: input.threadId,
+								operation: 'stream',
+								ok,
+								degraded,
+							}),
+						)
+					const sent = yield* provider.stream(input, chunks).pipe(Effect.tapError(() => report(false, [])))
+					yield* report(true, sent.ref.degraded)
 					return sent
 				})
 
@@ -720,28 +784,179 @@ export class Channels extends Context.Service<
 					return yield* provider.downloadAttachment(input)
 				})
 
+				const edit = Effect.fn('channels.edit')(function* (input: EditInput) {
+					const address = yield* addressFromThreadId(input.threadId)
+					yield* Effect.annotateCurrentSpan({
+						operation: 'edit',
+						provider: address.provider,
+						tenant: address.tenant,
+						thread_id: input.threadId,
+					})
+					const provider = yield* registry.byThreadId({ threadId: input.threadId })
+					const orgId = yield* authorizeEgress({
+						address,
+						onGateLookupFailed: () =>
+							EditFailed.make({
+								provider: address.provider,
+								threadId: input.threadId,
+								message: 'gate lookup failed',
+							}),
+					})
+					const report = (ok: boolean) =>
+						observerBestEffort(
+							observer.outboundSent({
+								orgId,
+								provider: address.provider,
+								tenant: address.tenant,
+								threadId: input.threadId,
+								operation: 'edit',
+								ok,
+								degraded: [],
+							}),
+						)
+					const sent = yield* provider.edit(input).pipe(Effect.tapError(() => report(false)))
+					yield* report(true)
+					return sent
+				})
+
+				const deleteMessage = Effect.fn('channels.delete')(function* (input: DeleteInput) {
+					const address = yield* addressFromThreadId(input.threadId)
+					yield* Effect.annotateCurrentSpan({
+						operation: 'delete',
+						provider: address.provider,
+						tenant: address.tenant,
+						thread_id: input.threadId,
+					})
+					const provider = yield* registry.byThreadId({ threadId: input.threadId })
+					const orgId = yield* authorizeEgress({
+						address,
+						onGateLookupFailed: () =>
+							DeleteFailed.make({
+								provider: address.provider,
+								threadId: input.threadId,
+								message: 'gate lookup failed',
+							}),
+					})
+					const report = (ok: boolean) =>
+						observerBestEffort(
+							observer.outboundSent({
+								orgId,
+								provider: address.provider,
+								tenant: address.tenant,
+								threadId: input.threadId,
+								operation: 'delete',
+								ok,
+								degraded: [],
+							}),
+						)
+					yield* provider.delete(input).pipe(Effect.tapError(() => report(false)))
+					yield* report(true)
+				})
+
+				const react = (method: 'add' | 'remove', input: ReactInput) =>
+					Effect.gen(function* () {
+						const address = yield* addressFromThreadId(input.threadId)
+						yield* Effect.annotateCurrentSpan({
+							operation: `${method}_reaction`,
+							provider: address.provider,
+							tenant: address.tenant,
+							thread_id: input.threadId,
+						})
+						const provider = yield* registry.byThreadId({ threadId: input.threadId })
+						const orgId = yield* authorizeEgress({
+							address,
+							onGateLookupFailed: () =>
+								ReactionFailed.make({
+									provider: address.provider,
+									threadId: input.threadId,
+									message: 'gate lookup failed',
+								}),
+						}).pipe(
+							Effect.catchTag('TenantDisabled', () =>
+								Effect.fail(
+									ReactionFailed.make({
+										provider: address.provider,
+										threadId: input.threadId,
+										message: 'tenant disabled',
+									}),
+								),
+							),
+						)
+						const report = (ok: boolean) =>
+							observerBestEffort(
+								observer.outboundSent({
+									orgId,
+									provider: address.provider,
+									tenant: address.tenant,
+									threadId: input.threadId,
+									operation: `${method}_reaction`,
+									ok,
+									degraded: [],
+								}),
+							)
+						yield* (method === 'add' ? provider.addReaction(input) : provider.removeReaction(input)).pipe(
+							Effect.tapError(() => report(false)),
+						)
+						yield* report(true)
+					})
+
 				return Channels.of({
 					onNewMention: registerMessageHandler(mentionHandlers, 'Channels.onNewMention'),
 					onSubscribedMessage: registerMessageHandler(subscribedHandlers, 'Channels.onSubscribedMessage'),
 					onNewMessage: () => unimplemented('Channels.onNewMessage'),
 					onDirectMessage: () => unimplemented('Channels.onDirectMessage'),
-					onMessageUpdated: () => unimplemented('Channels.onMessageUpdated'),
-					onMessageDeleted: () => unimplemented('Channels.onMessageDeleted'),
-					onConversationStopped: () => unimplemented('Channels.onConversationStopped'),
+					onMessageUpdated: registerEventHandler(updatedHandlers, 'Channels.onMessageUpdated'),
+					onMessageDeleted: registerEventHandler(deletedHandlers, 'Channels.onMessageDeleted'),
+					onConversationStopped: registerEventHandler(stoppedHandlers, 'Channels.onConversationStopped'),
 					onAssigned: () => unimplemented('Channels.onAssigned'),
 					onAction: () => unimplemented('Channels.onAction'),
-					onReaction: () => unimplemented('Channels.onReaction'),
-					onAnyReaction: () => unimplemented('Channels.onAnyReaction'),
+					onReaction: (emoji, handler) =>
+						Effect.map(Effect.context(), (context) => {
+							reactionHandlers.push({
+								emoji,
+								handler: (event) =>
+									handler(event).pipe(
+										Effect.provide(context),
+										Effect.mapError((error) =>
+											ChannelsRunError.make({
+												operation: 'Channels.onReaction',
+												message: 'registered handler failed',
+												retryability: Schema.is(RetryabilityMetadata)(error)
+													? retryabilityOf(error)
+													: 'retryable',
+											}),
+										),
+									),
+							})
+						}),
+					onAnyReaction: (handler) =>
+						Effect.map(Effect.context(), (context) => {
+							reactionHandlers.push({
+								handler: (event) =>
+									handler(event).pipe(
+										Effect.provide(context),
+										Effect.mapError((error) =>
+											ChannelsRunError.make({
+												operation: 'Channels.onAnyReaction',
+												message: 'registered handler failed',
+												retryability: Schema.is(RetryabilityMetadata)(error)
+													? retryabilityOf(error)
+													: 'retryable',
+											}),
+										),
+									),
+							})
+						}),
 					onCommand: () => unimplemented('Channels.onCommand'),
 					post,
 					postToChannel,
-					edit: () => unimplemented('Channels.edit'),
-					delete: () => unimplemented('Channels.delete'),
-					stream: () => unimplemented('Channels.stream'),
+					edit,
+					delete: deleteMessage,
+					stream,
 					startThreadTyping,
 					startChannelTyping,
-					addReaction: () => unimplemented('Channels.addReaction'),
-					removeReaction: () => unimplemented('Channels.removeReaction'),
+					addReaction: (input) => react('add', input),
+					removeReaction: (input) => react('remove', input),
 					messages,
 					messageStream,
 					containerMessages,

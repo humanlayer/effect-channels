@@ -8,11 +8,9 @@ import {
 	ConversationCoordinator,
 	ConversationSignals,
 	DebounceDelivery,
-	Emoji,
 	EphemeralNoFallback,
 	InterruptDelivery,
 	MarkdownContent,
-	MessageRef,
 	TenantId,
 	ThreadContext,
 	ThreadId,
@@ -29,7 +27,6 @@ const channel = {
 	isDm: false,
 }
 const content = MarkdownContent.make({ markdown: 'hello' })
-const messageRef = MessageRef.make('100.2')
 
 const expectDefect = <A, E, R>(operation: string, effect: Effect.Effect<A, E, R>) =>
 	Effect.gen(function* () {
@@ -54,18 +51,7 @@ it.effect('names every Phase 2 core placeholder', () =>
 			'Channels.onDirectMessage',
 			channels.onDirectMessage(() => Effect.void),
 		)
-		yield* expectDefect(
-			'Channels.onMessageUpdated',
-			channels.onMessageUpdated(() => Effect.void),
-		)
-		yield* expectDefect(
-			'Channels.onMessageDeleted',
-			channels.onMessageDeleted(() => Effect.void),
-		)
-		yield* expectDefect(
-			'Channels.onConversationStopped',
-			channels.onConversationStopped(() => Effect.void),
-		)
+		yield* channels.onConversationStopped(() => Effect.void)
 		yield* expectDefect(
 			'Channels.onAssigned',
 			channels.onAssigned(() => Effect.void),
@@ -75,27 +61,8 @@ it.effect('names every Phase 2 core placeholder', () =>
 			channels.onAction(() => Effect.void),
 		)
 		yield* expectDefect(
-			'Channels.onReaction',
-			channels.onReaction([Emoji.ThumbsUp], () => Effect.void),
-		)
-		yield* expectDefect(
-			'Channels.onAnyReaction',
-			channels.onAnyReaction(() => Effect.void),
-		)
-		yield* expectDefect(
 			'Channels.onCommand',
 			channels.onCommand(() => Effect.void),
-		)
-		yield* expectDefect('Channels.edit', channels.edit({ threadId, messageRef, content }))
-		yield* expectDefect('Channels.delete', channels.delete({ threadId, messageRef }))
-		yield* expectDefect('Channels.stream', channels.stream({ threadId }, Stream.empty))
-		yield* expectDefect(
-			'Channels.addReaction',
-			channels.addReaction({ threadId, messageRef, emoji: Emoji.ThumbsUp }),
-		)
-		yield* expectDefect(
-			'Channels.removeReaction',
-			channels.removeReaction({ threadId, messageRef, emoji: Emoji.ThumbsUp }),
 		)
 		yield* expectDefect('Channels.subject', channels.subject({ message: testMessage }))
 		yield* expectDefect(
@@ -124,6 +91,7 @@ it.effect('routes implemented Phase 2 operations to typed errors instead of plac
 				}
 			})
 		yield* expectUnknownProvider(channels.postToChannel({ channel, content }))
+		yield* expectUnknownProvider(channels.stream({ threadId }, Stream.empty))
 		yield* expectUnknownProvider(channels.messages({ threadId }))
 		yield* expectUnknownProvider(Stream.runDrain(channels.messageStream({ threadId })))
 		yield* expectUnknownProvider(channels.containerMessages({ channel }))
@@ -147,10 +115,7 @@ it.effect('routes implemented Phase 2 operations to typed errors instead of plac
 it.effect('names every coordinator and signal placeholder', () =>
 	Effect.gen(function* () {
 		const coordinator = yield* ConversationCoordinator
-		yield* expectDefect(
-			'ConversationCoordinator.requestCancellation',
-			coordinator.requestCancellation({ threadId, reason: 'application' }),
-		)
+		yield* coordinator.requestCancellation({ threadId, reason: 'application' })
 		yield* expectDefect(
 			'ConversationSignals.layerDistributed',
 			Effect.scoped(Layer.build(ConversationSignals.layerDistributed)),

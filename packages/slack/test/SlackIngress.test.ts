@@ -1,13 +1,19 @@
 import { NodeCrypto } from '@effect/platform-node'
 import { assert, it } from '@effect/vitest'
-import { Ingress, IngressAccepted, type NormalizedMessage, unimplemented } from '@humanlayer/channels'
+import {
+	Ingress,
+	IngressAccepted,
+	type NormalizedConversationStopped,
+	type NormalizedMessage,
+	unimplemented,
+} from '@humanlayer/channels'
 import { Clock, ConfigProvider, Context, Effect, Layer, Queue, Schema } from 'effect'
 import { TestClock } from 'effect/testing'
 import { HttpRouter } from 'effect/unstable/http'
 
 import { SlackEventCallback } from '../src/Schema.ts'
 import { SlackRoutes } from '../src/SlackRoutes.ts'
-import { appMentionCallback, reactionAddedCallback, signSlackBody, testCredentialsLayer } from './support.ts'
+import { appMentionCallback, signSlackBody, testCredentialsLayer, testRouteSlackClientLayer } from './support.ts'
 
 const routeLayer = SlackRoutes.layer.pipe(
 	HttpRouter.provideRequest(NodeCrypto.layer),
@@ -20,6 +26,7 @@ const routeLayer = SlackRoutes.layer.pipe(
 		),
 	),
 	Layer.provide(testCredentialsLayer),
+	Layer.provide(testRouteSlackClientLayer),
 )
 
 const signedRequest = (callback: SlackEventCallback) =>
@@ -65,21 +72,40 @@ it.effect('verifies and normalizes a signed Slack request through the Fetch hand
 	}).pipe(Effect.provide(NodeCrypto.layer)),
 )
 
-it.effect('acknowledges and drops an unsupported Slack event family without touching ingress', () =>
+it.effect('normalizes and admits an agent session stop', () =>
 	Effect.gen(function* () {
+		const accepted = yield* Queue.unbounded<NormalizedConversationStopped>()
 		const ingress = Ingress.of({
 			acceptMessage: () => unimplemented('test.acceptMessage'),
 			acceptMessageUpdated: () => unimplemented('test.acceptMessageUpdated'),
 			acceptMessageDeleted: () => unimplemented('test.acceptMessageDeleted'),
 			acceptReaction: () => unimplemented('test.acceptReaction'),
-			acceptConversationStopped: () => unimplemented('test.acceptConversationStopped'),
+			acceptConversationStopped: (event) =>
+				Queue.offer(accepted, event).pipe(
+					Effect.as(IngressAccepted.make({ idempotencyKey: event.idempotencyKey })),
+				),
 		})
-		const callback = yield* Schema.decodeEffect(SlackEventCallback)(reactionAddedCallback)
+		const callback = yield* Schema.decodeEffect(SlackEventCallback)({
+			type: 'event_callback',
+			team_id: 'T_TEST',
+			event_id: 'Ev_STOP',
+			event_time: 1_788_000_000,
+			event: {
+				type: 'agent_session_stopped',
+				channel: 'C_TEST',
+				thread_ts: '100.1',
+				user: 'U_TEST',
+				event_ts: '101.1',
+				streaming_message_ts: [],
+			},
+		})
 		const request = yield* signedRequest(callback)
 		const { dispose, handler } = HttpRouter.toWebHandler(routeLayer, { disableLogger: true })
 		yield* Effect.addFinalizer(() => Effect.promise(dispose))
 		const response = yield* Effect.promise(() => handler(request, Context.make(Ingress, ingress)))
 
 		assert.strictEqual(response.status, 200)
+		const stopped = yield* Queue.take(accepted)
+		assert.strictEqual(stopped.threadRef.id, 'slack:v1:T_TEST:C_TEST:100.1')
 	}).pipe(Effect.provide(NodeCrypto.layer)),
 )

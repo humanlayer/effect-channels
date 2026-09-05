@@ -1,13 +1,20 @@
 import { Ingress } from '@humanlayer/channels'
-import { Config, Effect, Layer, Match, Option, Schema } from 'effect'
+import { Config, Effect, Layer, Match, Option, Predicate, Schema } from 'effect'
 import type { Redacted } from 'effect'
 import { HttpRouter, HttpServerResponse } from 'effect/unstable/http'
 
 import { SlackWebhookError } from './Errors.ts'
 import type { SlackBotIdentity, SlackEventCallback } from './Schema.ts'
-import { SlackEventsRequest } from './Schema.ts'
+import { SlackEventsRequest, SlackMessageTs } from './Schema.ts'
 import { mergeSlackBotIdentity, slackBotIdentity } from './SlackBotIdentity.ts'
-import { normalizeSlackMessage } from './SlackNormalize.ts'
+import { SlackClient } from './SlackClient.ts'
+import {
+	normalizeSlackConversationStopped,
+	normalizeSlackMessage,
+	normalizeSlackMessageDeleted,
+	normalizeSlackMessageUpdated,
+	normalizeSlackReaction,
+} from './SlackNormalize.ts'
 import { verifySlackSignature } from './SlackSignature.ts'
 import { SlackTenantCredentials } from './SlackTenantCredentials.ts'
 
@@ -15,6 +22,7 @@ type SlackRoutesConfig = {
 	readonly signingSecret: Redacted.Redacted<string>
 	readonly identity: SlackBotIdentity
 	readonly credentials: SlackTenantCredentials['Service']
+	readonly client: SlackClient['Service']
 }
 
 const webhookErrorResponse = (error: SlackWebhookError) => {
@@ -61,11 +69,50 @@ const acceptMessageEvent = (config: SlackRoutesConfig, callback: SlackEventCallb
 		return HttpServerResponse.empty({ status: 200 })
 	})
 
-const acknowledgeUnsupported = (callback: SlackEventCallback) =>
-	Effect.logInfo('acknowledging and dropping unsupported Slack event family').pipe(
-		Effect.annotateLogs({ provider: 'slack', event_type: callback.event.type, event_id: callback.event_id }),
-		Effect.as(HttpServerResponse.empty({ status: 200 })),
-	)
+const acceptLifecycleEvent = (config: SlackRoutesConfig, callback: SlackEventCallback) =>
+	Effect.gen(function* () {
+		const ingress = yield* Ingress
+		const identity = yield* resolveBotIdentity(config, callback)
+		const event = callback.event
+		if (event.type === 'reaction_added' || event.type === 'reaction_removed') {
+			const parentThreadTs = yield* config.client
+				.replies({
+					teamId: callback.team_id,
+					channelId: event.item.channel,
+					threadTs: event.item.ts,
+					limit: 1,
+				})
+				.pipe(
+					Effect.map((page) => {
+						const raw = page.messages[0]?.raw
+						return Predicate.hasProperty(raw, 'thread_ts') && Predicate.isString(raw.thread_ts)
+							? SlackMessageTs.make(raw.thread_ts)
+							: event.item.ts
+					}),
+					Effect.catch((error) =>
+						Effect.logWarning(
+							'Slack reaction parent lookup failed; using reacted message as thread root',
+							error,
+						).pipe(Effect.as(event.item.ts)),
+					),
+				)
+			yield* ingress.acceptReaction(yield* normalizeSlackReaction({ callback, identity, parentThreadTs }))
+		} else if (event.type === 'message' && event.subtype === 'message_changed') {
+			yield* ingress.acceptMessageUpdated(yield* normalizeSlackMessageUpdated({ callback, identity }))
+		} else if (event.type === 'message' && event.subtype === 'message_deleted') {
+			yield* ingress.acceptMessageDeleted(yield* normalizeSlackMessageDeleted({ callback, identity }))
+		} else {
+			return yield* SlackWebhookError.make({ reason: 'decode' })
+		}
+		return HttpServerResponse.empty({ status: 200 })
+	})
+
+const acceptConversationStopped = (callback: SlackEventCallback) =>
+	Effect.gen(function* () {
+		const ingress = yield* Ingress
+		yield* ingress.acceptConversationStopped(yield* normalizeSlackConversationStopped(callback))
+		return HttpServerResponse.empty({ status: 200 })
+	})
 
 const routes = (config: SlackRoutesConfig) =>
 	HttpRouter.add('POST', '/api/v1/integrations/slack/webhook', (request) =>
@@ -92,10 +139,13 @@ const routes = (config: SlackRoutesConfig) =>
 						Match.value(callback.event).pipe(
 							Match.discriminatorsExhaustive('type')({
 								app_mention: () => acceptMessageEvent(config, callback),
-								message: () => acceptMessageEvent(config, callback),
-								reaction_added: () => acknowledgeUnsupported(callback),
-								reaction_removed: () => acknowledgeUnsupported(callback),
-								agent_session_stopped: () => acknowledgeUnsupported(callback),
+								message: (message) =>
+									message.subtype === 'message_changed' || message.subtype === 'message_deleted'
+										? acceptLifecycleEvent(config, callback)
+										: acceptMessageEvent(config, callback),
+								reaction_added: () => acceptLifecycleEvent(config, callback),
+								reaction_removed: () => acceptLifecycleEvent(config, callback),
+								agent_session_stopped: () => acceptConversationStopped(callback),
 							}),
 						),
 				}),
@@ -116,11 +166,12 @@ export const SlackRoutes = {
 	layer: Layer.unwrap(
 		Effect.gen(function* () {
 			const credentials = yield* SlackTenantCredentials
+			const client = yield* SlackClient
 			const signingSecret = yield* Config.redacted('SLACK_SIGNING_SECRET')
 			const botUserId = yield* Config.string('SLACK_BOT_USER_ID')
 			const botId = yield* Config.option(Config.string('SLACK_BOT_ID'))
 			const identity = slackBotIdentity({ botUserId, botId: Option.getOrUndefined(botId) })
-			return routes({ signingSecret, identity, credentials })
+			return routes({ signingSecret, identity, credentials, client })
 		}),
 	),
 }

@@ -12,10 +12,15 @@ import {
 	ProviderRegistry,
 	Subscriptions,
 	type Message,
+	type MessageDeletedEvent,
+	type MessageUpdatedEvent,
+	type ReactionEvent,
+	type Emoji,
 	type Thread,
 	UserDirectory,
 	UserProfileCache,
 	type ConversationCoordinatorOptions,
+	type ConversationStoppedEvent,
 	type UserProfileCacheMemoryOptions,
 } from '@humanlayer/channels'
 import {
@@ -219,9 +224,27 @@ export type ChannelsAppOptions<
 	readonly handlers?: {
 		readonly onNewMention?: (thread: Thread, message: Message) => Effect.Effect<void, HandlerError, Channels>
 		readonly onSubscribedMessage?: (thread: Thread, message: Message) => Effect.Effect<void, HandlerError, Channels>
+		readonly onMessageUpdated?: (event: MessageUpdatedEvent) => Effect.Effect<void, HandlerError, Channels>
+		readonly onMessageDeleted?: (event: MessageDeletedEvent) => Effect.Effect<void, HandlerError, Channels>
+		readonly onReaction?: {
+			readonly emoji: ReadonlyArray<Emoji>
+			readonly handler: (event: ReactionEvent) => Effect.Effect<void, HandlerError, Channels>
+		}
+		readonly onAnyReaction?: (event: ReactionEvent) => Effect.Effect<void, HandlerError, Channels>
+		readonly onConversationStopped?: (
+			event: ConversationStoppedEvent,
+		) => Effect.Effect<void, HandlerError, Channels>
 	}
 	readonly onNewMention?: (thread: Thread, message: Message) => Effect.Effect<void, HandlerError, Channels>
 	readonly onSubscribedMessage?: (thread: Thread, message: Message) => Effect.Effect<void, HandlerError, Channels>
+	readonly onMessageUpdated?: (event: MessageUpdatedEvent) => Effect.Effect<void, HandlerError, Channels>
+	readonly onMessageDeleted?: (event: MessageDeletedEvent) => Effect.Effect<void, HandlerError, Channels>
+	readonly onReaction?: {
+		readonly emoji: ReadonlyArray<Emoji>
+		readonly handler: (event: ReactionEvent) => Effect.Effect<void, HandlerError, Channels>
+	}
+	readonly onAnyReaction?: (event: ReactionEvent) => Effect.Effect<void, HandlerError, Channels>
+	readonly onConversationStopped?: (event: ConversationStoppedEvent) => Effect.Effect<void, HandlerError, Channels>
 	readonly advanced?: {
 		readonly httpClient?: Layer.Layer<HttpClient.HttpClient, HttpError>
 		readonly slackApiOrigin?: URL
@@ -280,20 +303,31 @@ export const createChannelsApp = <
 	const worker = Layer.effectDiscard(
 		Effect.gen(function* () {
 			const channels = yield* Channels
-			const onNewMention = options.handlers?.onNewMention ?? options.onNewMention
-			const onSubscribedMessage = options.handlers?.onSubscribedMessage ?? options.onSubscribedMessage
-			if (onNewMention !== undefined) {
-				yield* channels.onNewMention(onNewMention)
-			}
-			if (onSubscribedMessage !== undefined) {
-				yield* channels.onSubscribedMessage(onSubscribedMessage)
-			}
+			yield* Effect.gen(function* () {
+				const onNewMention = options.handlers?.onNewMention ?? options.onNewMention
+				const onSubscribedMessage = options.handlers?.onSubscribedMessage ?? options.onSubscribedMessage
+				if (onNewMention !== undefined) yield* channels.onNewMention(onNewMention)
+				if (onSubscribedMessage !== undefined) yield* channels.onSubscribedMessage(onSubscribedMessage)
+			})
+			yield* Effect.gen(function* () {
+				const onMessageUpdated = options.handlers?.onMessageUpdated ?? options.onMessageUpdated
+				const onMessageDeleted = options.handlers?.onMessageDeleted ?? options.onMessageDeleted
+				const onReaction = options.handlers?.onReaction ?? options.onReaction
+				const onAnyReaction = options.handlers?.onAnyReaction ?? options.onAnyReaction
+				const onConversationStopped = options.handlers?.onConversationStopped ?? options.onConversationStopped
+				if (onMessageUpdated !== undefined) yield* channels.onMessageUpdated(onMessageUpdated)
+				if (onMessageDeleted !== undefined) yield* channels.onMessageDeleted(onMessageDeleted)
+				if (onReaction !== undefined) yield* channels.onReaction(onReaction.emoji, onReaction.handler)
+				if (onAnyReaction !== undefined) yield* channels.onAnyReaction(onAnyReaction)
+				if (onConversationStopped !== undefined) yield* channels.onConversationStopped(onConversationStopped)
+			})
 			yield* channels.run.pipe(Effect.forkScoped)
 		}),
 	).pipe(Layer.provide(services))
 	const requestServices = Layer.merge(NodeCrypto.layer, services)
 	const providerRoutes = SlackRoutes.layer.pipe(
 		HttpRouter.provideRequest(requestServices),
+		Layer.provide(slackClient),
 		Layer.provide(connectionServices),
 	)
 	const unconfiguredRoutes = Layer.merge(worker, providerRoutes)
