@@ -1,0 +1,45 @@
+services:
+    redis:
+        image: redis:7-alpine
+        command:
+            - redis-server
+            - --appendonly
+            - 'yes'
+            - --appendfsync
+            - always
+            - --maxmemory
+            - 256mb
+            - --maxmemory-policy
+            - noeviction
+        ports:
+            - '127.0.0.1:56380:6379'
+        volumes:
+            - redis-data:/data
+        healthcheck:
+            test: ['CMD', 'redis-cli', 'ping']
+            interval: 2s
+            timeout: 2s
+            retries: 20
+        stop_grace_period: 30s
+
+    postgres:
+        image: postgres:17-alpine
+        profiles: ['postgres']
+        environment:
+            POSTGRES_DB: slack_example
+            POSTGRES_USER: slack_example
+            POSTGRES_PASSWORD: local-example-only
+        ports:
+            - '127.0.0.1:55433:5432'
+        volumes:
+            - postgres-data:/var/lib/postgresql/data
+        healthcheck:
+            test: ['CMD-SHELL', 'pg_isready -U slack_example -d slack_example']
+            interval: 2s
+            timeout: 2s
+            retries: 20
+        stop_grace_period: 30s
+
+volumes:
+    redis-data:
+    postgres-data:

@@ -11,6 +11,8 @@ storage. There is no universal provider facade, app framework, or agent engine.
   configured installation, Effect HTTP and Fetch hosts; no database.
 - [`examples/slack-multi-tenant`](./examples/slack-multi-tenant/) — the same bot
   API with library-owned Postgres connections, subscriptions/routing and delivery.
+- [`examples/slack-redis`](./examples/slack-redis/) — Redis with local Docker
+  Compose, explicit connection seeding, and typed Postgres/mixed storage recipes.
 - [`packages/postgres`](./packages/postgres/) — separate historical SQL implementation,
   not the new delivery adapter. It is preserved for explicit legacy drain/migration
   work; no old tables are dropped or silently adopted by new adapters.
@@ -26,7 +28,7 @@ bun run check
 bun run verify:exports
 ```
 
-The workspace has five projects; Slack and delivery have built ESM/declaration
+The workspace has six projects; Slack and delivery have built ESM/declaration
 exports. Commands use the local `vp` binary. Normal tests use memory, real native
 provider/delivery code and `emulate@0.11.0`; no live credentials, database, workerd,
 recordings, or replay. Vite env loading is disabled and backend suites are excluded

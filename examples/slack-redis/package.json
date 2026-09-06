@@ -1,0 +1,28 @@
+{
+	"name": "example-slack-redis",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"build": "bun build ./src/server.ts ./scripts/seed.ts --outdir ./dist --target bun --format esm --splitting --packages external",
+		"start": "bun run ./src/server.ts",
+		"seed": "bun run ./scripts/seed.ts",
+		"test": "vp test --root ../.. examples/slack-redis/test/",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"dependencies": {
+		"@effect/platform-node": "catalog:",
+		"@effect/sql-pg": "catalog:",
+		"@humanlayer/channels-delivery": "workspace:*",
+		"@humanlayer/channels-slack": "workspace:*",
+		"effect": "catalog:",
+		"redis": "^5.11.0"
+	},
+	"devDependencies": {
+		"@effect/vitest": "catalog:",
+		"@types/bun": "catalog:",
+		"@types/pg": "^8.15.6",
+		"typescript": "catalog:",
+		"vitest": "catalog:"
+	}
+}

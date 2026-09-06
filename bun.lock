@@ -37,6 +37,25 @@
         "vitest": "catalog:",
       },
     },
+    "examples/slack-redis": {
+      "name": "example-slack-redis",
+      "version": "0.0.0",
+      "dependencies": {
+        "@effect/platform-node": "catalog:",
+        "@effect/sql-pg": "catalog:",
+        "@humanlayer/channels-delivery": "workspace:*",
+        "@humanlayer/channels-slack": "workspace:*",
+        "effect": "catalog:",
+        "redis": "^5.11.0",
+      },
+      "devDependencies": {
+        "@effect/vitest": "catalog:",
+        "@types/bun": "catalog:",
+        "@types/pg": "^8.15.6",
+        "typescript": "catalog:",
+        "vitest": "catalog:",
+      },
+    },
     "examples/slack-thread-echo": {
       "name": "example-slack-thread-echo",
       "version": "0.0.0",
@@ -485,6 +504,8 @@
     "estree-walker": ["estree-walker@3.0.3", "", { "dependencies": { "@types/estree": "^1.0.0" } }, "sha512-7RUKfXgSMMkzt6ZuXmqapOurLGPPfgj6l9uRZ7lRGolvk0y2yocc35LdcxKC5PQZdn2DMqioAQ2NoWcrTKmm6g=="],
 
     "example-slack-multi-tenant": ["example-slack-multi-tenant@workspace:examples/slack-multi-tenant"],
+
+    "example-slack-redis": ["example-slack-redis@workspace:examples/slack-redis"],
 
     "example-slack-thread-echo": ["example-slack-thread-echo@workspace:examples/slack-thread-echo"],
 
