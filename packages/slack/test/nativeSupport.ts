@@ -11,7 +11,6 @@ import {
 	Slack,
 	SlackIngress,
 	SlackSubscriptions,
-	SlackUserDirectory,
 	Thread,
 	UserId,
 	UserProfile,
@@ -103,13 +102,7 @@ export const nativeIngressLayer = <E, R>(
 		),
 	)
 	return SlackIngress.layer({ namespace: 'slack-native-test', policy: nativePolicy, handlers }).pipe(
-		Layer.provideMerge(
-			Layer.mergeAll(
-				storage,
-				SlackSubscriptions.layerMemory(),
-				SlackUserDirectory.layer.pipe(Layer.provide(slack)),
-			),
-		),
+		Layer.provideMerge(Layer.mergeAll(storage, SlackSubscriptions.layerMemory(), slack)),
 	)
 }
 

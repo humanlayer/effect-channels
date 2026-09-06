@@ -3,7 +3,7 @@ import { MailboxReadiness, MailboxStore } from '@humanlayer/channels-delivery'
 import { Clock, Context, Effect, Exit, Layer, Queue, Scope } from 'effect'
 import { HttpRouter } from 'effect/unstable/http'
 
-import { routes, services, worker } from '../src/app.ts'
+import { bot } from '../src/app.ts'
 import { close, handle } from '../src/fetch.ts'
 import {
 	SlackEmulator,
@@ -13,6 +13,8 @@ import {
 	slackEmulatorAliceToken,
 	slackEmulatorBotToken,
 } from './support.ts'
+
+const { routes, services, worker } = bot
 
 it.live('the actual echo graph admits without a worker, then replies and handles subscribed follow-ups', () =>
 	Effect.gen(function* () {

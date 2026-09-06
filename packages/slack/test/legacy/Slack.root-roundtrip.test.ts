@@ -23,7 +23,7 @@ import { SlackClient } from '../../src/index.ts'
 import { Slack } from '../../src/index.ts'
 import { SlackRoutes } from '../../src/index.ts'
 import { SlackTenantCredentials } from '../../src/index.ts'
-import { SlackIngress, SlackSubscriptions, SlackUserDirectory, MarkdownContent, ThreadId } from '../../src/index.ts'
+import { SlackIngress, SlackSubscriptions, MarkdownContent, ThreadId } from '../../src/index.ts'
 import { appMentionCallback, signSlackBody } from '../support.ts'
 import { policy, runnerOptions } from './support.ts'
 
@@ -73,7 +73,6 @@ it.effect('delivers one signed mention end to end, subscribes explicitly, and po
 		)
 		const slack = Slack.layer.pipe(Layer.provide(slackClient))
 		const subscriptions = SlackSubscriptions.layerMemory()
-		const directory = SlackUserDirectory.layer.pipe(Layer.provide(slack))
 		const ingressLayer = SlackIngress.layer({
 			namespace: 'legacy-root',
 			policy,
@@ -91,7 +90,7 @@ it.effect('delivers one signed mention end to end, subscribes explicitly, and po
 					},
 				],
 			},
-		}).pipe(Layer.provideMerge(Layer.mergeAll(slack, subscriptions, directory, memory({ maxMailboxes: 100 }))))
+		}).pipe(Layer.provideMerge(Layer.mergeAll(slack, subscriptions, memory({ maxMailboxes: 100 }))))
 		const testApplication = Layer.merge(ingressLayer, NodeCrypto.layer)
 		const program = Effect.gen(function* () {
 			const ingress = yield* SlackIngress

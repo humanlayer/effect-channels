@@ -286,6 +286,10 @@ it.effect('maps provider history calls onto replies and history and narrows fail
 				limit: '4',
 			})
 
+			const profileRequests = yield* Queue.takeAll(harness.requests)
+			assert.ok(profileRequests.length > 0)
+			assert.ok(profileRequests.every((request) => request.url.pathname === '/api/users.info'))
+
 			const error = yield* expectTaggedFailure('HistoryFailed')(
 				provider.containerMessages({
 					channel: testChannelRef,

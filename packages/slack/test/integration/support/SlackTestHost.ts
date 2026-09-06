@@ -14,8 +14,6 @@ import {
 	SlackRoutes,
 	SlackSubscriptions,
 	SlackTenantCredentials,
-	SlackUserDirectory,
-	UserProfileCache,
 	type ConversationStoppedEvent,
 	type Emoji,
 	type Message,
@@ -27,7 +25,6 @@ import {
 	type SlackConnectionLookupInput as SlackConnectionLookup,
 	type SlackHandlerRegistration,
 	type SlackSubscriptionsMemoryOptions,
-	type UserProfileCacheMemoryOptions,
 } from '@humanlayer/channels-slack'
 import { ConfigProvider, Effect, Layer } from 'effect'
 import { HttpClient, HttpRouter, HttpServerResponse } from 'effect/unstable/http'
@@ -122,7 +119,6 @@ export type ChannelsAppOptions<
 		readonly httpClient?: Layer.Layer<HttpClient.HttpClient, HttpError>
 		readonly slackApiOrigin?: URL
 		readonly configProvider?: ConfigProvider.ConfigProvider
-		readonly userProfileCache?: UserProfileCacheMemoryOptions
 	}
 }
 
@@ -151,9 +147,6 @@ export const makeSlackTestHost = <
 		Layer.provide(options.advanced?.httpClient ?? NodeHttpClient.layerFetch),
 	)
 	const native = Slack.layer.pipe(Layer.provideMerge(slackClient))
-	const directory = SlackUserDirectory.make().pipe(
-		Layer.provide(Layer.merge(native, UserProfileCache.memory(options.advanced?.userProfileCache))),
-	)
 	const handlers = { ...options, ...options.handlers }
 	const ingress = SlackIngress.layer({
 		namespace: options.namespace ?? 'slack-app',
@@ -176,7 +169,7 @@ export const makeSlackTestHost = <
 				})),
 			],
 		},
-	}).pipe(Layer.provideMerge(Layer.mergeAll(storage, native, directory)))
+	}).pipe(Layer.provideMerge(Layer.merge(storage, native)))
 	const config = options.advanced?.configProvider
 	const services = config === undefined ? ingress : ingress.pipe(Layer.provide(ConfigProvider.layer(config)))
 	const run = Effect.flatMap(SlackIngress, (ingress) => ingress.run(options.runner ?? defaultRunnerOptions)).pipe(

@@ -15,12 +15,6 @@ import { ChannelRef as ChannelRefSchema } from './Model.ts'
 import type { MessageHistoryOptions, MessagePage, ThreadPage, ThreadSummary } from './Operations.ts'
 import type { SentMessage } from './SentMessage.ts'
 import { Slack } from './Slack.ts'
-import {
-	hydrateHistoryMessage,
-	hydrateHistoryPage,
-	hydrateThreadPage,
-	hydrateThreadSummary,
-} from './SlackUserDirectory.ts'
 
 export class Channel extends Schema.TaggedClass<Channel>()('Channel', {
 	ref: ChannelRefSchema,
@@ -45,9 +39,9 @@ export class Channel extends Schema.TaggedClass<Channel>()('Channel', {
 	): Effect.Effect<MessagePage, HistoryFailed | UnsupportedContextScope, Slack> {
 		return Effect.flatMap(Slack, (slack) => {
 			if (options === undefined) {
-				return slack.containerMessages({ channel: this.ref }).pipe(Effect.flatMap(hydrateHistoryPage))
+				return slack.containerMessages({ channel: this.ref })
 			}
-			return slack.containerMessages({ channel: this.ref, options }).pipe(Effect.flatMap(hydrateHistoryPage))
+			return slack.containerMessages({ channel: this.ref, options })
 		})
 	}
 
@@ -55,9 +49,7 @@ export class Channel extends Schema.TaggedClass<Channel>()('Channel', {
 	 * Lazily reads channel messages newest-first.
 	 */
 	get messages(): Stream.Stream<Message, HistoryFailed | UnsupportedContextScope, Slack> {
-		return Stream.unwrap(Effect.map(Slack, (slack) => slack.containerMessageStream({ channel: this.ref }))).pipe(
-			Stream.mapEffect(hydrateHistoryMessage),
-		)
+		return Stream.unwrap(Effect.map(Slack, (slack) => slack.containerMessageStream({ channel: this.ref })))
 	}
 
 	/**
@@ -68,9 +60,9 @@ export class Channel extends Schema.TaggedClass<Channel>()('Channel', {
 	): Effect.Effect<ThreadPage, HistoryFailed | UnsupportedContextScope, Slack> {
 		return Effect.flatMap(Slack, (slack) => {
 			if (options === undefined) {
-				return slack.channelThreads({ channel: this.ref }).pipe(Effect.flatMap(hydrateThreadPage))
+				return slack.channelThreads({ channel: this.ref })
 			}
-			return slack.channelThreads({ channel: this.ref, options }).pipe(Effect.flatMap(hydrateThreadPage))
+			return slack.channelThreads({ channel: this.ref, options })
 		})
 	}
 
@@ -78,9 +70,7 @@ export class Channel extends Schema.TaggedClass<Channel>()('Channel', {
 	 * Lazily reads every page of threads from the channel.
 	 */
 	get threads(): Stream.Stream<ThreadSummary, HistoryFailed | UnsupportedContextScope, Slack> {
-		return Stream.unwrap(Effect.map(Slack, (slack) => slack.channelThreadStream({ channel: this.ref }))).pipe(
-			Stream.mapEffect(hydrateThreadSummary),
-		)
+		return Stream.unwrap(Effect.map(Slack, (slack) => slack.channelThreadStream({ channel: this.ref })))
 	}
 
 	fetchMetadata(): Effect.Effect<ChannelInfo, ChannelGone | MetadataFailed, Slack> {

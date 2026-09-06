@@ -19,7 +19,6 @@ import {
 	SlackApiError,
 	SlackIngress,
 	SlackSubscriptions,
-	SlackUserDirectory,
 	type SlackClient,
 	type Author,
 	type ThreadRef,
@@ -185,13 +184,7 @@ export const ingressLayer = <E = never, R = never>(
 	client: Partial<SlackClient['Service']> = {},
 ) => {
 	const slack = nativeSlackLayer(client)
-	const directory = SlackUserDirectory.layer.pipe(Layer.provide(slack))
-	const dependencies = Layer.mergeAll(
-		slack,
-		directory,
-		SlackSubscriptions.layerMemory(),
-		memory({ maxMailboxes: 100 }),
-	)
+	const dependencies = Layer.mergeAll(slack, SlackSubscriptions.layerMemory(), memory({ maxMailboxes: 100 }))
 	return SlackIngress.layer({ namespace: 'legacy-regression', policy, handlers }).pipe(
 		Layer.provideMerge(dependencies),
 	)

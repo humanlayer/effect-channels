@@ -5,10 +5,23 @@ A single-workspace Slack example using the native Slack APIs and shared delivery
 
 ## What runs where
 
-- [`src/app.ts`](./src/app.ts) declares typed handlers and Layers: `transport`
-  supplies Slack credentials/HTTP; `services` supplies native Slack, memory
-  subscriptions, a profile cache, and delivery memory. `routes` only verifies and
-  admits webhooks; `worker` explicitly runs handlers. `application` combines them.
+- [`src/app.ts`](./src/app.ts) selects the Slack memory bot preset and registers
+  handlers. It contains no transport, cache, queue, or request-context plumbing:
+
+    ```ts
+    export const bot = SlackBot.memory({ namespace: 'slack-thread-echo', handlers })
+    export const application = bot.layer
+    ```
+
+- [`src/handlers.ts`](./src/handlers.ts) contains plain Effect callbacks. Single
+  callbacks have stable built-in IDs; multiple reaction handlers declare their
+  own IDs and emoji filters.
+- [`src/responses.ts`](./src/responses.ts) owns message formatting, streaming,
+  uploads, and the edit/delete/reaction demonstrations.
+- [`src/transport.ts`](./src/transport.ts) supplies the HTTP client, configured
+  credentials, and platform crypto. Slack owns its user cache: callbacks and
+  history already have resolved authors, with original-author fallback on lookup
+  failure. Applications do not wire or invoke hydration services.
 - [`src/server.ts`](./src/server.ts) provides `transport` to `application` and
   starts one scoped Node HTTP server. SIGINT/SIGTERM close the server and worker.
 - [`src/fetch.ts`](./src/fetch.ts) is the **alternative** Fetch entrypoint. It
@@ -26,8 +39,9 @@ app.post('/api/v1/integrations/slack/webhook', (c) => handle(c.req.raw))
 ```
 
 Do not parse/re-serialize the request before forwarding it: signatures cover the
-original body. Mounting only `routes` requires a separately supervised `worker`
-with the same acquired services. These hosts use process memory and background
+original body. Advanced hosts can mount `bot.routes` without starting work and run
+`bot.worker` separately, sharing the same acquired `bot.services` and Layer memo map.
+The normal `bot.layer` handles this lifecycle in one scope. These hosts use process memory and background
 fibers; this is not yet a durable serverless/Cloudflare deployment example.
 
 ## Setup
@@ -119,16 +133,22 @@ exercise extra file combinations and authenticated downloads, temporarily invoke
 
 ## Delivery limits
 
-This example explicitly selects queue/latest plus `context.skipped`, a 256,000-byte
+`SlackBot.memory` supplies queue/latest plus `context.skipped`, a 256,000-byte
 envelope limit, 1,000 retained envelopes and 10,000 outcomes per mailbox, one-day
 dedupe retention, five attempts with 100 ms–30 s backoff, a 30 s lease with 5 s
-heartbeat, and 10,000 memory mailboxes. These are example settings, not production
-defaults. Failed work counts against capacity; idle mailbox records are not recycled.
+heartbeat, and 10,000 memory mailboxes. The worker scans up to 100 mailboxes with
+concurrency 8 and a 25 ms poll. These are the memory preset's defaults, not production
+capacity recommendations. Override individual `policy` or `runner` fields in
+`SlackBot.memory` when necessary; applications need not repeat the entire policy.
+Failed work counts against capacity; idle mailbox records are not recycled.
 
 Handlers with different IDs are independent: there is no cross-handler order.
 Lifecycle events run serially per handler, while message queues coalesce pending
 work. Retried external Slack writes can repeat. Restarting loses all mailbox,
 routing, and subscription state; Postgres/Redis delivery belongs to a later phase.
+
+See the [shared service graph](../../packages/slack/README.md#service-graph) for
+the runtime internals. This example's credential source is environment configuration.
 
 ## Tests and builds
 

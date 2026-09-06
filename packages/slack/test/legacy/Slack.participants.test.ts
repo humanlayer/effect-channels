@@ -1,7 +1,7 @@
 import { assert, it } from '@effect/vitest'
 import { Effect, Layer, Ref } from 'effect'
 
-import { Slack, Thread, type MessageHistoryOptions, type MessagePage } from '../../src/index.ts'
+import { Slack, SlackApiError, Thread, type MessageHistoryOptions, type MessagePage } from '../../src/index.ts'
 import { stubSlackClientLayer } from '../support.ts'
 import { makeTestAuthor, makeTestMessage, testThreadRef } from './support.ts'
 
@@ -38,6 +38,7 @@ it.effect('derives unique human participants from the complete thread history, s
 	Effect.gen(function* () {
 		const calls = yield* Ref.make<ReadonlyArray<MessageHistoryOptions | undefined>>([])
 		const provider = stubSlackClientLayer({
+			getUser: () => Effect.fail(SlackApiError.make({ operation: 'users.info', code: 'user_not_found' })),
 			replies: (input) =>
 				Ref.update(calls, (all) => [...all, historyOptions(input)]).pipe(
 					Effect.map(() => pages.get(historyOptions(input)?.cursor ?? 'start') ?? { messages: [] }),

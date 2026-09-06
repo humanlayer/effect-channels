@@ -13,9 +13,11 @@ import {
 import { Context, Effect, Layer, Schema } from 'effect'
 
 import { RetryabilityMetadata, SlackIngressError } from './DomainErrors.ts'
+import type { Emoji } from './Emoji.ts'
 import { Message } from './Message.ts'
 import { ThreadId, type ThreadRef } from './Model.ts'
 import { IngressAccepted, IngressDropped, type IngressResult } from './Operations.ts'
+import { SlackAuthors } from './SlackAuthors.ts'
 import {
 	ConversationStoppedEvent,
 	DirectMessageDelivery,
@@ -32,7 +34,6 @@ import {
 	SubscribedMessageDelivery,
 } from './SlackEvents.ts'
 import { SlackSubscriptions } from './SlackSubscriptions.ts'
-import { SlackUserDirectory } from './SlackUserDirectory.ts'
 import { Thread } from './Thread.ts'
 
 export type SlackHandlerRegistration<A, E, R> = {
@@ -46,7 +47,9 @@ export type SlackIngressHandlers<E, R> = {
 	readonly onDirectMessage?: ReadonlyArray<SlackHandlerRegistration<MessageEvent, E, R>>
 	readonly onMessageUpdated?: ReadonlyArray<SlackHandlerRegistration<MessageUpdatedEvent, E, R>>
 	readonly onMessageDeleted?: ReadonlyArray<SlackHandlerRegistration<MessageDeletedEvent, E, R>>
-	readonly onReaction?: ReadonlyArray<SlackHandlerRegistration<ReactionEvent, E, R>>
+	readonly onReaction?: ReadonlyArray<
+		SlackHandlerRegistration<ReactionEvent, E, R> & { readonly emojis?: ReadonlyArray<Emoji> }
+	>
 	readonly onConversationStopped?: ReadonlyArray<SlackHandlerRegistration<ConversationStoppedEvent, E, R>>
 }
 
@@ -215,13 +218,13 @@ export class SlackIngress extends Context.Service<
 				const store = yield* MailboxStore
 				const readiness = yield* MailboxReadiness
 				const subscriptions = yield* SlackSubscriptions
-				const directory = yield* SlackUserDirectory
+				const authors = yield* SlackAuthors
 				const handlerContext = yield* Effect.context<R>()
 
 				const bindRegistration = <A, I>(
 					definition: EventDefinition<Schema.Codec<A, I>, typeof SlackDeliveryResource>,
 					registration: SlackHandlerRegistration<A, E, R>,
-					hydrate: (event: A) => Effect.Effect<A>,
+					resolve: (event: A) => Effect.Effect<A>,
 					before: (event: A) => Effect.Effect<void, BindingError> = () => Effect.void,
 				): DeliveryBinding<A> => {
 					const delivery = bind({
@@ -235,10 +238,10 @@ export class SlackIngress extends Context.Service<
 						handler: (event, context) =>
 							Effect.gen(function* () {
 								yield* before(event)
-								const hydrated = yield* hydrate(event)
-								const skipped = yield* Effect.forEach(context.skipped, hydrate)
+								const resolved = yield* resolve(event)
+								const skipped = yield* Effect.forEach(context.skipped, resolve)
 								yield* registration
-									.handler(hydrated, { skipped })
+									.handler(resolved, { skipped })
 									.pipe(Effect.scoped, Effect.provide(handlerContext))
 							}).pipe(
 								Effect.tapError(Effect.logError),
@@ -268,17 +271,21 @@ export class SlackIngress extends Context.Service<
 					}
 				}
 
-				const hydrateMessage = (event: MessageEvent) =>
-					Effect.map(directory.hydrateDelivery(event.thread, event.message), ({ thread, message }) =>
-						MessageEvent.make({ ...event, thread, message }),
+				const resolveMessage = (event: MessageEvent) =>
+					Effect.map(
+						authors.resolveDelivery({ thread: event.thread, message: event.message }),
+						({ thread, message }) => MessageEvent.make({ ...event, thread, message }),
 					)
-				const hydrateUpdated = (event: MessageUpdatedEvent) =>
+				const resolveUpdated = (event: MessageUpdatedEvent) =>
 					Effect.gen(function* () {
-						const delivery = yield* directory.hydrateDelivery(event.thread, event.message)
+						const delivery = yield* authors.resolveDelivery({
+							thread: event.thread,
+							message: event.message,
+						})
 						const previousMessage =
 							event.previousMessage === undefined
 								? undefined
-								: yield* directory.hydrateMessage(event.previousMessage)
+								: yield* authors.resolveMessage(event.previousMessage)
 						return previousMessage === undefined
 							? MessageUpdatedEvent.make({ ...event, thread: delivery.thread, message: delivery.message })
 							: MessageUpdatedEvent.make({
@@ -288,44 +295,52 @@ export class SlackIngress extends Context.Service<
 									previousMessage,
 								})
 					})
-				const hydrateDeleted = (event: MessageDeletedEvent) =>
+				const resolveDeleted = (event: MessageDeletedEvent) =>
 					event.previousMessage === undefined
 						? Effect.succeed(event)
-						: Effect.map(directory.hydrateMessage(event.previousMessage), (previousMessage) =>
+						: Effect.map(authors.resolveMessage(event.previousMessage), (previousMessage) =>
 								MessageDeletedEvent.make({ ...event, previousMessage }),
 							)
-				const hydrateReaction = (event: ReactionEvent) =>
+				const resolveReaction = (event: ReactionEvent) =>
 					Effect.gen(function* () {
-						const actor = yield* directory.hydrateAuthor(
-							{ provider: 'slack', tenant: event.tenant, userId: event.actor.userId },
-							event.actor,
-						)
+						const actor = yield* authors.resolveAuthor({ tenant: event.tenant, author: event.actor })
 						const message =
-							event.message === undefined ? undefined : yield* directory.hydrateMessage(event.message)
+							event.message === undefined ? undefined : yield* authors.resolveMessage(event.message)
 						return message === undefined
 							? ReactionEvent.make({ ...event, actor })
 							: ReactionEvent.make({ ...event, actor, message })
 					})
-				const hydrateStopped = (event: ConversationStoppedEvent) => Effect.succeed(event)
+				const resolveStopped = (event: ConversationStoppedEvent) => Effect.succeed(event)
 
 				const newMention = (options.handlers.onNewMention ?? []).map((registration) =>
-					bindRegistration(messageDefinition, registration, hydrateMessage),
+					bindRegistration(messageDefinition, registration, resolveMessage),
 				)
 				const subscribedMessage = (options.handlers.onSubscribedMessage ?? []).map((registration) =>
-					bindRegistration(messageDefinition, registration, hydrateMessage),
+					bindRegistration(messageDefinition, registration, resolveMessage),
 				)
 				const directMessage = (options.handlers.onDirectMessage ?? []).map((registration) =>
-					bindRegistration(messageDefinition, registration, hydrateMessage),
+					bindRegistration(messageDefinition, registration, resolveMessage),
 				)
 				const messageBindings = [...newMention, ...subscribedMessage, ...directMessage]
 				const updated = (options.handlers.onMessageUpdated ?? []).map((registration) =>
-					bindRegistration(updatedDefinition, registration, hydrateUpdated),
+					bindRegistration(updatedDefinition, registration, resolveUpdated),
 				)
 				const deleted = (options.handlers.onMessageDeleted ?? []).map((registration) =>
-					bindRegistration(deletedDefinition, registration, hydrateDeleted),
+					bindRegistration(deletedDefinition, registration, resolveDeleted),
 				)
 				const reactions = (options.handlers.onReaction ?? []).map((registration) =>
-					bindRegistration(reactionDefinition, registration, hydrateReaction),
+					bindRegistration(
+						reactionDefinition,
+						{
+							...registration,
+							handler: (event, context) =>
+								registration.emojis === undefined ||
+								registration.emojis.some((emoji) => emoji.name === event.emoji.name)
+									? registration.handler(event, context)
+									: Effect.void,
+						},
+						resolveReaction,
+					),
 				)
 
 				const messageResource = (tenant: string, threadId: ThreadId) => ({
@@ -342,7 +357,7 @@ export class SlackIngress extends Context.Service<
 						{ discard: true },
 					)
 				const stopped = (options.handlers.onConversationStopped ?? []).map((registration) =>
-					bindRegistration(stoppedDefinition, registration, hydrateStopped, awaitMessageIdle),
+					bindRegistration(stoppedDefinition, registration, resolveStopped, awaitMessageIdle),
 				)
 				const allBindings = [...messageBindings, ...updated, ...deleted, ...reactions, ...stopped]
 

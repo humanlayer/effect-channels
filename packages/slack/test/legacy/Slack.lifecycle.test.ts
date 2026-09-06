@@ -1,8 +1,10 @@
 import { assert, it } from '@effect/vitest'
-import { DateTime, Deferred, Effect, Fiber, Queue } from 'effect'
+import { DateTime, Deferred, Effect, Fiber, Layer, Queue } from 'effect'
 import { TestClock } from 'effect/testing'
 
 import {
+	SlackApiError,
+	SlackBot,
 	SlackSubscriptions,
 	ConversationStoppedEvent,
 	Emoji,
@@ -23,6 +25,7 @@ import {
 	Thread,
 	ThreadId,
 } from '../../src/index.ts'
+import { stubSlackClientLayer } from '../support.ts'
 import {
 	ingressLayer,
 	runnerOptions,
@@ -33,7 +36,7 @@ import {
 	testThreadRef,
 } from './support.ts'
 
-it.effect('dispatches updates, deletes, and filtered typed reactions once', () =>
+it.effect('the memory bot dispatches updates, deletes, and declaratively filtered typed reactions', () =>
 	Effect.gen(function* () {
 		const updates = yield* Queue.unbounded<MessageUpdatedEvent>()
 		const deletes = yield* Queue.unbounded<MessageDeletedEvent>()
@@ -55,10 +58,13 @@ it.effect('dispatches updates, deletes, and filtered typed reactions once', () =
 			onReaction: [
 				{
 					id: 'reactions',
-					handler: (event: ReactionEvent) =>
-						Queue.offer(event.emoji.name === Emoji.Heart.name ? heartReactions : reactions, event).pipe(
-							Effect.asVoid,
-						),
+					emojis: [Emoji.ThumbsUp],
+					handler: (event: ReactionEvent) => Queue.offer(reactions, event).pipe(Effect.asVoid),
+				},
+				{
+					id: 'hearts',
+					emojis: [Emoji.Heart],
+					handler: (event: ReactionEvent) => Queue.offer(heartReactions, event).pipe(Effect.asVoid),
 				},
 			],
 		}
@@ -143,7 +149,18 @@ it.effect('dispatches updates, deletes, and filtered typed reactions once', () =
 			assert.strictEqual(yield* Queue.size(reactions), 0)
 
 			yield* Fiber.interrupt(worker)
-		}).pipe(Effect.provide(ingressLayer(handlers)))
+		}).pipe(
+			Effect.provide(
+				SlackBot.memory({ namespace: 'lifecycle-filters', handlers }).services.pipe(
+					Layer.provide(
+						stubSlackClientLayer({
+							getUser: () =>
+								Effect.fail(SlackApiError.make({ operation: 'users.info', code: 'user_not_found' })),
+						}),
+					),
+				),
+			),
+		)
 	}),
 )
 

@@ -16,7 +16,6 @@ import {
 	StatusFailed,
 	ThreadGone,
 	UnknownTenant,
-	UserLookupFailed,
 } from './DomainErrors.ts'
 import { Emoji } from './Emoji.ts'
 import { SlackApiError, slackErrorRetryability } from './Errors.ts'
@@ -39,7 +38,6 @@ import type {
 	ContainerMessagesInput,
 	DeleteInput,
 	EditInput,
-	GetUserInput,
 	InfoInput,
 	MessagesInput,
 	OpenDMInput,
@@ -54,7 +52,6 @@ import {
 	SlackDeleteMessageInput,
 	SlackFileDownloadInput,
 	SlackFileUploadInput,
-	SlackGetUserInput,
 	SlackHistoryInput,
 	SlackListThreadsInput,
 	SlackMessageTs,
@@ -74,6 +71,7 @@ import {
 	type SlackThreadRef as SlackThreadRefType,
 } from './Schema.ts'
 import { SentMessage, SentRef } from './SentMessage.ts'
+import { SlackAuthors } from './SlackAuthors.ts'
 import { SlackClient } from './SlackClient.ts'
 import type { SlackService } from './SlackService.ts'
 import {
@@ -84,11 +82,10 @@ import {
 	slackDmConversationRef,
 	slackThreadRef,
 } from './SlackThreadId.ts'
+import { SlackUserDirectory } from './SlackUserDirectory.ts'
 import type { StreamChunk } from './StreamChunk.ts'
 import { renderStreamingMarkdown, streamEditIntervalMs } from './Streaming.ts'
 import { Thread } from './Thread.ts'
-
-const retryableUserLookupApiErrors = new Set(['ratelimited', 'internal_error', 'fatal_error', 'service_unavailable'])
 
 const SlackCapabilities = Capabilities.make({
 	threadPost: true,
@@ -279,6 +276,8 @@ export class Slack extends Context.Service<Slack, SlackService>()('slack/Slack')
 			Slack,
 			Effect.gen(function* () {
 				const client = yield* SlackClient
+				const users = yield* SlackUserDirectory
+				const authors = yield* SlackAuthors
 				const typingThreads = yield* Ref.make(HashSet.empty<ThreadId>())
 
 				const restoreActiveStatus = (ref: SlackThreadRefType, threadId: ThreadId) =>
@@ -656,6 +655,7 @@ export class Slack extends Context.Service<Slack, SlackService>()('slack/Slack')
 							? client.history(slackConversationHistoryInput(ref, input.options))
 							: client.replies(slackRepliesInput(ref, input.options))
 					return yield* history.pipe(
+						Effect.flatMap(authors.messagePage),
 						Effect.tapError((error) =>
 							Effect.logError('Slack thread history failed', error).pipe(
 								Effect.annotateLogs({ provider: 'slack', thread_id: input.threadId }),
@@ -713,6 +713,7 @@ export class Slack extends Context.Service<Slack, SlackService>()('slack/Slack')
 						fields.before = SlackMessageTs.make(input.before)
 					}
 					return yield* client.history(SlackHistoryInput.make(fields)).pipe(
+						Effect.flatMap(authors.messagePage),
 						Effect.tapError((error) =>
 							Effect.logError('Slack channel history failed', error).pipe(
 								Effect.annotateLogs({ provider: 'slack', tenant: address.teamId }),
@@ -769,6 +770,7 @@ export class Slack extends Context.Service<Slack, SlackService>()('slack/Slack')
 						fields.cursor = input.options.cursor
 					}
 					return yield* client.listThreads(SlackListThreadsInput.make(fields)).pipe(
+						Effect.flatMap(authors.threadPage),
 						Effect.tapError((error) =>
 							Effect.logError('Slack channel thread listing failed', error).pipe(
 								Effect.annotateLogs({ provider: 'slack', tenant: address.teamId }),
@@ -882,34 +884,6 @@ export class Slack extends Context.Service<Slack, SlackService>()('slack/Slack')
 											),
 							}),
 						)
-				})
-
-				const getUser = Effect.fn('slack.provider.get_user')(function* (input: GetUserInput) {
-					const teamId = SlackTeamId.make(input.tenant)
-					const lookupFailed = (reason: UserLookupFailed['reason'], retryable: boolean) =>
-						Effect.fail(
-							UserLookupFailed.make({
-								provider: 'slack',
-								tenant: input.tenant,
-								userId: input.userId,
-								reason,
-								retryable,
-							}),
-						)
-					return yield* client.getUser(SlackGetUserInput.make({ teamId, userId: input.userId })).pipe(
-						Effect.tapError((error) =>
-							Effect.logError('Slack user lookup failed', error).pipe(
-								Effect.annotateLogs({ provider: 'slack', tenant: input.tenant }),
-							),
-						),
-						Effect.catchTags({
-							SlackTransportError: () => lookupFailed('transport', true),
-							SlackApiError: (error) =>
-								error.code === 'user_not_found'
-									? lookupFailed('not_found', false)
-									: lookupFailed('api', retryableUserLookupApiErrors.has(error.code)),
-						}),
-					)
 				})
 
 				const downloadAttachment = Effect.fn('slack.provider.download_attachment')(function* (input: {
@@ -1510,13 +1484,13 @@ export class Slack extends Context.Service<Slack, SlackService>()('slack/Slack')
 						),
 					info,
 					channelInfo,
-					getUser,
+					getUser: users.getUser,
 					downloadAttachment,
 					openDM,
 					postEphemeral,
 				})
 			}),
-		)
+		).pipe(Layer.provideMerge(SlackAuthors.layer))
 
 	static readonly layer = Slack.layerWith()
 }

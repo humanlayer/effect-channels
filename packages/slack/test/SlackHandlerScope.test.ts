@@ -3,7 +3,8 @@ import { MailboxReadiness, MailboxStore } from '@humanlayer/channels-delivery'
 import { layer as deliveryMemory } from '@humanlayer/channels-delivery/memory'
 import { Effect, Exit, Fiber, Layer, Queue } from 'effect'
 
-import { PostFailed, SlackIngress, SlackSubscriptions, SlackUserDirectory } from '../src/index.ts'
+import { PostFailed, SlackIngress, SlackSubscriptions } from '../src/index.ts'
+import { SlackAuthors } from '../src/SlackAuthors.ts'
 import { nativeIngressLayer, nativeMessage, nativePolicy, nativeRunner } from './nativeSupport.ts'
 
 for (const failure of [false, true]) {
@@ -77,7 +78,7 @@ it.effect('rejects an invalid delivery policy during ingress Layer acquisition',
 				Layer.mergeAll(
 					Layer.mock(MailboxStore, {}),
 					Layer.mock(MailboxReadiness, {}),
-					Layer.mock(SlackUserDirectory, {}),
+					Layer.mock(SlackAuthors, {}),
 					Layer.mock(SlackSubscriptions, {}),
 				),
 			),

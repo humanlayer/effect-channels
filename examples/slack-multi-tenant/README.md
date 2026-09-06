@@ -6,9 +6,22 @@ Use [`slack-thread-echo`](../slack-thread-echo/) if you want no database at all.
 
 ## Composition
 
-[`src/app.ts`](./src/app.ts) declares handlers, memory subscriptions/delivery, and
-native Slack services. `routes` only admits work; `worker` runs it; `application`
-combines them. The separate `transport` Layer uses:
+[`src/app.ts`](./src/app.ts) is only the bot definition:
+
+```ts
+export const bot = SlackBot.memory({ namespace: 'slack-multi-tenant', handlers })
+export const application = bot.layer
+```
+
+[`src/handlers.ts`](./src/handlers.ts) contains application behavior;
+[`src/responses.ts`](./src/responses.ts) contains message/stream formatting.
+Native Slack returns resolved authors automatically; handlers never load caches
+or hydrate messages. The memory preset owns subscriptions, delivery, and scoped
+worker startup. `bot.routes` and `bot.worker` remain available separately for
+advanced hosts; `bot.layer` combines them with the same acquired services.
+
+[`src/transport.ts`](./src/transport.ts) owns the HTTP client, crypto, one scoped
+SQL pool, repository migration, and credential lookup:
 
 ```ts
 SlackTenantCredentials.layerWithLookup({ loadConnection: loadSlackConnection })
@@ -19,8 +32,8 @@ The callback receives `{ workspaceId: SlackTeamId }` and returns a typed
 workspace's credentials for one minute. There are no organization gates,
 enablement flags, or OAuth endpoints.
 
-[`src/server.ts`](./src/server.ts) provides `transport`, the repository migration,
-and one scoped SQL client before serving the combined application. `application`
+[`src/server.ts`](./src/server.ts) supplies that transport and serves the application.
+The repository migration completes before the credential service is acquired. `application`
 and `transport` remain separate so tests can use real Slack clients against Emulate
 with supplied credential Layers without acquiring a database.
 
@@ -81,13 +94,18 @@ reply. Include **stream** for streaming (with post/edit fallback), or **reaction
 in a mention for a check reaction. Edits, deletes, typed reactions, and Stop events
 have lifecycle handlers. Each registration has a stable ID.
 
-The explicit queue, retry, retention, lease, capacity, and worker settings in
-`src/app.ts` match the [echo example](../slack-thread-echo/README.md#delivery-limits).
+The memory preset's queue, retry, retention, lease, capacity, and worker defaults
+match the [echo example](../slack-thread-echo/README.md#delivery-limits); individual
+`policy` and `runner` fields can be overridden without restating every setting.
 Mailboxes are installation-scoped; unrelated handlers are independent. Accepted
 pending messages can coalesce into the latest message plus `context.skipped`.
 There is no exactly-once guarantee for outgoing writes. On process restart,
 credentials survive but **delivery, routing, and subscriptions do not**. Run a
 single process for this memory example; multiple processes do not share ownership.
+
+See the [shared service graph](../../packages/slack/README.md#service-graph).
+Only the credential source differs from the echo example: this application loads
+connections from its own repository rather than directly from environment config.
 
 ## Verification
 

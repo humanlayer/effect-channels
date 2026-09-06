@@ -61,6 +61,7 @@ const makeCalls = Effect.all({
 
 const makeHistoryProvider = (calls: { readonly thread: RecordedCalls; readonly channel: RecordedCalls }) =>
 	stubSlackClientLayer({
+		getUser: () => Effect.fail(SlackApiError.make({ operation: 'users.info', code: 'user_not_found' })),
 		replies: (input) =>
 			Ref.update(calls.thread, (all) => [...all, historyOptions(input)]).pipe(
 				Effect.andThen(scriptedPage(threadPages, historyOptions(input))),

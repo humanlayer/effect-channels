@@ -1,3 +1,4 @@
+import { NodeCrypto } from '@effect/platform-node'
 import {
 	SlackClient,
 	SlackTenantCredentials,
@@ -63,5 +64,5 @@ export const makeExampleTestTransport = Effect.gen(function* () {
 	const config = ConfigProvider.layer(
 		ConfigProvider.fromUnknown({ SLACK_SIGNING_SECRET: slackEmulatorSigningSecret }),
 	)
-	return { transport, config, posts }
+	return { transport: Layer.merge(transport, NodeCrypto.layer), config, posts }
 })

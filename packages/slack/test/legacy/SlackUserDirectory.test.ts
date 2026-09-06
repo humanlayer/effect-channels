@@ -1,5 +1,5 @@
 import { assert, it } from '@effect/vitest'
-import { Cause, Effect, Exit, Fiber, Layer, Queue, Ref } from 'effect'
+import { Cause, Effect, Exit, Fiber, Queue, Ref } from 'effect'
 import { TestClock } from 'effect/testing'
 
 import {
@@ -20,6 +20,7 @@ import {
 	makeTestNormalizedMessage,
 	nativeSlackLayer,
 	runnerOptions,
+	expectTaggedFailure,
 	testThreadRef,
 } from './support.ts'
 
@@ -78,19 +79,18 @@ it.effect('hydrates native thread and channel history with a shared lookup per a
 		})
 		yield* Effect.gen(function* () {
 			const service = yield* Slack
-			const directory = yield* SlackUserDirectory
 			for (const page of [
 				yield* service.messages({ threadId: testThreadRef.id }),
 				yield* service.containerMessages({ channel: testThreadRef.channel }),
 			]) {
-				const hydrated = yield* directory.hydrateMessages(page.messages)
+				const hydrated = page.messages
 				assert.deepStrictEqual(
 					hydrated.map((message) => message.author.fullName),
 					['T_TEST Profile', 'T_TEST Profile'],
 				)
 			}
 			assert.strictEqual(yield* Ref.get(calls), 1)
-		}).pipe(Effect.provide(SlackUserDirectory.layer.pipe(Layer.provideMerge(slack))))
+		}).pipe(Effect.provide(slack))
 	}),
 )
 
@@ -105,25 +105,20 @@ it.effect('isolates cached authors by Slack installation and user identity', () 
 			const directory = yield* SlackUserDirectory
 			const author = makeTestAuthor({ userId: 'U_SHARED' })
 			const hydrated = yield* Effect.forEach(['T_ONE', 'T_TWO', 'T_ONE'], (tenant) =>
-				directory.hydrateAuthor(
-					{ provider: 'slack', tenant: TenantId.make(tenant), userId: author.userId },
-					author,
-				),
+				directory.getUser({ provider: 'slack', tenant: TenantId.make(tenant), userId: author.userId }),
 			)
 			assert.deepStrictEqual(
-				hydrated.map((value) => value.fullName),
+				hydrated.map((value) => value.author.fullName),
 				['T_ONE Profile', 'T_TWO Profile', 'T_ONE Profile'],
 			)
 			const other = makeTestAuthor({ userId: 'U_OTHER' })
 			assert.strictEqual(
-				(yield* directory.hydrateAuthor(
-					{ provider: 'slack', tenant: TenantId.make('T_ONE'), userId: other.userId },
-					other,
-				)).userId,
+				(yield* directory.getUser({ provider: 'slack', tenant: TenantId.make('T_ONE'), userId: other.userId }))
+					.author.userId,
 				'U_OTHER',
 			)
 			assert.strictEqual(yield* Ref.get(calls), 3)
-		}).pipe(Effect.provide(SlackUserDirectory.layer.pipe(Layer.provide(slack))))
+		}).pipe(Effect.provide(slack))
 	}),
 )
 
@@ -180,19 +175,29 @@ it.effect('caches non-retryable lookup failures', () =>
 			const directory = yield* SlackUserDirectory
 			const author = makeTestAuthor({ userId: 'U_TEST' })
 			const input = { provider: 'slack' as const, tenant: TenantId.make('T_ONE'), userId: author.userId }
-			assert.strictEqual(yield* directory.hydrateAuthor(input, author), author)
-			assert.strictEqual(yield* directory.hydrateAuthor(input, author), author)
+			assert.strictEqual(
+				(yield* directory.getUser(input).pipe(expectTaggedFailure('UserLookupFailed'))).reason,
+				'not_found',
+			)
+			assert.strictEqual(
+				(yield* directory.getUser(input).pipe(expectTaggedFailure('UserLookupFailed'))).reason,
+				'not_found',
+			)
 			assert.strictEqual(yield* Ref.get(lookups), 1)
-		}).pipe(Effect.provide(SlackUserDirectory.layer.pipe(Layer.provide(slack))))
+		}).pipe(Effect.provide(slack))
 	}),
 )
 
 it.effect('does not turn profile lookup interruptions or defects into successful hydration', () =>
 	Effect.gen(function* () {
 		for (const lookup of [Effect.interrupt, Effect.die('profile defect')]) {
-			const layer = SlackUserDirectory.layer.pipe(Layer.provide(nativeSlackLayer({ getUser: () => lookup })))
+			const layer = nativeSlackLayer({ getUser: () => lookup })
 			const result = yield* Effect.flatMap(SlackUserDirectory, (directory) =>
-				directory.hydrateMessage(makeTestMessage({ messageTs: '100.1' })),
+				directory.getUser({
+					provider: 'slack',
+					tenant: TenantId.make('T_TEST'),
+					userId: UserId.make('U_TEST'),
+				}),
 			).pipe(Effect.provide(layer), Effect.exit)
 			assert.ok(Exit.isFailure(result))
 			assert.ok(Cause.hasInterrupts(result.cause) || Cause.hasDies(result.cause))

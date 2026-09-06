@@ -19,7 +19,6 @@ import type { SentMessage } from './SentMessage.ts'
 import { Slack } from './Slack.ts'
 import type { SubscriptionTransition } from './SlackEvents.ts'
 import { SlackSubscriptions } from './SlackSubscriptions.ts'
-import { hydrateHistoryMessage, hydrateHistoryPage } from './SlackUserDirectory.ts'
 import type { StreamChunk } from './StreamChunk.ts'
 
 export class Thread extends Schema.TaggedClass<Thread>()('Thread', {
@@ -96,13 +95,9 @@ export class Thread extends Schema.TaggedClass<Thread>()('Thread', {
 	listMessages(options?: MessageHistoryOptions): Effect.Effect<MessagePage, HistoryFailed, Slack> {
 		return Effect.flatMap(Slack, (slack) => {
 			if (options === undefined) {
-				return slack
-					.messages(MessagesInput.make({ threadId: this.ref.id }))
-					.pipe(Effect.flatMap(hydrateHistoryPage))
+				return slack.messages(MessagesInput.make({ threadId: this.ref.id }))
 			}
-			return slack
-				.messages(MessagesInput.make({ threadId: this.ref.id, options }))
-				.pipe(Effect.flatMap(hydrateHistoryPage))
+			return slack.messages(MessagesInput.make({ threadId: this.ref.id, options }))
 		})
 	}
 
@@ -110,9 +105,7 @@ export class Thread extends Schema.TaggedClass<Thread>()('Thread', {
 	 * Lazily reads thread messages newest-first.
 	 */
 	get messages(): Stream.Stream<Message, HistoryFailed, Slack> {
-		return Stream.unwrap(Effect.map(Slack, (slack) => slack.messageStream({ threadId: this.ref.id }))).pipe(
-			Stream.mapEffect(hydrateHistoryMessage),
-		)
+		return Stream.unwrap(Effect.map(Slack, (slack) => slack.messageStream({ threadId: this.ref.id })))
 	}
 
 	/**
@@ -120,9 +113,7 @@ export class Thread extends Schema.TaggedClass<Thread>()('Thread', {
 	 */
 	get allMessages(): Stream.Stream<Message, HistoryFailed, Slack> {
 		const options = MessageHistoryOptionsSchema.make({ direction: 'forward' })
-		return Stream.unwrap(
-			Effect.map(Slack, (slack) => slack.messageStream({ threadId: this.ref.id, options })),
-		).pipe(Stream.mapEffect(hydrateHistoryMessage))
+		return Stream.unwrap(Effect.map(Slack, (slack) => slack.messageStream({ threadId: this.ref.id, options })))
 	}
 
 	getParticipants(): Effect.Effect<ReadonlyArray<Author>, HistoryFailed, Slack> {
