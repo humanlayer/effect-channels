@@ -15,6 +15,7 @@ import { SlackMessageTs, type SlackPostMessageInput, SlackSentMessage, SlackStre
 import { Slack } from '../src/Slack.ts'
 import { SlackClient } from '../src/SlackClient.ts'
 import { nativeIngressLayer, nativeMailbox, nativeMessage, nativeRunner } from './nativeSupport.ts'
+import { testConnectionStoreLayer } from './support.ts'
 import { makeStubSlackClient, testChannelId, testRootThreadId, testRootTs } from './support.ts'
 
 it.effect('cancels the targeted head and delivers the stop callback next without retrying it', () =>
@@ -95,6 +96,7 @@ it.effect('restores active status after an interrupted stream and leaves no stre
 			setSessionStatus: (input) => Queue.offer(statuses, input.status).pipe(Effect.asVoid),
 		})
 		const providerLayer = Slack.layerWith({ streaming: 'post_and_edit' }).pipe(
+			Layer.provide(testConnectionStoreLayer),
 			Layer.provide(Layer.succeed(SlackClient, client)),
 		)
 		yield* Effect.gen(function* () {
@@ -124,7 +126,10 @@ it.effect('never sends the proactive DM sentinel as a streaming thread timestamp
 			postMessage: (input) => Queue.offer(posts, input).pipe(Effect.as(sent)),
 			updateMessage: () => Effect.succeed(sent),
 		})
-		const providerLayer = Slack.layer.pipe(Layer.provide(Layer.succeed(SlackClient, client)))
+		const providerLayer = Slack.layer.pipe(
+			Layer.provide(testConnectionStoreLayer),
+			Layer.provide(Layer.succeed(SlackClient, client)),
+		)
 		yield* Effect.flatMap(Slack, (provider) =>
 			provider.stream(
 				{ threadId: ThreadId.make('slack:v1:T_TEST:im:C_TEST') },
@@ -155,7 +160,10 @@ it.effect('stops an opened native stream when a later append fails', () =>
 					Effect.as({ channelId: input.stream.channelId, ts: input.stream.messageTs }),
 				),
 		})
-		const providerLayer = Slack.layer.pipe(Layer.provide(Layer.succeed(SlackClient, client)))
+		const providerLayer = Slack.layer.pipe(
+			Layer.provide(testConnectionStoreLayer),
+			Layer.provide(Layer.succeed(SlackClient, client)),
+		)
 		const exit = yield* Effect.exit(
 			Effect.flatMap(Slack, (provider) =>
 				provider.stream(

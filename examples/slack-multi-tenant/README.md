@@ -1,55 +1,38 @@
-# Slack multi-tenant example
+# Slack multi-tenant example — Postgres storage
 
-A workspace-aware Slack example with **memory delivery** and an application-owned
-Postgres **credential repository**. It is not the Phase 2 Postgres delivery backend.
-Use [`slack-thread-echo`](../slack-thread-echo/) if you want no database at all.
+The same `SlackBot.make` API as the memory example, with **library-owned Postgres
+connections, subscriptions/routing and delivery**. The example has no row schema,
+repository, codec, migration, or cache invalidation implementation.
 
 ## Composition
 
-[`src/app.ts`](./src/app.ts) is only the bot definition:
-
 ```ts
-export const bot = SlackBot.memory({ namespace: 'slack-multi-tenant', handlers })
+// src/app.ts — behavior is independent of storage
+export const bot = SlackBot.make({ namespace: 'slack-multi-tenant', handlers })
 export const application = bot.layer
 ```
 
-[`src/handlers.ts`](./src/handlers.ts) contains application behavior;
-[`src/responses.ts`](./src/responses.ts) contains message/stream formatting.
-Native Slack returns resolved authors automatically; handlers never load caches
-or hydrate messages. The memory preset owns subscriptions, delivery, and scoped
-worker startup. `bot.routes` and `bot.worker` remain available separately for
-advanced hosts; `bot.layer` combines them with the same acquired services.
+[`src/handlers.ts`](./src/handlers.ts) contains plain Effect callbacks;
+[`src/responses.ts`](./src/responses.ts) owns message/stream formatting.
+Native Slack resolves authors automatically, using provider-owned state/cache.
 
-[`src/transport.ts`](./src/transport.ts) owns the HTTP client, crypto, one scoped
-SQL pool, repository migration, and credential lookup:
+[`src/transport.ts`](./src/transport.ts) provides
+`@humanlayer/channels-slack/postgres`'s `layer`, one configured scoped PgClient,
+HTTP and crypto. Library migrations finish at acquisition before routes/workers
+start. The host's scope owns the pool and shutdown. To use Redis instead, select
+`@humanlayer/channels-slack/redis` and provide the neutral Redis client; no handlers
+or delivery policies change. See the [service graph](../../packages/slack/README.md#service-graph).
 
-```ts
-SlackTenantCredentials.layerWithLookup({ loadConnection: loadSlackConnection })
-```
-
-The callback receives `{ workspaceId: SlackTeamId }` and returns a typed
-`SlackConnection | undefined`. Slack validates the boundary and caches each
-workspace's credentials for one minute. There are no organization gates,
-enablement flags, or OAuth endpoints.
-
-[`src/server.ts`](./src/server.ts) supplies that transport and serves the application.
-The repository migration completes before the credential service is acquired. `application`
-and `transport` remain separate so tests can use real Slack clients against Emulate
-with supplied credential Layers without acquiring a database.
-
-[`src/store.ts`](./src/store.ts) owns `example_slack_installations_v1`. Startup
-creates the table if absent but never overwrites credentials. The explicit seed
-command upserts records. The old `example_slack_connections` namespace is untouched;
-existing installations need an explicitly planned export/reseed, not automatic
-migration. No delivery records are written to Postgres. Tokens are redacted in
-application values but stored as database text: protect database access and backups.
+The old `src/store.ts` / `SlackConnectionRow` have been removed. Applications with
+existing custom tables may instead implement `SlackConnectionStore`'s domain-level
+`get` / `upsert` / `remove`. They still do not implement Slack's cache or hydration.
 
 ## Setup
 
-Run commands from the repository root after `bun install`. Use a database you
-intend this example to modify, and the same Slack app manifest/tunnel setup as the
-[echo example](../slack-thread-echo/README.md#setup). One Slack app has one signing
-secret and webhook URL; the signed payload's `team_id` selects its workspace token.
+From the repository root after installing/building, select a database you intend
+this example to modify. Use the manifest/tunnel setup from the
+[echo example](../slack-thread-echo/README.md#setup). One app has one signing secret;
+the signed payload's `team_id` selects its installation.
 
 ```sh
 export DATABASE_URL='postgres://localhost/slack_example'
@@ -64,52 +47,51 @@ bun run --cwd examples/slack-multi-tenant seed
 bun run --cwd examples/slack-multi-tenant start
 ```
 
-`seed` requires a complete primary installation and validates **all** supplied
-records before acquiring SQL or writing anything. No secrets are printed. The
-server then reads tokens from the repository, not from the seed variables.
-`DATABASE_URL` and `SLACK_SIGNING_SECRET` remain necessary for serving requests.
+`seed` parses **all** installations before acquiring SQL or writing, then calls
+`SlackState.upsertConnection`. The server subsequently requires `DATABASE_URL`
+and `SLACK_SIGNING_SECRET`, not the seed variables. Tokens are redacted in domain
+values but stored as plaintext credential material; protect database access,
+transport, storage and backups. Do not enable query-parameter logging.
 
-To seed a second installation of the **same app**, also supply all four variables:
+For a second installation of the same app, also set all four suffix-`_2` variables:
+`SLACK_TEAM_ID_2`, `SLACK_BOT_TOKEN_2`, `SLACK_BOT_USER_ID_2`, `SLACK_BOT_ID_2`.
+An absent secondary installation is allowed; partial configuration fails.
 
-```sh
-export SLACK_TEAM_ID_2='T...'
-export SLACK_BOT_TOKEN_2='xoxb-...'
-export SLACK_BOT_USER_ID_2='U...'
-export SLACK_BOT_ID_2='B...'
-```
-
-Run `seed` again with the primary and secondary configuration. An entirely absent
-second installation is allowed; a partial one fails instead of silently skipping.
-Credential changes may take up to one minute to pass through the local cache.
+Credentials and missing installations are **not TTL-cached**. Upserts/removals are
+visible to subsequent inbound/outbound requests across runtimes. Applications
+with an installation lifecycle call `SlackState.upsertConnection` /
+`removeConnection`; no manual cache invalidation is required. Already-started
+requests are not transactionally revoked. Removal does not delete pending work
+or subscriptions. OAuth and ownership/authorization endpoints are not implemented.
 
 Set Slack's Request URL to
-`https://YOUR-TUNNEL-HOST/api/v1/integrations/slack/webhook`. Invite the bot to the
-channels in each workspace. Unknown installations are acknowledged and dropped;
-lookup failures return a retryable HTTP failure instead.
+`https://YOUR-TUNNEL-HOST/api/v1/integrations/slack/webhook`. Invite the bot in each
+workspace. Unknown installations are acknowledged and dropped; store failures
+return a retryable HTTP error instead.
 
-## Behavior and limits
+## Behavior and persistence
 
-Mentions explicitly subscribe then echo; subscribed follow-ups and DMs/MPIMs also
-reply. Include **stream** for streaming (with post/edit fallback), or **reaction**
-in a mention for a check reaction. Edits, deletes, typed reactions, and Stop events
-have lifecycle handlers. Each registration has a stable ID.
+Mentions explicitly subscribe and echo; subscribed follow-ups and DMs/MPIMs reply.
+`stream` triggers streaming with post/edit fallback; `reaction` adds a check.
+Edits, deletes, reactions and Stop have lifecycle handlers with stable IDs.
 
-The memory preset's queue, retry, retention, lease, capacity, and worker defaults
-match the [echo example](../slack-thread-echo/README.md#delivery-limits); individual
-`policy` and `runner` fields can be overridden without restating every setting.
-Mailboxes are installation-scoped; unrelated handlers are independent. Accepted
-pending messages can coalesce into the latest message plus `context.skipped`.
-There is no exactly-once guarantee for outgoing writes. On process restart,
-credentials survive but **delivery, routing, and subscriptions do not**. Run a
-single process for this memory example; multiple processes do not share ownership.
+The [initial delivery policy](../slack-thread-echo/README.md#delivery-limits) is
+unchanged. Message queues coalesce pending messages into latest + `context.skipped`;
+unrelated registrations and workspaces are independent. Durable stores preserve
+accepted work, frozen retries, leases, subscriptions/routing and installations
+across runtime reconstruction. Multiple workers share conditional ownership.
+All workers need compatible clocks and registration/policy configuration.
+External Slack writes can still repeat after recovery; this is not exactly-once.
 
-See the [shared service graph](../../packages/slack/README.md#service-graph).
-Only the credential source differs from the echo example: this application loads
-connections from its own repository rather than directly from environment config.
+New tables use `humanlayer_slack_v1_*` and `humanlayer_delivery_v1_*`.
+**No automatic migration** from `example_slack_installations_v1`,
+`example_slack_connections`, or historical Channels mailbox tables is attempted.
+Before switching an existing deployment: stop old ingress, inventory/back up old
+work, drain or export it with the matching old runtime, explicitly translate
+subscriptions/connections, verify pending counts, then switch ingress and workers.
+Do not copy legacy mailbox JSON or drop old tables automatically.
 
 ## Verification
-
-Normal example tests are database-free:
 
 ```sh
 bun run --cwd examples/slack-multi-tenant test
@@ -117,21 +99,23 @@ bun run --cwd examples/slack-multi-tenant typecheck
 bun run --cwd examples/slack-multi-tenant build
 ```
 
-They exercise the real application graph's DM reply and unknown-installation
-handling against Emulate with supplied credential Layers, plus seed-config parsing.
-The root `bun run test` includes them. The build produces a workspace-dependent
-`dist/server.js`, not a self-contained deployment archive.
+Default tests use the actual application graph with memory storage and Emulate:
+DM replies, unknown/removed installations, and seed parsing. They require no DB.
+Build output is workspace-dependent, not a standalone deployment archive.
 
-The optional repository SQL tests are **separate** and require an explicitly
-provided disposable database:
+Root `bun run test:backend:postgres` and `bun run test:backend:redis` create fresh
+disposable containers. They run real adapter contracts and the same bot definition
+over each backend, including admission before execution and latest/skipped delivery.
+External Slack HTTP is replaced at its actual transport seam for those contracts.
+
+The older optional example-specific outbound credential checks remain separate:
 
 ```sh
 TEST_DATABASE_URL='postgres://localhost/disposable_slack_test' \
   bun run --cwd examples/slack-multi-tenant test:postgres
 ```
 
-This command creates and drops unique test schemas. It fails if `TEST_DATABASE_URL`
-is missing; it never falls back to `DATABASE_URL` or loads env files. Normal test
-commands structurally exclude `test-backends`. Merely setting a database variable
-does not activate backend tests. These tests were typechecked but not executed as
-part of the example update; they do not test shared-delivery SQL persistence.
+They create/drop a unique test schema and never fall back to `DATABASE_URL`.
+Both checks passed on a separate fresh disposable Postgres container during Phase 2
+verification; they are counted separately from the four root adapter contracts.
+Normal configurations structurally exclude all backend suites.

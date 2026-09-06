@@ -24,6 +24,7 @@
 				"name": "@effect/language-service",
 				"diagnostics": false
 			}
-		]
+		],
+		"customConditions": ["@humanlayer/source"]
 	}
 }

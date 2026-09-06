@@ -2,12 +2,52 @@
 	"name": "@humanlayer/channels-slack",
 	"version": "0.0.0",
 	"private": true,
+	"files": [
+		"dist",
+		"README.md"
+	],
 	"type": "module",
+	"sideEffects": false,
 	"exports": {
-		".": "./src/index.ts"
+		".": {
+			"@humanlayer/source": "./src/index.ts",
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js",
+			"default": "./dist/index.js"
+		},
+		"./memory": {
+			"@humanlayer/source": "./src/memory.ts",
+			"types": "./dist/memory.d.ts",
+			"import": "./dist/memory.js",
+			"default": "./dist/memory.js"
+		},
+		"./postgres": {
+			"@humanlayer/source": "./src/postgres.ts",
+			"types": "./dist/postgres.d.ts",
+			"import": "./dist/postgres.js",
+			"default": "./dist/postgres.js"
+		},
+		"./redis": {
+			"@humanlayer/source": "./src/redis.ts",
+			"types": "./dist/redis.d.ts",
+			"import": "./dist/redis.js",
+			"default": "./dist/redis.js"
+		},
+		"./postgres/client": {
+			"@humanlayer/source": "./src/postgres/client.ts",
+			"types": "./dist/postgres/client.d.ts",
+			"import": "./dist/postgres/client.js",
+			"default": "./dist/postgres/client.js"
+		},
+		"./redis/client": {
+			"@humanlayer/source": "./src/redis/client.ts",
+			"types": "./dist/redis/client.d.ts",
+			"import": "./dist/redis/client.js",
+			"default": "./dist/redis/client.js"
+		}
 	},
 	"scripts": {
-		"build": "bun build ./src/index.ts --outdir ./dist --target browser --format esm --packages external",
+		"build": "tsc -p tsconfig.build.json",
 		"test": "vitest run --dir test",
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},
@@ -16,13 +56,34 @@
 	},
 	"devDependencies": {
 		"@effect/platform-node": "catalog:",
+		"@effect/sql-pg": "catalog:",
 		"@effect/vitest": "catalog:",
+		"@types/pg": "^8.15.6",
 		"effect": "catalog:",
 		"emulate": "0.11.0",
+		"redis": "^5.11.0",
 		"typescript": "catalog:",
 		"vitest": "catalog:"
 	},
 	"peerDependencies": {
-		"effect": "4.0.0-rc.112"
+		"@effect/platform-node": "4.0.0-rc.112",
+		"@effect/sql-pg": "4.0.0-rc.112",
+		"@types/pg": "^8.15.6",
+		"effect": "4.0.0-rc.112",
+		"redis": ">=5.0.0 <7.0.0"
+	},
+	"peerDependenciesMeta": {
+		"@effect/sql-pg": {
+			"optional": true
+		},
+		"@effect/platform-node": {
+			"optional": true
+		},
+		"redis": {
+			"optional": true
+		},
+		"@types/pg": {
+			"optional": true
+		}
 	}
 }

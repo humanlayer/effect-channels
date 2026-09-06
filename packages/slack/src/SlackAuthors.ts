@@ -3,6 +3,7 @@ import { Context, Effect, Layer } from 'effect'
 import { Message as MessageSchema, type Message } from './Message.ts'
 import type { Author, TenantId } from './Model.ts'
 import type { MessagePage, ThreadPage } from './Operations.ts'
+import { SlackClient } from './SlackClient.ts'
 import { SlackUserDirectory } from './SlackUserDirectory.ts'
 import { Thread as ThreadSchema, type Thread } from './Thread.ts'
 
@@ -24,6 +25,7 @@ const messageWithAuthor = (message: Message, author: Author) => {
 
 const make = Effect.gen(function* () {
 	const users = yield* SlackUserDirectory
+	const client = yield* SlackClient
 	const resolveAuthor = Effect.fn('slack.authors.resolve')(function* ({
 		tenant,
 		author,
@@ -32,6 +34,7 @@ const make = Effect.gen(function* () {
 		readonly author: Author
 	}) {
 		return yield* users.getUser({ provider: 'slack', tenant, userId: author.userId }).pipe(
+			Effect.provideService(SlackClient, client),
 			Effect.map((profile) => profile.author),
 			Effect.catchTags({
 				UnknownTenant: () => Effect.succeed(author),

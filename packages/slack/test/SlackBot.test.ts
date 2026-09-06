@@ -1,9 +1,10 @@
 import { assert, it } from '@effect/vitest'
 import { Context, Effect, Fiber, Layer, Queue, Ref } from 'effect'
+import { HttpClient, HttpClientResponse } from 'effect/unstable/http'
 
-import { Slack, SlackBot, SlackIngress, SlackSubscriptions, UserProfile, type MessageEvent } from '../src/index.ts'
+import { Slack, SlackBot, SlackIngress, SlackSubscriptions, type MessageEvent } from '../src/index.ts'
 import { nativeMessage, nativeRunner, testAuthor } from './nativeSupport.ts'
-import { stubSlackClientLayer } from './support.ts'
+import { testConnectionStoreLayer } from './support.ts'
 
 class Replies extends Context.Service<
 	Replies,
@@ -16,9 +17,30 @@ it.effect('the memory bot captures application services and shares users between
 	Effect.gen(function* () {
 		const calls = yield* Ref.make(0)
 		const delivered = yield* Queue.unbounded<string>()
-		const client = stubSlackClientLayer({
-			getUser: () => Ref.update(calls, (n) => n + 1).pipe(Effect.as(UserProfile.make({ author: testAuthor }))),
-		})
+		const client = Layer.merge(
+			testConnectionStoreLayer,
+			Layer.succeed(
+				HttpClient.HttpClient,
+				HttpClient.make((request) =>
+					Ref.update(calls, (n) => n + 1).pipe(
+						Effect.as(
+							HttpClientResponse.fromWeb(
+								request,
+								Response.json({
+									ok: true,
+									user: {
+										id: testAuthor.userId,
+										real_name: testAuthor.fullName,
+										name: testAuthor.userName,
+										is_bot: false,
+									},
+								}),
+							),
+						),
+					),
+				),
+			),
+		)
 		const bot = SlackBot.memory({
 			namespace: 'bot-services',
 			handlers: {

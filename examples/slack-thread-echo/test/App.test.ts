@@ -46,7 +46,7 @@ it.live('the actual echo graph admits without a worker, then replies and handles
 		assert.strictEqual((yield* Effect.promise(() => web.handler(emulator.signedWebhook(callback)))).status, 200)
 		assert.strictEqual(yield* Queue.size(test.posts), 0)
 		const context = yield* Layer.buildWithMemoMap(
-			services.pipe(Layer.provide(dependencies)),
+			services.pipe(Layer.provideMerge(dependencies)),
 			memoMap,
 			yield* Scope.Scope,
 		)

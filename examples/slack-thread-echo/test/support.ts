@@ -1,12 +1,8 @@
 import { NodeCrypto } from '@effect/platform-node'
-import {
-	SlackClient,
-	SlackTenantCredentials,
-	SlackConnection,
-	SlackConnectionCredentials,
-} from '@humanlayer/channels-slack'
+import { SlackConnection, SlackConnectionCredentials, SlackTeamId } from '@humanlayer/channels-slack'
+import { layer as storage } from '@humanlayer/channels-slack/memory'
 import { ConfigProvider, Effect, Layer, Queue, Redacted } from 'effect'
-import { FetchHttpClient, HttpClient } from 'effect/unstable/http'
+import { FetchHttpClient, HttpClient, HttpClientRequest } from 'effect/unstable/http'
 
 import {
 	SlackEmulator,
@@ -34,7 +30,12 @@ export const makeExampleTestTransport = Effect.gen(function* () {
 			const client = yield* HttpClient.HttpClient
 			return HttpClient.make((request) =>
 				client
-					.execute(request)
+					.execute(
+						HttpClientRequest.setUrl(
+							request,
+							request.url.replace('https://slack.com/api', `${emulator.emulator.url}/api`),
+						),
+					)
 					.pipe(
 						Effect.tap(() =>
 							request.url.endsWith('/chat.postMessage') ? Queue.offer(posts, undefined) : Effect.void,
@@ -43,24 +44,21 @@ export const makeExampleTestTransport = Effect.gen(function* () {
 			)
 		}),
 	).pipe(Layer.provide(FetchHttpClient.layer))
-	const credentials = SlackTenantCredentials.layerWithLookup({
-		loadConnection: ({ workspaceId }) =>
-			Effect.succeed(
-				workspaceId === emulator.teamId
-					? SlackConnection.make({
-							credentials: SlackConnectionCredentials.make({
-								botToken: Redacted.make(slackEmulatorBotToken),
-								botUserId: slackEmulatorBotUserId,
-								botId: slackEmulatorBotId,
-							}),
-						})
-					: undefined,
-			),
+	const stores = storage({
+		connections: [
+			{
+				workspaceId: SlackTeamId.make(emulator.teamId),
+				connection: SlackConnection.make({
+					credentials: SlackConnectionCredentials.make({
+						botToken: Redacted.make(slackEmulatorBotToken),
+						botUserId: slackEmulatorBotUserId,
+						botId: slackEmulatorBotId,
+					}),
+				}),
+			},
+		],
 	})
-	const transport = SlackClient.layerWith({ apiOrigin: new URL(`${emulator.emulator.url}/api`) }).pipe(
-		Layer.provideMerge(credentials),
-		Layer.provide(http),
-	)
+	const transport = Layer.merge(stores, http)
 	const config = ConfigProvider.layer(
 		ConfigProvider.fromUnknown({ SLACK_SIGNING_SECRET: slackEmulatorSigningSecret }),
 	)

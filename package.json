@@ -17,7 +17,10 @@
 		"format": "vp fmt --check",
 		"format:write": "vp fmt --write",
 		"typecheck": "vp run -r typecheck",
-		"prepare": "effect-tsgo patch --oxlint"
+		"prepare": "effect-tsgo patch --oxlint",
+		"verify:exports": "bun run tools/verify-package-exports.ts",
+		"test:backend:postgres": "PHASE2_BACKEND=postgres bun run tools/test-backends.ts",
+		"test:backend:redis": "PHASE2_BACKEND=redis bun run tools/test-backends.ts"
 	},
 	"devDependencies": {
 		"@effect/language-service": "0.86.2",

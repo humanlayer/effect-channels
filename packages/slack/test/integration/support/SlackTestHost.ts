@@ -29,6 +29,8 @@ import {
 import { ConfigProvider, Effect, Layer } from 'effect'
 import { HttpClient, HttpRouter, HttpServerResponse } from 'effect/unstable/http'
 
+import { testConnectionStoreLayer } from '../../support.ts'
+
 export type SlackProviderConfig<E = never, R = never> = {
 	readonly provider: 'slack'
 	readonly loadConnection?: (input: SlackConnectionLookup) => Effect.Effect<unknown, E, R>
@@ -146,7 +148,7 @@ export const makeSlackTestHost = <
 		Layer.provideMerge(connectionServices),
 		Layer.provide(options.advanced?.httpClient ?? NodeHttpClient.layerFetch),
 	)
-	const native = Slack.layer.pipe(Layer.provideMerge(slackClient))
+	const native = Slack.layer.pipe(Layer.provideMerge(slackClient), Layer.provide(testConnectionStoreLayer))
 	const handlers = { ...options, ...options.handlers }
 	const ingress = SlackIngress.layer({
 		namespace: options.namespace ?? 'slack-app',

@@ -1,55 +1,17 @@
-# Native Slack + shared delivery
+# Native Slack and shared delivery
 
-`@humanlayer/channels-slack` exposes Slack operations, schema-backed handles,
-signed webhook routes, and typed handler registration. There is no Channels
-facade, provider registry, or app package.
+One provider-native bot definition works with memory, Postgres, Redis, or custom
+storage. Applications own handlers and host resources—not credential rows,
+cache plumbing, webhook context, or delivery algorithms.
 
-## Outbound only
-
-```ts
-import { Slack, SlackClient, SlackTenantCredentials, ThreadId, MarkdownContent } from '@humanlayer/channels-slack'
-import { Effect, Layer } from 'effect'
-import { FetchHttpClient } from 'effect/unstable/http'
-
-const client = SlackClient.layer.pipe(
-	Layer.provide(SlackTenantCredentials.layerFromConfig),
-	Layer.provide(FetchHttpClient.layer),
-)
-const native = Slack.layer.pipe(Layer.provide(client))
-const post = Effect.flatMap(Slack, (slack) =>
-	slack.post({
-		threadId: ThreadId.make('slack:v1:T_WORKSPACE:C_CHANNEL:100.1'),
-		content: MarkdownContent.make({ markdown: 'Hello' }),
-	}),
-).pipe(Effect.provide(native))
-```
-
-This needs the bot token and HTTP, not a signing secret, mailbox store,
-subscriptions, Node defaults, or a worker. `Thread.post`, `SentMessage.edit`,
-reactions, files, history, streaming, and DMs use the same native service.
-`Thread.subscribe` separately requires `SlackSubscriptions`. Native history and
-handles both return resolved authors automatically. `Slack.getUser` uses one
-workspace/user-scoped cache, shared with history and inbound delivery. A miss
-fetches the user and caches the profile; concurrent misses share the lookup.
-
-The cache holds at most 1,000 users: successful profiles live for five minutes,
-`user_not_found` for one minute, and other failures have zero TTL. An explicit
-`getUser` call retains its typed error. Message author resolution keeps the original
-author on expected lookup failure, after the failure has been logged; defects and
-interruption still propagate. There is no optional hydration step or second shared
-cache to configure. The old `UserProfileCache` contract is retained only for the
-historical Postgres adapter, not used by the native runtime.
-
-## Inbound hosting
-
-The normal memory-host API is intentionally small:
+## Define behavior, then choose storage
 
 ```ts
 import { SlackBot, MarkdownContent, type MessageEvent } from '@humanlayer/channels-slack'
 import { Effect } from 'effect'
 
-const bot = SlackBot.memory({
-	namespace: 'my-slack-bot',
+export const bot = SlackBot.make({
+	namespace: 'my-bot',
 	handlers: {
 		onNewMention: ({ thread, message }: MessageEvent) =>
 			Effect.gen(function* () {
@@ -60,91 +22,177 @@ const bot = SlackBot.memory({
 })
 ```
 
-`bot.layer` mounts the webhook and starts a scoped worker. Hosts provide
-`SlackClient`, `SlackTenantCredentials`, and platform `Crypto`; custom handler
-services remain in the Layer's requirements. Nothing launches at import time.
-`policy` and `runner` accept partial overrides of the bounded memory preset.
-This is Slack-specific composition, not a universal provider facade or agent runtime.
+Supply **one storage bundle**, an `HttpClient`, and platform `Crypto` at the host:
 
-Single callbacks use stable IDs: `mention`, `subscribed`, `dm`, `edited`, `deleted`,
-`reaction`, and `stopped`. For multiple handlers, pass arrays of `{ id, handler }`;
-reaction registrations also accept `emojis`. IDs must be unique across the bot.
-Filtering is inside the registered delivery handler, so retries retain the same
-admission identity. Avoid renaming IDs while work is outstanding.
+| Import                                | `layer` provides                                                  | Requirements                         |
+| ------------------------------------- | ----------------------------------------------------------------- | ------------------------------------ |
+| `@humanlayer/channels-slack/memory`   | Connection store, subscriptions/routing, delivery store/readiness | None; `layer(options?)` is a factory |
+| `@humanlayer/channels-slack/postgres` | Same services, backed by versioned SQL tables                     | Ambient `SqlClient.SqlClient`        |
+| `@humanlayer/channels-slack/redis`    | Same services, backed by Redis                                    | Ambient neutral `Redis.Redis`        |
 
-Advanced applications can still compose the lower-level services:
+The backend modules also export `connections` and `subscriptions` individually.
+Memory exports `connections(options?)`, `subscriptions(options?)`,
+`connectionsFromConfig`, and `layerFromConfig`. The config recipes read
+`SLACK_TEAM_ID`, `SLACK_BOT_TOKEN`, `SLACK_BOT_USER_ID`, and `SLACK_BOT_ID`; they
+bootstrap a real mutable memory store, not a wildcard credential loader.
 
-1. `SlackIngress.layer({ namespace, policy, handlers })` binds stable handler IDs
-   and native event schemas to shared delivery.
-2. Supply delivery `/memory`, `SlackSubscriptions.layerMemory`, and `Slack.layer`.
-   Slack supplies its internal user-resolution services itself.
-3. Mount `SlackRoutes.layer` in Effect HTTP. It verifies the original body and
-   commits all required admissions before returning success; it starts no worker.
-4. Explicitly run `SlackIngress.run({ scanLimit, concurrency, pollMs })` in the
-   host's scope. It awaits handlers and finalizes active fibers on shutdown.
-   Each handler invocation receives its own scope, including when it uses captured
-   application services. Invalid delivery policies fail ingress Layer acquisition.
+`bot.layer` mounts signed routes and starts a scoped worker. Advanced hosts can
+use `bot.routes` (admission only), `bot.worker`, and `bot.services` separately,
+sharing the same Layer memo map. Callbacks retain ambient application service
+requirements. `policy` and `runner` accept partial overrides. Nothing starts at import.
 
-`HttpRouter.toWebHandler(bot.layer)` supplies a standard
-`Request → Promise<Response>` function for Hono or another Fetch host. The host
-must supply the transport Layer and await the returned `dispose()` on shutdown.
-For separate admission/execution, use `bot.routes` and `bot.worker` with one shared
-Layer memo map. `bot.services` exposes the acquired services for advanced composition.
-Do not reconstruct the Layer graph for every request.
+Single callbacks have stable IDs: `mention`, `subscribed`, `dm`, `edited`,
+`deleted`, `reaction`, `stopped`. Arrays use `{ id, handler }`; reaction entries
+also accept `emojis`. Keep IDs unique and stable while work is outstanding.
+The older `SlackBot.memory` convenience fixes memory delivery/subscriptions but
+still requires a connection store and HTTP. Prefer `make` plus a storage bundle.
 
-Message queue behavior is latest plus `context.skipped`, not FIFO. Lifecycle
-callbacks are serial per handler. Different handler IDs are independent; no
-cross-handler execution order is promised. Mentions do not implicitly subscribe.
-Other bots remain eligible; only this installation's own echoes are suppressed.
-Routing decisions are remembered across retries, including mention/message twins
-and proactive-DM subscription changes. Memory routes are installation/channel
-scoped and retained for one day by default; configure routing retention to cover
-your provider replay window. Memory is volatile and capacity bounded.
+## Connection storage: the required custom seam
 
-Ephemeral-to-DM fallback requires explicit `EphemeralFallbackToDm`; it is never
-an implicit persistent write. A duplicate Stop cannot cancel a successor attempt.
-There is no exactly-once guarantee for external Slack writes.
-Explicit stream-source retryability is preserved; a non-retryable source failure
-does not become retryable merely because it passed through Slack streaming.
+`SlackConnectionStore` has exactly three operations:
 
-The multi-tenant example supplies an application-owned credential lookup through
-`SlackTenantCredentials.layerWithLookup`. It preserves ambient requirements and
-caches successful workspace lookups (including missing installations) for one minute.
-Failed lookups have zero cache TTL so a recovered repository can serve the next
-request. OAuth is not implemented.
+```ts
+get({ workspaceId }): Effect<SlackConnection | undefined, SlackConnectionStoreError>
+upsert({ workspaceId, connection }): Effect<void, SlackConnectionStoreError>
+remove({ workspaceId }): Effect<void, SlackConnectionStoreError>
+```
+
+`SlackConnection` contains `credentials: { botToken, botUserId, botId }`.
+The token is `Redacted<string>`. Implement `SlackConnectionStore` with an ordinary
+`Layer.effect` over your repository. Return domain records—not SQL rows or SDK
+objects. Upserts must be atomic, removals idempotent, and reads authoritative.
+Map and safely capture repository failures at that boundary. Applications with
+custom schemas own only this translation, not Slack's cache or request logic.
+
+For standard storage, use the supplied implementations instead. Their schemas,
+codecs, migrations, TTLs, and atomic statements/scripts are private to the library.
+Memory connections never expire or evict: capacity rejects new installations,
+upsert replaces an existing one, and removal frees capacity.
+
+For installation lifecycle operations, use **`SlackState`**:
+
+```ts
+const state = yield * SlackState
+yield * state.upsertConnection({ workspaceId, connection })
+yield * state.removeConnection({ workspaceId })
+```
+
+The service owns connection access and the single disposable user cache. Writes
+invalidate affected workspace profiles, including when a write fails ambiguously
+or is interrupted. **Credentials and missing installations are not TTL-cached.**
+Inbound requests and outbound API calls consult the authoritative store. A new
+request after removal cannot use a cached token; already-started requests are not
+revoked transactionally. There is no automatic cancellation/deletion of that
+installation's pending work or subscriptions on removal.
+
+The internal `SlackTenantCredentials.layer` bridges state to provider requests.
+Legacy read-only `layerWithLookup`/`layerFromConfig` remain for compatibility;
+the former retains its one-minute cache and neither is the new mutable-store path.
+Neither is used by the examples. OAuth installation UI, rotation, ownership
+authorization, and enterprise policy remain later phases. Do not expose unauthenticated
+endpoints for `upsertConnection` or `removeConnection`.
+
+## Users: request them, do not hydrate them
+
+`Slack.getUser` and inbound/history author assembly share `SlackState`'s cache:
+1,000 entries; profiles cached five minutes; `user_not_found` one minute; other
+failures zero TTL. Concurrent same-key lookups share a request. Keys include the
+workspace, user, redacted token and bot identity. Every lookup checks installation
+presence first. The HTTP lookup is privately pinned to the authorization snapshot
+used for its cache key, so a concurrent credential change cannot poison another
+installation version's entry. No plaintext tokens appear in Redis/cache key strings.
+
+Direct `getUser` preserves typed failures. Message author assembly falls back to
+the original author on expected lookup failure, after safe logging; defects and
+interruption propagate. `SlackUserDirectory` is a compatibility name for `SlackState`,
+not a second cache. The old caller-managed `UserProfileCache` remains only for the
+separate historical SQL package; native runtime code does not use it.
+
+## Outbound only
+
+```ts
+import { Slack, ThreadId, MarkdownContent } from '@humanlayer/channels-slack'
+import { connectionsFromConfig } from '@humanlayer/channels-slack/memory'
+import { Effect, Layer } from 'effect'
+import { FetchHttpClient } from 'effect/unstable/http'
+
+const native = Slack.layerFromStore.pipe(Layer.provide(connectionsFromConfig), Layer.provide(FetchHttpClient.layer))
+const post = Effect.flatMap(Slack, (slack) =>
+	slack.post({
+		threadId: ThreadId.make('slack:v1:T_WORKSPACE:C_CHANNEL:100.1'),
+		content: MarkdownContent.make({ markdown: 'Hello' }),
+	}),
+).pipe(Effect.provide(native))
+```
+
+This acquires no mailbox store, subscriptions, signing secret, platform crypto,
+Node defaults, or worker. Low-level `Slack.layer` / `SlackClient.layerWith` remain
+available for custom native transport composition.
+
+## Hosting and delivery guarantees
+
+After supplying host dependencies, `HttpRouter.toWebHandler(bot.layer)` provides
+standard `Request → Promise<Response>` hosting. Forward the original signed body
+unchanged and await `dispose()` during shutdown. Do not construct a runtime per request.
+
+All required admissions commit before ACK; partial fan-out fails with a retryable
+response and retries repair missing admissions. Queue means latest pending plus
+`context.skipped`, not FIFO. Lifecycle callbacks remain serial per handler.
+Subscriptions are explicit. Routes remember initial decisions across retries and
+proactive-DM changes. A duplicate Stop cannot cancel the next attempt. Handler
+finalizers finish before completion; cancellation renews ownership during cleanup.
+Ephemeral-to-DM fallback requires explicit `EphemeralFallbackToDm`.
+
+No backend makes external Slack writes exactly-once. See the
+[delivery guarantees](../delivery/README.md) and backend test READMEs for retention,
+Redis persistence/eviction requirements, single-slot limits, and clock assumptions.
+
+## Packaging and verification
+
+Root and memory export built ESM plus declarations without optional drivers.
+Postgres/Redis imports require only neutral Effect services. `/postgres/client`
+and `/redis/client` are explicit optional platform conveniences. Install
+`@effect/sql-pg` plus `@types/pg` for the former; `@effect/platform-node` plus
+node-redis `redis` for the latter. All Effect packages must match rc.112.
+
+Default tests use memory and Emulate, never ambient database URLs. `bun run
+verify:exports` packs and installs real isolated consumers, checks strict NodeNext
+and bundler declarations, import-time inertness, one Effect runtime, cross-entry
+service identity, and browser output without SQL/Redis/Node/Alchemy code.
+Effect's barrel has additional tree-shaken neutral modules; the verifier distinguishes
+parsed inputs from emitted bytes rather than claiming every parsed file ships.
+
+`bun run test:backend:postgres` and `bun run test:backend:redis` create fresh local
+Docker containers for each suite, reject occupied ports, and remove their containers
+and anonymous volumes on completion. They do not use `DATABASE_URL` or `REDIS_URL`.
 
 ## Service graph
 
-Arrows below mean **depends on**, except the worker's invocation of ingress.
-`SlackBot.memory` assembles the shared native/delivery subtree once. The routes and
-worker reuse that subtree; application handlers do not construct Layers.
-
 ```mermaid
 flowchart TD
-  Host["Node server or Fetch runtime"] --> Routes[SlackRoutes]
-  Host --> Worker[Scoped worker]
+  Routes[SlackRoutes] --> Credentials[SlackTenantCredentials]
   Routes --> Crypto[Platform Crypto]
+  Routes --> Client[SlackClient]
   Routes --> Ingress[SlackIngress]
-  Worker --> Ingress
-  Ingress --> Mailboxes["MailboxStore + MailboxReadiness — memory"]
-  Ingress --> Subscriptions["SlackSubscriptions — memory"]
+  Worker[Scoped worker] --> Ingress
+  Ingress --> Delivery[Mailbox store and readiness]
+  Ingress --> Subscriptions[SlackSubscriptions]
   Ingress --> Handlers[Application handlers]
   Handlers --> Slack[Slack native operations]
-  Handlers --> Subscriptions
-  Ingress --> Authors["SlackAuthors — internal message assembly"]
+  Handlers --> State[SlackState]
+  Ingress --> Authors[Internal author assembly]
   Slack --> Authors
-  Authors --> Users["SlackUserDirectory — cached getUser"]
-  Slack --> Users
-  Slack --> Client[SlackClient]
-  Users --> Client
-  Routes --> Client
-  Routes --> Credentials[SlackTenantCredentials]
+  Slack --> State
+  Authors --> State
+  Credentials --> State
+  State --> Connections[SlackConnectionStore]
+  State -. profile cache miss .-> Client
+  Slack --> Client
   Client --> Credentials
   Client --> HTTP[HttpClient]
-  Credentials --> Source["Echo: Config / Multi-tenant: application repository + SqlClient"]
 ```
 
-The host owns shutdown. Handler scopes finish before delivery records success or
-failure; cancellation renews ownership until cleanup completes. The multi-tenant
-SQL pool stores credentials only. Memory delivery is not process durability and
-does not make external Slack writes exactly-once.
+The profile client dependency is supplied at lookup, not State acquisition, so
+this call relationship is not a circular Layer construction. `SlackBot.make`
+owns assembly. The selected storage bundle implements Connections, Subscriptions,
+and Delivery; the host owns HTTP, crypto, pool/Redis connection and shutdown.

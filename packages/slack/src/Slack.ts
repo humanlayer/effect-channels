@@ -74,6 +74,8 @@ import { SentMessage, SentRef } from './SentMessage.ts'
 import { SlackAuthors } from './SlackAuthors.ts'
 import { SlackClient } from './SlackClient.ts'
 import type { SlackService } from './SlackService.ts'
+import { SlackState } from './SlackState.ts'
+import { SlackTenantCredentials } from './SlackTenantCredentials.ts'
 import {
 	SlackDmConversationTs,
 	decodeSlackChannelId,
@@ -1484,7 +1486,7 @@ export class Slack extends Context.Service<Slack, SlackService>()('slack/Slack')
 						),
 					info,
 					channelInfo,
-					getUser: users.getUser,
+					getUser: (input) => users.getUser(input).pipe(Effect.provideService(SlackClient, client)),
 					downloadAttachment,
 					openDM,
 					postEphemeral,
@@ -1493,6 +1495,15 @@ export class Slack extends Context.Service<Slack, SlackService>()('slack/Slack')
 		).pipe(Layer.provideMerge(SlackAuthors.layer))
 
 	static readonly layer = Slack.layerWith()
+
+	/** Native operations and state from a connection store and HTTP; no delivery, subscriptions, signing secret or worker. */
+	static readonly layerFromStore = Layer.suspend(() =>
+		Slack.layer.pipe(
+			Layer.provideMerge(SlackClient.layer),
+			Layer.provideMerge(SlackTenantCredentials.layer),
+			Layer.provideMerge(SlackState.layer),
+		),
+	)
 }
 
 export { SlackCapabilities }

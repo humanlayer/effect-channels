@@ -12,6 +12,7 @@ import {
 	type ThreadSummary,
 } from '../../src/index.ts'
 import type { SlackClient } from '../../src/SlackClient.ts'
+import { testConnectionStoreLayer } from '../support.ts'
 import { stubSlackClientLayer } from '../support.ts'
 import { makeTestMessage, testChannelRef, testThreadRef, testThreadRefFor } from './support.ts'
 
@@ -77,7 +78,7 @@ const makeHistoryProvider = (calls: { readonly thread: RecordedCalls; readonly c
 	})
 
 const withProvider = <A, E, R>(client: Layer.Layer<SlackClient>, program: Effect.Effect<A, E, R>) =>
-	program.pipe(Effect.provide(Slack.layer.pipe(Layer.provide(client))))
+	program.pipe(Effect.provide(Slack.layer.pipe(Layer.provide(testConnectionStoreLayer), Layer.provide(client))))
 
 const refs = (messages: ReadonlyArray<{ readonly ref: string }>) => messages.map((entry) => entry.ref)
 

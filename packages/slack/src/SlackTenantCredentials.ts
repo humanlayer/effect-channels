@@ -4,6 +4,8 @@ import { CredentialStoreError } from './Errors.ts'
 import type { SlackLoadCredentialsInput, SlackSaveCredentialsInput, SlackTenantCreds } from './Schema.ts'
 import { SlackTenantCreds as SlackTenantCredsSchema } from './Schema.ts'
 import { SlackConnection, SlackConnectionLookupInput, SlackTeamId } from './Schema.ts'
+import { SlackCredentialSnapshot } from './SlackCredentialSnapshot.ts'
+import { SlackState } from './SlackState.ts'
 
 export class SlackTenantCredentials extends Context.Service<
 	SlackTenantCredentials,
@@ -14,6 +16,42 @@ export class SlackTenantCredentials extends Context.Service<
 		readonly save: (input: SlackSaveCredentialsInput) => Effect.Effect<void, CredentialStoreError>
 	}
 >()('channels/SlackTenantCredentials') {
+	/** The mutable store path deliberately does not cache credentials or missing installations. */
+	static readonly layer = Layer.effect(
+		SlackTenantCredentials,
+		Effect.gen(function* () {
+			const state = yield* SlackState
+			return SlackTenantCredentials.of({
+				load: Effect.fn('slack.credentials.load')(function* (input) {
+					const snapshot = yield* Effect.serviceOption(SlackCredentialSnapshot)
+					if (Option.isSome(snapshot) && snapshot.value.workspaceId === input.teamId)
+						return Option.some(snapshot.value.credentials)
+					const connection = yield* state
+						.getConnection({ workspaceId: input.teamId })
+						.pipe(
+							Effect.mapError(() =>
+								CredentialStoreError.make({ operation: 'load', teamId: input.teamId }),
+							),
+						)
+					return Option.fromUndefinedOr(connection?.credentials)
+				}),
+				save: Effect.fn('slack.credentials.save')(function* (input) {
+					const connection = yield* Schema.decodeUnknownEffect(Schema.toType(SlackConnection))({
+						credentials: input.credentials,
+					}).pipe(
+						Effect.mapError(() => CredentialStoreError.make({ operation: 'save', teamId: input.teamId })),
+					)
+					yield* state
+						.upsertConnection({ workspaceId: input.teamId, connection })
+						.pipe(
+							Effect.mapError(() =>
+								CredentialStoreError.make({ operation: 'save', teamId: input.teamId }),
+							),
+						)
+				}),
+			})
+		}),
+	)
 	static readonly layerWithLookup = <E, R>(options: {
 		readonly loadConnection: (input: SlackConnectionLookupInput) => Effect.Effect<unknown, E, R>
 	}) =>

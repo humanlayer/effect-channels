@@ -1,5 +1,6 @@
 import { assert, it } from '@effect/vitest'
-import { Effect, Layer, Queue } from 'effect'
+import { SlackConnectionStore, SlackTeamId } from '@humanlayer/channels-slack'
+import { Context, Effect, Layer, Queue, Scope } from 'effect'
 import { HttpRouter } from 'effect/unstable/http'
 
 import {
@@ -19,9 +20,10 @@ it.live(
 		Effect.gen(function* () {
 			const emulator = yield* SlackEmulator
 			const test = yield* makeExampleTestTransport
+			const memoMap = yield* Layer.makeMemoMap
 			const web = HttpRouter.toWebHandler(
 				application.pipe(Layer.provide(test.transport), Layer.provide(test.config)),
-				{ disableLogger: true },
+				{ disableLogger: true, memoMap },
 			)
 			yield* Effect.addFinalizer(() => Effect.promise(web.dispose))
 			const dm = yield* emulator.call(
@@ -65,6 +67,17 @@ it.live(
 			assert.strictEqual(
 				(yield* Effect.promise(() =>
 					web.handler(emulator.signedWebhook({ ...callback, team_id: 'T_UNKNOWN' })),
+				)).status,
+				200,
+			)
+			assert.strictEqual(yield* Queue.size(test.posts), 0)
+			const services = yield* Layer.buildWithMemoMap(test.transport, memoMap, yield* Scope.Scope)
+			yield* Context.get(services, SlackConnectionStore).remove({
+				workspaceId: SlackTeamId.make(emulator.teamId),
+			})
+			assert.strictEqual(
+				(yield* Effect.promise(() =>
+					web.handler(emulator.signedWebhook({ ...callback, event_id: 'Ev_removed_installation' })),
 				)).status,
 				200,
 			)

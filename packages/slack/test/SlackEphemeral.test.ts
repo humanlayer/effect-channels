@@ -7,6 +7,7 @@ import { SlackChannelId, SlackMessageTs, SlackPostEphemeralInput, SlackSentMessa
 import { Slack } from '../src/Slack.ts'
 import { SlackClient } from '../src/SlackClient.ts'
 import { expectTaggedFailure, testAuthor, testThreadRef } from './nativeSupport.ts'
+import { testConnectionStoreLayer } from './support.ts'
 import { makeSlackClientHarness, makeStubSlackClient, slackJsonResponse, testChannelId, testTeamId } from './support.ts'
 
 const EphemeralBody = Schema.Struct({
@@ -48,6 +49,7 @@ it.effect('finalizes native typing after an ephemeral post and skips typing for 
 	Effect.gen(function* () {
 		const statuses = yield* Queue.unbounded<string>()
 		const layer = Slack.layer.pipe(
+			Layer.provide(testConnectionStoreLayer),
 			Layer.provide(
 				Layer.succeed(
 					SlackClient,
@@ -111,7 +113,14 @@ it.effect('uses a persistent DM only when the explicit fallback policy requests 
 				content: MarkdownContent.make({ markdown: 'private' }),
 				fallback: EphemeralFallbackToDm.make({}),
 			}),
-		).pipe(Effect.provide(Slack.layer.pipe(Layer.provide(Layer.succeed(SlackClient, client)))))
+		).pipe(
+			Effect.provide(
+				Slack.layer.pipe(
+					Layer.provide(testConnectionStoreLayer),
+					Layer.provide(Layer.succeed(SlackClient, client)),
+				),
+			),
+		)
 		assert.strictEqual(result.usedFallback, true)
 		assert.strictEqual(result.sent?.ref.threadId, 'slack:v1:T_TEST:im:D_OPENED')
 		assert.deepStrictEqual(yield* Queue.takeAll(calls), ['ephemeral', 'openDM', 'post'])
@@ -143,7 +152,14 @@ it.effect('does not open a DM or persist content when no fallback is explicitly 
 					fallback: EphemeralNoFallback.make({}),
 				}),
 			),
-		).pipe(Effect.provide(Slack.layer.pipe(Layer.provide(Layer.succeed(SlackClient, client)))))
+		).pipe(
+			Effect.provide(
+				Slack.layer.pipe(
+					Layer.provide(testConnectionStoreLayer),
+					Layer.provide(Layer.succeed(SlackClient, client)),
+				),
+			),
+		)
 		assert.strictEqual(error.threadId, testThreadRef.id)
 		assert.strictEqual(error.retryability, 'non_retryable')
 		assert.deepStrictEqual(yield* Queue.takeAll(calls), ['ephemeral'])

@@ -1,9 +1,9 @@
 import { assert, it } from '@effect/vitest'
 import { DateTime, Deferred, Effect, Fiber, Layer, Queue } from 'effect'
 import { TestClock } from 'effect/testing'
+import { HttpClient, HttpClientResponse } from 'effect/unstable/http'
 
 import {
-	SlackApiError,
 	SlackBot,
 	SlackSubscriptions,
 	ConversationStoppedEvent,
@@ -25,7 +25,7 @@ import {
 	Thread,
 	ThreadId,
 } from '../../src/index.ts'
-import { stubSlackClientLayer } from '../support.ts'
+import { testConnectionStoreLayer } from '../support.ts'
 import {
 	ingressLayer,
 	runnerOptions,
@@ -153,10 +153,20 @@ it.effect('the memory bot dispatches updates, deletes, and declaratively filtere
 			Effect.provide(
 				SlackBot.memory({ namespace: 'lifecycle-filters', handlers }).services.pipe(
 					Layer.provide(
-						stubSlackClientLayer({
-							getUser: () =>
-								Effect.fail(SlackApiError.make({ operation: 'users.info', code: 'user_not_found' })),
-						}),
+						Layer.merge(
+							testConnectionStoreLayer,
+							Layer.succeed(
+								HttpClient.HttpClient,
+								HttpClient.make((request) =>
+									Effect.succeed(
+										HttpClientResponse.fromWeb(
+											request,
+											Response.json({ ok: false, error: 'user_not_found' }),
+										),
+									),
+								),
+							),
+						),
 					),
 				),
 			),

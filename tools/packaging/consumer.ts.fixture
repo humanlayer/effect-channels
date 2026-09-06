@@ -1,0 +1,45 @@
+import { emptyMailbox, MailboxReadiness, MailboxStore } from '@humanlayer/channels-delivery'
+import * as DeliveryMemory from '@humanlayer/channels-delivery/memory'
+import { MarkdownContent, Slack, SlackConnectionStore, SlackSubscriptions, SlackTeamId, ThreadId } from '@humanlayer/channels-slack'
+import * as SlackMemory from '@humanlayer/channels-slack/memory'
+import { Context, Effect, Layer } from 'effect'
+import { FetchHttpClient } from 'effect/unstable/http'
+
+const readyForHost = <A, E>(program: Effect.Effect<A, E>) => program
+export const outbound = readyForHost(Effect.flatMap(Slack, (slack) => slack.post({
+	threadId: ThreadId.make('slack:v1:T_PACKAGING:C_PACKAGING:100.1'),
+	content: MarkdownContent.make({ markdown: 'Hello' }),
+})).pipe(Effect.provide(Slack.layerFromStore.pipe(
+	Layer.provide(SlackMemory.connections()),
+	Layer.provide(FetchHttpClient.layer),
+))))
+
+export const deliveryIdentity = Effect.scoped(
+	Effect.gen(function* () {
+		const context = yield* Layer.build(DeliveryMemory.layer({ maxMailboxes: 2 }))
+		const store = Context.get(context, MailboxStore)
+		const readiness = Context.get(context, MailboxReadiness)
+		const committed = yield* store.commitMailbox({ key: 'packaging', expectedRevision: null, nextState: emptyMailbox() })
+		const snapshot = yield* store.loadMailbox({ key: 'packaging' })
+		const ready = yield* readiness.scanReady({ prefix: '', now: 0, limit: 1 })
+		return { committed, snapshot, ready }
+	}),
+)
+
+export const slackIdentity = Effect.scoped(
+	Effect.gen(function* () {
+		const context = yield* Layer.build(SlackMemory.layer({ maxMailboxes: 2 }))
+		const store = Context.get(context, MailboxStore)
+		const readiness = Context.get(context, MailboxReadiness)
+		const connections = Context.get(context, SlackConnectionStore)
+		const subscriptions = Context.get(context, SlackSubscriptions)
+		const threadId = ThreadId.make('packaging-thread')
+		const committed = yield* store.commitMailbox({ key: 'slack', expectedRevision: null, nextState: emptyMailbox() })
+		const snapshot = yield* store.loadMailbox({ key: 'slack' })
+		const ready = yield* readiness.scanReady({ prefix: '', now: 0, limit: 1 })
+		const connection = yield* connections.get({ workspaceId: SlackTeamId.make('T_PACKAGING') })
+		yield* subscriptions.subscribe({ threadId })
+		const subscribed = yield* subscriptions.isSubscribed({ threadId })
+		return { committed, snapshot, ready, connection, subscribed }
+	}),
+)

@@ -1,58 +1,68 @@
-# Channels: native provider modules and shared delivery
+# Channels: native providers and shared delivery
 
-Phase 1 implements native Slack plus a shared, typed in-memory mailbox engine.
-`packages/app` and the old `packages/channels` facade are removed.
+Phase 2 provides native Slack with interchangeable memory, Postgres and Redis
+storage. There is no universal provider facade, app framework, or agent engine.
 
-- [`packages/slack`](./packages/slack/) — native operations, schema-backed handles,
-  subscriptions, credential Layers, signed routes, and typed ingress handlers.
-- [`packages/delivery`](./packages/delivery/) — admission, queue/latest-and-skipped,
-  bounded retries, leases, cancellation, memory storage, and scoped runners.
-- [`examples/slack-thread-echo`](./examples/slack-thread-echo/) — direct Effect Layer
-  composition with memory; no database needed. Effect HTTP and Fetch entrypoints.
-- [`examples/slack-multi-tenant`](./examples/slack-multi-tenant/) — existing optional
-  Postgres **credential repository**, with memory delivery and subscriptions.
-- [`packages/postgres`](./packages/postgres/) — isolated historical SQL code for
-  migration/drain work, **not** a new shared-delivery Postgres backend.
+- [`packages/slack`](./packages/slack/) — native operations, signed ingress,
+  ergonomic bot composition, required connection CRUD, and provider-owned state/cache.
+- [`packages/delivery`](./packages/delivery/) — one admission, latest-and-skipped,
+  retry, lease, cancellation and runner implementation across all storage adapters.
+- [`examples/slack-thread-echo`](./examples/slack-thread-echo/) — memory storage,
+  configured installation, Effect HTTP and Fetch hosts; no database.
+- [`examples/slack-multi-tenant`](./examples/slack-multi-tenant/) — the same bot
+  API with library-owned Postgres connections, subscriptions/routing and delivery.
+- [`packages/postgres`](./packages/postgres/) — separate historical SQL implementation,
+  not the new delivery adapter. It is preserved for explicit legacy drain/migration
+  work; no old tables are dropped or silently adopted by new adapters.
 
 ## Verification
 
 ```sh
 bun install
+bun run build
 bun run typecheck
 bun run test
 bun run check
-bun run build
+bun run verify:exports
 ```
 
-Commands use the workspace-local `vp` binary. If invoking it directly, use
-`./node_modules/.bin/vp test` rather than a separately installed global launcher.
+The workspace has five projects; Slack and delivery have built ESM/declaration
+exports. Commands use the local `vp` binary. Normal tests use memory, real native
+provider/delivery code and `emulate@0.11.0`; no live credentials, database, workerd,
+recordings, or replay. Vite env loading is disabled and backend suites are excluded
+structurally, regardless of ambient `DATABASE_URL` / `REDIS_URL`.
 
-## Slack provider testing
+Optional **disposable Docker** verification:
 
-Default tests use supplied memory Layers, real provider/shared-delivery code,
-and Vercel Labs `emulate@0.11.0`. No database, workerd, live Slack credentials,
-recording sessions, or recorded-traffic replay is required. Vite env-file loading
-is disabled, and backend suites are structurally excluded even if `DATABASE_URL`
-is already set.
+```sh
+bun run test:backend:postgres
+bun run test:backend:redis
+```
 
-`packages/slack/test/integration` starts isolated Slack emulators and closes each
-listener/runtime through Effect scopes. It covers public/private mentions,
-subscription follow-ups, DMs, own-bot suppression, other-bot history, files,
-edits/deletes/reactions, fallback streaming, cancellation, admission-before-work,
-and provider-visible replies. Protocol tests cover signatures, handshakes,
-partial-admission failures, replay routing, native streaming/status, and queue
-coalescing. Shared-engine tests cover conflicts, bounded retention, retries,
-lease recovery, independent mailbox scheduling, and stale/duplicate controls.
+These scripts create a fresh container per suite and remove owned containers and
+volumes afterward. They use fixed loopback ports 55432/56379 and refuse a bind
+conflict; they do not connect to application databases. Images: `postgres:17-alpine`,
+`redis:7-alpine`. See each package's `test-backends/README.md` for direct-suite
+commands, assertions and limitations.
 
-Emulate does not implement every Slack API: native streaming and exact pagination
-remain synthetic protocol tests, not claimed emulator coverage. Memory recovery
-means reconstruction over the same acquired store, not process-crash durability.
+`verify:exports` builds/packs actual packages, installs isolated consumers without
+optional peers and then with them, checks strict declarations and ESM imports,
+bundles real browser output without backend/Node code, and checks shared service
+identity and a single Effect runtime. It needs registry access and never acquires
+backend Layers. Avoid running it concurrently with another build, since it cleans
+generated `dist` output before packing.
 
-Postgres/Redis delivery Layers, built declaration/optional-peer isolation checks,
-Alchemy deployment, OAuth, additional delivery modes, and new providers are not
-part of Phase 1. No backend tests or deployment were run. Archived incomplete
-app-backend test sources are explicitly marked as non-executable Phase 2 work.
+## Scope and limitations
 
-`bun run test:live:slack` optionally launches the memory echo server for manual
-Slack testing. It contacts real Slack only when deliberately run and is not an
-acceptance requirement.
+Memory is volatile. Postgres and Redis tests prove storage/lease/routing semantics,
+not power-loss or replica-failover guarantees. Redis requires appropriate persistence,
+noeviction and operational headroom; the initial delivery adapter uses one hash slot
+and prefix indexes with write amplification. External Slack writes can repeat after
+recovery. Credentials are redacted in application values, not encrypted at rest.
+
+Alchemy/Cloudflare deployment, OAuth, token rotation, other delivery modes and other
+providers remain unimplemented. Emulate gaps such as native Slack streaming still
+use signed synthetic protocol tests. No live Slack or application database was used.
+
+`bun run test:live:slack` launches the echo server only when deliberately invoked;
+it is not automated acceptance coverage.

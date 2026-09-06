@@ -16,6 +16,7 @@ import {
 import { ConfigProvider, Effect, Layer, Option, Redacted } from 'effect'
 import * as FetchHttpClient from 'effect/unstable/http/FetchHttpClient'
 
+import { testConnectionStoreLayer } from '../support.ts'
 import {
 	FileInfoResponse,
 	HistoryResponse,
@@ -49,7 +50,10 @@ layer(SlackEmulator.layer, { timeout: '30 seconds' })('Slack file emulator integ
 					Layer.provide(Layer.merge(FetchHttpClient.layer, credentials)),
 					Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({}))),
 				)
-				const providerLayer = Slack.layer.pipe(Layer.provide(clientLayer))
+				const providerLayer = Slack.layer.pipe(
+					Layer.provide(testConnectionStoreLayer),
+					Layer.provide(clientLayer),
+				)
 				const publicRoot = yield* emulator.call(
 					slackEmulatorAliceToken,
 					'chat.postMessage',

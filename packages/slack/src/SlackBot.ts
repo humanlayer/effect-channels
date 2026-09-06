@@ -8,8 +8,8 @@ import { SlackIngress, type SlackHandlerRegistration, type SlackIngressHandlers 
 import { SlackRoutes } from './SlackRoutes.ts'
 import { SlackSubscriptions } from './SlackSubscriptions.ts'
 
-/** Bounded, single-process defaults for the memory bot preset, not a durability guarantee. */
-const memoryPolicy = DeliveryPolicy.make({
+/** Bounded initial policy, not a production capacity recommendation or an exactly-once guarantee. */
+const defaultPolicy = DeliveryPolicy.make({
 	mode: 'queue',
 	maxPayloadBytes: 256_000,
 	maxEnvelopes: 1_000,
@@ -38,24 +38,24 @@ const registrations = <A, E, R>(
 ): ReadonlyArray<SlackHandlerRegistration<A, E, R>> =>
 	handler === undefined ? [] : Predicate.isFunction(handler) ? [{ id, handler }] : handler
 
-export type SlackMemoryBotOptions<E, R> = {
+export type SlackBotOptions<E, R> = {
 	readonly namespace: string
 	readonly handlers: SlackBotHandlers<E, R>
 	readonly policy?: Partial<DeliveryPolicy>
 	readonly runner?: Partial<RunnerOptions>
-	readonly maxMailboxes?: number
 }
+export type SlackMemoryBotOptions<E, R> = SlackBotOptions<E, R> & { readonly maxMailboxes?: number }
 
 /**
  * Slack-only composition: native operations, subscriptions, admission and a scoped worker.
- * Hosts supply SlackClient, SlackTenantCredentials and Crypto; handlers keep their ambient requirements.
+ * Hosts supply storage, HTTP and Crypto; handlers keep their ambient requirements.
  * Construction is lazy. Routes alone admit work without starting a worker; layer runs both in one scope.
  */
 export const SlackBot = {
-	memory: <E = never, R = never>(options: SlackMemoryBotOptions<E, R>) => {
+	make: <E = never, R = never>(options: SlackBotOptions<E, R>) => {
 		const services = SlackIngress.layer({
 			namespace: options.namespace,
-			policy: { ...memoryPolicy, ...options.policy },
+			policy: { ...defaultPolicy, ...options.policy },
 			handlers: {
 				onNewMention: registrations('mention', options.handlers.onNewMention),
 				onSubscribedMessage: registrations('subscribed', options.handlers.onSubscribedMessage),
@@ -65,15 +65,7 @@ export const SlackBot = {
 				onReaction: registrations('reaction', options.handlers.onReaction),
 				onConversationStopped: registrations('stopped', options.handlers.onConversationStopped),
 			},
-		}).pipe(
-			Layer.provideMerge(
-				Layer.mergeAll(
-					Slack.layer,
-					SlackSubscriptions.layerMemory(),
-					memory({ maxMailboxes: options.maxMailboxes ?? 10_000 }),
-				),
-			),
-		)
+		}).pipe(Layer.provideMerge(Slack.layerFromStore))
 		const worker = Layer.effectDiscard(
 			Effect.flatMap(SlackIngress, (ingress) =>
 				ingress.run({ scanLimit: 100, concurrency: 8, pollMs: 25, ...options.runner }),
@@ -84,5 +76,19 @@ export const SlackBot = {
 			Layer.provide(services),
 		)
 		return { services, routes, worker, layer: Layer.merge(routes, worker) }
+	},
+	/** Low-level compatibility preset; connections and HTTP remain required services. */
+	memory: <E = never, R = never>(options: SlackMemoryBotOptions<E, R>) => {
+		const bot = SlackBot.make(options)
+		const storage = Layer.merge(
+			SlackSubscriptions.layerMemory(),
+			memory({ maxMailboxes: options.maxMailboxes ?? 10_000 }),
+		)
+		return {
+			services: bot.services.pipe(Layer.provideMerge(storage)),
+			routes: bot.routes.pipe(Layer.provide(storage)),
+			worker: bot.worker.pipe(Layer.provide(storage)),
+			layer: bot.layer.pipe(Layer.provide(storage)),
+		}
 	},
 }

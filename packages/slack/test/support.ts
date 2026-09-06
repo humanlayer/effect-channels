@@ -6,6 +6,7 @@ import { HttpClient, HttpClientRequest, HttpClientResponse, HttpRouter } from 'e
 import { ChannelInfo, MessagePage, SlackIngress as Ingress } from '../src/index.ts'
 import { SlackChannelId, SlackEventCallback, SlackMessageTs, SlackTeamId } from '../src/Schema.ts'
 import { SlackClient } from '../src/SlackClient.ts'
+import { SlackConnectionStore } from '../src/SlackConnectionStore.ts'
 import { SlackRoutes } from '../src/SlackRoutes.ts'
 import { hmacSha256 } from '../src/SlackSignature.ts'
 import { SlackTenantCredentials } from '../src/SlackTenantCredentials.ts'
@@ -26,6 +27,18 @@ export const testIdentityConfigLayer = ConfigProvider.layer(
 export const webhookUrl = 'http://channels.test/api/v1/integrations/slack/webhook'
 
 export const testBotToken = 'xoxb-test-token'
+
+export const testConnectionStoreLayer = Layer.succeed(
+	SlackConnectionStore,
+	SlackConnectionStore.of({
+		get: () =>
+			Effect.succeed({
+				credentials: { botToken: Redacted.make(testBotToken), botUserId: 'U_BOT', botId: 'B_OURS' },
+			}),
+		upsert: () => Effect.die(new Error('unexpected test connection upsert')),
+		remove: () => Effect.die(new Error('unexpected test connection remove')),
+	}),
+)
 
 export const unimplemented = (operation: string): Effect.Effect<never> =>
 	Effect.die(new Error(operation + ' is intentionally unimplemented'))
@@ -108,6 +121,7 @@ export const makeSlackClientHarness = (
 		const layer = SlackClient.layer.pipe(
 			Layer.provide(Layer.merge(Layer.succeed(HttpClient.HttpClient, httpClient), credentials)),
 			Layer.provide(identityConfig),
+			Layer.provideMerge(testConnectionStoreLayer),
 		)
 		return { requests, layer }
 	})
@@ -137,7 +151,7 @@ export const makeStubSlackClient = (overrides: Partial<SlackClient['Service']>) 
 	})
 
 export const stubSlackClientLayer = (overrides: Partial<SlackClient['Service']>) =>
-	Layer.succeed(SlackClient, makeStubSlackClient(overrides))
+	Layer.merge(Layer.succeed(SlackClient, makeStubSlackClient(overrides)), testConnectionStoreLayer)
 
 export const testRouteSlackClientLayer = stubSlackClientLayer({
 	replies: () => Effect.succeed(MessagePage.make({ messages: [] })),

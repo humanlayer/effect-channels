@@ -171,7 +171,7 @@ export const runnerOptions = { pollMs: 10, scanLimit: 100, concurrency: 8 }
 
 export const nativeSlackLayer = (client: Partial<SlackClient['Service']> = {}) =>
 	Slack.layer.pipe(
-		Layer.provide(
+		Layer.provideMerge(
 			stubSlackClientLayer({
 				getUser: () => Effect.fail(SlackApiError.make({ operation: 'users.info', code: 'user_not_found' })),
 				...client,

@@ -24,6 +24,7 @@ import { Slack } from '../src/Slack.ts'
 import { SlackClient } from '../src/SlackClient.ts'
 import { normalizeSlackMessage } from '../src/SlackNormalize.ts'
 import { expectTaggedFailure, nativeIngressLayer, nativeMailbox, nativeRunner } from './nativeSupport.ts'
+import { testConnectionStoreLayer } from './support.ts'
 import { makeSlackClientHarness, makeStubSlackClient, slackJsonResponse } from './support.ts'
 
 const identity: SlackBotIdentity = { botUserId: 'U_BOT', botId: 'B_BOT' }
@@ -77,6 +78,7 @@ it.effect('opens a proactive DM as a conversation-scoped Thread', () =>
 	}).pipe(
 		Effect.provide(
 			Slack.layer.pipe(
+				Layer.provide(testConnectionStoreLayer),
 				Layer.provide(
 					Layer.succeed(
 						SlackClient,
@@ -110,6 +112,7 @@ it.effect('reports openDM failures without fabricating a ThreadId', () =>
 	}).pipe(
 		Effect.provide(
 			Slack.layer.pipe(
+				Layer.provide(testConnectionStoreLayer),
 				Layer.provide(
 					Layer.succeed(
 						SlackClient,
@@ -144,7 +147,9 @@ it.effect('preserves IM and MPIM identities in provider-backed history', () =>
 			assert.strictEqual(mpim.messages[0]?.threadRef.id, 'slack:v1:T_TEST:mpim:G_TEST:100.1')
 			assert.strictEqual(mpim.messages[0]?.threadRef.channel.isDm, true)
 		})
-		yield* program.pipe(Effect.provide(Slack.layer.pipe(Layer.provide(harness.layer))))
+		yield* program.pipe(
+			Effect.provide(Slack.layer.pipe(Layer.provide(testConnectionStoreLayer), Layer.provide(harness.layer))),
+		)
 	}),
 )
 

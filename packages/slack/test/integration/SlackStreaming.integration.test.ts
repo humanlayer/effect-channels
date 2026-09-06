@@ -14,6 +14,7 @@ import { ConfigProvider, Deferred, Effect, Fiber, Layer, Option, Redacted, Strea
 import { TestClock } from 'effect/testing'
 import * as FetchHttpClient from 'effect/unstable/http/FetchHttpClient'
 
+import { testConnectionStoreLayer } from '../support.ts'
 import {
 	HistoryResponse,
 	PostedMessageResponse,
@@ -66,7 +67,12 @@ layer(SlackEmulator.layer, { timeout: '30 seconds' })('Slack streaming emulator 
 			const streamFiber = yield* Effect.flatMap(Slack, (provider) =>
 				provider.stream({ threadId: thread.id }, chunks),
 			).pipe(
-				Effect.provide(Slack.layerWith({ streaming: 'post_and_edit' }).pipe(Layer.provide(clientLayer))),
+				Effect.provide(
+					Slack.layerWith({ streaming: 'post_and_edit' }).pipe(
+						Layer.provide(testConnectionStoreLayer),
+						Layer.provide(clientLayer),
+					),
+				),
 				Effect.forkChild,
 			)
 			yield* Deferred.await(waitingForSecond)

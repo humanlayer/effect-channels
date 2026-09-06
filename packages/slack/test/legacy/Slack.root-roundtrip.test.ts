@@ -24,6 +24,7 @@ import { Slack } from '../../src/index.ts'
 import { SlackRoutes } from '../../src/index.ts'
 import { SlackTenantCredentials } from '../../src/index.ts'
 import { SlackIngress, SlackSubscriptions, MarkdownContent, ThreadId } from '../../src/index.ts'
+import { testConnectionStoreLayer } from '../support.ts'
 import { appMentionCallback, signSlackBody } from '../support.ts'
 import { policy, runnerOptions } from './support.ts'
 
@@ -71,7 +72,7 @@ it.effect('delivers one signed mention end to end, subscribes explicitly, and po
 		const slackClient = SlackClient.layer.pipe(
 			Layer.provide(Layer.merge(Layer.succeed(HttpClient.HttpClient, httpClient), credentials)),
 		)
-		const slack = Slack.layer.pipe(Layer.provide(slackClient))
+		const slack = Slack.layer.pipe(Layer.provide(testConnectionStoreLayer), Layer.provide(slackClient))
 		const subscriptions = SlackSubscriptions.layerMemory()
 		const ingressLayer = SlackIngress.layer({
 			namespace: 'legacy-root',

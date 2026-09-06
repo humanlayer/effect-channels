@@ -3,19 +3,32 @@ import { defineConfig } from 'vite-plus'
 
 export default defineConfig({
 	envDir: false,
+	resolve: {
+		conditions: ['@humanlayer/source'],
+		alias: ['delivery', 'slack'].flatMap((name) => [
+			{
+				find: new RegExp(`^@humanlayer/channels-${name}$`),
+				replacement: new URL(`./packages/${name}/src/index.ts`, import.meta.url).pathname,
+			},
+			{
+				find: new RegExp(`^@humanlayer/channels-${name}/(.+)$`),
+				replacement: new URL(`./packages/${name}/src/`, import.meta.url).pathname + '$1.ts',
+			},
+		]),
+	},
 	staged: {
 		'*': 'vp check --fix',
 	},
 	test: {
 		include: ['packages/*/test/**/*.test.ts', 'examples/*/test/**/*.test.ts'],
 		exclude: [
+			'packages/postgres/test/**',
 			'**/node_modules/**',
 			'**/dist/**',
 			'**/test-backends/**',
 			'**/*.postgres.test.ts',
 			'**/*.redis.test.ts',
 			'tools/oxlint/anti-slop/**',
-			'packages/postgres/test/**',
 		],
 		passWithNoTests: true,
 		silent: 'passed-only',

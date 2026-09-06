@@ -7,6 +7,7 @@ import { Slack } from '../src/Slack.ts'
 import { SlackClient } from '../src/SlackClient.ts'
 import { slackChannelRef } from '../src/SlackThreadId.ts'
 import { expectTaggedFailure } from './nativeSupport.ts'
+import { testConnectionStoreLayer } from './support.ts'
 import {
 	makeSlackClientHarness,
 	slackJsonResponse,
@@ -67,7 +68,7 @@ const channelInfoResponse = (channel: {
 }) => slackJsonResponse(JSON.stringify({ ok: true, channel }))
 
 const providerLayerFor = <E>(harness: { readonly layer: Layer.Layer<SlackClient, E> }) =>
-	Slack.layer.pipe(Layer.provide(harness.layer))
+	Slack.layer.pipe(Layer.provide(testConnectionStoreLayer), Layer.provide(harness.layer))
 
 it.effect('posts a channel root message without thread_ts and returns a new thread reference', () =>
 	Effect.gen(function* () {

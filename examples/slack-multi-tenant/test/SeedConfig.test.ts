@@ -19,7 +19,7 @@ it.effect('reads complete primary and secondary installations without database a
 		)
 		const first = seeds.at(0)
 		assert.ok(first !== undefined)
-		assert.strictEqual(Redacted.value(first.botToken), 'xoxb-fixture')
+		assert.strictEqual(Redacted.value(first.connection.credentials.botToken), 'xoxb-fixture')
 	}).pipe(
 		Effect.provide(
 			ConfigProvider.layer(

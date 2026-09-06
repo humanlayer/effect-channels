@@ -1,8 +1,8 @@
-# Delivery — provisional memory implementation
+# Shared delivery — memory, Postgres and Redis
 
 `@humanlayer/channels-delivery` is the shared mailbox implementation used by
-native Slack ingress. Phase 1 supplies volatile memory storage; optional Postgres
-and Redis delivery Layers are not implemented. The old Channels and app packages
+native Slack ingress. Memory, Postgres and Redis Layers implement the same atomic
+store contracts; delivery policy stays in one engine. The old Channels and app packages
 have been removed. The package name and production defaults remain provisional.
 
 ## Boundaries
@@ -33,7 +33,7 @@ have been removed. The package name and production defaults remain provisional.
 
 ## Guarantees and limits
 
-This is **volatile memory**, not disk persistence. Logical worker reconstruction
+The `/memory` adapter is **volatile**, not disk persistence. Logical worker reconstruction
 over the same acquired Layer can recover a frozen batch after its lease expires;
 reconstructing the Layer or restarting the process loses all records.
 
@@ -64,8 +64,9 @@ a processing error. A failed readiness scan still requires host supervision.
 Ownership fencing protects mailbox state, **not external side effects**. An
 expired or interrupted handler may already have posted a message; retry can
 repeat that effect. External operations need their own idempotency strategy.
-All hosts sharing a future distributed backend also need compatible clocks and
-the same registration/policy configuration. No real-backend claim is made here.
+All hosts sharing a distributed backend need compatible clocks and the same
+registration/policy configuration. Real backend contracts verify atomicity and
+logical reconstruction; they do not certify power-loss or replica failover.
 
 Mailbox keys use length-prefixed namespace, handler, provider, installation, and
 canonical resource-key segments. Definition version lives on the envelope, not
@@ -82,9 +83,45 @@ missing admissions without repeating the committed ones. Lifecycle events use
 serial delivery instead of message coalescing. Stop is a targeted control
 transition. The consuming example owns the HTTP server and explicit runner.
 
-Normal tests exercise memory Layers, actual Slack clients/routes, and Emulate.
-They do not establish SQL, Redis, disk-crash, or Cloudflare guarantees. Built
-declaration exports and optional-backend isolation checks belong to Phase 2.
+Normal tests exercise memory Layers, actual Slack clients/routes, Emulate, and
+narrow SQL/Redis command seams. Optional backend suites separately exercise real
+storage. Neither suite establishes disk-crash or Cloudflare guarantees.
+
+## Optional storage Layers
+
+```ts
+import { layer as storage } from '@humanlayer/channels-delivery/postgres'
+import { layerConfig } from '@humanlayer/channels-delivery/postgres/client'
+import { Config, Layer } from 'effect'
+
+const durable = storage.pipe(Layer.provide(layerConfig({ url: Config.redacted('DATABASE_URL') })))
+```
+
+`/postgres` and `/redis` export Layer **values**, each providing `MailboxStore`
+and `MailboxReadiness`. They depend on ambient `SqlClient.SqlClient` or neutral
+`Redis.Redis`; they do not construct pools/clients. Only `/postgres/client` and
+`/redis/client` require optional platform peers. Postgres migrations are bundled,
+versioned and acquisition-time, serialized before migration-table bootstrap.
+Snapshot and readiness updates commit together; failed CAS changes neither.
+
+Redis uses atomic scripts and literal-prefix readiness indexes, with no TTL on
+delivery records. Every touched key occupies the fixed `{mailboxes}` slot.
+This avoids namespace starvation but costs O(key length) index memberships and
+O(key length squared) aggregate prefix-key bytes. Keep identities compact.
+The initial verified topology is standalone Redis, not sharded Redis Cluster.
+Configure **noeviction**, headroom, persistence/replication and backups. Script
+success is not a disk acknowledgement; scripts cannot roll back arbitrary
+resource errors. See [backend details](./test-backends/README.md).
+
+Root, memory, backend and client entries export built ESM and declarations.
+`bun run verify:exports` checks isolated packed consumers both without optional
+peers and with them, browser emitted-code isolation, strict declarations,
+cross-entry service identity and a single Effect runtime. Root/memory imports
+neither require nor acquire a database client.
+
+`bun run test:backend:postgres` / `bun run test:backend:redis` use fresh scoped
+Docker containers for delivery and Slack separately. The normal test graph never
+activates these from an ambient database URL.
 
 Effect dependencies are pinned to rc.112. The root catalog reserves Alchemy
 `2.0.0-beta.76`, whose published Effect peers require at least rc.112. Alchemy

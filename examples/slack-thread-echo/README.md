@@ -5,11 +5,11 @@ A single-workspace Slack example using the native Slack APIs and shared delivery
 
 ## What runs where
 
-- [`src/app.ts`](./src/app.ts) selects the Slack memory bot preset and registers
+- [`src/app.ts`](./src/app.ts) defines a storage-neutral bot and registers
   handlers. It contains no transport, cache, queue, or request-context plumbing:
 
     ```ts
-    export const bot = SlackBot.memory({ namespace: 'slack-thread-echo', handlers })
+    export const bot = SlackBot.make({ namespace: 'slack-thread-echo', handlers })
     export const application = bot.layer
     ```
 
@@ -18,8 +18,9 @@ A single-workspace Slack example using the native Slack APIs and shared delivery
   own IDs and emoji filters.
 - [`src/responses.ts`](./src/responses.ts) owns message formatting, streaming,
   uploads, and the edit/delete/reaction demonstrations.
-- [`src/transport.ts`](./src/transport.ts) supplies the HTTP client, configured
-  credentials, and platform crypto. Slack owns its user cache: callbacks and
+- [`src/transport.ts`](./src/transport.ts) selects `/memory` `layerFromConfig`
+  (connections, subscriptions/routing, delivery), HTTP and platform crypto.
+  Config seeds one real mutable installation. Slack owns its user cache: callbacks and
   history already have resolved authors, with original-author fallback on lookup
   failure. Applications do not wire or invoke hydration services.
 - [`src/server.ts`](./src/server.ts) provides `transport` to `application` and
@@ -78,13 +79,14 @@ curl -sS https://slack.com/api/auth.test \
 ```
 
 Set `SLACK_BOT_USER_ID` to the response's `user_id`, and `SLACK_BOT_ID` to its
-`bot_id`. The workspace `team_id` is useful for proactive API calls. These are
+`bot_id`, and `SLACK_TEAM_ID` to `team_id`. These are
 separate IDs; own-bot suppression must not suppress other integrations' messages.
 
 ### 3. Configure the server
 
 ```sh
 export SLACK_SIGNING_SECRET='...'
+export SLACK_TEAM_ID='T...'
 export SLACK_BOT_TOKEN='xoxb-...'
 export SLACK_BOT_USER_ID='U...'
 export SLACK_BOT_ID='B...'
@@ -133,22 +135,24 @@ exercise extra file combinations and authenticated downloads, temporarily invoke
 
 ## Delivery limits
 
-`SlackBot.memory` supplies queue/latest plus `context.skipped`, a 256,000-byte
+`SlackBot.make` supplies queue/latest plus `context.skipped`, a 256,000-byte
 envelope limit, 1,000 retained envelopes and 10,000 outcomes per mailbox, one-day
 dedupe retention, five attempts with 100 ms–30 s backoff, a 30 s lease with 5 s
-heartbeat, and 10,000 memory mailboxes. The worker scans up to 100 mailboxes with
-concurrency 8 and a 25 ms poll. These are the memory preset's defaults, not production
+heartbeat. The memory storage bundle permits 10,000 mailboxes. The worker scans up to 100 mailboxes with
+concurrency 8 and a 25 ms poll. These are initial defaults, not production
 capacity recommendations. Override individual `policy` or `runner` fields in
-`SlackBot.memory` when necessary; applications need not repeat the entire policy.
+`SlackBot.make` when necessary; applications need not repeat the entire policy.
 Failed work counts against capacity; idle mailbox records are not recycled.
 
 Handlers with different IDs are independent: there is no cross-handler order.
 Lifecycle events run serially per handler, while message queues coalesce pending
 work. Retried external Slack writes can repeat. Restarting loses all mailbox,
-routing, and subscription state; Postgres/Redis delivery belongs to a later phase.
+routing, subscription and connection mutations; config seeds the installation anew.
+For durable storage, change the transport Layer as in the multi-tenant example.
 
 See the [shared service graph](../../packages/slack/README.md#service-graph) for
-the runtime internals. This example's credential source is environment configuration.
+the runtime internals. Credential reads are authoritative and uncached;
+`SlackState.upsertConnection` / `removeConnection` own profile invalidation.
 
 ## Tests and builds
 

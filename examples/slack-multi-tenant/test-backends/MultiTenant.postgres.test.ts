@@ -1,21 +1,27 @@
 import { assert, describe, it } from '@effect/vitest'
 import { MarkdownContent, ThreadId } from '@humanlayer/channels-slack'
-import { SlackClient, Slack, SlackTeamId, SlackTenantCredentials } from '@humanlayer/channels-slack'
+import { SlackClient, Slack, SlackState, SlackTeamId, SlackTenantCredentials } from '@humanlayer/channels-slack'
+import { connections } from '@humanlayer/channels-slack/postgres'
 import { Effect, Layer, Option, Queue, Random, Redacted } from 'effect'
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http'
 
-import { loadSlackConnection, seedSlackConnection, SlackConnectionRepositoryLive } from '../src/store.ts'
 import { database } from './database.ts'
 
-const RepositoryLive = SlackConnectionRepositoryLive.pipe(Layer.provideMerge(database))
+const RepositoryLive = SlackState.layer.pipe(Layer.provideMerge(connections), Layer.provideMerge(database))
 
 const seed = (workspaceId: string, token: string) =>
-	seedSlackConnection({
-		workspaceId,
-		botToken: Redacted.make(token),
-		botUserId: `U_${workspaceId}`,
-		botId: `B_${workspaceId}`,
-	})
+	Effect.flatMap(SlackState, (state) =>
+		state.upsertConnection({
+			workspaceId: SlackTeamId.make(workspaceId),
+			connection: {
+				credentials: {
+					botToken: Redacted.make(token),
+					botUserId: `U_${workspaceId}`,
+					botId: `B_${workspaceId}`,
+				},
+			},
+		}),
+	)
 
 describe('Slack multi-tenant Postgres repository', () => {
 	it.effect('loads independent workspace token and identity records', () =>
@@ -25,7 +31,7 @@ describe('Slack multi-tenant Postgres repository', () => {
 			const teamB = SlackTeamId.make(`T_B_${suffix}`)
 			yield* seed(teamA, 'xoxb-token-a')
 			yield* seed(teamB, 'xoxb-token-b')
-			const services = SlackTenantCredentials.layerWithLookup({ loadConnection: loadSlackConnection })
+			const services = SlackTenantCredentials.layer
 			const program = Effect.gen(function* () {
 				const credentials = yield* SlackTenantCredentials
 				const a = Option.getOrThrow(yield* credentials.load({ teamId: teamA }))
@@ -51,18 +57,18 @@ describe('Slack multi-tenant Postgres repository', () => {
 				Effect.gen(function* () {
 					const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie)
 					yield* Queue.offer(authorizations, web.headers.get('authorization') ?? 'missing')
-					const body = web.url.includes('conversations.replies')
-						? `{"ok":true,"messages":[{"user":"U_${teamB}","text":"own","ts":"200.2","thread_ts":"200.1"}]}`
-						: '{"ok":true,"channel":"C_TEST","ts":"100.1"}'
+					const body = web.url.includes('users.info')
+						? '{"ok":false,"error":"user_not_found"}'
+						: web.url.includes('conversations.replies')
+							? `{"ok":true,"messages":[{"user":"U_${teamB}","text":"own","ts":"200.2","thread_ts":"200.1"}]}`
+							: '{"ok":true,"channel":"C_TEST","ts":"100.1"}'
 					return HttpClientResponse.fromWeb(
 						request,
 						new Response(body, { status: 200, headers: { 'content-type': 'application/json' } }),
 					)
 				}),
 			)
-			const connectionServices = SlackTenantCredentials.layerWithLookup({
-				loadConnection: loadSlackConnection,
-			})
+			const connectionServices = SlackTenantCredentials.layer
 			const client = SlackClient.layer.pipe(
 				Layer.provide(Layer.merge(connectionServices, Layer.succeed(HttpClient.HttpClient, http))),
 			)

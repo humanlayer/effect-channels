@@ -7,6 +7,7 @@ import { MarkdownTextChunk, PlanUpdateChunk, PostFailed, ThreadId } from '../src
 import { SlackMessageTs } from '../src/Schema.ts'
 import { Slack } from '../src/Slack.ts'
 import { SlackClient } from '../src/SlackClient.ts'
+import { testConnectionStoreLayer } from './support.ts'
 import { makeStubSlackClient, testChannelId, testRootThreadId } from './support.ts'
 
 it.effect('falls back to one post plus throttled edits with final raw markdown', () =>
@@ -24,7 +25,10 @@ it.effect('falls back to one post plus throttled edits with final raw markdown',
 					Effect.as({ channelId: testChannelId, ts: input.ts }),
 				),
 		})
-		const providerLayer = Slack.layer.pipe(Layer.provide(Layer.succeed(SlackClient, client)))
+		const providerLayer = Slack.layer.pipe(
+			Layer.provide(testConnectionStoreLayer),
+			Layer.provide(Layer.succeed(SlackClient, client)),
+		)
 		const fiber = yield* Effect.flatMap(Slack, (provider) =>
 			provider.stream(
 				{ threadId: ThreadId.make(testRootThreadId) },
@@ -53,7 +57,14 @@ it.effect('posts one explicit placeholder for an empty stream', () =>
 		})
 		const sent = yield* Effect.flatMap(Slack, (provider) =>
 			provider.stream({ threadId: ThreadId.make(testRootThreadId) }, Stream.empty),
-		).pipe(Effect.provide(Slack.layer.pipe(Layer.provide(Layer.succeed(SlackClient, client)))))
+		).pipe(
+			Effect.provide(
+				Slack.layer.pipe(
+					Layer.provide(testConnectionStoreLayer),
+					Layer.provide(Layer.succeed(SlackClient, client)),
+				),
+			),
+		)
 		assert.strictEqual(sent.message.markdown, '…')
 		assert.deepStrictEqual(sent.ref.degraded, ['native_streaming', 'empty_stream'])
 	}),
@@ -69,6 +80,7 @@ it.effect('keeps source failures typed before and after the first output without
 				),
 		})
 		const layer = Slack.layerWith({ streaming: 'post_and_edit' }).pipe(
+			Layer.provide(testConnectionStoreLayer),
 			Layer.provide(Layer.succeed(SlackClient, client)),
 		)
 		const before = yield* Effect.flatMap(Slack, (provider) =>
@@ -111,7 +123,10 @@ it.effect('preserves explicit non-retryable stream source failures', () =>
 			),
 		).pipe(
 			Effect.provide(
-				Slack.layerWith({ streaming: 'post_and_edit' }).pipe(Layer.provide(Layer.succeed(SlackClient, client))),
+				Slack.layerWith({ streaming: 'post_and_edit' }).pipe(
+					Layer.provide(testConnectionStoreLayer),
+					Layer.provide(Layer.succeed(SlackClient, client)),
+				),
 			),
 			Effect.flip,
 		)
