@@ -1,8 +1,9 @@
 import { DeliveryPolicy, type RunnerOptions } from '@humanlayer/channels-delivery'
 import { layer as memory } from '@humanlayer/channels-delivery/memory'
-import { Crypto, Effect, Layer, Predicate } from 'effect'
+import { Crypto, Effect, Layer, Predicate, Schema } from 'effect'
 import { HttpRouter } from 'effect/unstable/http'
 
+import { SlackIngressError } from './DomainErrors.ts'
 import { Slack } from './Slack.ts'
 import { SlackIngress, type SlackHandlerRegistration, type SlackIngressHandlers } from './SlackIngress.ts'
 import { SlackRoutes } from './SlackRoutes.ts'
@@ -53,19 +54,26 @@ export type SlackMemoryBotOptions<E, R> = SlackBotOptions<E, R> & { readonly max
  */
 export const SlackBot = {
 	make: <E = never, R = never>(options: SlackBotOptions<E, R>) => {
-		const services = SlackIngress.layer({
-			namespace: options.namespace,
-			policy: { ...defaultPolicy, ...options.policy },
-			handlers: {
-				onNewMention: registrations('mention', options.handlers.onNewMention),
-				onSubscribedMessage: registrations('subscribed', options.handlers.onSubscribedMessage),
-				onDirectMessage: registrations('dm', options.handlers.onDirectMessage),
-				onMessageUpdated: registrations('edited', options.handlers.onMessageUpdated),
-				onMessageDeleted: registrations('deleted', options.handlers.onMessageDeleted),
-				onReaction: registrations('reaction', options.handlers.onReaction),
-				onConversationStopped: registrations('stopped', options.handlers.onConversationStopped),
-			},
-		}).pipe(Layer.provideMerge(Slack.layerFromStore))
+		const services = Layer.unwrap(
+			Schema.decodeUnknownEffect(DeliveryPolicy)({ ...defaultPolicy, ...options.policy }).pipe(
+				Effect.mapError(() => SlackIngressError.make({ operation: 'configuration' })),
+				Effect.map((policy) =>
+					SlackIngress.layer({
+						namespace: options.namespace,
+						policy,
+						handlers: {
+							onNewMention: registrations('mention', options.handlers.onNewMention),
+							onSubscribedMessage: registrations('subscribed', options.handlers.onSubscribedMessage),
+							onDirectMessage: registrations('dm', options.handlers.onDirectMessage),
+							onMessageUpdated: registrations('edited', options.handlers.onMessageUpdated),
+							onMessageDeleted: registrations('deleted', options.handlers.onMessageDeleted),
+							onReaction: registrations('reaction', options.handlers.onReaction),
+							onConversationStopped: registrations('stopped', options.handlers.onConversationStopped),
+						},
+					}),
+				),
+			),
+		).pipe(Layer.provideMerge(Slack.layerFromStore))
 		const worker = Layer.effectDiscard(
 			Effect.flatMap(SlackIngress, (ingress) =>
 				ingress.run({ scanLimit: 100, concurrency: 8, pollMs: 25, ...options.runner }),

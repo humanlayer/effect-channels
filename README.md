@@ -1,7 +1,8 @@
 # Channels: native providers and shared delivery
 
-Phase 2 provides native Slack with interchangeable memory, Postgres and Redis
-storage. There is no universal provider facade, app framework, or agent engine.
+Native Slack has interchangeable memory, Postgres and Redis storage, with shared
+queue, concurrent, debounce, drop and burst delivery. There is no universal
+provider facade, app framework, or agent engine.
 
 - [`packages/slack`](./packages/slack/) — native operations, signed ingress,
   ergonomic bot composition, required connection CRUD, and provider-owned state/cache.
@@ -62,7 +63,11 @@ noeviction and operational headroom; the initial delivery adapter uses one hash 
 and prefix indexes with write amplification. External Slack writes can repeat after
 recovery. Credentials are redacted in application values, not encrypted at rest.
 
-Alchemy/Cloudflare deployment, OAuth, token rotation, other delivery modes and other
+See [delivery modes and the v1→v2 upgrade procedure](./packages/delivery/README.md)
+before upgrading an existing store. Accepted v1 work remains readable; stop old
+writers before deploying code that writes v2. Mixed-version operation is unsupported.
+
+Alchemy/Cloudflare deployment, OAuth, token rotation, interrupt delivery and other
 providers remain unimplemented. Emulate gaps such as native Slack streaming still
 use signed synthetic protocol tests. No live Slack or application database was used.
 

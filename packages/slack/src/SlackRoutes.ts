@@ -21,8 +21,6 @@ import { SlackTenantCredentials } from './SlackTenantCredentials.ts'
 type SlackRoutesConfig = {
 	readonly signingSecret: Redacted.Redacted<string>
 	readonly identity: SlackBotIdentity
-	readonly credentials: SlackTenantCredentials['Service']
-	readonly client: SlackClient['Service']
 }
 
 const webhookErrorResponse = (error: SlackWebhookError) => {
@@ -39,12 +37,14 @@ const webhookErrorResponse = (error: SlackWebhookError) => {
 }
 
 const resolveBotIdentity = (config: SlackRoutesConfig, callback: SlackEventCallback) =>
-	config.credentials
-		.load({ teamId: callback.team_id })
-		.pipe(Effect.map(Option.map((creds) => mergeSlackBotIdentity(config.identity, Option.some(creds)))))
+	Effect.gen(function* () {
+		const credentials = yield* SlackTenantCredentials
+		return yield* credentials
+			.load({ teamId: callback.team_id })
+			.pipe(Effect.map(Option.map((creds) => mergeSlackBotIdentity(config.identity, Option.some(creds)))))
+	})
 
 const resolveDirectMessageKind = Effect.fn('slack.webhook.resolve_direct_message_kind')(function* (input: {
-	readonly config: SlackRoutesConfig
 	readonly teamId: SlackEventCallback['team_id']
 	readonly channelId: SlackChannelId
 	readonly hint?: 'channel' | 'group' | 'im' | 'mpim'
@@ -52,7 +52,8 @@ const resolveDirectMessageKind = Effect.fn('slack.webhook.resolve_direct_message
 	if (input.hint === 'im' || input.channelId.startsWith('D')) return 'im' as const
 	if (input.hint === 'mpim') return 'mpim' as const
 	if (input.hint === 'channel' || input.hint === 'group' || !input.channelId.startsWith('G')) return undefined
-	const info = yield* input.config.client.channelInfo(
+	const client = yield* SlackClient
+	const info = yield* client.channelInfo(
 		SlackChannelInfoInput.make({ teamId: input.teamId, channelId: input.channelId }),
 	)
 	return info.channel.isDm ? ('mpim' as const) : undefined
@@ -92,11 +93,11 @@ const acceptLifecycleEvent = (config: SlackRoutesConfig, callback: SlackEventCal
 		const event = callback.event
 		if (event.type === 'reaction_added' || event.type === 'reaction_removed') {
 			const directMessageKind = yield* resolveDirectMessageKind({
-				config,
 				teamId: callback.team_id,
 				channelId: event.item.channel,
 			})
-			const parentThreadTs = yield* config.client
+			const client = yield* SlackClient
+			const parentThreadTs = yield* client
 				.replies({
 					teamId: callback.team_id,
 					channelId: event.item.channel,
@@ -127,7 +128,6 @@ const acceptLifecycleEvent = (config: SlackRoutesConfig, callback: SlackEventCal
 			)
 		} else if (event.type === 'message' && event.subtype === 'message_changed') {
 			const directMessageKind = yield* resolveDirectMessageKind({
-				config,
 				teamId: callback.team_id,
 				channelId: event.channel,
 				hint: event.channel_type,
@@ -137,7 +137,6 @@ const acceptLifecycleEvent = (config: SlackRoutesConfig, callback: SlackEventCal
 			)
 		} else if (event.type === 'message' && event.subtype === 'message_deleted') {
 			const directMessageKind = yield* resolveDirectMessageKind({
-				config,
 				teamId: callback.team_id,
 				channelId: event.channel,
 				hint: event.channel_type,
@@ -151,15 +150,15 @@ const acceptLifecycleEvent = (config: SlackRoutesConfig, callback: SlackEventCal
 		return HttpServerResponse.empty({ status: 200 })
 	})
 
-const acceptConversationStopped = (config: SlackRoutesConfig, callback: SlackEventCallback) =>
+const acceptConversationStopped = (callback: SlackEventCallback) =>
 	Effect.gen(function* () {
 		const ingress = yield* SlackIngress
-		const credentials = yield* config.credentials.load({ teamId: callback.team_id })
+		const tenantCredentials = yield* SlackTenantCredentials
+		const credentials = yield* tenantCredentials.load({ teamId: callback.team_id })
 		if (Option.isNone(credentials)) return HttpServerResponse.empty({ status: 200 })
 		const event = callback.event
 		if (event.type !== 'agent_session_stopped') return yield* SlackWebhookError.make({ reason: 'decode' })
 		const directMessageKind = yield* resolveDirectMessageKind({
-			config,
 			teamId: callback.team_id,
 			channelId: event.channel,
 		})
@@ -200,7 +199,7 @@ const routes = (config: SlackRoutesConfig) =>
 										: acceptMessageEvent(config, callback),
 								reaction_added: () => acceptLifecycleEvent(config, callback),
 								reaction_removed: () => acceptLifecycleEvent(config, callback),
-								agent_session_stopped: () => acceptConversationStopped(config, callback),
+								agent_session_stopped: () => acceptConversationStopped(callback),
 							}),
 						),
 				}),
@@ -236,8 +235,6 @@ const routes = (config: SlackRoutesConfig) =>
 export const SlackRoutes = {
 	layer: Layer.unwrap(
 		Effect.gen(function* () {
-			const credentials = yield* SlackTenantCredentials
-			const client = yield* SlackClient
 			const signingSecret = yield* Config.redacted('SLACK_SIGNING_SECRET')
 			const botUserId = yield* Config.option(Config.string('SLACK_BOT_USER_ID'))
 			const botId = yield* Config.option(Config.string('SLACK_BOT_ID'))
@@ -245,7 +242,10 @@ export const SlackRoutes = {
 				botUserId: Option.getOrUndefined(botUserId),
 				botId: Option.getOrUndefined(botId),
 			})
-			return routes({ signingSecret, identity, credentials, client })
+			return routes({ signingSecret, identity }).pipe(
+				HttpRouter.provideRequest(Layer.effect(SlackTenantCredentials, SlackTenantCredentials)),
+				HttpRouter.provideRequest(Layer.effect(SlackClient, SlackClient)),
+			)
 		}),
 	),
 }

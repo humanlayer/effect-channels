@@ -6,7 +6,7 @@ import { emptyMailbox, MailboxSnapshot, mailboxKey, mailboxPrefix } from '../src
 import { MailboxReadiness, MailboxStore, MailboxStoreError } from '../src/MailboxStore.ts'
 import { layer } from '../src/redis.ts'
 import { readyKey, readyKeys, recordKey } from '../src/redis/keys.ts'
-import { completeMailbox, encodeKey, encodeSnapshot, redisCommands } from './AdapterCommands.ts'
+import { encodeKey, encodeSnapshot, mailboxCodecCases, redisCommands } from './AdapterCommands.ts'
 
 it.effect(
 	'Redis fake command contract: CAS sends one same-slot script containing snapshot and every literal-prefix index',
@@ -97,11 +97,10 @@ it.effect('Redis seam decodes snapshots and rejects malformed replies without lo
 			const store = yield* MailboxStore
 			yield* Queue.offer(fake.replies, Effect.succeed([null, null]))
 			assert.strictEqual(yield* store.loadMailbox({ key: 'key' }), undefined)
-			yield* Queue.offer(
-				fake.replies,
-				Effect.succeed(['0', encodeSnapshot({ revision: 0, state: completeMailbox })]),
-			)
-			assert.deepStrictEqual(yield* store.loadMailbox({ key: 'key' }), { revision: 0, state: completeMailbox })
+			for (const state of mailboxCodecCases) {
+				yield* Queue.offer(fake.replies, Effect.succeed(['0', encodeSnapshot({ revision: 0, state })]))
+				assert.deepStrictEqual(yield* store.loadMailbox({ key: 'key' }), { revision: 0, state })
+			}
 			for (const reply of [
 				[],
 				['0', null],

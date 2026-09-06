@@ -88,6 +88,7 @@ export const nativeRunner = { scanLimit: 16, concurrency: 2, pollMs: 10 }
 export const nativeIngressLayer = <E, R>(
 	handlers: SlackIngressHandlers<E, R>,
 	storage = deliveryMemory({ maxMailboxes: 100 }),
+	policy: DeliveryPolicy = nativePolicy,
 ) => {
 	const slack = Slack.layer.pipe(
 		Layer.provide(
@@ -101,7 +102,7 @@ export const nativeIngressLayer = <E, R>(
 			}),
 		),
 	)
-	return SlackIngress.layer({ namespace: 'slack-native-test', policy: nativePolicy, handlers }).pipe(
+	return SlackIngress.layer({ namespace: 'slack-native-test', policy, handlers }).pipe(
 		Layer.provideMerge(Layer.mergeAll(storage, SlackSubscriptions.layerMemory(), slack)),
 	)
 }

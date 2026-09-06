@@ -6,7 +6,7 @@ import type { Connection } from 'effect/unstable/sql/SqlConnection'
 import type { SqlError } from 'effect/unstable/sql/SqlError'
 import * as Statement from 'effect/unstable/sql/Statement'
 
-import { ActiveBatch, Envelope, MailboxSnapshot, MailboxState } from '../src/Mailbox.ts'
+import { ActiveBatch, currentMailbox, Envelope, eventIdentity, MailboxSnapshot, MailboxState } from '../src/Mailbox.ts'
 
 export interface SqlCommand {
 	readonly sql: string
@@ -117,6 +117,28 @@ export const completeMailbox = MailboxState.make({
 	outcomes: [{ identity: 'previous', kind: 'control', expiresAt: 300 }],
 	readyAt: 200,
 })
+export const mailboxCodecCases: ReadonlyArray<MailboxState> = [
+	completeMailbox,
+	{
+		...currentMailbox(completeMailbox),
+		additionalActive: [{ ...active, owner: 18, envelopes: [{ ...envelope, eventId: 'C' }] }],
+		pendingReadyAt: 150,
+		outcomes: [{ identity: 'dropped', kind: 'dropped', expiresAt: 300 }],
+	},
+	{ ...currentMailbox(completeMailbox), pendingReadyAt: 250, burstDraining: true },
+	{
+		...currentMailbox(completeMailbox),
+		outcomes: [
+			{
+				identity: 'control:targeted',
+				kind: 'control',
+				expiresAt: 300,
+				cancellationTarget: { identity: eventIdentity(envelope), acceptedAt: envelope.acceptedAt },
+			},
+			{ identity: 'control:empty', kind: 'control', expiresAt: 300, cancellationTarget: null },
+		],
+	},
+]
 export const encodeState = Schema.encodeSync(Schema.fromJsonString(MailboxState))
 export const encodeSnapshot = Schema.encodeSync(Schema.fromJsonString(MailboxSnapshot))
 export const encodeKey = Schema.encodeSync(Schema.fromJsonString(Schema.String))

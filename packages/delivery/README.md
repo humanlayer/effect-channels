@@ -26,10 +26,89 @@ have been removed. The package name and production defaults remain provisional.
   incompatible payloads surface to the host; the host must decide how to report
   and restart a failed readiness scan. Individual processing failures are logged
   and do not stop unrelated mailboxes; their persisted state controls recovery.
-- `cancelActive({ key, controlId })` records a deduplicated control transition,
+- `cancelActive({ key, controlId, eventId? })` records a deduplicated control transition,
   freezing the target before conditional-commit retries. It cannot retarget a
   successor merely because the original attempt completed during a conflict.
   Lease renewal continues while the cancelled handler's finalizers are running.
+  `eventId` optionally selects the active batch containing that caller-owned event
+  ID for this binding's definition, including a frozen retry or a coalesced/skipped
+  event. Callers obtain the key from `admit`, `keyFor`, or `keyForResource`; no
+  storage read or attempt-owner knowledge is needed. The engine snapshots and
+  fences the attempt internally: completion or retry cannot redirect an in-flight
+  control to a replacement attempt, even for the same event ID.
+  Without `eventId`, the first retained active batch is targeted, not every concurrent
+  invocation. A missing/stale target still records the control identity, so replay
+  cannot target future work. Slack Stop uses this default per message handler.
+  Pending-only, completed, and unknown event IDs do not target active peers.
+  Reusing a control ID does not retarget it, even if a different event ID is supplied.
+- `awaitCancellation({ key, controlId })` waits for that control's recorded batch
+  to retire, not for the mailbox to become idle. Slack's Stop callback uses this
+  barrier: unrelated concurrent work and later batches may keep running. The
+  control outcome stores the target envelope identity and admission time (or
+  explicit `null` for no target), so callback retries and runtime reconstruction
+  use the same target across lease recovery. Finalizers complete before the
+  engine retires the batch; lease renewal during cleanup is unchanged.
+  Control outcomes stay retained, and count against capacity, while their target
+  remains active—even past normal retention expiry. Missing/expired retired
+  controls and explicit no-target controls impose no barrier. `awaitInactive`
+  retains its separate, mailbox-wide meaning for callers that need it.
+  Both barriers check immediately and repeat with a heartbeat-spaced Schedule
+  while work remains; storage failures propagate and waiting is interruptible.
+  Older stored controls without target metadata remain readable and conservatively
+  wait only for cancelled active batches, never unrelated uncancelled work; their
+  exact historical target cannot be reconstructed. All writers must use the same
+  revision of the code to avoid stripping the new optional metadata.
+
+## Delivery modes
+
+All modes commit before acknowledgment and leave execution to the host. Configure
+the common limits plus one of these mode-specific settings:
+
+| Policy                                      | Behavior                                                                                                                                                                                           |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `{ mode: 'queue' }`                         | Immediately eligible when idle. Claim the latest pending event with earlier pending events in `context.skipped`. Never interrupt active work. Arrivals before the first claim may coalesce too.    |
+| `{ mode: 'concurrent', maxConcurrency: 2 }` | Each event has its own invocation and no skipped context. Shared persisted active batches enforce the per-mailbox bound across runners. No completion ordering guarantee.                          |
+| `{ mode: 'debounce', quietPeriodMs: 1500 }` | Each new eligible admission resets a persisted pending deadline. Duplicates do not reset it. Run after both the quiet period and active completion; continuous arrivals can postpone indefinitely. |
+| `{ mode: 'drop' }`                          | Pending (including ready-but-unclaimed), active or retrying work is busy. Record a `dropped` dedupe outcome for new busy arrivals before acknowledgment; never execute those arrivals.             |
+| `{ mode: 'burst', windowMs: 1500 }`         | First arrival starts a fixed persisted window, not extended by later arrivals. After the first claim, drain queue-style immediately until idle. The next idle arrival starts a new window.         |
+
+The internal `serial` policy still delivers every lifecycle event separately.
+All numeric mode settings must be positive integers; there are no implicit window
+or concurrency defaults. `SlackBot.make({ policy: ... })` accepts these settings
+with its existing common-limit defaults. Slack lifecycle registrations always use
+serial delivery, regardless of the configured message mode.
+
+Retries reuse the frozen batch and skipped context, not newer pending work. A
+retrying batch reserves a concurrent slot until completion or terminal failure.
+Runner `concurrency` independently bounds that host's processing fibers; the
+policy's `maxConcurrency` bounds shared mailbox attempts. A runner can process
+multiple attempts in one mailbox, adding at most one per key per scan pass.
+Handlers and finalizers are awaited before freeing a slot.
+
+`admit().accepted` means a **new durable admission outcome**, including deliberate
+drop, not a promise of handler execution. Duplicate admissions return `false`.
+Dropped identities count against `maxOutcomes` and expire under `retentionMs`;
+capacity exhaustion rejects admission rather than acknowledging an unrecorded drop.
+
+## Persisted mailbox upgrade (v1 → v2)
+
+New code reads both mailbox document versions. Its next conditional commit writes
+v2 in the **same key/table/Redis namespace**, preserving revision fencing and all
+pending, active, failed and outcome records. No SQL or Redis policy/migration script
+changes are needed: those backends store the document and readiness atomically.
+V2 adds `pendingReadyAt`, `burstDraining`, and `additionalActive`; `active` remains
+the first batch. Use `activeBatches(state)` to inspect all concurrent batches.
+V1 queue/serial work retains its existing eligibility and frozen retry deadlines.
+
+Upgrade procedure: pause ingress, stop **all** old workers/writers, back up the
+store, then start the new code with the same handler IDs, definitions, keys and
+queue/serial policies before resuming ingress. Existing work need not be discarded
+or drained to read it. Change a handler's mode only when its mailbox work is idle,
+and use the same configuration on all hosts. Old binaries reject v2; mixed-version
+operation and in-place rollback after a v2 write are unsupported. To roll back,
+stop new writers and reconcile/export post-upgrade admissions before restoring a
+backup—blind restoration would lose accepted work. No upgrade or live store
+operation is performed by the test suite.
 
 ## Guarantees and limits
 

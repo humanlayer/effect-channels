@@ -5,7 +5,7 @@ import { ConnectionError, SqlError } from 'effect/unstable/sql/SqlError'
 import { emptyMailbox } from '../src/Mailbox.ts'
 import { MailboxReadiness, MailboxStore, MailboxStoreError } from '../src/MailboxStore.ts'
 import { layer, migrate, PostgresInitializationError } from '../src/postgres.ts'
-import { completeMailbox, encodeState, sqlCommands } from './AdapterCommands.ts'
+import { encodeState, mailboxCodecCases, sqlCommands } from './AdapterCommands.ts'
 
 it.effect('Postgres fake command contract: lock precedes migrator creation; conditional writes include readiness', () =>
 	Effect.gen(function* () {
@@ -73,14 +73,16 @@ it.effect('Postgres SQL seam decodes complete snapshots and rejects corruption w
 			const store = yield* MailboxStore
 			yield* Queue.offer(fake.replies, Effect.succeed([]))
 			assert.strictEqual(yield* store.loadMailbox({ key: 'absent' }), undefined)
-			yield* Queue.offer(
-				fake.replies,
-				Effect.succeed([{ revision: 7, state_json: encodeState(completeMailbox), ready_at: 200 }]),
-			)
-			assert.deepStrictEqual(yield* store.loadMailbox({ key: 'key' }), { revision: 7, state: completeMailbox })
+			for (const state of mailboxCodecCases) {
+				yield* Queue.offer(
+					fake.replies,
+					Effect.succeed([{ revision: 7, state_json: encodeState(state), ready_at: state.readyAt }]),
+				)
+				assert.deepStrictEqual(yield* store.loadMailbox({ key: 'key' }), { revision: 7, state })
+			}
 			for (const state of [
 				'private-payload-sentinel',
-				encodeState(emptyMailbox()).replace('"version":1', '"version":99'),
+				encodeState(emptyMailbox()).replace('"version":2', '"version":99'),
 			]) {
 				yield* Queue.offer(fake.replies, Effect.succeed([{ revision: 7, state_json: state, ready_at: null }]))
 				assert.deepStrictEqual(

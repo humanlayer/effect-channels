@@ -4,6 +4,9 @@ import { DeliveryPolicy } from './DeliveryPolicy.ts'
 import type { EventDefinition } from './EventDefinition.ts'
 import {
 	ActiveBatch,
+	activeBatches,
+	CurrentMailboxState,
+	currentMailbox,
 	emptyMailbox,
 	Envelope,
 	eventIdentity,
@@ -26,7 +29,7 @@ export class HandlerFailure extends Schema.TaggedError<HandlerFailure>()('Handle
 export type HandlerContext<A> = { readonly skipped: ReadonlyArray<A> }
 
 type Transition<A> = {
-	readonly state: MailboxState
+	readonly state: CurrentMailboxState
 	readonly result: A
 }
 
@@ -34,7 +37,7 @@ const transition = <A>(input: {
 	readonly key: string
 	readonly retries: number
 	readonly calculate: (
-		state: MailboxState,
+		state: CurrentMailboxState,
 		revision: number,
 		now: number,
 	) => Effect.Effect<Transition<A>, DeliveryError>
@@ -44,7 +47,11 @@ const transition = <A>(input: {
 		for (let attempt = 0; attempt <= input.retries; attempt++) {
 			const current = yield* store.loadMailbox({ key: input.key })
 			const now = yield* Clock.currentTimeMillis
-			const next = yield* input.calculate(current?.state ?? emptyMailbox(), (current?.revision ?? -1) + 1, now)
+			const next = yield* input.calculate(
+				currentMailbox(current?.state ?? emptyMailbox()),
+				(current?.revision ?? -1) + 1,
+				now,
+			)
 			const committed = yield* store.commitMailbox({
 				key: input.key,
 				expectedRevision: current?.revision ?? null,
@@ -55,10 +62,23 @@ const transition = <A>(input: {
 		return yield* DeliveryError.make({ reason: 'conflict' })
 	})
 
-const retained = (state: MailboxState, now: number) => state.outcomes.filter((outcome) => outcome.expiresAt > now)
+const cancellationPending = (state: MailboxState, outcome: Outcome) => {
+	const target = outcome.cancellationTarget
+	if (target === null) return false
+	return activeBatches(state).some((batch) =>
+		target === undefined
+			? batch.cancelled
+			: eventIdentity(batch.envelopes[0]) === target.identity &&
+				batch.envelopes[0].acceptedAt === target.acceptedAt,
+	)
+}
+const retained = (state: MailboxState, now: number) =>
+	state.outcomes.filter(
+		(outcome) => outcome.expiresAt > now || (outcome.kind === 'control' && cancellationPending(state, outcome)),
+	)
 const envelopes = (state: MailboxState) => [
 	...state.pending,
-	...(state.active?.envelopes ?? []),
+	...activeBatches(state).flatMap((batch) => batch.envelopes),
 	...state.failed.flatMap((batch) => batch.envelopes),
 ]
 const known = (state: MailboxState, identity: string) =>
@@ -96,6 +116,23 @@ export const bind = <Event extends Schema.Constraint, Resource extends Schema.Co
 ) => {
 	const definition = registration.definition
 	const policy = registration.policy
+	const concurrency = policy.mode === 'concurrent' ? policy.maxConcurrency : 1
+	const withBatches = (state: CurrentMailboxState, batches: ReadonlyArray<ActiveBatch>): CurrentMailboxState => ({
+		...state,
+		active: batches[0] ?? null,
+		additionalActive: batches.slice(1),
+	})
+	const scheduled = (state: CurrentMailboxState): CurrentMailboxState => {
+		const batches = activeBatches(state)
+		const deadlines = batches.map((batch) => batch.leaseUntil)
+		if (state.pending.length > 0 && batches.length < concurrency && state.pendingReadyAt !== null)
+			deadlines.push(state.pendingReadyAt)
+		return {
+			...state,
+			readyAt: deadlines.length === 0 ? null : Math.min(...deadlines),
+			burstDraining: state.burstDraining && (batches.length > 0 || state.pending.length > 0),
+		}
+	}
 	const eventCodec = Schema.fromJsonString(Schema.toCodecJson(definition.event))
 	const resourceCodec = Schema.fromJsonString(Schema.toCodecJson(definition.resource))
 	const prefix = mailboxPrefix({ ...registration, provider: definition.provider })
@@ -186,13 +223,36 @@ export const bind = <Event extends Schema.Constraint, Resource extends Schema.Co
 			calculate: (current, _revision, now) => {
 				const state = { ...current, outcomes: retained(current, now) }
 				if (known(state, eventIdentity(envelope))) return Effect.succeed({ state, result: false })
+				if (policy.mode === 'drop' && (state.pending.length > 0 || activeBatches(state).length > 0)) {
+					if (state.outcomes.length + envelopes(state).length >= policy.maxOutcomes)
+						return Effect.fail(DeliveryError.make({ reason: 'capacity' }))
+					return Effect.succeed({
+						state: {
+							...state,
+							outcomes: [
+								...state.outcomes,
+								Outcome.make({
+									identity: eventIdentity(envelope),
+									kind: 'dropped',
+									expiresAt: now + policy.retentionMs,
+								}),
+							],
+						},
+						result: true,
+					})
+				}
 				if (
 					envelopes(state).length >= policy.maxEnvelopes ||
 					state.outcomes.length + envelopes(state).length >= policy.maxOutcomes
 				)
 					return Effect.fail(DeliveryError.make({ reason: 'capacity' }))
+				const pendingReadyAt =
+					policy.mode === 'debounce'
+						? now + policy.quietPeriodMs
+						: (state.pendingReadyAt ??
+							(policy.mode === 'burst' && !state.burstDraining ? now + policy.windowMs : now))
 				return Effect.succeed({
-					state: { ...state, pending: [...state.pending, envelope], readyAt: state.readyAt ?? now },
+					state: scheduled({ ...state, pending: [...state.pending, envelope], pendingReadyAt }),
 					result: true,
 				})
 			},
@@ -208,11 +268,18 @@ export const bind = <Event extends Schema.Constraint, Resource extends Schema.Co
 			retries: policy.conflictRetries,
 			calculate: (state, revision, now) => {
 				if (state.readyAt === null || state.readyAt > now) return Effect.succeed({ state, result: undefined })
-				const batch = state.active
-				if (batch !== null && batch.owner !== null && batch.leaseUntil > now)
-					return Effect.succeed({ state, result: undefined })
+				const batches = activeBatches(state)
+				const batch = batches.find((batch) => batch.leaseUntil <= now)
+				if (
+					batch === undefined &&
+					(batches.length >= concurrency || state.pendingReadyAt === null || state.pendingReadyAt > now)
+				)
+					return Effect.succeed({ state: scheduled(state), result: undefined })
 				const selected =
-					batch?.envelopes ?? (policy.mode === 'queue' ? state.pending : state.pending.slice(0, 1))
+					batch?.envelopes ??
+					(policy.mode === 'serial' || policy.mode === 'concurrent'
+						? state.pending.slice(0, 1)
+						: state.pending)
 				const first = selected[0]
 				if (first === undefined)
 					return Effect.succeed({ state: { ...state, readyAt: null }, result: undefined })
@@ -223,13 +290,21 @@ export const bind = <Event extends Schema.Constraint, Resource extends Schema.Co
 					leaseUntil: now + policy.leaseMs,
 					cancelled: batch?.cancelled ?? false,
 				})
+				const pending = batch === undefined ? state.pending.slice(selected.length) : state.pending
 				return Effect.succeed({
-					state: {
-						...state,
-						active,
-						pending: batch === null ? state.pending.slice(selected.length) : state.pending,
-						readyAt: active.leaseUntil,
-					},
+					state: scheduled(
+						withBatches(
+							{
+								...state,
+								pending,
+								pendingReadyAt: pending.length === 0 ? null : state.pendingReadyAt,
+								burstDraining: policy.mode === 'burst' || state.burstDraining,
+							},
+							batch === undefined
+								? [...batches, active]
+								: batches.map((entry) => (entry === batch ? active : entry)),
+						),
+					),
 					result: active,
 				})
 			},
@@ -237,8 +312,9 @@ export const bind = <Event extends Schema.Constraint, Resource extends Schema.Co
 	})
 
 	const owned = (state: MailboxState, batch: ActiveBatch, now: number) => {
-		const active = state.active
-		return active !== null && active.owner === batch.owner && active.leaseUntil > now
+		return activeBatches(state).find(
+			(active) => active.owner === batch.owner && active.owner !== null && active.leaseUntil > now,
+		)
 	}
 
 	const finish = Effect.fn('delivery.finish')(function* (input: {
@@ -250,14 +326,21 @@ export const bind = <Event extends Schema.Constraint, Resource extends Schema.Co
 			key: input.key,
 			retries: policy.conflictRetries,
 			calculate: (state, _revision, now) => {
-				if (!owned(state, input.batch, now)) return Effect.fail(DeliveryError.make({ reason: 'stale' }))
-				const batch = state.active
-				if (batch === null) return Effect.fail(DeliveryError.make({ reason: 'stale' }))
+				const batch = owned(state, input.batch, now)
+				if (batch === undefined) return Effect.fail(DeliveryError.make({ reason: 'stale' }))
+				const batches = activeBatches(state)
 				const outcome = batch.cancelled ? 'cancelled' : input.outcome
 				if (outcome === 'retry' && batch.attempt < policy.maxAttempts) {
 					const readyAt = now + Math.min(policy.retryMaxMs, policy.retryBaseMs * 2 ** (batch.attempt - 1))
 					return Effect.succeed({
-						state: { ...state, active: { ...batch, owner: null, leaseUntil: readyAt }, readyAt },
+						state: scheduled(
+							withBatches(
+								state,
+								batches.map((entry) =>
+									entry === batch ? { ...batch, owner: null, leaseUntil: readyAt } : entry,
+								),
+							),
+						),
 						result: undefined,
 					})
 				}
@@ -266,13 +349,16 @@ export const bind = <Event extends Schema.Constraint, Resource extends Schema.Co
 					Outcome.make({ identity: eventIdentity(event), kind, expiresAt: now + policy.retentionMs }),
 				)
 				return Effect.succeed({
-					state: {
-						...state,
-						active: null,
-						failed: kind === 'failed' ? [...state.failed, batch] : state.failed,
-						outcomes: [...retained(state, now), ...outcomes],
-						readyAt: state.pending.length > 0 ? now : null,
-					},
+					state: scheduled(
+						withBatches(
+							{
+								...state,
+								failed: kind === 'failed' ? [...state.failed, batch] : state.failed,
+								outcomes: [...retained(state, now), ...outcomes],
+							},
+							batches.filter((entry) => entry !== batch),
+						),
+					),
 					result: undefined,
 				})
 			},
@@ -282,16 +368,34 @@ export const bind = <Event extends Schema.Constraint, Resource extends Schema.Co
 	const cancelActive = Effect.fn('delivery.cancel_active')(function* (input: {
 		readonly key: string
 		readonly controlId: string
+		readonly eventId?: string
 	}) {
 		yield* configured
 		if (!input.key.startsWith(prefix)) return yield* DeliveryError.make({ reason: 'definition' })
 		yield* Schema.NonEmptyString.makeEffect(input.controlId).pipe(
 			Effect.mapError(() => DeliveryError.make({ reason: 'definition' })),
 		)
-		if (new TextEncoder().encode(input.controlId + input.key).byteLength > policy.maxPayloadBytes)
+		if (input.eventId !== undefined)
+			yield* Schema.NonEmptyString.makeEffect(input.eventId).pipe(
+				Effect.mapError(() => DeliveryError.make({ reason: 'definition' })),
+			)
+		if (
+			new TextEncoder().encode(input.controlId + input.key + (input.eventId ?? '')).byteLength >
+			policy.maxPayloadBytes
+		)
 			return yield* DeliveryError.make({ reason: 'capacity' })
 		const store = yield* MailboxStore
-		const target = (yield* store.loadMailbox(input))?.state.active
+		const snapshot = yield* store.loadMailbox(input)
+		const target =
+			snapshot === undefined
+				? undefined
+				: activeBatches(snapshot.state).find(
+						(batch) =>
+							input.eventId === undefined ||
+							batch.envelopes.some(
+								(event) => event.definition === definition.name && event.eventId === input.eventId,
+							),
+					)
 		const identity = `control:${input.controlId}`
 		return yield* transition({
 			key: input.key,
@@ -302,23 +406,40 @@ export const bind = <Event extends Schema.Constraint, Resource extends Schema.Co
 					return Effect.succeed({ state, result: false })
 				if (state.outcomes.length + envelopes(state).length >= policy.maxOutcomes)
 					return Effect.fail(DeliveryError.make({ reason: 'capacity' }))
+				const batches = activeBatches(state)
 				const targeted =
-					target !== undefined &&
-					target !== null &&
-					state.active !== null &&
-					state.active.owner === target.owner &&
-					eventIdentity(state.active.envelopes[0]) === eventIdentity(target.envelopes[0])
-				const active = targeted && state.active !== null ? { ...state.active, cancelled: true } : state.active
+					target === undefined
+						? undefined
+						: batches.find(
+								(batch) =>
+									batch.owner === target.owner &&
+									batch.attempt === target.attempt &&
+									batch.envelopes[0].acceptedAt === target.envelopes[0].acceptedAt &&
+									eventIdentity(batch.envelopes[0]) === eventIdentity(target.envelopes[0]),
+							)
 				return Effect.succeed({
 					state: {
-						...state,
-						active,
+						...withBatches(
+							state,
+							batches.map((batch) => (batch === targeted ? { ...batch, cancelled: true } : batch)),
+						),
 						outcomes: [
 							...state.outcomes,
-							Outcome.make({ identity, kind: 'control', expiresAt: now + policy.retentionMs }),
+							Outcome.make({
+								identity,
+								kind: 'control',
+								expiresAt: now + policy.retentionMs,
+								cancellationTarget:
+									targeted === undefined
+										? null
+										: {
+												identity: eventIdentity(targeted.envelopes[0]),
+												acceptedAt: targeted.envelopes[0].acceptedAt,
+											},
+							}),
 						],
 					},
-					result: targeted,
+					result: targeted !== undefined,
 				})
 			},
 		})
@@ -339,11 +460,16 @@ export const bind = <Event extends Schema.Constraint, Resource extends Schema.Co
 			key: input.key,
 			retries: policy.conflictRetries,
 			calculate: (state, _revision, now) => {
-				if (!owned(state, batch, now) || state.active === null)
-					return Effect.fail(DeliveryError.make({ reason: 'stale' }))
-				const active = { ...state.active, leaseUntil: now + policy.leaseMs }
+				const current = owned(state, batch, now)
+				if (current === undefined) return Effect.fail(DeliveryError.make({ reason: 'stale' }))
+				const active = { ...current, leaseUntil: now + policy.leaseMs }
 				return Effect.succeed({
-					state: { ...state, active, readyAt: active.leaseUntil },
+					state: scheduled(
+						withBatches(
+							state,
+							activeBatches(state).map((entry) => (entry === current ? active : entry)),
+						),
+					),
 					result: active.cancelled,
 				})
 			},
@@ -390,11 +516,32 @@ export const bind = <Event extends Schema.Constraint, Resource extends Schema.Co
 		yield* configured
 		if (!input.key.startsWith(prefix)) return yield* DeliveryError.make({ reason: 'definition' })
 		const store = yield* MailboxStore
-		while (true) {
-			const snapshot = yield* store.loadMailbox(input)
-			if (snapshot?.state.active === null || snapshot === undefined) return
-			yield* Effect.sleep(policy.heartbeatMs)
-		}
+		yield* store.loadMailbox(input).pipe(
+			Effect.map((snapshot) => snapshot !== undefined && activeBatches(snapshot.state).length > 0),
+			Effect.repeat({ while: (active) => active, schedule: Schedule.spaced(policy.heartbeatMs) }),
+		)
+	})
+
+	const awaitCancellation = Effect.fn('delivery.await_cancellation')(function* (input: {
+		readonly key: string
+		readonly controlId: string
+	}) {
+		yield* configured
+		if (!input.key.startsWith(prefix)) return yield* DeliveryError.make({ reason: 'definition' })
+		yield* Schema.NonEmptyString.makeEffect(input.controlId).pipe(
+			Effect.mapError(() => DeliveryError.make({ reason: 'definition' })),
+		)
+		const store = yield* MailboxStore
+		yield* store.loadMailbox(input).pipe(
+			Effect.map((snapshot) => {
+				if (snapshot === undefined) return false
+				const control = snapshot.state.outcomes.find(
+					(outcome) => outcome.kind === 'control' && outcome.identity === `control:${input.controlId}`,
+				)
+				return control !== undefined && cancellationPending(snapshot.state, control)
+			}),
+			Effect.repeat({ while: (pending) => pending, schedule: Schedule.spaced(policy.heartbeatMs) }),
+		)
 	})
 
 	const run = Effect.fn('delivery.run')(function* (input: RunnerOptions) {
@@ -403,20 +550,29 @@ export const bind = <Event extends Schema.Constraint, Resource extends Schema.Co
 			Effect.mapError(() => DeliveryError.make({ reason: 'configuration' })),
 		)
 		const readiness = yield* MailboxReadiness
-		const running = new Set<string>()
+		const running = new Map<string, number>()
+		let runningCount = 0
 		const pass = Effect.gen(function* () {
 			const now = yield* Clock.currentTimeMillis
 			const keys = yield* readiness.scanReady({ prefix, now, limit: input.scanLimit })
 			for (const key of keys) {
-				if (running.size >= input.concurrency) break
-				if (running.has(key)) continue
-				running.add(key)
+				if (runningCount >= input.concurrency) break
+				if ((running.get(key) ?? 0) >= concurrency) continue
+				running.set(key, (running.get(key) ?? 0) + 1)
+				runningCount++
 				yield* processMailbox({ key }).pipe(
 					Effect.catchCauseIf(
 						(cause) => !Cause.hasInterruptsOnly(cause),
 						(cause) => Effect.logError('delivery mailbox processing failed', cause),
 					),
-					Effect.ensuring(Effect.sync(() => running.delete(key))),
+					Effect.ensuring(
+						Effect.sync(() => {
+							runningCount--
+							const remaining = (running.get(key) ?? 1) - 1
+							if (remaining === 0) running.delete(key)
+							else running.set(key, remaining)
+						}),
+					),
 					Effect.forkScoped,
 				)
 			}
@@ -424,5 +580,5 @@ export const bind = <Event extends Schema.Constraint, Resource extends Schema.Co
 		yield* pass.pipe(Effect.repeat(Schedule.spaced(input.pollMs)), Effect.scoped)
 	})
 
-	return { keyForResource, keyFor, admit, processMailbox, cancelActive, awaitInactive, run }
+	return { keyForResource, keyFor, admit, processMailbox, cancelActive, awaitInactive, awaitCancellation, run }
 }
