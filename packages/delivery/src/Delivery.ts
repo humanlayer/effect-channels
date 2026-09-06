@@ -1,4 +1,4 @@
-import { Cause, Clock, Effect, Exit, Fiber, Schedule, Schema } from 'effect'
+import { Cause, Clock, Effect, Exit, Fiber, Match, Schedule, Schema, SchemaIssue } from 'effect'
 
 import { DeliveryPolicy } from './DeliveryPolicy.ts'
 import type { EventDefinition } from './EventDefinition.ts'
@@ -111,6 +111,27 @@ const RunnerOptions = Schema.Struct({
 })
 export type RunnerOptions = typeof RunnerOptions.Type
 
+const redactDecodeIssues = (
+	issue: SchemaIssue.Issue,
+	path: ReadonlyArray<string> = [],
+): Array<{
+	readonly category: SchemaIssue.Issue['_tag']
+	readonly path: ReadonlyArray<string>
+}> =>
+	Match.value(issue).pipe(
+		Match.tags({
+			Pointer: (issue) => redactDecodeIssues(issue.issue, [...path, ...issue.path.map(() => '[redacted-key]')]),
+			Encoding: (issue) => redactDecodeIssues(issue.issue, path),
+			Filter: () => [{ category: 'Filter' as const, path }],
+			Composite: (issue) => issue.issues.flatMap((child) => redactDecodeIssues(child, path)),
+			AnyOf: (issue) =>
+				issue.issues.length === 0
+					? [{ category: 'AnyOf' as const, path }]
+					: issue.issues.flatMap((child) => redactDecodeIssues(child, path)),
+		}),
+		Match.orElse((issue) => [{ category: issue._tag, path } as const]),
+	)
+
 export const bind = <Event extends Schema.Constraint, Resource extends Schema.Constraint, R>(
 	registration: HandlerRegistration<Event, Resource, R>,
 ) => {
@@ -145,18 +166,18 @@ export const bind = <Event extends Schema.Constraint, Resource extends Schema.Co
 			if (envelope.definition !== definition.name || envelope.version !== definition.version)
 				return yield* DeliveryError.make({ reason: 'definition' })
 			const event = yield* Schema.decodeEffect(eventCodec)(envelope.payload).pipe(
-				Effect.tapError(() =>
-					Effect.logError('Delivery event payload failed schema decoding').pipe(
-						Effect.annotateLogs({ definition: envelope.definition, version: envelope.version }),
-					),
+				Effect.tapError((error) =>
+					Effect.logError('Delivery event payload failed schema decoding', {
+						issues: redactDecodeIssues(error.issue),
+					}).pipe(Effect.annotateLogs({ definition: envelope.definition, version: envelope.version })),
 				),
 				Effect.mapError(() => DeliveryError.make({ reason: 'payload' })),
 			)
 			yield* Schema.decodeEffect(resourceCodec)(envelope.resource).pipe(
-				Effect.tapError(() =>
-					Effect.logError('Delivery resource failed schema decoding').pipe(
-						Effect.annotateLogs({ definition: envelope.definition, version: envelope.version }),
-					),
+				Effect.tapError((error) =>
+					Effect.logError('Delivery resource failed schema decoding', {
+						issues: redactDecodeIssues(error.issue),
+					}).pipe(Effect.annotateLogs({ definition: envelope.definition, version: envelope.version })),
 				),
 				Effect.mapError(() => DeliveryError.make({ reason: 'payload' })),
 			)

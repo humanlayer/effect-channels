@@ -111,7 +111,7 @@ const acceptLifecycleEvent = (config: SlackRoutesConfig, callback: SlackEventCal
 							? SlackMessageTs.make(raw.thread_ts)
 							: event.item.ts
 					}),
-					Effect.catch((error) =>
+					Effect.catchTag(['UnknownTenant', 'SlackTransportError', 'SlackApiError'], (error) =>
 						Effect.logWarning(
 							'Slack reaction parent lookup failed; using reacted message as thread root',
 							error,

@@ -311,41 +311,113 @@ it.effect('rejects invalid runner configuration before scanning an empty store',
 	}).pipe(Effect.provide(memory)),
 )
 
-it.effect('reports corrupt persisted payloads without logging their contents', () =>
-	Effect.gen(function* () {
-		const logs: Array<string> = []
-		const logger = Logger.layer([Logger.make((entry) => logs.push(JSON.stringify(entry.message)))])
-		const delivery = bind({
-			namespace: 'app',
-			handlerId: 'private-payload',
-			definition,
-			policy,
-			handler: () => Effect.die('must not run'),
-		})
-		const receipt = yield* delivery.admit({ event: event('A') })
-		const store = yield* MailboxStore
-		const snapshot = yield* store.loadMailbox(receipt)
-		assert.ok(snapshot !== undefined)
-		yield* store.commitMailbox({
-			key: receipt.key,
-			expectedRevision: snapshot.revision,
-			nextState: {
-				...snapshot.state,
-				pending: snapshot.state.pending.map((entry) => ({
-					...entry,
-					payload: JSON.stringify({ ...event('A'), text: { secret: 'private-payload-sentinel' } }),
-				})),
-			},
-		})
-		assert.deepStrictEqual(
-			yield* delivery.processMailbox(receipt).pipe(Effect.provide(logger), Effect.flip),
-			DeliveryError.make({ reason: 'payload' }),
-		)
-		assert.ok(logs.some((entry) => entry.includes('schema decoding')))
-		assert.ok(logs.every((entry) => !entry.includes('private-payload-sentinel')))
-		assert.strictEqual((yield* store.loadMailbox(receipt))?.state.failed.length, 1)
-	}).pipe(Effect.provide(memory)),
-)
+for (const corruption of [
+	{
+		field: 'payload',
+		value: JSON.stringify({ ...event('A'), text: { secret: 'private-payload-sentinel' } }),
+		category: 'InvalidType',
+		path: ['[redacted-key]'],
+	},
+	{
+		field: 'resource',
+		value: JSON.stringify({ token: 'private-payload-sentinel' }),
+		category: 'InvalidType',
+		path: [],
+	},
+	{ field: 'payload', value: '{"token":"private-payload-sentinel"', category: 'InvalidValue', path: [] },
+	{
+		field: 'payload',
+		value: JSON.stringify({ token: 'private-payload-sentinel' }),
+		category: 'MissingKey',
+		path: ['[redacted-key]'],
+	},
+	{
+		field: 'payload',
+		value: JSON.stringify({ ...event('A'), checked: 'private-payload-sentinel' }),
+		category: 'Filter',
+		path: ['[redacted-key]'],
+	},
+	{
+		field: 'payload',
+		value: JSON.stringify({
+			...event('A'),
+			metadata: { 'private-key-sentinel': { token: 'private-payload-sentinel' } },
+		}),
+		category: 'InvalidType',
+		path: ['[redacted-key]', '[redacted-key]'],
+	},
+	{
+		field: 'payload',
+		value: JSON.stringify({ ...event('A'), choice: 'private-payload-sentinel' }),
+		category: 'AnyOf',
+		path: ['[redacted-key]'],
+	},
+] as const) {
+	it.effect(
+		`reports persisted ${corruption.field} ${corruption.category} at depth ${corruption.path.length} safely`,
+		() =>
+			Effect.gen(function* () {
+				const logs: Array<string> = []
+				const messages: Array<unknown> = []
+				const logger = Logger.layer([
+					Logger.make((entry) => {
+						if (Array.isArray(entry.message)) messages.push(...entry.message)
+						logs.push(JSON.stringify(Logger.formatStructured.log(entry)))
+					}),
+				])
+				const delivery = bind({
+					namespace: 'app',
+					handlerId: 'private-payload',
+					definition: {
+						...definition,
+						event: Schema.Struct({
+							...Event.fields,
+							metadata: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+							checked: Schema.optionalKey(
+								Schema.String.check(
+									Schema.isMinLength(100, { message: 'private-annotation-sentinel' }),
+								),
+							),
+							choice: Schema.optionalKey(Schema.Union([Schema.Literal('one'), Schema.Literal('two')])),
+						}),
+					},
+					policy,
+					handler: () => Effect.die('must not run'),
+				})
+				const receipt = yield* delivery.admit({ event: event('A') })
+				const store = yield* MailboxStore
+				const snapshot = yield* store.loadMailbox(receipt)
+				assert.ok(snapshot !== undefined)
+				yield* store.commitMailbox({
+					key: receipt.key,
+					expectedRevision: snapshot.revision,
+					nextState: {
+						...snapshot.state,
+						pending: snapshot.state.pending.map((entry) => ({
+							...entry,
+							[corruption.field]: corruption.value,
+						})),
+					},
+				})
+				assert.deepStrictEqual(
+					yield* delivery.processMailbox(receipt).pipe(Effect.provide(logger), Effect.flip),
+					DeliveryError.make({ reason: 'payload' }),
+				)
+				assert.ok(logs.some((entry) => entry.includes('schema decoding')))
+				assert.ok(
+					messages.some(
+						(message) =>
+							JSON.stringify(message) ===
+							JSON.stringify({ issues: [{ category: corruption.category, path: corruption.path }] }),
+					),
+				)
+				assert.ok(logs.every((entry) => !entry.includes('private-payload-sentinel')))
+				assert.ok(logs.every((entry) => !entry.includes('private-key-sentinel')))
+				assert.ok(logs.every((entry) => !entry.includes('private-annotation-sentinel')))
+				assert.strictEqual((yield* store.loadMailbox(receipt))?.state.failed.length, 1)
+			}).pipe(Effect.provide(memory)),
+	)
+}
 
 it.effect('rejects overflow before acceptance and permits safe duplicate admission at capacity', () =>
 	Effect.gen(function* () {
