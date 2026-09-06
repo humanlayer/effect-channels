@@ -5,15 +5,16 @@
 	"type": "module",
 	"scripts": {
 		"build": "bun build ./src/server.ts --outdir ./dist --target bun --format esm --packages external",
-		"seed": "bun run ./test/seed.ts",
-		"test": "vitest run --dir test",
+		"start": "bun run ./src/server.ts",
+		"seed": "bun run ./scripts/seed.ts",
+		"test": "vp test --root ../.. examples/slack-multi-tenant/test/",
+		"test:postgres": "vp test --config ./vitest.postgres.config.ts",
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},
 	"dependencies": {
 		"@effect/platform-node": "catalog:",
 		"@effect/sql-pg": "catalog:",
-		"@humanlayer/channels": "workspace:*",
-		"@humanlayer/channels-app": "workspace:*",
+		"@humanlayer/channels-delivery": "workspace:*",
 		"@humanlayer/channels-slack": "workspace:*",
 		"effect": "catalog:"
 	},

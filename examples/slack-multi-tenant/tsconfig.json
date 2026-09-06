@@ -3,5 +3,5 @@
 	"compilerOptions": {
 		"types": ["bun"]
 	},
-	"include": ["src/**/*.ts", "test/**/*.ts"]
+	"include": ["src/**/*.ts", "test/**/*.ts", "test-backends/**/*.ts", "scripts/**/*.ts", "vitest.postgres.config.ts"]
 }

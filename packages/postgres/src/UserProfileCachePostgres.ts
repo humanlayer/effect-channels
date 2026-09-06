@@ -3,7 +3,7 @@ import {
 	UserProfileCacheEntry,
 	UserProfileCacheError,
 	type UserProfileCacheKey,
-} from '@humanlayer/channels'
+} from '@humanlayer/channels-slack'
 import { Duration, Effect, Layer, Option, Schema } from 'effect'
 import { SqlClient } from 'effect/unstable/sql'
 

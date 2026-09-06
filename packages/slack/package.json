@@ -12,16 +12,17 @@
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},
 	"dependencies": {
-		"@humanlayer/channels": "workspace:*"
+		"@humanlayer/channels-delivery": "workspace:*"
 	},
 	"devDependencies": {
 		"@effect/platform-node": "catalog:",
 		"@effect/vitest": "catalog:",
 		"effect": "catalog:",
+		"emulate": "0.11.0",
 		"typescript": "catalog:",
 		"vitest": "catalog:"
 	},
 	"peerDependencies": {
-		"effect": "^4.0.0-rc.110"
+		"effect": "4.0.0-rc.112"
 	}
 }

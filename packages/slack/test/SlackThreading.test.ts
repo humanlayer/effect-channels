@@ -1,9 +1,9 @@
 import { NodeCrypto } from '@effect/platform-node'
 import { assert, it } from '@effect/vitest'
-import { Ingress, IngressAccepted, type NormalizedMessage } from '@humanlayer/channels'
 import { Context, Effect, Option, Queue, Schema } from 'effect'
 import { HttpRouter } from 'effect/unstable/http'
 
+import { IngressAccepted, SlackIngress as Ingress, type NormalizedMessage } from '../src/index.ts'
 import { SlackEventCallback, type SlackBotIdentity } from '../src/Schema.ts'
 import { normalizeSlackMessage } from '../src/SlackNormalize.ts'
 import { appMentionCallback, makeTestIngress, signedSlackRequest, testRouteLayer } from './support.ts'

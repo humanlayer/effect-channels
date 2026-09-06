@@ -5,10 +5,10 @@ import { PgClient } from '@effect/sql-pg'
 import { Config, Layer } from 'effect'
 import { HttpRouter } from 'effect/unstable/http'
 
-import { routes } from './app.ts'
+import { application, transport } from './app.ts'
 import { SlackConnectionRepositoryLive } from './store.ts'
 
-const ApplicationRoutes = Layer.merge(routes, SlackConnectionRepositoryLive)
+const ApplicationRoutes = application.pipe(Layer.provide(transport), Layer.provide(SlackConnectionRepositoryLive))
 const DatabaseLive = PgClient.layerConfig({ url: Config.redacted('DATABASE_URL') })
 
 const HttpLive = HttpRouter.serve(ApplicationRoutes).pipe(

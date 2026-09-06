@@ -37,6 +37,15 @@ it.effect('normalizes canonical and custom Slack reactions', () =>
 		})
 		assert.strictEqual(replyReaction.thread.ref.id, 'slack:v1:T_TEST:C_TEST:99.1')
 		assert.strictEqual(replyReaction.messageRef, '100.1')
+
+		const dmReaction = yield* normalizeSlackReaction({
+			callback,
+			identity: { botUserId: 'U_BOT' },
+			directMessageKind: 'mpim',
+		})
+		assert.strictEqual(dmReaction.thread.ref.id, 'slack:v1:T_TEST:mpim:C_TEST:100.1')
+		assert.strictEqual(dmReaction.thread.ref.channel.isDm, true)
+		assert.strictEqual(dmReaction.directMessageThread?.id, 'slack:v1:T_TEST:mpim:C_TEST')
 	}).pipe(Effect.provide(NodeCrypto.layer)),
 )
 

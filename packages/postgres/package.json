@@ -13,9 +13,10 @@
 	},
 	"dependencies": {
 		"@effect/sql-pg": "catalog:",
-		"@humanlayer/channels": "workspace:*"
+		"@humanlayer/channels-slack": "workspace:*"
 	},
 	"devDependencies": {
+		"@effect/platform-node": "catalog:",
 		"@effect/vitest": "catalog:",
 		"@types/bun": "catalog:",
 		"effect": "catalog:",
@@ -23,6 +24,6 @@
 		"vitest": "catalog:"
 	},
 	"peerDependencies": {
-		"effect": "^4.0.0-rc.110"
+		"effect": "4.0.0-rc.112"
 	}
 }

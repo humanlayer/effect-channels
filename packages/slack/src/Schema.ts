@@ -1,27 +1,11 @@
-import {
-	AttachmentRef,
-	ChannelInfo,
-	Content,
-	FileUpload,
-	MessagePage,
-	OrgId,
-	StreamChunk,
-	ThreadId,
-	ThreadPage,
-	UserId,
-	UserProfile,
-} from '@humanlayer/channels'
-import type { FileData } from '@humanlayer/channels'
 import { Schema } from 'effect'
 
-export const SlackTeamId = Schema.NonEmptyString.pipe(Schema.brand('SlackTeamId'))
-export type SlackTeamId = typeof SlackTeamId.Type
-
-export const SlackChannelId = Schema.NonEmptyString.pipe(Schema.brand('SlackChannelId'))
-export type SlackChannelId = typeof SlackChannelId.Type
-
-export const SlackMessageTs = Schema.NonEmptyString.pipe(Schema.brand('SlackMessageTs'))
-export type SlackMessageTs = typeof SlackMessageTs.Type
+import { Content } from './Content.ts'
+import { AttachmentRef, ChannelInfo, FileUpload, ThreadId, UserId, UserProfile, type FileData } from './Model.ts'
+import type { MessagePage, ThreadPage } from './Operations.ts'
+import { SlackTeamId, SlackChannelId, SlackMessageTs } from './SlackIdentity.ts'
+import { StreamChunk } from './StreamChunk.ts'
+export { SlackTeamId, SlackChannelId, SlackMessageTs } from './SlackIdentity.ts'
 
 export const SlackTenantCreds = Schema.Struct({
 	botToken: Schema.Redacted(Schema.String, { disallowJsonEncode: true }),
@@ -43,8 +27,6 @@ export const SlackConnectionCredentials = Schema.Struct({
 export type SlackConnectionCredentials = typeof SlackConnectionCredentials.Type
 
 export const SlackConnection = Schema.Struct({
-	organizationId: OrgId,
-	enabled: Schema.Boolean,
 	credentials: SlackConnectionCredentials,
 })
 export type SlackConnection = typeof SlackConnection.Type
@@ -170,12 +152,7 @@ export type SlackUrlVerification = typeof SlackUrlVerification.Type
 export const SlackEventsRequest = Schema.Union([SlackEventCallback, SlackUrlVerification])
 export type SlackEventsRequest = typeof SlackEventsRequest.Type
 
-export const SlackThreadRef = Schema.Struct({
-	teamId: SlackTeamId,
-	channelId: SlackChannelId,
-	threadTs: SlackMessageTs,
-})
-export type SlackThreadRef = typeof SlackThreadRef.Type
+export { SlackThreadRef } from './SlackIdentity.ts'
 
 export const SlackPostMessageInput = Schema.Struct({
 	teamId: SlackTeamId,
@@ -269,6 +246,7 @@ export const SlackRepliesInput = Schema.Struct({
 	teamId: SlackTeamId,
 	channelId: SlackChannelId,
 	threadTs: SlackMessageTs,
+	directMessageKind: Schema.optionalKey(Schema.Literals(['im', 'mpim'])),
 	limit: Schema.optionalKey(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 }))),
 	cursor: Schema.optionalKey(Schema.String),
 	direction: Schema.optionalKey(Schema.Literals(['forward', 'backward'])),
@@ -278,6 +256,7 @@ export type SlackRepliesInput = typeof SlackRepliesInput.Type
 export const SlackHistoryInput = Schema.Struct({
 	teamId: SlackTeamId,
 	channelId: SlackChannelId,
+	directMessageKind: Schema.optionalKey(Schema.Literals(['im', 'mpim'])),
 	before: Schema.optionalKey(SlackMessageTs),
 	limit: Schema.optionalKey(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 }))),
 	cursor: Schema.optionalKey(Schema.String),
@@ -355,11 +334,7 @@ export const SlackBotIdentity = Schema.Struct({
 })
 export type SlackBotIdentity = typeof SlackBotIdentity.Type
 
-export const SlackChannelAddress = Schema.Struct({
-	teamId: SlackTeamId,
-	channelId: SlackChannelId,
-})
-export type SlackChannelAddress = typeof SlackChannelAddress.Type
+export { SlackChannelAddress } from './SlackIdentity.ts'
 
 export const SlackHistoryMessage = Schema.Struct({
 	type: Schema.optionalKey(Schema.String),
@@ -464,6 +439,22 @@ export const SlackPostMessageResponse = Schema.Struct({
 	error: Schema.optionalKey(Schema.String),
 })
 export type SlackPostMessageResponse = typeof SlackPostMessageResponse.Type
+
+export const SlackOpenDMResponse = Schema.Struct({
+	ok: Schema.Boolean,
+	error: Schema.optionalKey(Schema.String),
+	channel: Schema.optionalKey(Schema.Struct({ id: SlackChannelId })),
+})
+export type SlackOpenDMResponse = typeof SlackOpenDMResponse.Type
+
+export const SlackPostEphemeralResponse = Schema.Struct({
+	ok: Schema.Boolean,
+	error: Schema.optionalKey(Schema.String),
+	channel: Schema.optionalKey(SlackChannelId),
+	message_ts: Schema.optionalKey(SlackMessageTs),
+	ts: Schema.optionalKey(SlackMessageTs),
+})
+export type SlackPostEphemeralResponse = typeof SlackPostEphemeralResponse.Type
 
 export const SlackGetUploadUrlResponse = Schema.Struct({
 	ok: Schema.Boolean,

@@ -1,19 +1,25 @@
 import { NodeCrypto } from '@effect/platform-node'
 import { assert, it } from '@effect/vitest'
-import {
-	Ingress,
-	IngressAccepted,
-	type NormalizedConversationStopped,
-	type NormalizedMessage,
-	unimplemented,
-} from '@humanlayer/channels'
 import { Clock, ConfigProvider, Context, Effect, Layer, Queue, Schema } from 'effect'
 import { TestClock } from 'effect/testing'
 import { HttpRouter } from 'effect/unstable/http'
 
+import {
+	SlackIngress as Ingress,
+	IngressAccepted,
+	type NormalizedConversationStopped,
+	type NormalizedMessage,
+	type NormalizedReaction,
+} from '../src/index.ts'
 import { SlackEventCallback } from '../src/Schema.ts'
 import { SlackRoutes } from '../src/SlackRoutes.ts'
-import { appMentionCallback, signSlackBody, testCredentialsLayer, testRouteSlackClientLayer } from './support.ts'
+import {
+	appMentionCallback,
+	signSlackBody,
+	testCredentialsLayer,
+	testRouteSlackClientLayer,
+	unimplemented,
+} from './support.ts'
 
 const routeLayer = SlackRoutes.layer.pipe(
 	HttpRouter.provideRequest(NodeCrypto.layer),
@@ -27,6 +33,44 @@ const routeLayer = SlackRoutes.layer.pipe(
 	),
 	Layer.provide(testCredentialsLayer),
 	Layer.provide(testRouteSlackClientLayer),
+)
+
+it.effect('resolves MPIM reaction identities before ingress admission', () =>
+	Effect.gen(function* () {
+		const accepted = yield* Queue.unbounded<NormalizedReaction>()
+		const ingress = Ingress.of({
+			acceptMessage: () => unimplemented('test.acceptMessage'),
+			acceptMessageUpdated: () => unimplemented('test.acceptMessageUpdated'),
+			acceptMessageDeleted: () => unimplemented('test.acceptMessageDeleted'),
+			acceptReaction: (event) =>
+				Queue.offer(accepted, event).pipe(
+					Effect.as(IngressAccepted.make({ idempotencyKey: event.idempotencyKey })),
+				),
+			acceptConversationStopped: () => unimplemented('test.acceptConversationStopped'),
+			run: () => unimplemented('test.run'),
+		})
+		const callback = yield* Schema.decodeEffect(SlackEventCallback)({
+			type: 'event_callback',
+			team_id: 'T_TEST',
+			event_id: 'Ev_REACTION_MPIM',
+			event_time: 1_788_000_000,
+			event: {
+				type: 'reaction_added',
+				user: 'U_TEST',
+				reaction: 'thumbsup',
+				item: { type: 'message', channel: 'G_MPIM', ts: '100.1' },
+				event_ts: '101.1',
+			},
+		})
+		const request = yield* signedRequest(callback)
+		const { dispose, handler } = HttpRouter.toWebHandler(routeLayer, { disableLogger: true })
+		yield* Effect.addFinalizer(() => Effect.promise(dispose))
+		assert.strictEqual((yield* Effect.promise(() => handler(request, Context.make(Ingress, ingress)))).status, 200)
+		const reaction = yield* Queue.take(accepted)
+		assert.strictEqual(reaction.thread.ref.id, 'slack:v1:T_TEST:mpim:G_MPIM:100.1')
+		assert.strictEqual(reaction.thread.ref.channel.isDm, true)
+		assert.strictEqual(reaction.directMessageThread?.id, 'slack:v1:T_TEST:mpim:G_MPIM')
+	}).pipe(Effect.provide(NodeCrypto.layer)),
 )
 
 const signedRequest = (callback: SlackEventCallback) =>
@@ -58,6 +102,7 @@ it.effect('verifies and normalizes a signed Slack request through the Fetch hand
 			acceptMessageDeleted: () => unimplemented('test.acceptMessageDeleted'),
 			acceptReaction: () => unimplemented('test.acceptReaction'),
 			acceptConversationStopped: () => unimplemented('test.acceptConversationStopped'),
+			run: () => unimplemented('test.run'),
 		})
 		const callback = yield* Schema.decodeEffect(SlackEventCallback)(appMentionCallback)
 		const request = yield* signedRequest(callback)
@@ -84,6 +129,7 @@ it.effect('normalizes and admits an agent session stop', () =>
 				Queue.offer(accepted, event).pipe(
 					Effect.as(IngressAccepted.make({ idempotencyKey: event.idempotencyKey })),
 				),
+			run: () => unimplemented('test.run'),
 		})
 		const callback = yield* Schema.decodeEffect(SlackEventCallback)({
 			type: 'event_callback',
@@ -92,7 +138,7 @@ it.effect('normalizes and admits an agent session stop', () =>
 			event_time: 1_788_000_000,
 			event: {
 				type: 'agent_session_stopped',
-				channel: 'C_TEST',
+				channel: 'G_MPIM',
 				thread_ts: '100.1',
 				user: 'U_TEST',
 				event_ts: '101.1',
@@ -106,6 +152,8 @@ it.effect('normalizes and admits an agent session stop', () =>
 
 		assert.strictEqual(response.status, 200)
 		const stopped = yield* Queue.take(accepted)
-		assert.strictEqual(stopped.threadRef.id, 'slack:v1:T_TEST:C_TEST:100.1')
+		assert.strictEqual(stopped.threadRef.id, 'slack:v1:T_TEST:mpim:G_MPIM:100.1')
+		assert.strictEqual(stopped.threadRef.channel.isDm, true)
+		assert.strictEqual(stopped.directMessageThread?.id, 'slack:v1:T_TEST:mpim:G_MPIM')
 	}).pipe(Effect.provide(NodeCrypto.layer)),
 )

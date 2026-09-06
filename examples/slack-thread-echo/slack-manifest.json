@@ -9,6 +9,11 @@
 		"background_color": "#1f2937"
 	},
 	"features": {
+		"app_home": {
+			"home_tab_enabled": false,
+			"messages_tab_enabled": true,
+			"messages_tab_read_only_enabled": false
+		},
 		"bot_user": {
 			"display_name": "Channels Thread Echo",
 			"always_online": true
@@ -30,7 +35,11 @@
 				"groups:history",
 				"groups:read",
 				"im:history",
+				"im:read",
+				"im:write",
 				"mpim:history",
+				"mpim:read",
+				"mpim:write",
 				"reactions:read",
 				"reactions:write",
 				"users:read",
@@ -47,6 +56,8 @@
 				"app_mention",
 				"message.channels",
 				"message.groups",
+				"message.im",
+				"message.mpim",
 				"reaction_added",
 				"reaction_removed"
 			]

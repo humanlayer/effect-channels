@@ -1,19 +1,18 @@
 import { NodeCrypto } from '@effect/platform-node'
 import { assert, it } from '@effect/vitest'
+import { ConfigProvider, Context, Effect, Layer, Option, Queue, Redacted, Ref, Schema } from 'effect'
+import { HttpRouter } from 'effect/unstable/http'
+
+import { CredentialStoreError } from '../src/Errors.ts'
 import {
-	Ingress,
 	IngressAccepted,
 	IngressDropped,
+	SlackIngress as Ingress,
 	UserId,
 	type IngressResult,
 	type Message,
 	type NormalizedMessage,
-} from '@humanlayer/channels'
-import { ConfigProvider, Context, Effect, Layer, Option, Queue, Redacted, Ref, Schema } from 'effect'
-import { HttpRouter } from 'effect/unstable/http'
-
-import { ChannelsWithIngressLayer } from '../../channels/test/support.ts'
-import { CredentialStoreError } from '../src/Errors.ts'
+} from '../src/index.ts'
 import {
 	SlackEventCallback,
 	SlackGetUserInput,
@@ -28,6 +27,7 @@ import { SlackRoutes } from '../src/SlackRoutes.ts'
 import { SlackTenantCredentials } from '../src/SlackTenantCredentials.ts'
 import {
 	makeSlackClientHarness,
+	makeTestIngress,
 	signedSlackRequest,
 	slackJsonResponse,
 	testBotToken,
@@ -35,6 +35,18 @@ import {
 	testChannelId,
 	type RecordedSlackRequest,
 } from './support.ts'
+
+const identityIngressLayer = Layer.succeed(
+	Ingress,
+	makeTestIngress({
+		acceptMessage: (message) =>
+			Effect.succeed(
+				message.message.author.isMe
+					? IngressDropped.make({ reason: 'bot' })
+					: IngressAccepted.make({ idempotencyKey: message.idempotencyKey }),
+			),
+	}),
+)
 
 type EncodedCallback = typeof SlackEventCallback.Encoded
 
@@ -113,7 +125,7 @@ const withWebhook = <A, E, R>(
 		const { dispose, handler } = HttpRouter.toWebHandler(routeLayer, { disableLogger: true })
 		yield* Effect.addFinalizer(() => Effect.promise(dispose))
 		return yield* program(handler, recorded)
-	}).pipe(Effect.provide(Layer.merge(ChannelsWithIngressLayer, NodeCrypto.layer)))
+	}).pipe(Effect.provide(Layer.merge(identityIngressLayer, NodeCrypto.layer)))
 
 const droppedAsBot = IngressDropped.make({ reason: 'bot' })
 const acceptedFor = (recorded: RecordedIngress) =>
@@ -139,17 +151,17 @@ it.effect('drops the tenant bot user as our own echo and lets the configured bot
 	),
 )
 
-it.effect('falls back to the configured identity when the team has no stored identity', () =>
+it.effect('uses the configured bot identity only after the workspace credentials resolve', () =>
 	withWebhook((handler, recorded) =>
 		Effect.gen(function* () {
-			const ownEcho = yield* deliver(handler, recorded, mentionFrom('T_TEST', 'UCONFIG', '300.1', 'done'))
+			const ownEcho = yield* deliver(handler, recorded, mentionFrom('T_PLAIN', 'UCONFIG', '300.1', 'done'))
 			assert.strictEqual(ownEcho.message.message.author.isMe, true)
 			assert.deepStrictEqual(ownEcho.result, droppedAsBot)
 
 			const human = yield* deliver(
 				handler,
 				recorded,
-				mentionFrom('T_TEST', 'U_HUMAN', '300.2', '<@UCONFIG> hello from a human'),
+				mentionFrom('T_PLAIN', 'U_HUMAN', '300.2', '<@UCONFIG> hello from a human'),
 			)
 			assert.strictEqual(human.message.message.author.isMe, false)
 			assert.strictEqual(human.message.message.text, 'hello from a human')
@@ -158,19 +170,20 @@ it.effect('falls back to the configured identity when the team has no stored ide
 	),
 )
 
-it.effect('falls back to the configured identity and still processes the event when the credential store fails', () =>
+it.effect('isolates unknown and failed workspace credential lookups before ingress', () =>
 	withWebhook((handler, recorded) =>
 		Effect.gen(function* () {
-			const ownEcho = yield* deliver(handler, recorded, mentionFrom('T_BROKEN', 'UCONFIG', '400.1', 'done'))
-			assert.deepStrictEqual(ownEcho.result, droppedAsBot)
-
-			const human = yield* deliver(
-				handler,
-				recorded,
-				mentionFrom('T_BROKEN', 'U_HUMAN', '400.2', '<@UCONFIG> still here'),
-			)
-			assert.strictEqual(human.message.message.text, 'still here')
-			assert.deepStrictEqual(human.result, acceptedFor(human))
+			const request = (callback: EncodedCallback) =>
+				Effect.gen(function* () {
+					const decoded = yield* Schema.decodeEffect(SlackEventCallback)(callback)
+					const signed = yield* signedSlackRequest(decoded)
+					return yield* Effect.promise(() => handler(signed, Context.make(Ingress, makeTestIngress({}))))
+				})
+			const unknown = yield* request(mentionFrom('T_UNKNOWN', 'U_HUMAN', '400.1', '<@UCONFIG> hidden'))
+			const failed = yield* request(mentionFrom('T_BROKEN', 'U_HUMAN', '400.2', '<@UCONFIG> hidden'))
+			assert.strictEqual(unknown.status, 200)
+			assert.strictEqual(failed.status, 503)
+			assert.strictEqual(yield* Queue.size(recorded), 0)
 		}),
 	),
 )

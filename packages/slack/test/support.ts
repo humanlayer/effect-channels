@@ -1,9 +1,9 @@
 import { NodeCrypto } from '@effect/platform-node'
-import { Ingress, MessagePage, unimplemented } from '@humanlayer/channels'
 import { Clock, ConfigProvider, Effect, Layer, Option, Queue, Redacted, Schema } from 'effect'
 import { TestClock } from 'effect/testing'
 import { HttpClient, HttpClientRequest, HttpClientResponse, HttpRouter } from 'effect/unstable/http'
 
+import { ChannelInfo, MessagePage, SlackIngress as Ingress } from '../src/index.ts'
 import { SlackChannelId, SlackEventCallback, SlackMessageTs, SlackTeamId } from '../src/Schema.ts'
 import { SlackClient } from '../src/SlackClient.ts'
 import { SlackRoutes } from '../src/SlackRoutes.ts'
@@ -26,6 +26,9 @@ export const testIdentityConfigLayer = ConfigProvider.layer(
 export const webhookUrl = 'http://channels.test/api/v1/integrations/slack/webhook'
 
 export const testBotToken = 'xoxb-test-token'
+
+export const unimplemented = (operation: string): Effect.Effect<never> =>
+	Effect.die(new Error(operation + ' is intentionally unimplemented'))
 
 export const testCredentialsLayer = SlackTenantCredentials.make({
 	load: () => Effect.succeed(Option.some({ botToken: Redacted.make(testBotToken) })),
@@ -61,6 +64,7 @@ export const makeTestIngress = (overrides: Partial<Ingress['Service']>) =>
 		acceptMessageDeleted: () => unimplemented('test.Ingress.acceptMessageDeleted'),
 		acceptReaction: () => unimplemented('test.Ingress.acceptReaction'),
 		acceptConversationStopped: () => unimplemented('test.Ingress.acceptConversationStopped'),
+		run: () => unimplemented('test.Ingress.run'),
 		...overrides,
 	})
 
@@ -137,6 +141,16 @@ export const stubSlackClientLayer = (overrides: Partial<SlackClient['Service']>)
 
 export const testRouteSlackClientLayer = stubSlackClientLayer({
 	replies: () => Effect.succeed(MessagePage.make({ messages: [] })),
+	channelInfo: (input) =>
+		Effect.succeed(
+			ChannelInfo.make({
+				channel: slackChannelRef(
+					input.teamId,
+					input.channelId,
+					input.channelId.startsWith('G') ? 'mpim' : undefined,
+				),
+			}),
+		),
 })
 
 export const testRouteLayer = SlackRoutes.layer.pipe(

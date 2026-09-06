@@ -1,24 +1,58 @@
-# channels
+# Channels: native provider modules and shared delivery
 
-- [`examples/slack-thread-echo`](./examples/slack-thread-echo/) — minimal single-workspace Slack application.
-- [`examples/slack-multi-tenant`](./examples/slack-multi-tenant/) — a provider-owned Slack `loadConnection` callback for multiple workspaces.
+Phase 1 implements native Slack plus a shared, typed in-memory mailbox engine.
+`packages/app` and the old `packages/channels` facade are removed.
+
+- [`packages/slack`](./packages/slack/) — native operations, schema-backed handles,
+  subscriptions, credential Layers, signed routes, and typed ingress handlers.
+- [`packages/delivery`](./packages/delivery/) — admission, queue/latest-and-skipped,
+  bounded retries, leases, cancellation, memory storage, and scoped runners.
+- [`examples/slack-thread-echo`](./examples/slack-thread-echo/) — direct Effect Layer
+  composition with memory; no database needed. Effect HTTP and Fetch entrypoints.
+- [`examples/slack-multi-tenant`](./examples/slack-multi-tenant/) — existing optional
+  Postgres **credential repository**, with memory delivery and subscriptions.
+- [`packages/postgres`](./packages/postgres/) — isolated historical SQL code for
+  migration/drain work, **not** a new shared-delivery Postgres backend.
+
+## Verification
+
+```sh
+bun install
+bun run typecheck
+bun run test
+bun run check
+bun run build
+```
+
+Commands use the workspace-local `vp` binary. If invoking it directly, use
+`./node_modules/.bin/vp test` rather than a separately installed global launcher.
 
 ## Slack provider testing
 
-Slack integration tests are emulator-first and run as part of the ordinary test suite:
+Default tests use supplied memory Layers, real provider/shared-delivery code,
+and Vercel Labs `emulate@0.11.0`. No database, workerd, live Slack credentials,
+recording sessions, or recorded-traffic replay is required. Vite env-file loading
+is disabled, and backend suites are structurally excluded even if `DATABASE_URL`
+is already set.
 
-```bash
-vp test
-```
+`packages/slack/test/integration` starts isolated Slack emulators and closes each
+listener/runtime through Effect scopes. It covers public/private mentions,
+subscription follow-ups, DMs, own-bot suppression, other-bot history, files,
+edits/deletes/reactions, fallback streaming, cancellation, admission-before-work,
+and provider-visible replies. Protocol tests cover signatures, handshakes,
+partial-admission failures, replay routing, native streaming/status, and queue
+coalescing. Shared-engine tests cover conflicts, bounded retention, retries,
+lease recovery, independent mailbox scheduling, and stale/duplicate controls.
 
-This is the default, credential-free test command for the whole repository. It uses memory storage and local provider emulators, does not read `.env`, does not contact live providers, does not require Docker or Postgres, and excludes infrastructure-only Postgres suites. Test discovery is restricted to this repository's package and example test directories, so dependency tests under `node_modules` are never collected.
+Emulate does not implement every Slack API: native streaming and exact pagination
+remain synthetic protocol tests, not claimed emulator coverage. Memory recovery
+means reconstruction over the same acquired store, not process-crash durability.
 
-The app suite starts `emulate@0.11.0` through a scoped Effect test Layer, points the production `SlackClient` at the emulator's `/api` origin, and closes both the application runtime and emulator deterministically. It exercises signed webhook admission, public and private channel mentions and subscribed follow-ups, mentions inside integration-authored threads, bot-loop suppression, provider-backed history in both directions, pagination signals, `allMessages`, channel/thread metadata and listing, participants, user hydration, and unknown/disabled connection routing. Assertions read Slack state through the emulator's HTTP APIs rather than its internal store.
+Postgres/Redis delivery Layers, built declaration/optional-peer isolation checks,
+Alchemy deployment, OAuth, additional delivery modes, and new providers are not
+part of Phase 1. No backend tests or deployment were run. Archived incomplete
+app-backend test sources are explicitly marked as non-executable Phase 2 work.
 
-The emulator's high-level API emits ordinary Slack `message` events for writes but does not expose an `app_mention` simulator. Mention tests therefore create the message through the emulator first, then construct and sign the corresponding `app_mention` delivery from the returned channel, timestamp, text, and author fields. This keeps provider state authoritative while using the signed webhook only as the inbound delivery driver.
-
-The emulator currently models one Slack workspace per server and does not implement `agents.sessions.setStatus`. True two-workspace callback routing remains covered by the connection-layer and Postgres example tests; typing/status request encoding remains covered by the exact Slack client tests. The emulator's `conversations.replies` implementation also returns a complete thread rather than implementing Slack's timestamp pagination, so exact multi-page cursor behavior remains in the Slack client contract tests while the emulator suite verifies both directions and the backward-page continuation signal.
-
-When `DATABASE_URL` is available, an isolated-schema integration suite sends a signed mention through one complete application runtime and its human follow-up through a second runtime sharing Postgres. It verifies durable subscription transfer, single-owner FIFO handling, and both production Slack replies in the original emulator thread. The schema, application runtimes, SQL pools, and emulator are all scoped and finalized by Effect.
-
-`bun run test:live:slack` is an optional minimal smoke check against a real Slack workspace. It is not required for CI or normal development, and recording files are not part of the test workflow.
+`bun run test:live:slack` optionally launches the memory echo server for manual
+Slack testing. It contacts real Slack only when deliberately run and is not an
+acceptance requirement.

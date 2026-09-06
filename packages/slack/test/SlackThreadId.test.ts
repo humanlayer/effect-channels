@@ -1,8 +1,8 @@
 import { assert, it } from '@effect/vitest'
-import { ThreadId } from '@humanlayer/channels'
 import { Effect, Schema } from 'effect'
 
 import { InvalidSlackThreadId } from '../src/Errors.ts'
+import { ThreadId } from '../src/index.ts'
 import { SlackChannelId, SlackMessageTs, SlackTeamId, SlackThreadRef } from '../src/Schema.ts'
 import { decodeSlackThreadId, encodeSlackThreadId } from '../src/SlackThreadId.ts'
 

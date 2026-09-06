@@ -1,9 +1,9 @@
 import { assert, it } from '@effect/vitest'
-import { ThreadId } from '@humanlayer/channels'
 import { Effect, Layer } from 'effect'
 
 import { SlackApiError, SlackTransportError, slackErrorRetryability } from '../src/Errors.ts'
-import { SlackProvider } from '../src/SlackProvider.ts'
+import { ThreadId } from '../src/index.ts'
+import { Slack } from '../src/Slack.ts'
 import { stubSlackClientLayer } from './support.ts'
 
 it('classifies Slack transport and API errors for provider-neutral retry handling', () => {
@@ -27,9 +27,9 @@ it('classifies Slack transport and API errors for provider-neutral retry handlin
 	}
 })
 
-it.effect('preserves missing_scope as non-retryable through SlackProvider history narrowing', () =>
+it.effect('preserves missing_scope as non-retryable through Slack history narrowing', () =>
 	Effect.gen(function* () {
-		const provider = yield* SlackProvider
+		const provider = yield* Slack
 		const failure = yield* Effect.flip(
 			provider.messages({ threadId: ThreadId.make('slack:v1:T_TEST:C_TEST:100.1') }),
 		)
@@ -37,7 +37,7 @@ it.effect('preserves missing_scope as non-retryable through SlackProvider histor
 		assert.strictEqual(failure.retryability, 'non_retryable')
 	}).pipe(
 		Effect.provide(
-			SlackProvider.layer.pipe(
+			Slack.layer.pipe(
 				Layer.provide(
 					stubSlackClientLayer({
 						replies: () =>

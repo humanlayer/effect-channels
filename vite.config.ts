@@ -2,6 +2,7 @@ import { recommended } from '@effect/tsgo/oxlint-presets'
 import { defineConfig } from 'vite-plus'
 
 export default defineConfig({
+	envDir: false,
 	staged: {
 		'*': 'vp check --fix',
 	},
@@ -10,12 +11,11 @@ export default defineConfig({
 		exclude: [
 			'**/node_modules/**',
 			'**/dist/**',
+			'**/test-backends/**',
+			'**/*.postgres.test.ts',
+			'**/*.redis.test.ts',
 			'tools/oxlint/anti-slop/**',
-			'packages/channels/test/ConversationCoordinator.postgres.test.ts',
-			'packages/channels/test/Channels.ha.test.ts',
 			'packages/postgres/test/**',
-			'packages/app/test/SlackEmulator.postgres.test.ts',
-			'examples/slack-multi-tenant/test/**',
 		],
 		passWithNoTests: true,
 		silent: 'passed-only',

@@ -1,11 +1,11 @@
 import { assert, it } from '@effect/vitest'
-import { MessageRef, ThreadId } from '@humanlayer/channels'
 import { Effect, Layer, Queue } from 'effect'
 
-import { expectTaggedFailure } from '../../channels/test/support.ts'
+import { MessageRef, ThreadId } from '../src/index.ts'
 import { SlackHistoryInput, SlackRepliesInput } from '../src/Schema.ts'
+import { Slack } from '../src/Slack.ts'
 import { SlackClient } from '../src/SlackClient.ts'
-import { SlackProvider } from '../src/SlackProvider.ts'
+import { expectTaggedFailure } from './nativeSupport.ts'
 import {
 	makeSlackClientHarness,
 	slackJsonResponse,
@@ -272,9 +272,9 @@ it.effect('maps provider history calls onto replies and history and narrows fail
 				? pageResponse(threadOldestFirst)
 				: slackJsonResponse('{"ok":false,"error":"channel_not_found"}'),
 		)
-		const providerLayer = SlackProvider.layer.pipe(Layer.provide(harness.layer))
+		const providerLayer = Slack.layer.pipe(Layer.provide(harness.layer))
 		yield* Effect.gen(function* () {
-			const provider = yield* SlackProvider
+			const provider = yield* Slack
 			const threadPage = yield* provider.messages({
 				threadId: ThreadId.make(testRootThreadId),
 				options: { direction: 'forward', limit: 4 },

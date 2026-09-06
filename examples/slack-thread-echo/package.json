@@ -4,19 +4,22 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"build": "bun build ./src/server.ts --outdir ./dist --target bun --format esm --packages external",
+		"build": "bun build ./src/server.ts ./src/fetch.ts --outdir ./dist --target bun --format esm --splitting --packages external",
+		"start": "bun run ./src/server.ts",
+		"test": "vp test --root ../.. examples/slack-thread-echo/test/",
 		"typecheck": "tsc --noEmit -p tsconfig.json",
-		"live": "bun run ./test/live-smoke.ts live"
+		"live": "bun run start"
 	},
 	"dependencies": {
 		"@effect/platform-node": "catalog:",
-		"@humanlayer/channels": "workspace:*",
-		"@humanlayer/channels-app": "workspace:*",
+		"@humanlayer/channels-delivery": "workspace:*",
+		"@humanlayer/channels-slack": "workspace:*",
 		"effect": "catalog:"
 	},
 	"devDependencies": {
-		"@humanlayer/channels-slack": "workspace:*",
+		"@effect/vitest": "catalog:",
 		"@types/bun": "catalog:",
-		"typescript": "catalog:"
+		"typescript": "catalog:",
+		"vitest": "catalog:"
 	}
 }

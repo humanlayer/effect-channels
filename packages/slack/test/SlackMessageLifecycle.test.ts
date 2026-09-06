@@ -48,6 +48,38 @@ it.effect('normalizes Slack message changes and deletions', () =>
 	}).pipe(Effect.provide(NodeCrypto.layer)),
 )
 
+it.effect('preserves direct-message namespaces for changes and deletions', () =>
+	Effect.gen(function* () {
+		const callback = yield* Schema.decodeEffect(SlackEventCallback)({
+			...changed,
+			event: { ...changed.event, channel: 'G_MPIM', channel_type: 'mpim' },
+		})
+		const updated = yield* normalizeSlackMessageUpdated({ callback, identity: { botUserId: 'U_BOT' } })
+		assert.strictEqual(updated.thread.ref.id, 'slack:v1:T_TEST:mpim:G_MPIM:100.1')
+		assert.strictEqual(updated.thread.ref.channel.isDm, true)
+		assert.strictEqual(updated.directMessageThread?.id, 'slack:v1:T_TEST:mpim:G_MPIM')
+
+		const { message: _message, ...deletedEvent } = changed.event
+		const deletedCallback = yield* Schema.decodeEffect(SlackEventCallback)({
+			...changed,
+			event: {
+				...deletedEvent,
+				channel: 'G_MPIM',
+				channel_type: 'mpim',
+				subtype: 'message_deleted',
+				deleted_ts: '100.2',
+			},
+		})
+		const deleted = yield* normalizeSlackMessageDeleted({
+			callback: deletedCallback,
+			identity: { botUserId: 'U_BOT' },
+		})
+		assert.strictEqual(deleted.threadRef.id, 'slack:v1:T_TEST:mpim:G_MPIM:100.1')
+		assert.strictEqual(deleted.threadRef.channel.isDm, true)
+		assert.strictEqual(deleted.directMessageThread?.id, 'slack:v1:T_TEST:mpim:G_MPIM')
+	}).pipe(Effect.provide(NodeCrypto.layer)),
+)
+
 it.effect('calls chat.update and chat.delete with exact message references', () =>
 	Effect.gen(function* () {
 		const harness = yield* makeSlackClientHarness((request) =>

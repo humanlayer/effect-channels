@@ -1,10 +1,10 @@
 import { assert, it } from '@effect/vitest'
 import { Effect, Layer, Queue, Schema } from 'effect'
 
-import { expectTaggedFailure } from '../../channels/test/support.ts'
 import { SlackSessionStatusInput } from '../src/Schema.ts'
 import { Slack } from '../src/Slack.ts'
 import { SlackClient } from '../src/SlackClient.ts'
+import { expectTaggedFailure } from './nativeSupport.ts'
 import {
 	makeSlackClientHarness,
 	slackJsonResponse,

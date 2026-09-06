@@ -1,8 +1,6 @@
 import { assert, describe, it } from '@effect/vitest'
 import {
-	ConversationCoordinator,
 	SubscriptionCreated,
-	Subscriptions,
 	TenantId,
 	ThreadId,
 	UserId,
@@ -10,17 +8,17 @@ import {
 	UserProfileCache,
 	UserProfileCacheKey,
 	UserProfileFound,
-} from '@humanlayer/channels'
+} from '@humanlayer/channels-slack'
 import { Context, Effect, Layer, Option, Random, Schema } from 'effect'
 import { SqlClient } from 'effect/unstable/sql'
 
-import { layerConfig } from '../src/index.ts'
+import { ConversationCoordinator, LegacySubscriptions as Subscriptions, layerFromClient } from '../src/index.ts'
+import { postgresTestLayer, postgresTestsEnabled } from './support/PostgresTestResource.ts'
 
-const postgresTestsEnabled = import.meta.env.DATABASE_URL !== undefined
 const applicationLayer = (userProfileCache?: { readonly timeToLive: number }) =>
 	Subscriptions.layer.pipe(
 		Layer.provideMerge(
-			layerConfig(
+			layerFromClient(
 				{
 					leaseTtlMs: 1_000,
 					heartbeatEveryMs: 250,
@@ -69,7 +67,7 @@ describe.skipIf(!postgresTestsEnabled)('@humanlayer/channels-postgres', () => {
 			})
 			yield* firstCache.set(cacheKey, cached)
 			assert.deepStrictEqual(yield* secondCache.get(cacheKey), Option.some(cached))
-			const sql = Context.get(firstContext, SqlClient.SqlClient)
+			const sql = yield* SqlClient.SqlClient
 			const tables = yield* sql<{ readonly table_name: string }>`
 				SELECT table_name
 				FROM information_schema.tables
@@ -90,7 +88,7 @@ describe.skipIf(!postgresTestsEnabled)('@humanlayer/channels-postgres', () => {
 					'effect_persistence',
 				]),
 			)
-		}),
+		}).pipe(Effect.provide(postgresTestLayer)),
 	)
 
 	it.live('expires shared profile cache entries', () =>
@@ -119,6 +117,6 @@ describe.skipIf(!postgresTestsEnabled)('@humanlayer/channels-postgres', () => {
 			)
 			yield* Effect.sleep(50)
 			assert.ok(Option.isNone(yield* cache.get(cacheKey)))
-		}),
+		}).pipe(Effect.provide(postgresTestLayer)),
 	)
 })

@@ -1,5 +1,14 @@
+import { NodeCrypto } from '@effect/platform-node'
+import { DeliveryPolicy } from '@humanlayer/channels-delivery'
+import { layer as deliveryMemory } from '@humanlayer/channels-delivery/memory'
 import {
-	Channels,
+	SlackClient,
+	SlackIngress,
+	SlackRoutes,
+	SlackSubscriptions,
+	SlackTenantCredentials,
+	SlackUserDirectory,
+	Slack,
 	Emoji,
 	FileUpload,
 	MarkdownContent,
@@ -9,9 +18,14 @@ import {
 	type Message,
 	type SentMessage,
 	type Thread,
-} from '@humanlayer/channels'
-import { createChannelsApp, postgres, slack } from '@humanlayer/channels-app'
-import { Effect, Stream } from 'effect'
+	type MessageEvent,
+	type MessageUpdatedEvent,
+	type MessageDeletedEvent,
+	type ReactionEvent,
+	type ConversationStoppedEvent,
+} from '@humanlayer/channels-slack'
+import { Effect, Layer, Stream } from 'effect'
+import { FetchHttpClient, HttpRouter } from 'effect/unstable/http'
 
 const imageRequest = /\bimage\b/i
 const reactionRequest = /\breact(?:ion)?\b/i
@@ -25,7 +39,7 @@ const exampleImage = () =>
 		filename: 'channels-example.svg',
 		mimeType: 'image/svg+xml',
 		data: encoder.encode(
-			'<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360"><rect width="640" height="360" rx="32" fill="#4a154b"/><text x="320" y="180" fill="white" font-family="sans-serif" font-size="42" text-anchor="middle" dominant-baseline="middle">Hello from Channels</text></svg>',
+			'<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360"><rect width="640" height="360" rx="32" fill="#4a154b"/><text x="320" y="180" fill="white" font-family="sans-serif" font-size="42" text-anchor="middle" dominant-baseline="middle">Hello from Slack</text></svg>',
 		),
 	})
 
@@ -39,8 +53,8 @@ const echoContent = (prefix: string, text: string) => {
 const demonstrateLifecycle = (thread: Thread, message: Message, sent: SentMessage) =>
 	Effect.gen(function* () {
 		if (reactionRequest.test(message.text)) {
-			const channels = yield* Channels
-			yield* channels.addReaction({ threadId: thread.ref.id, messageRef: message.ref, emoji: Emoji.Check })
+			const slack = yield* Slack
+			yield* slack.addReaction({ threadId: thread.ref.id, messageRef: message.ref, emoji: Emoji.Check })
 		}
 		if (editRequest.test(message.text)) {
 			yield* sent.edit(MarkdownContent.make({ markdown: `Edited echo: ${message.text}` }))
@@ -61,14 +75,12 @@ const respond = (thread: Thread, prefix: string, text: string) =>
 			)
 		: thread.post(echoContent(prefix, text))
 
-export const app = createChannelsApp({
-	providers: [slack()],
-	storage: postgres(),
-	onNewMention: (thread, message) =>
+const handlers = {
+	onNewMention: ({ thread, message }: MessageEvent) =>
 		Effect.gen(function* () {
 			yield* Effect.logInfo(`Received a mention from ${message.author.fullName}`)
-			const channels = yield* Channels
-			const previousChannelMessages = yield* channels.containerMessages({
+			const slack = yield* Slack
+			const previousChannelMessages = yield* slack.containerMessages({
 				channel: thread.ref.channel,
 				before: message.ref,
 				options: { limit: 20, direction: 'backward' },
@@ -79,29 +91,88 @@ export const app = createChannelsApp({
 			const sent = yield* respond(thread, 'Echo', message.text)
 			yield* demonstrateLifecycle(thread, message, sent)
 		}),
-	onSubscribedMessage: (thread, message) =>
+	onSubscribedMessage: ({ thread, message }: MessageEvent) =>
 		Effect.gen(function* () {
 			yield* Effect.logInfo(`Received a subscribed message from ${message.author.fullName}`)
-			const threadMessages = yield* thread.allMessages.pipe(Stream.runCollect)
-			yield* Effect.logInfo(`Loaded ${threadMessages.length} messages from the thread`)
+			const threadMessages = yield* thread.messages.pipe(Stream.take(100), Stream.runCollect)
+			yield* Effect.logInfo(`Loaded ${threadMessages.length} recent messages from the thread`)
 			yield* thread.startTyping()
 			const sent = yield* respond(thread, 'Echo 2', message.text)
 			yield* demonstrateLifecycle(thread, message, sent)
 		}),
-	onMessageUpdated: (event) => Effect.logInfo(`Message ${event.message.ref} was edited in ${event.thread.ref.id}`),
-	onMessageDeleted: (event) => Effect.logInfo(`Message ${event.messageRef} was deleted from ${event.threadRef.id}`),
+	onDirectMessage: ({ thread, message }: MessageEvent) =>
+		Effect.gen(function* () {
+			yield* Effect.logInfo(`Received a direct message from ${message.author.fullName}`)
+			const sent = yield* respond(thread, 'Direct echo', message.text)
+			yield* demonstrateLifecycle(thread, message, sent)
+		}),
+	onMessageUpdated: (event: MessageUpdatedEvent) =>
+		Effect.logInfo(`Message ${event.message.ref} was edited in ${event.thread.ref.id}`),
+	onMessageDeleted: (event: MessageDeletedEvent) =>
+		Effect.logInfo(`Message ${event.messageRef} was deleted from ${event.threadRef.id}`),
 	onReaction: [
 		{
+			id: 'approval-reaction',
 			emojis: [Emoji.ThumbsUp],
-			handler: (event) => Effect.logInfo(`${event.actor.fullName} approved with ${event.rawEmoji}`),
+			handler: (event: ReactionEvent) =>
+				Effect.logInfo(`${event.actor.fullName} approved with ${event.rawEmoji}`),
 		},
 		{
+			id: 'heart-or-check-reaction',
 			emojis: [Emoji.Heart, Emoji.Check],
-			handler: (event) => Effect.logInfo(`${event.actor.fullName} reacted with ${event.rawEmoji}`),
+			handler: (event: ReactionEvent) => Effect.logInfo(`${event.actor.fullName} reacted with ${event.rawEmoji}`),
 		},
 	],
-	onConversationStopped: (event) => Effect.logInfo(`Slack stopped the active response in ${event.threadRef.id}`),
+	onConversationStopped: (event: ConversationStoppedEvent) =>
+		Effect.logInfo(`Slack stopped the active response in ${event.threadRef.id}`),
+}
+
+const policy = DeliveryPolicy.make({
+	mode: 'queue',
+	maxPayloadBytes: 256_000,
+	maxEnvelopes: 1_000,
+	maxOutcomes: 10_000,
+	retentionMs: 86_400_000,
+	maxAttempts: 5,
+	retryBaseMs: 100,
+	retryMaxMs: 30_000,
+	leaseMs: 30_000,
+	heartbeatMs: 5_000,
+	conflictRetries: 10,
 })
 
-export const handle = app.handle
-export const routes = app.routes
+export const transport = SlackClient.layer.pipe(
+	Layer.provideMerge(SlackTenantCredentials.layerFromConfig),
+	Layer.provide(FetchHttpClient.layer),
+)
+const native = Slack.layer
+const subscriptions = SlackSubscriptions.layerMemory()
+const directory = SlackUserDirectory.layer.pipe(Layer.provide(native))
+export const services = SlackIngress.layer({
+	namespace: 'slack-thread-echo',
+	policy,
+	handlers: {
+		onNewMention: [{ id: 'mention', handler: handlers.onNewMention }],
+		onSubscribedMessage: [{ id: 'subscribed', handler: handlers.onSubscribedMessage }],
+		onMessageUpdated: [{ id: 'edited', handler: handlers.onMessageUpdated }],
+		onMessageDeleted: [{ id: 'deleted', handler: handlers.onMessageDeleted }],
+		onConversationStopped: [{ id: 'stopped', handler: handlers.onConversationStopped }],
+		onDirectMessage: [{ id: 'dm', handler: handlers.onDirectMessage }],
+		onReaction: handlers.onReaction.map((registration) => ({
+			id: registration.id,
+			handler: (event: ReactionEvent) =>
+				registration.emojis.some((emoji) => emoji.name === event.emoji.name)
+					? registration.handler(event)
+					: Effect.void,
+		})),
+	},
+}).pipe(Layer.provideMerge(Layer.mergeAll(native, subscriptions, directory, deliveryMemory({ maxMailboxes: 10_000 }))))
+export const run = Effect.flatMap(SlackIngress, (ingress) =>
+	ingress.run({ scanLimit: 100, concurrency: 8, pollMs: 25 }),
+)
+export const worker = Layer.effectDiscard(run.pipe(Effect.forkScoped)).pipe(Layer.provide(services))
+export const routes = SlackRoutes.layer.pipe(
+	HttpRouter.provideRequest(Layer.merge(NodeCrypto.layer, services)),
+	Layer.provide(services),
+)
+export const application = Layer.merge(routes, worker)

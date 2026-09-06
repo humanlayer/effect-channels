@@ -1,94 +1,69 @@
 import { assert, it } from '@effect/vitest'
-import {
-	ChannelId,
-	EphemeralNoFallback,
-	MarkdownContent,
-	TenantId,
-	ThreadId,
-	UserId,
-	unimplemented,
-} from '@humanlayer/channels'
-import { Cause, ConfigProvider, Effect, Exit, Layer, Option, Redacted } from 'effect'
-import { HttpClient } from 'effect/unstable/http'
+import { ConfigProvider, Effect, Layer, Option, Queue, Redacted, Schema } from 'effect'
 
-import { testAuthor, testMessage } from '../../channels/test/support.ts'
-import { SlackChannelId, SlackMessageTs, SlackSentMessage, SlackTeamId } from '../src/Schema.ts'
-import { Slack } from '../src/Slack.ts'
-import { SlackClient } from '../src/SlackClient.ts'
-import { SlackProvider } from '../src/SlackProvider.ts'
-import { SlackTenantCredentials } from '../src/SlackTenantCredentials.ts'
+import { MarkdownContent, Slack, SlackClient, SlackTenantCredentials } from '../src/index.ts'
+import { expectTaggedFailure, testThread } from './nativeSupport.ts'
+import { makeSlackClientHarness, slackJsonResponse, testTeamId } from './support.ts'
 
-const teamId = SlackTeamId.make('T_TEST')
-const channelId = SlackChannelId.make('C_TEST')
-const threadId = ThreadId.make('slack:v1:T_TEST:C_TEST:100.1')
-const tenant = TenantId.make('T_TEST')
-const userId = UserId.make('U_TEST')
-const channel = { id: ChannelId.make('slack:v1:T_TEST:C_TEST'), provider: 'slack' as const, tenant, isDm: false }
-const content = MarkdownContent.make({ markdown: 'hello' })
-
-const expectDefect = <A, E>(operation: string, effect: Effect.Effect<A, E>) =>
+it.effect('posts through a native Thread with only SlackClient dependencies and no ingress runtime', () =>
 	Effect.gen(function* () {
-		const exit = yield* Effect.exit(effect)
-		assert.strictEqual(Exit.isFailure(exit), true)
-		if (Exit.isFailure(exit)) {
-			assert.ok(
-				Cause.pretty(exit.cause).includes(`${operation} is intentionally unimplemented`),
-				`expected defect naming ${operation}, got: ${Cause.pretty(exit.cause)}`,
-			)
-		}
-	})
-
-const deadHttpClient = HttpClient.make(() => Effect.die(new Error('unexpected HTTP request')))
-const credentialsLayer = SlackTenantCredentials.make({
-	load: () => Effect.succeed(Option.some({ botToken: Redacted.make('xoxb-test-token') })),
-	save: () => Effect.void,
-})
-const clientLayer = SlackClient.layer.pipe(
-	Layer.provide(Layer.merge(Layer.succeed(HttpClient.HttpClient, deadHttpClient), credentialsLayer)),
-)
-
-it.effect('names every Phase 2 SlackClient placeholder', () =>
-	Effect.gen(function* () {
-		const client = yield* SlackClient
-		yield* expectDefect('SlackClient.openDM', client.openDM({ teamId, userId }))
-		yield* expectDefect(
-			'SlackClient.postEphemeral',
-			client.postEphemeral({ teamId, channelId, userId, text: 'private' }),
+		const harness = yield* makeSlackClientHarness(() =>
+			slackJsonResponse('{"ok":true,"channel":"C_TEST","ts":"100.9"}'),
 		)
-		yield* expectDefect('SlackClient.api', client.api({ teamId, method: 'chat.scheduleMessage', payload: {} }))
-	}).pipe(Effect.provide(clientLayer)),
+		const sent = yield* testThread
+			.post(MarkdownContent.make({ markdown: 'outbound only' }))
+			.pipe(Effect.provide(Slack.layer.pipe(Layer.provide(harness.layer))))
+		assert.strictEqual(sent.ref.messageRef, '100.9')
+		assert.strictEqual(sent.ref.threadId, testThread.ref.id)
+		assert.strictEqual(sent.message.text, 'outbound only')
+		assert.deepStrictEqual(sent.ref.degraded, [])
+		const request = yield* Queue.take(harness.requests)
+		assert.strictEqual(request.url.pathname, '/api/chat.postMessage')
+		assert.deepStrictEqual(yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Json))(request.body), {
+			channel: 'C_TEST',
+			thread_ts: '100.1',
+			text: 'outbound only',
+		})
+		assert.strictEqual(yield* Queue.size(harness.requests), 0)
+	}),
 )
 
-it.effect('names every Phase 2 native Slack placeholder', () =>
+it.effect('exposes the native client API escape hatch with workspace authentication', () =>
 	Effect.gen(function* () {
-		const slack = yield* Slack
-		yield* expectDefect('Slack.createThread', slack.createThread({ teamId, channelId, content }))
-		yield* expectDefect('Slack.post', slack.post({ threadId, payload: {} }))
-		yield* expectDefect('Slack.postEphemeral', slack.postEphemeral({ threadId, userId, payload: {} }))
-		yield* expectDefect('Slack.api', slack.api({ teamId, method: 'chat.scheduleMessage', payload: {} }))
-	}).pipe(Effect.provide(Slack.layer.pipe(Layer.provide(clientLayer)))),
-)
-
-it.effect('names every Phase 2 Slack provider placeholder', () =>
-	Effect.gen(function* () {
-		const provider = yield* SlackProvider
-		yield* expectDefect('SlackProvider.startChannelTyping', provider.startChannelTyping({ channel }))
-		yield* expectDefect('SlackProvider.subject', provider.subject({ message: testMessage }))
-		yield* expectDefect('SlackProvider.openDM', provider.openDM({ provider: 'slack', tenant, user: testAuthor }))
-		yield* expectDefect(
-			'SlackProvider.postEphemeral',
-			provider.postEphemeral({ threadId, user: testAuthor, content, fallback: EphemeralNoFallback.make({}) }),
+		const harness = yield* makeSlackClientHarness(() =>
+			slackJsonResponse('{"ok":true,"scheduled_message_id":"Q1"}'),
 		)
-	}).pipe(Effect.provide(SlackProvider.layer.pipe(Layer.provide(clientLayer)))),
+		const response = yield* Effect.flatMap(SlackClient, (client) =>
+			client.api({
+				teamId: testTeamId,
+				method: 'chat.scheduleMessage',
+				payload: { channel: 'C_TEST', text: 'later', post_at: 1_800_000_000 },
+			}),
+		).pipe(Effect.provide(harness.layer))
+		assert.deepStrictEqual(response, { ok: true, scheduled_message_id: 'Q1' })
+		const request = yield* Queue.take(harness.requests)
+		assert.strictEqual(request.url.pathname, '/api/chat.scheduleMessage')
+		assert.strictEqual(request.authorization, 'Bearer xoxb-test-token')
+		assert.deepStrictEqual(yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Json))(request.body), {
+			channel: 'C_TEST',
+			text: 'later',
+			post_at: 1_800_000_000,
+		})
+	}),
 )
 
-it.effect('names the fromConfig credential save placeholder', () =>
+it.effect('loads configured credentials and rejects saving them with a typed error', () =>
 	Effect.gen(function* () {
 		const credentials = yield* SlackTenantCredentials
-		yield* expectDefect(
-			'SlackTenantCredentials.save',
-			credentials.save({ teamId, credentials: { botToken: Redacted.make('xoxb-test-token') } }),
+		const before = Option.getOrThrow(yield* credentials.load({ teamId: testTeamId }))
+		assert.strictEqual(Redacted.value(before.botToken), 'xoxb-config-token')
+		const error = yield* expectTaggedFailure('CredentialStoreError')(
+			credentials.save({ teamId: testTeamId, credentials: { botToken: Redacted.make('xoxb-replacement') } }),
 		)
+		assert.strictEqual(error.operation, 'save_not_supported')
+		assert.strictEqual(error.teamId, testTeamId)
+		const after = Option.getOrThrow(yield* credentials.load({ teamId: testTeamId }))
+		assert.strictEqual(Redacted.value(after.botToken), 'xoxb-config-token')
 	}).pipe(
 		Effect.provide(
 			SlackTenantCredentials.layerFromConfig.pipe(
@@ -100,54 +75,21 @@ it.effect('names the fromConfig credential save placeholder', () =>
 	),
 )
 
-const stubClientLayer = Layer.succeed(
-	SlackClient,
-	SlackClient.of({
-		postMessage: () => Effect.succeed(SlackSentMessage.make({ channelId, ts: SlackMessageTs.make('100.9') })),
-		setSessionStatus: () => Effect.void,
-		startStream: () => unimplemented('test.SlackClient.startStream'),
-		appendStream: () => unimplemented('test.SlackClient.appendStream'),
-		stopStream: () => unimplemented('test.SlackClient.stopStream'),
-		updateMessage: () => unimplemented('test.SlackClient.updateMessage'),
-		deleteMessage: () => unimplemented('test.SlackClient.deleteMessage'),
-		addReaction: () => unimplemented('test.SlackClient.addReaction'),
-		removeReaction: () => unimplemented('test.SlackClient.removeReaction'),
-		replies: () => unimplemented('test.SlackClient.replies'),
-		history: () => unimplemented('test.SlackClient.history'),
-		channelInfo: () => unimplemented('test.SlackClient.channelInfo'),
-		listThreads: () => unimplemented('test.SlackClient.listThreads'),
-		getUser: () => unimplemented('test.SlackClient.getUser'),
-		uploadFiles: () => unimplemented('test.SlackClient.uploadFiles'),
-		downloadFile: () => unimplemented('test.SlackClient.downloadFile'),
-		openDM: () => unimplemented('test.SlackClient.openDM'),
-		postEphemeral: () => unimplemented('test.SlackClient.postEphemeral'),
-		api: () => unimplemented('test.SlackClient.api'),
-	}),
-)
-
-it.effect('advertises support only for implemented operations', () =>
+it.effect('advertises native and post-and-edit streaming without making unsupported channel typing requests', () =>
 	Effect.gen(function* () {
-		const provider = yield* SlackProvider
-		assert.deepStrictEqual(provider.capabilities, {
-			threadPost: true,
-			channelPost: true,
-			edit: true,
-			delete: true,
-			streaming: 'native',
-			typing: { thread: true, channel: false },
-			history: { thread: true, channelMessages: true, channelThreads: true },
-			reactions: { add: true, remove: true, events: true },
-			files: { read: true, upload: true },
-			actions: false,
-			threadInfo: true,
-			channelInfo: true,
-			createThread: false,
-			directMessages: { ingress: false, open: false },
-			ephemeral: { native: false, dmFallback: false },
-			subject: false,
+		const harness = yield* makeSlackClientHarness(() => {
+			throw new Error('unexpected HTTP request')
 		})
-		const sent = yield* provider.post({ threadId, content: MarkdownContent.make({ markdown: 'capability check' }) })
-		assert.strictEqual(sent.ref.messageRef, '100.9')
-		assert.deepStrictEqual(sent.ref.degraded, [])
-	}).pipe(Effect.provide(SlackProvider.layer.pipe(Layer.provide(stubClientLayer)))),
+		for (const streaming of ['native', 'post_and_edit'] as const) {
+			yield* Effect.gen(function* () {
+				const slack = yield* Slack
+				assert.strictEqual(slack.capabilities.streaming, streaming)
+				assert.deepStrictEqual(slack.capabilities.typing, { thread: true, channel: false })
+				assert.deepStrictEqual(slack.capabilities.directMessages, { ingress: true, open: true })
+				assert.deepStrictEqual(slack.capabilities.ephemeral, { native: true, dmFallback: true })
+				yield* slack.startChannelTyping({ channel: testThread.ref.channel })
+			}).pipe(Effect.provide(Slack.layerWith({ streaming }).pipe(Layer.provide(harness.layer))))
+		}
+		assert.strictEqual(yield* Queue.size(harness.requests), 0)
+	}),
 )

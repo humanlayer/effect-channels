@@ -26,8 +26,7 @@
       "dependencies": {
         "@effect/platform-node": "catalog:",
         "@effect/sql-pg": "catalog:",
-        "@humanlayer/channels": "workspace:*",
-        "@humanlayer/channels-app": "workspace:*",
+        "@humanlayer/channels-delivery": "workspace:*",
         "@humanlayer/channels-slack": "workspace:*",
         "effect": "catalog:",
       },
@@ -43,50 +42,28 @@
       "version": "0.0.0",
       "dependencies": {
         "@effect/platform-node": "catalog:",
-        "@humanlayer/channels": "workspace:*",
-        "@humanlayer/channels-app": "workspace:*",
+        "@humanlayer/channels-delivery": "workspace:*",
+        "@humanlayer/channels-slack": "workspace:*",
         "effect": "catalog:",
       },
       "devDependencies": {
-        "@humanlayer/channels-slack": "workspace:*",
+        "@effect/vitest": "catalog:",
         "@types/bun": "catalog:",
         "typescript": "catalog:",
-      },
-    },
-    "packages/app": {
-      "name": "@humanlayer/channels-app",
-      "version": "0.0.0",
-      "dependencies": {
-        "@effect/platform-node": "catalog:",
-        "@humanlayer/channels": "workspace:*",
-        "@humanlayer/channels-postgres": "workspace:*",
-        "@humanlayer/channels-slack": "workspace:*",
-      },
-      "devDependencies": {
-        "@effect/sql-pg": "catalog:",
-        "@effect/vitest": "catalog:",
-        "effect": "catalog:",
-        "emulate": "0.11.0",
-        "typescript": "catalog:",
         "vitest": "catalog:",
       },
-      "peerDependencies": {
-        "effect": "^4.0.0-rc.110",
-      },
     },
-    "packages/channels": {
-      "name": "@humanlayer/channels",
+    "packages/delivery": {
+      "name": "@humanlayer/channels-delivery",
       "version": "0.0.0",
       "devDependencies": {
-        "@effect/platform-node": "catalog:",
-        "@effect/sql-pg": "catalog:",
         "@effect/vitest": "catalog:",
         "effect": "catalog:",
         "typescript": "catalog:",
         "vitest": "catalog:",
       },
       "peerDependencies": {
-        "effect": "^4.0.0-rc.110",
+        "effect": "4.0.0-rc.112",
       },
     },
     "packages/postgres": {
@@ -94,9 +71,10 @@
       "version": "0.0.0",
       "dependencies": {
         "@effect/sql-pg": "catalog:",
-        "@humanlayer/channels": "workspace:*",
+        "@humanlayer/channels-slack": "workspace:*",
       },
       "devDependencies": {
+        "@effect/platform-node": "catalog:",
         "@effect/vitest": "catalog:",
         "@types/bun": "catalog:",
         "effect": "catalog:",
@@ -104,24 +82,25 @@
         "vitest": "catalog:",
       },
       "peerDependencies": {
-        "effect": "^4.0.0-rc.110",
+        "effect": "4.0.0-rc.112",
       },
     },
     "packages/slack": {
       "name": "@humanlayer/channels-slack",
       "version": "0.0.0",
       "dependencies": {
-        "@humanlayer/channels": "workspace:*",
+        "@humanlayer/channels-delivery": "workspace:*",
       },
       "devDependencies": {
         "@effect/platform-node": "catalog:",
         "@effect/vitest": "catalog:",
         "effect": "catalog:",
+        "emulate": "0.11.0",
         "typescript": "catalog:",
         "vitest": "catalog:",
       },
       "peerDependencies": {
-        "effect": "^4.0.0-rc.110",
+        "effect": "4.0.0-rc.112",
       },
     },
   },
@@ -129,14 +108,15 @@
     "vite": "npm:@voidzero-dev/vite-plus-core@0.3.0",
   },
   "catalog": {
-    "@effect/opentelemetry": "4.0.0-rc.110",
-    "@effect/platform-browser": "4.0.0-rc.110",
-    "@effect/platform-bun": "4.0.0-rc.110",
-    "@effect/platform-node": "4.0.0-rc.110",
-    "@effect/sql-pg": "4.0.0-rc.110",
-    "@effect/vitest": "4.0.0-rc.110",
+    "@effect/opentelemetry": "4.0.0-rc.112",
+    "@effect/platform-browser": "4.0.0-rc.112",
+    "@effect/platform-bun": "4.0.0-rc.112",
+    "@effect/platform-node": "4.0.0-rc.112",
+    "@effect/sql-pg": "4.0.0-rc.112",
+    "@effect/vitest": "4.0.0-rc.112",
     "@types/bun": "^1.3.10",
-    "effect": "4.0.0-rc.110",
+    "alchemy": "2.0.0-beta.76",
+    "effect": "4.0.0-rc.112",
     "typescript": "7.0.2",
     "vitest": "4.1.11",
   },
@@ -151,11 +131,11 @@
 
     "@effect/language-service": ["@effect/language-service@0.86.2", "", { "bin": { "effect-language-service": "cli.js" } }, "sha512-SaPln+8srOqDJDUwNTDmP5e+IYpEDr9+1epGznnsLqu8xvo6VnxyWARdeLpqvZJlb0Pgy9ca7ppqvvdWbHPXAg=="],
 
-    "@effect/platform-node": ["@effect/platform-node@4.0.0-rc.110", "", { "dependencies": { "@effect/platform-node-shared": "^4.0.0-rc.110", "mime": "^4.1.0", "undici": "^8.7.0" }, "peerDependencies": { "effect": "^4.0.0-rc.110", "redis": ">=5.0.0 <7.0.0" } }, "sha512-poj6VxTc2kRDowUHgjGXAZL2nWHTyGi/18607jK+pV9A9CH/wqZ4NeYj38rij95j5SiZ3U7Y1iOsk2Vfnr4GEw=="],
+    "@effect/platform-node": ["@effect/platform-node@4.0.0-rc.112", "", { "dependencies": { "@effect/platform-node-shared": "^4.0.0-rc.112", "mime": "^4.1.0", "undici": "^8.10.0" }, "peerDependencies": { "effect": "^4.0.0-rc.112", "redis": ">=5.0.0 <7.0.0" } }, "sha512-/BMAcdNGQQskLmI0Zoa95KfTZkr9HV9N4NSxaSrusG6GeW6Ulp9KvZ+Rlaiw8lnOt43CXjFLdfll5/k5rxL4hQ=="],
 
     "@effect/platform-node-shared": ["@effect/platform-node-shared@4.0.0-rc.112", "", { "dependencies": { "@types/ws": "^8.18.1", "ws": "^8.21.3" }, "peerDependencies": { "effect": "^4.0.0-rc.112" } }, "sha512-ttjz0xKamFN7vL8pNDYVwddJLjZvqKePc05djlz2VcdaKbLsnYbtMnL1rbOfHgEnIUSHGh7FkjaN4DM1Ov81sQ=="],
 
-    "@effect/sql-pg": ["@effect/sql-pg@4.0.0-rc.110", "", { "dependencies": { "pg": "^8.22.0", "pg-connection-string": "^2.14.0", "pg-cursor": "^2.21.0", "pg-pool": "^3.14.0", "pg-types": "^4.1.0" }, "peerDependencies": { "effect": "^4.0.0-rc.110" } }, "sha512-GiJkQPAXGXyVB+fQkZ5NvUY1D2Um4nnsY63l5/lBhb/UNqqPLyMwPJil7rPopAoX9pzYkbpwJjMKRJuIlR9ixg=="],
+    "@effect/sql-pg": ["@effect/sql-pg@4.0.0-rc.112", "", { "dependencies": { "pg": "^8.23.0", "pg-connection-string": "^2.14.0", "pg-cursor": "^2.22.0", "pg-pool": "^3.14.0", "pg-types": "^4.1.0" }, "peerDependencies": { "effect": "^4.0.0-rc.112" } }, "sha512-UYUA3LAGH1Pg88Yau7eTlTLHRrIb/uTdxdPGxVcRdIjjrTzxtA7iKHR4hcmUeq5lQEcGLCopN7E4ffsAKF8vEQ=="],
 
     "@effect/tsgo": ["@effect/tsgo@0.38.0", "", { "optionalDependencies": { "@effect/tsgo-darwin-arm64": "0.38.0", "@effect/tsgo-darwin-x64": "0.38.0", "@effect/tsgo-linux-arm": "0.38.0", "@effect/tsgo-linux-arm64": "0.38.0", "@effect/tsgo-linux-x64": "0.38.0", "@effect/tsgo-win32-arm64": "0.38.0", "@effect/tsgo-win32-x64": "0.38.0" }, "bin": { "effect-tsgo": "dist/effect-tsgo.cjs" } }, "sha512-eazN0kX+WNT1jNjIm/l5esnkpKVfd1wNh2ig0pfaULKuI2PZh0JwjbepDPUr6MWx5cqOiUgwStNf5hGhg2w00g=="],
 
@@ -173,11 +153,9 @@
 
     "@effect/tsgo-win32-x64": ["@effect/tsgo-win32-x64@0.38.0", "", { "os": "win32", "cpu": "x64" }, "sha512-FjbXqAZqxs9WaRp3XCCUa8ndXDeVibAjeE1EdVAouxB36aMUzEV0ue6LLH8zVaqqR+zxf1xvFVOp4D0JL4Ur0g=="],
 
-    "@effect/vitest": ["@effect/vitest@4.0.0-rc.110", "", { "peerDependencies": { "effect": "^4.0.0-rc.110", "vitest": ">=4.1.0 <5.0.0" } }, "sha512-ZvceBAWOPDnLgQgoObxPZOBuRTaRhBUR0K8sT4vfwwnf6Sv92GvCFp+WmfFV31j58Inf2p+wU1C3o9TNC1MZrQ=="],
+    "@effect/vitest": ["@effect/vitest@4.0.0-rc.112", "", { "peerDependencies": { "effect": "^4.0.0-rc.112", "vitest": ">=4.1.0 <5.0.0" } }, "sha512-mEKh/FI64mt8JK1/v9mpOrJYdnp+UFZdRUBMEdZMiKz7klg6NPqVgg/oeAGH6wOOQc2iAPcfc2H9BbAv1KyzMQ=="],
 
-    "@humanlayer/channels": ["@humanlayer/channels@workspace:packages/channels"],
-
-    "@humanlayer/channels-app": ["@humanlayer/channels-app@workspace:packages/app"],
+    "@humanlayer/channels-delivery": ["@humanlayer/channels-delivery@workspace:packages/delivery"],
 
     "@humanlayer/channels-postgres": ["@humanlayer/channels-postgres@workspace:packages/postgres"],
 
@@ -469,7 +447,7 @@
 
     "dom-accessibility-api": ["dom-accessibility-api@0.5.16", "", {}, "sha512-X7BJ2yElsnOJ30pZF4uIIDfBEVgF4XEBxL9Bxhy6dnrm5hkzqmsWHGTiHqRiITNhMyFLyAiWndIJP7Z1NTteDg=="],
 
-    "effect": ["effect@4.0.0-rc.110", "", { "dependencies": { "@standard-schema/spec": "^1.1.0", "fast-check": "^4.9.0", "msgpackr": "^2.0.4" } }, "sha512-ega6FTJ8CS2of7tHZiADvgyJyV999Q6tZ9juE56V81O0jw6flRwydaPNtyfvP2a5LL9PZrse8A1jnNUD5sWVHg=="],
+    "effect": ["effect@4.0.0-rc.112", "", { "dependencies": { "fast-check": "^4.9.0", "msgpackr": "^2.0.5" } }, "sha512-wXxwuh1Ywnv4cPRM3Wfa0vDwuOHnZ1TsTgHJkG9XgzND6inhBH9n1vBxhg3iIXOia/OrpmvVmd3lrD4vq6bF3A=="],
 
     "emulate": ["emulate@0.11.0", "", { "dependencies": { "commander": "^14", "picocolors": "^1.1.1", "yaml": "^2" }, "bin": { "emulate": "dist/index.js" } }, "sha512-R2kKebrA5MZRKv0U3vNJuOHPbtK34KZlNCTvVMAC6y/LuAD4jjNFgkMX79fth3ETrCXWA5IB/PwiID0Y04s0cw=="],
 

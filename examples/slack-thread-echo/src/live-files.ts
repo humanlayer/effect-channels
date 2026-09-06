@@ -1,4 +1,4 @@
-import { FileUpload, MarkdownContent, PlainTextContent, type Thread } from '@humanlayer/channels'
+import { FileUpload, MarkdownContent, PlainTextContent, type Thread } from '@humanlayer/channels-slack'
 import { Effect } from 'effect'
 
 const encoder = new TextEncoder()
@@ -7,10 +7,10 @@ const encoder = new TextEncoder()
 export const runLiveFileChecks = Effect.fn('example.slack.live_files')(function* (thread: Thread) {
 	const textAndFile = yield* thread.post(
 		MarkdownContent.make({
-			markdown: 'Phase 6 live check: text plus file',
+			markdown: 'Live file check: text plus file',
 			files: [
 				FileUpload.make({
-					filename: 'channels-phase-6.txt',
+					filename: 'slack-file-check.txt',
 					mimeType: 'text/plain',
 					data: encoder.encode('text-plus-file'),
 				}),
@@ -27,7 +27,7 @@ export const runLiveFileChecks = Effect.fn('example.slack.live_files')(function*
 	}
 	yield* thread.post(
 		MarkdownContent.make({
-			markdown: 'Phase 6 live check: multiple files',
+			markdown: 'Live file check: multiple files',
 			files: [
 				FileUpload.make({ filename: 'channels-one.txt', data: encoder.encode('one') }),
 				FileUpload.make({ filename: 'channels-two.txt', data: encoder.encode('two') }),

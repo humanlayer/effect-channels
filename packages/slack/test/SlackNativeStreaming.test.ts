@@ -1,7 +1,7 @@
 import { assert, it } from '@effect/vitest'
 import { Effect, Exit, Queue, Schema } from 'effect'
 
-import { MarkdownTextChunk, PlanUpdateChunk, TaskUpdateChunk } from '../../channels/src/index.ts'
+import { MarkdownTextChunk, PlanUpdateChunk, TaskUpdateChunk } from '../src/index.ts'
 import { SlackAppendStreamInput, SlackStartStreamInput, SlackStopStreamInput } from '../src/Schema.ts'
 import { SlackClient } from '../src/SlackClient.ts'
 import { makeSlackClientHarness, slackJsonResponse, testChannelId, testRootTs, testTeamId } from './support.ts'

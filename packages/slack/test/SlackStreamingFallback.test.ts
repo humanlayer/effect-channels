@@ -1,12 +1,12 @@
 import { assert, it } from '@effect/vitest'
-import { MarkdownTextChunk, PlanUpdateChunk, ThreadId } from '@humanlayer/channels'
 import { Effect, Exit, Fiber, Layer, Queue, Stream } from 'effect'
 import { TestClock } from 'effect/testing'
 
 import { SlackApiError } from '../src/Errors.ts'
+import { MarkdownTextChunk, PlanUpdateChunk, PostFailed, ThreadId } from '../src/index.ts'
 import { SlackMessageTs } from '../src/Schema.ts'
+import { Slack } from '../src/Slack.ts'
 import { SlackClient } from '../src/SlackClient.ts'
-import { SlackProvider } from '../src/SlackProvider.ts'
 import { makeStubSlackClient, testChannelId, testRootThreadId } from './support.ts'
 
 it.effect('falls back to one post plus throttled edits with final raw markdown', () =>
@@ -24,8 +24,8 @@ it.effect('falls back to one post plus throttled edits with final raw markdown',
 					Effect.as({ channelId: testChannelId, ts: input.ts }),
 				),
 		})
-		const providerLayer = SlackProvider.layer.pipe(Layer.provide(Layer.succeed(SlackClient, client)))
-		const fiber = yield* Effect.flatMap(SlackProvider, (provider) =>
+		const providerLayer = Slack.layer.pipe(Layer.provide(Layer.succeed(SlackClient, client)))
+		const fiber = yield* Effect.flatMap(Slack, (provider) =>
 			provider.stream(
 				{ threadId: ThreadId.make(testRootThreadId) },
 				Stream.make(
@@ -51,9 +51,9 @@ it.effect('posts one explicit placeholder for an empty stream', () =>
 		const client = makeStubSlackClient({
 			postMessage: () => Effect.succeed({ channelId: testChannelId, ts: SlackMessageTs.make('100.3') }),
 		})
-		const sent = yield* Effect.flatMap(SlackProvider, (provider) =>
+		const sent = yield* Effect.flatMap(Slack, (provider) =>
 			provider.stream({ threadId: ThreadId.make(testRootThreadId) }, Stream.empty),
-		).pipe(Effect.provide(SlackProvider.layer.pipe(Layer.provide(Layer.succeed(SlackClient, client)))))
+		).pipe(Effect.provide(Slack.layer.pipe(Layer.provide(Layer.succeed(SlackClient, client)))))
 		assert.strictEqual(sent.message.markdown, '…')
 		assert.deepStrictEqual(sent.ref.degraded, ['native_streaming', 'empty_stream'])
 	}),
@@ -68,22 +68,54 @@ it.effect('keeps source failures typed before and after the first output without
 					Effect.as({ channelId: testChannelId, ts: SlackMessageTs.make('100.4') }),
 				),
 		})
-		const layer = SlackProvider.layerWith({ streaming: 'post_and_edit' }).pipe(
+		const layer = Slack.layerWith({ streaming: 'post_and_edit' }).pipe(
 			Layer.provide(Layer.succeed(SlackClient, client)),
 		)
-		const before = yield* Effect.flatMap(SlackProvider, (provider) =>
+		const before = yield* Effect.flatMap(Slack, (provider) =>
 			provider.stream({ threadId: ThreadId.make(testRootThreadId) }, Stream.fail('before')),
 		).pipe(Effect.provide(layer), Effect.exit)
 		assert.strictEqual(Exit.isFailure(before), true)
 		assert.strictEqual(yield* Queue.size(calls), 0)
 
-		const after = yield* Effect.flatMap(SlackProvider, (provider) =>
+		const after = yield* Effect.flatMap(Slack, (provider) =>
 			provider.stream(
 				{ threadId: ThreadId.make(testRootThreadId) },
 				Stream.make(MarkdownTextChunk.make({ text: 'started' })).pipe(Stream.concat(Stream.fail('after'))),
 			),
 		).pipe(Effect.provide(layer), Effect.exit)
 		assert.strictEqual(Exit.isFailure(after), true)
+		assert.deepStrictEqual(yield* Queue.takeAll(calls), ['started'])
+	}),
+)
+
+it.effect('preserves explicit non-retryable stream source failures', () =>
+	Effect.gen(function* () {
+		const calls = yield* Queue.unbounded<string>()
+		const client = makeStubSlackClient({
+			postMessage: (input) =>
+				Queue.offer(calls, input.text).pipe(
+					Effect.as({ channelId: testChannelId, ts: SlackMessageTs.make('100.5') }),
+				),
+		})
+		const threadId = ThreadId.make(testRootThreadId)
+		const sourceError = PostFailed.make({
+			provider: 'slack',
+			threadId,
+			message: 'upstream operation rejected',
+			retryability: 'non_retryable',
+		})
+		const result = yield* Effect.flatMap(Slack, (slack) =>
+			slack.stream(
+				{ threadId },
+				Stream.make(MarkdownTextChunk.make({ text: 'started' })).pipe(Stream.concat(Stream.fail(sourceError))),
+			),
+		).pipe(
+			Effect.provide(
+				Slack.layerWith({ streaming: 'post_and_edit' }).pipe(Layer.provide(Layer.succeed(SlackClient, client))),
+			),
+			Effect.flip,
+		)
+		assert.strictEqual(result.retryability, 'non_retryable')
 		assert.deepStrictEqual(yield* Queue.takeAll(calls), ['started'])
 	}),
 )

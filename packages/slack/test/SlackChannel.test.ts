@@ -1,12 +1,12 @@
 import { assert, it } from '@effect/vitest'
-import { MarkdownContent, ThreadId, UserId } from '@humanlayer/channels'
 import { DateTime, Effect, Layer, Queue, Schema } from 'effect'
 
-import { expectTaggedFailure } from '../../channels/test/support.ts'
+import { MarkdownContent, ThreadId, UserId } from '../src/index.ts'
 import { SlackChannelId, SlackChannelInfoInput, SlackListThreadsInput } from '../src/Schema.ts'
+import { Slack } from '../src/Slack.ts'
 import { SlackClient } from '../src/SlackClient.ts'
-import { SlackProvider } from '../src/SlackProvider.ts'
 import { slackChannelRef } from '../src/SlackThreadId.ts'
+import { expectTaggedFailure } from './nativeSupport.ts'
 import {
 	makeSlackClientHarness,
 	slackJsonResponse,
@@ -67,14 +67,14 @@ const channelInfoResponse = (channel: {
 }) => slackJsonResponse(JSON.stringify({ ok: true, channel }))
 
 const providerLayerFor = <E>(harness: { readonly layer: Layer.Layer<SlackClient, E> }) =>
-	SlackProvider.layer.pipe(Layer.provide(harness.layer))
+	Slack.layer.pipe(Layer.provide(harness.layer))
 
 it.effect('posts a channel root message without thread_ts and returns a new thread reference', () =>
 	Effect.gen(function* () {
 		const harness = yield* makeSlackClientHarness(() =>
 			slackJsonResponse('{"ok":true,"channel":"C_TEST","ts":"500.1","message":{"user":"U_BOT"}}'),
 		)
-		const sent = yield* Effect.flatMap(SlackProvider, (provider) =>
+		const sent = yield* Effect.flatMap(Slack, (provider) =>
 			provider.postToChannel({
 				channel: testChannelRef,
 				content: MarkdownContent.make({ markdown: 'hello channel' }),
@@ -203,7 +203,7 @@ it.effect('passes provider thread listing options through and maps failures to H
 				: threadListResponse(),
 		)
 		yield* Effect.gen(function* () {
-			const provider = yield* SlackProvider
+			const provider = yield* Slack
 			const page = yield* provider.channelThreads({ channel: testChannelRef, options: { limit: 2, cursor: 'c' } })
 			assert.deepStrictEqual(params(yield* Queue.take(harness.requests)), {
 				channel: 'C_TEST',
@@ -302,7 +302,7 @@ it.effect('titles thread info with the channel name and maps lookup failures to 
 				: channelInfoResponse({ id: 'C_TEST', name: 'general' }),
 		)
 		yield* Effect.gen(function* () {
-			const provider = yield* SlackProvider
+			const provider = yield* Slack
 			const threadId = ThreadId.make(testRootThreadId)
 			const info = yield* provider.info({ threadId })
 			assert.strictEqual(info.title, 'general')
@@ -327,7 +327,7 @@ it.effect('narrows non-gone metadata failures to MetadataFailed instead of lying
 	Effect.gen(function* () {
 		const ratelimited = yield* makeSlackClientHarness(() => slackJsonResponse('{"ok":false,"error":"ratelimited"}'))
 		yield* Effect.gen(function* () {
-			const provider = yield* SlackProvider
+			const provider = yield* Slack
 			const infoError = yield* expectTaggedFailure('MetadataFailed')(
 				provider.info({ threadId: ThreadId.make(testRootThreadId) }),
 			)
@@ -343,7 +343,7 @@ it.effect('narrows non-gone metadata failures to MetadataFailed instead of lying
 			unknownTenantCredentialsLayer,
 		)
 		yield* Effect.gen(function* () {
-			const provider = yield* SlackProvider
+			const provider = yield* Slack
 			const error = yield* expectTaggedFailure('MetadataFailed')(
 				provider.info({ threadId: ThreadId.make(testRootThreadId) }),
 			)

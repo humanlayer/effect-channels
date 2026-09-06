@@ -1,4 +1,6 @@
 import { assert, it } from '@effect/vitest'
+import { Effect, Layer, Queue, Schema } from 'effect'
+
 import {
 	Attachment,
 	AttachmentRef,
@@ -7,13 +9,11 @@ import {
 	PlainTextContent,
 	TenantId,
 	ThreadId,
-} from '@humanlayer/channels'
-import { Effect, Layer, Queue, Schema } from 'effect'
-
+} from '../src/index.ts'
 import { SlackFileUploadInput, SlackSentMessage, SlackThreadRef } from '../src/Schema.ts'
+import { Slack } from '../src/Slack.ts'
 import { SlackClient } from '../src/SlackClient.ts'
 import { normalizeSlackHistoryMessage, slackFileAttachments } from '../src/SlackNormalize.ts'
-import { SlackProvider } from '../src/SlackProvider.ts'
 import { slackThreadRef } from '../src/SlackThreadId.ts'
 import {
 	makeSlackClientHarness,
@@ -166,9 +166,9 @@ it.effect('performs the uploadV2 sequence for multiple files without sending the
 it.effect('composes text-plus-file and file-only thread posts without file degradation', () =>
 	Effect.gen(function* () {
 		const harness = yield* makeSlackClientHarness(uploadResponder())
-		const providerLayer = SlackProvider.layer.pipe(Layer.provide(harness.layer))
+		const providerLayer = Slack.layer.pipe(Layer.provide(harness.layer))
 		const program = Effect.gen(function* () {
-			const provider = yield* SlackProvider
+			const provider = yield* Slack
 			const withText = yield* provider.post({
 				threadId: ThreadId.make(testRootThreadId),
 				content: MarkdownContent.make({ markdown: 'report', files: [file('report.txt', 'payload')] }),

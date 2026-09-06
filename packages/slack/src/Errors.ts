@@ -1,7 +1,7 @@
-import type { Retryability } from '@humanlayer/channels'
 import { Match, Schema } from 'effect'
 
-import { SlackTeamId } from './Schema.ts'
+import type { Retryability } from './DomainErrors.ts'
+import { SlackTeamId } from './SlackIdentity.ts'
 
 export class CredentialStoreError extends Schema.TaggedError<CredentialStoreError>()('CredentialStoreError', {
 	operation: Schema.String,

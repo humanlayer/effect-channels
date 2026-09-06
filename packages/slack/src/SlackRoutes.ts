@@ -1,13 +1,13 @@
-import { Ingress } from '@humanlayer/channels'
 import { Config, Effect, Layer, Match, Option, Predicate, Schema } from 'effect'
 import type { Redacted } from 'effect'
 import { HttpRouter, HttpServerResponse } from 'effect/unstable/http'
 
 import { SlackWebhookError } from './Errors.ts'
-import type { SlackBotIdentity, SlackEventCallback } from './Schema.ts'
-import { SlackEventsRequest, SlackMessageTs } from './Schema.ts'
+import type { SlackBotIdentity, SlackChannelId, SlackEventCallback } from './Schema.ts'
+import { SlackChannelInfoInput, SlackEventsRequest, SlackMessageTs } from './Schema.ts'
 import { mergeSlackBotIdentity, slackBotIdentity } from './SlackBotIdentity.ts'
 import { SlackClient } from './SlackClient.ts'
+import { SlackIngress } from './SlackIngress.ts'
 import {
 	normalizeSlackConversationStopped,
 	normalizeSlackMessage,
@@ -39,21 +39,36 @@ const webhookErrorResponse = (error: SlackWebhookError) => {
 }
 
 const resolveBotIdentity = (config: SlackRoutesConfig, callback: SlackEventCallback) =>
-	config.credentials.load({ teamId: callback.team_id }).pipe(
-		Effect.map((creds) => mergeSlackBotIdentity(config.identity, creds)),
-		Effect.tapError((error) =>
-			Effect.logWarning('Slack tenant identity lookup failed, using the configured bot identity', error).pipe(
-				Effect.annotateLogs({ provider: 'slack', tenant: callback.team_id, event_id: callback.event_id }),
-			),
-		),
-		Effect.catchTag('CredentialStoreError', () => Effect.succeed(config.identity)),
+	config.credentials
+		.load({ teamId: callback.team_id })
+		.pipe(Effect.map(Option.map((creds) => mergeSlackBotIdentity(config.identity, Option.some(creds)))))
+
+const resolveDirectMessageKind = Effect.fn('slack.webhook.resolve_direct_message_kind')(function* (input: {
+	readonly config: SlackRoutesConfig
+	readonly teamId: SlackEventCallback['team_id']
+	readonly channelId: SlackChannelId
+	readonly hint?: 'channel' | 'group' | 'im' | 'mpim'
+}) {
+	if (input.hint === 'im' || input.channelId.startsWith('D')) return 'im' as const
+	if (input.hint === 'mpim') return 'mpim' as const
+	if (input.hint === 'channel' || input.hint === 'group' || !input.channelId.startsWith('G')) return undefined
+	const info = yield* input.config.client.channelInfo(
+		SlackChannelInfoInput.make({ teamId: input.teamId, channelId: input.channelId }),
 	)
+	return info.channel.isDm ? ('mpim' as const) : undefined
+})
 
 const acceptMessageEvent = (config: SlackRoutesConfig, callback: SlackEventCallback) =>
 	Effect.gen(function* () {
-		const ingress = yield* Ingress
+		const ingress = yield* SlackIngress
 		const identity = yield* resolveBotIdentity(config, callback)
-		const normalized = yield* normalizeSlackMessage({ callback, identity })
+		if (Option.isNone(identity)) {
+			yield* Effect.logWarning('acknowledging Slack event for an unknown installation').pipe(
+				Effect.annotateLogs({ provider: 'slack', tenant: callback.team_id, event_id: callback.event_id }),
+			)
+			return HttpServerResponse.empty({ status: 200 })
+		}
+		const normalized = yield* normalizeSlackMessage({ callback, identity: identity.value })
 		if (Option.isNone(normalized)) {
 			yield* Effect.logInfo('acknowledging and dropping ineligible Slack message subtype').pipe(
 				Effect.annotateLogs({
@@ -71,10 +86,16 @@ const acceptMessageEvent = (config: SlackRoutesConfig, callback: SlackEventCallb
 
 const acceptLifecycleEvent = (config: SlackRoutesConfig, callback: SlackEventCallback) =>
 	Effect.gen(function* () {
-		const ingress = yield* Ingress
+		const ingress = yield* SlackIngress
 		const identity = yield* resolveBotIdentity(config, callback)
+		if (Option.isNone(identity)) return HttpServerResponse.empty({ status: 200 })
 		const event = callback.event
 		if (event.type === 'reaction_added' || event.type === 'reaction_removed') {
+			const directMessageKind = yield* resolveDirectMessageKind({
+				config,
+				teamId: callback.team_id,
+				channelId: event.item.channel,
+			})
 			const parentThreadTs = yield* config.client
 				.replies({
 					teamId: callback.team_id,
@@ -96,21 +117,55 @@ const acceptLifecycleEvent = (config: SlackRoutesConfig, callback: SlackEventCal
 						).pipe(Effect.as(event.item.ts)),
 					),
 				)
-			yield* ingress.acceptReaction(yield* normalizeSlackReaction({ callback, identity, parentThreadTs }))
+			yield* ingress.acceptReaction(
+				yield* normalizeSlackReaction({
+					callback,
+					identity: identity.value,
+					parentThreadTs,
+					directMessageKind,
+				}),
+			)
 		} else if (event.type === 'message' && event.subtype === 'message_changed') {
-			yield* ingress.acceptMessageUpdated(yield* normalizeSlackMessageUpdated({ callback, identity }))
+			const directMessageKind = yield* resolveDirectMessageKind({
+				config,
+				teamId: callback.team_id,
+				channelId: event.channel,
+				hint: event.channel_type,
+			})
+			yield* ingress.acceptMessageUpdated(
+				yield* normalizeSlackMessageUpdated({ callback, identity: identity.value, directMessageKind }),
+			)
 		} else if (event.type === 'message' && event.subtype === 'message_deleted') {
-			yield* ingress.acceptMessageDeleted(yield* normalizeSlackMessageDeleted({ callback, identity }))
+			const directMessageKind = yield* resolveDirectMessageKind({
+				config,
+				teamId: callback.team_id,
+				channelId: event.channel,
+				hint: event.channel_type,
+			})
+			yield* ingress.acceptMessageDeleted(
+				yield* normalizeSlackMessageDeleted({ callback, identity: identity.value, directMessageKind }),
+			)
 		} else {
 			return yield* SlackWebhookError.make({ reason: 'decode' })
 		}
 		return HttpServerResponse.empty({ status: 200 })
 	})
 
-const acceptConversationStopped = (callback: SlackEventCallback) =>
+const acceptConversationStopped = (config: SlackRoutesConfig, callback: SlackEventCallback) =>
 	Effect.gen(function* () {
-		const ingress = yield* Ingress
-		yield* ingress.acceptConversationStopped(yield* normalizeSlackConversationStopped(callback))
+		const ingress = yield* SlackIngress
+		const credentials = yield* config.credentials.load({ teamId: callback.team_id })
+		if (Option.isNone(credentials)) return HttpServerResponse.empty({ status: 200 })
+		const event = callback.event
+		if (event.type !== 'agent_session_stopped') return yield* SlackWebhookError.make({ reason: 'decode' })
+		const directMessageKind = yield* resolveDirectMessageKind({
+			config,
+			teamId: callback.team_id,
+			channelId: event.channel,
+		})
+		yield* ingress.acceptConversationStopped(
+			yield* normalizeSlackConversationStopped({ callback, directMessageKind }),
+		)
 		return HttpServerResponse.empty({ status: 200 })
 	})
 
@@ -145,7 +200,7 @@ const routes = (config: SlackRoutesConfig) =>
 										: acceptMessageEvent(config, callback),
 								reaction_added: () => acceptLifecycleEvent(config, callback),
 								reaction_removed: () => acceptLifecycleEvent(config, callback),
-								agent_session_stopped: () => acceptConversationStopped(callback),
+								agent_session_stopped: () => acceptConversationStopped(config, callback),
 							}),
 						),
 				}),
@@ -153,8 +208,24 @@ const routes = (config: SlackRoutesConfig) =>
 		}).pipe(
 			Effect.catchTags({
 				SlackWebhookError: webhookErrorResponse,
-				IngressError: (error) =>
+				SlackIngressError: (error) =>
 					Effect.logError('Slack ingress admission failed', error).pipe(
+						Effect.as(HttpServerResponse.empty({ status: 503 })),
+					),
+				CredentialStoreError: (error) =>
+					Effect.logError('Slack credential lookup failed', error).pipe(
+						Effect.as(HttpServerResponse.empty({ status: 503 })),
+					),
+				UnknownTenant: (error) =>
+					Effect.logError('Slack installation became unavailable', error).pipe(
+						Effect.as(HttpServerResponse.empty({ status: 503 })),
+					),
+				SlackTransportError: (error) =>
+					Effect.logError('Slack metadata request failed', error).pipe(
+						Effect.as(HttpServerResponse.empty({ status: 503 })),
+					),
+				SlackApiError: (error) =>
+					Effect.logError('Slack metadata request failed', error).pipe(
 						Effect.as(HttpServerResponse.empty({ status: 503 })),
 					),
 			}),
@@ -168,9 +239,12 @@ export const SlackRoutes = {
 			const credentials = yield* SlackTenantCredentials
 			const client = yield* SlackClient
 			const signingSecret = yield* Config.redacted('SLACK_SIGNING_SECRET')
-			const botUserId = yield* Config.string('SLACK_BOT_USER_ID')
+			const botUserId = yield* Config.option(Config.string('SLACK_BOT_USER_ID'))
 			const botId = yield* Config.option(Config.string('SLACK_BOT_ID'))
-			const identity = slackBotIdentity({ botUserId, botId: Option.getOrUndefined(botId) })
+			const identity = slackBotIdentity({
+				botUserId: Option.getOrUndefined(botUserId),
+				botId: Option.getOrUndefined(botId),
+			})
 			return routes({ signingSecret, identity, credentials, client })
 		}),
 	),

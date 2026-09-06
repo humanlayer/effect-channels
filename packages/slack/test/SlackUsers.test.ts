@@ -1,11 +1,11 @@
 import { assert, it } from '@effect/vitest'
-import { TenantId, UserId } from '@humanlayer/channels'
 import { Effect, Layer, Queue } from 'effect'
 
-import { expectTaggedFailure } from '../../channels/test/support.ts'
+import { TenantId, UserId } from '../src/index.ts'
 import { SlackGetUserInput } from '../src/Schema.ts'
+import { Slack } from '../src/Slack.ts'
 import { SlackClient } from '../src/SlackClient.ts'
-import { SlackProvider } from '../src/SlackProvider.ts'
+import { expectTaggedFailure } from './nativeSupport.ts'
 import {
 	makeSlackClientHarness,
 	slackJsonResponse,
@@ -100,7 +100,7 @@ it.effect('surfaces user_not_found as SlackApiError', () =>
 it.effect('passes UnknownTenant through the provider without calling Slack', () =>
 	Effect.gen(function* () {
 		const harness = yield* makeSlackClientHarness(usersInfoResponse, unknownTenantCredentialsLayer)
-		const error = yield* Effect.flatMap(SlackProvider, (provider) =>
+		const error = yield* Effect.flatMap(Slack, (provider) =>
 			expectTaggedFailure('UnknownTenant')(
 				provider.getUser({
 					provider: 'slack',
@@ -108,7 +108,7 @@ it.effect('passes UnknownTenant through the provider without calling Slack', () 
 					userId: UserId.make('U_HUMAN'),
 				}),
 			),
-		).pipe(Effect.provide(SlackProvider.layer.pipe(Layer.provide(harness.layer))))
+		).pipe(Effect.provide(Slack.layer.pipe(Layer.provide(harness.layer))))
 		assert.strictEqual(error.provider, 'slack')
 		assert.strictEqual(error.tenant, 'T_TEST')
 		assert.strictEqual(yield* Queue.size(harness.requests), 0)
@@ -123,7 +123,7 @@ it.effect('returns the profile through the provider and narrows Slack transport 
 				: slackJsonResponse('gateway timeout', 504),
 		)
 		yield* Effect.gen(function* () {
-			const provider = yield* SlackProvider
+			const provider = yield* Slack
 			const profile = yield* provider.getUser({
 				provider: 'slack',
 				tenant: TenantId.make('T_TEST'),
@@ -138,7 +138,7 @@ it.effect('returns the profile through the provider and narrows Slack transport 
 			assert.strictEqual(error.tenant, 'T_TEST')
 			assert.strictEqual(error.userId, 'U_BOT')
 			assert.strictEqual(error.reason, 'transport')
-		}).pipe(Effect.provide(SlackProvider.layer.pipe(Layer.provide(harness.layer))))
+		}).pipe(Effect.provide(Slack.layer.pipe(Layer.provide(harness.layer))))
 	}),
 )
 
@@ -150,7 +150,7 @@ it.effect('narrows user_not_found to UserLookupFailed not_found and other API er
 				: usersInfoResponse(request),
 		)
 		yield* Effect.gen(function* () {
-			const provider = yield* SlackProvider
+			const provider = yield* Slack
 			const missing = yield* expectTaggedFailure('UserLookupFailed')(
 				provider.getUser({
 					provider: 'slack',
@@ -169,6 +169,6 @@ it.effect('narrows user_not_found to UserLookupFailed not_found and other API er
 				}),
 			)
 			assert.strictEqual(rejected.reason, 'api')
-		}).pipe(Effect.provide(SlackProvider.layer.pipe(Layer.provide(harness.layer))))
+		}).pipe(Effect.provide(Slack.layer.pipe(Layer.provide(harness.layer))))
 	}),
 )

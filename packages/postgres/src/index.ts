@@ -1,3 +1,6 @@
 export * from './ChannelsPostgres.ts'
+export * from './ConversationCoordinator.ts'
+export { ConversationCoordinatorPostgresMigrations } from './ConversationCoordinatorPostgres.ts'
+export * from './LegacySubscriptions.ts'
 export * from './migrations.ts'
 export * from './UserProfileCachePostgres.ts'

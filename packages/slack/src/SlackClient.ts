@@ -1,33 +1,32 @@
-import {
-	ChannelInfo,
-	MessagePage,
-	TenantId,
-	ThreadPage,
-	ThreadSummary,
-	UnknownTenant,
-	UserId,
-	UserProfile,
-	unimplemented,
-	type Author,
-	type ChannelRef,
-	type Message,
-	type StreamChunk,
-	type ThreadRef,
-} from '@humanlayer/channels'
-import type { FileData } from '@humanlayer/channels'
 import { Config, Context, Effect, Layer, Match, Option, Predicate, Schema, Stream } from 'effect'
 import type { DateTime, Redacted } from 'effect'
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http'
 import type { UrlParams } from 'effect/unstable/http'
 
+import { UnknownTenant } from './DomainErrors.ts'
 import { SlackApiError, SlackTransportError } from './Errors.ts'
+import type { Message } from './Message.ts'
+import {
+	ChannelInfo,
+	TenantId,
+	UserId,
+	UserProfile,
+	type Author,
+	type ChannelRef,
+	type FileData,
+	type ThreadRef,
+} from './Model.ts'
+import { MessagePage, ThreadPage, ThreadSummary } from './Operations.ts'
 import {
 	SlackConversationsInfoResponse,
 	SlackConversationsPageResponse,
 	SlackCompleteUploadResponse,
+	SlackApiResponse,
 	SlackFileInfoResponse,
 	SlackGetUploadUrlResponse,
 	SlackOkResponse,
+	SlackOpenDMResponse,
+	SlackPostEphemeralResponse,
 	SlackPostMessageResponse,
 	SlackSentMessage,
 	SlackChannelId,
@@ -35,7 +34,6 @@ import {
 	SlackThreadRef,
 	SlackUsersInfoResponse,
 	type SlackApiInput,
-	type SlackApiResponse,
 	type SlackAppendStreamInput,
 	type SlackBotIdentity as SlackBotIdentityType,
 	type SlackCompletedFile,
@@ -64,11 +62,19 @@ import {
 import { mergeSlackBotIdentity, slackBotIdentity } from './SlackBotIdentity.ts'
 import { normalizeSlackHistoryMessage, slackTsToDateTime } from './SlackNormalize.ts'
 import { SlackTenantCredentials } from './SlackTenantCredentials.ts'
-import { slackChannelRef, slackThreadRef } from './SlackThreadId.ts'
+import { slackChannelRef, slackDmConversationRef, slackThreadRef } from './SlackThreadId.ts'
+import type { StreamChunk } from './StreamChunk.ts'
 
 const SlackPostMessageBody = Schema.Struct({
 	channel: Schema.String,
 	thread_ts: Schema.optionalKey(Schema.String),
+	text: Schema.String,
+})
+
+const SlackPostEphemeralBody = Schema.Struct({
+	channel: Schema.String,
+	thread_ts: Schema.optionalKey(Schema.String),
+	user: Schema.String,
 	text: Schema.String,
 })
 
@@ -275,6 +281,65 @@ const makePostMessage = (origin: URL) =>
 			: SlackSentMessage.make({ channelId: decoded.channel, ts: decoded.ts, botUserId })
 	})
 
+const makeApi = (origin: URL) =>
+	Effect.fn('slack.api.call')(function* (input: SlackApiInput) {
+		yield* Effect.annotateCurrentSpan({ provider: 'slack', tenant: input.teamId, operation: input.method })
+		const token = yield* loadBotToken({ teamId: input.teamId, operation: input.method })
+		const request = yield* HttpClientRequest.post(slackApiUrl(origin, input.method)).pipe(
+			HttpClientRequest.bearerToken(token),
+			HttpClientRequest.schemaBodyJson(Schema.Json)(input.payload),
+			Effect.mapError(() => SlackApiError.make({ operation: input.method, code: 'request_encode_failed' })),
+		)
+		return yield* fetchSlackJson({ operation: input.method, schema: SlackApiResponse, request })
+	})
+
+const makeOpenDM = (origin: URL) =>
+	Effect.fn('slack.api.open_dm')(function* (input: SlackOpenDMInput) {
+		yield* Effect.annotateCurrentSpan({ provider: 'slack', tenant: input.teamId, operation: 'conversations.open' })
+		const token = yield* loadBotToken({ teamId: input.teamId, operation: 'conversations.open' })
+		const decoded = yield* fetchSlackJson({
+			operation: 'conversations.open',
+			schema: SlackOpenDMResponse,
+			request: slackPost(origin, token, 'conversations.open', { users: input.userId }),
+		}).pipe(Effect.flatMap((response) => requireOk('conversations.open', response)))
+		if (decoded.channel === undefined) {
+			return yield* SlackApiError.make({ operation: 'conversations.open', code: 'missing_channel' })
+		}
+		return decoded.channel.id
+	})
+
+const makePostEphemeral = (origin: URL) =>
+	Effect.fn('slack.api.post_ephemeral')(function* (input: SlackPostEphemeralInput) {
+		yield* Effect.annotateCurrentSpan({ provider: 'slack', tenant: input.teamId, operation: 'chat.postEphemeral' })
+		const token = yield* loadBotToken({ teamId: input.teamId, operation: 'chat.postEphemeral' })
+		const body =
+			input.threadTs === undefined
+				? SlackPostEphemeralBody.make({ channel: input.channelId, user: input.userId, text: input.text })
+				: SlackPostEphemeralBody.make({
+						channel: input.channelId,
+						thread_ts: input.threadTs,
+						user: input.userId,
+						text: input.text,
+					})
+		const request = yield* HttpClientRequest.post(slackApiUrl(origin, 'chat.postEphemeral')).pipe(
+			HttpClientRequest.bearerToken(token),
+			HttpClientRequest.schemaBodyJson(SlackPostEphemeralBody)(body),
+			Effect.mapError(() =>
+				SlackApiError.make({ operation: 'chat.postEphemeral', code: 'request_encode_failed' }),
+			),
+		)
+		const decoded = yield* fetchSlackJson({
+			operation: 'chat.postEphemeral',
+			schema: SlackPostEphemeralResponse,
+			request,
+		}).pipe(Effect.flatMap((response) => requireOk('chat.postEphemeral', response)))
+		const messageTs = decoded.message_ts ?? decoded.ts
+		if (messageTs === undefined) {
+			return yield* SlackApiError.make({ operation: 'chat.postEphemeral', code: 'missing_message_reference' })
+		}
+		return SlackSentMessage.make({ channelId: input.channelId, ts: messageTs })
+	})
+
 const makeSetSessionStatus = (origin: URL) =>
 	Effect.fn('slack.api.set_session_status')(function* (input: SlackSessionStatusInput) {
 		yield* Effect.annotateCurrentSpan({
@@ -425,16 +490,20 @@ const normalizePageMessages = (input: {
 	readonly channelId: SlackChannelId
 	readonly messages: ReadonlyArray<SlackHistoryMessage>
 	readonly threadRef?: ThreadRef
+	readonly directMessageKind?: 'im' | 'mpim'
 }) =>
 	input.messages.map((snapshot) => {
+		const fields = {
+			teamId: input.teamId,
+			channelId: input.channelId,
+			threadTs: snapshot.thread_ts ?? snapshot.ts,
+		}
 		const threadRef =
 			input.threadRef ??
 			slackThreadRef(
-				SlackThreadRef.make({
-					teamId: input.teamId,
-					channelId: input.channelId,
-					threadTs: snapshot.thread_ts ?? snapshot.ts,
-				}),
+				input.directMessageKind === undefined
+					? SlackThreadRef.make(fields)
+					: SlackThreadRef.make({ ...fields, directMessageKind: input.directMessageKind }),
 				false,
 			)
 		return normalizeSlackHistoryMessage({ snapshot, threadRef, teamId: input.teamId, identity: input.identity })
@@ -453,8 +522,11 @@ const makeReplies = (fallback: SlackBotIdentityType, origin: URL) =>
 		})
 		const direction = input.direction ?? 'backward'
 		const limit = input.limit ?? 100
+		const refFields = { teamId: input.teamId, channelId: input.channelId, threadTs: input.threadTs }
 		const threadRef = slackThreadRef(
-			SlackThreadRef.make({ teamId: input.teamId, channelId: input.channelId, threadTs: input.threadTs }),
+			input.directMessageKind === undefined
+				? SlackThreadRef.make(refFields)
+				: SlackThreadRef.make({ ...refFields, directMessageKind: input.directMessageKind }),
 			false,
 		)
 		if (direction === 'forward') {
@@ -531,6 +603,10 @@ const makeHistory = (fallback: SlackBotIdentityType, origin: URL) =>
 		})
 		const direction = input.direction ?? 'backward'
 		const limit = input.limit ?? 100
+		const conversationThreadRef =
+			input.directMessageKind === undefined
+				? undefined
+				: slackDmConversationRef(input.teamId, input.channelId, input.directMessageKind)
 		if (direction === 'forward') {
 			const request = slackPost(origin, token, 'conversations.history', {
 				channel: input.channelId,
@@ -547,12 +623,17 @@ const makeHistory = (fallback: SlackBotIdentityType, origin: URL) =>
 			const chronological = [...(decoded.messages ?? [])].reverse()
 			const newest = chronological.at(-1)
 			const nextCursor = decoded.has_more === true && newest !== undefined ? newest.ts : undefined
-			const messages = normalizePageMessages({
+			const messageInput = {
 				identity,
 				teamId: input.teamId,
 				channelId: input.channelId,
 				messages: chronological,
-			})
+			}
+			const messages = normalizePageMessages(
+				conversationThreadRef === undefined
+					? messageInput
+					: { ...messageInput, threadRef: conversationThreadRef },
+			)
 			return messagePage(messages, nextCursor)
 		}
 		const latest = input.cursor ?? input.before
@@ -570,12 +651,10 @@ const makeHistory = (fallback: SlackBotIdentityType, origin: URL) =>
 		const newestFirst = decoded.messages ?? []
 		const oldest = newestFirst.at(-1)
 		const nextCursor = decoded.has_more === true && oldest !== undefined ? oldest.ts : undefined
-		const messages = normalizePageMessages({
-			identity,
-			teamId: input.teamId,
-			channelId: input.channelId,
-			messages: newestFirst,
-		})
+		const messageInput = { identity, teamId: input.teamId, channelId: input.channelId, messages: newestFirst }
+		const messages = normalizePageMessages(
+			conversationThreadRef === undefined ? messageInput : { ...messageInput, threadRef: conversationThreadRef },
+		)
 		return messagePage(messages, nextCursor)
 	})
 
@@ -1025,6 +1104,9 @@ export class SlackClient extends Context.Service<
 				const startStream = makeStartStream(apiOrigin)
 				const appendStream = makeAppendStream(apiOrigin)
 				const stopStream = makeStopStream(apiOrigin)
+				const openDM = makeOpenDM(apiOrigin)
+				const postEphemeral = makePostEphemeral(apiOrigin)
+				const api = makeApi(apiOrigin)
 				return SlackClient.of({
 					postMessage: (input) => run('chat.postMessage', input.teamId, makePostMessage(apiOrigin)(input)),
 					setSessionStatus: (input) =>
@@ -1044,9 +1126,9 @@ export class SlackClient extends Context.Service<
 					getUser: (input) => run('users.info', input.teamId, getUser(input)),
 					uploadFiles: (input) => run('files.uploadV2', input.teamId, uploadFiles(input)),
 					downloadFile: (input) => run('files.download', input.teamId, downloadFile(input)),
-					openDM: () => unimplemented('SlackClient.openDM'),
-					postEphemeral: () => unimplemented('SlackClient.postEphemeral'),
-					api: () => unimplemented('SlackClient.api'),
+					openDM: (input) => run('conversations.open', input.teamId, openDM(input)),
+					postEphemeral: (input) => run('chat.postEphemeral', input.teamId, postEphemeral(input)),
+					api: (input) => run(input.method, input.teamId, api(input)),
 				})
 			}),
 		)

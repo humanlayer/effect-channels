@@ -1,8 +1,8 @@
 import { PgClient } from '@effect/sql-pg'
-import { ConversationCoordinator, type ConversationCoordinatorOptions } from '@humanlayer/channels'
 import { Config, Layer } from 'effect'
 import { Persistence } from 'effect/unstable/persistence'
 
+import { ConversationCoordinator, type ConversationCoordinatorOptions } from './ConversationCoordinator.ts'
 import { userProfileCachePostgresLayer, type UserProfileCachePostgresOptions } from './UserProfileCachePostgres.ts'
 
 export type ChannelsPostgresOptions = {

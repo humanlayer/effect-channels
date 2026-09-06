@@ -1,0 +1,23 @@
+{
+	"name": "@humanlayer/channels-delivery",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts",
+		"./memory": "./src/memory.ts"
+	},
+	"scripts": {
+		"build": "bun build ./src/index.ts ./src/memory.ts --outdir ./dist --target browser --format esm --splitting --packages external",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"devDependencies": {
+		"@effect/vitest": "catalog:",
+		"effect": "catalog:",
+		"typescript": "catalog:",
+		"vitest": "catalog:"
+	},
+	"peerDependencies": {
+		"effect": "4.0.0-rc.112"
+	}
+}
