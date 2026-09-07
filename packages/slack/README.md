@@ -105,8 +105,10 @@ installation version's entry. No plaintext tokens appear in Redis/cache key stri
 Direct `getUser` preserves typed failures. Message author assembly falls back to
 the original author on expected lookup failure, after safe logging; defects and
 interruption propagate. `SlackUserDirectory` is a compatibility name for `SlackState`,
-not a second cache. The old caller-managed `UserProfileCache` remains only for the
-separate historical SQL package; native runtime code does not use it.
+not a second cache. The old caller-managed `UserProfileCache` remains as a legacy
+API with memory regression tests; native runtime code does not use it. Its former
+SQL consumer is retired to Git history at `e7894f0` / `f27947c`, not an active
+workspace package. See the root README before migrating old stored data.
 
 ## Outbound only
 

@@ -14,9 +14,6 @@ provider facade, app framework, or agent engine.
   API with library-owned Postgres connections, subscriptions/routing and delivery.
 - [`examples/slack-redis`](./examples/slack-redis/) — Redis with local Docker
   Compose, explicit connection seeding, and typed Postgres/mixed storage recipes.
-- [`packages/postgres`](./packages/postgres/) — separate historical SQL implementation,
-  not the new delivery adapter. It is preserved for explicit legacy drain/migration
-  work; no old tables are dropped or silently adopted by new adapters.
 
 ## Verification
 
@@ -29,7 +26,7 @@ bun run check
 bun run verify:exports
 ```
 
-The workspace has six projects; Slack and delivery have built ESM/declaration
+The workspace has five projects; Slack and delivery have built ESM/declaration
 exports. Commands use the local `vp` binary. Normal tests use memory, real native
 provider/delivery code and `emulate@0.11.0`; no live credentials, database, workerd,
 recordings, or replay. Vite env loading is disabled and backend suites are excluded
@@ -56,6 +53,22 @@ backend Layers. Avoid running it concurrently with another build, since it clean
 generated `dist` output before packing.
 
 ## Scope and limitations
+
+The historical `packages/postgres` implementation is removed from the active
+workspace; its source and tests remain in Git history at `e7894f0` / `f27947c`.
+Removing source does not drain, migrate or delete existing data. New Slack and
+delivery adapters do not adopt `channels_conversations`,
+`channels_conversation_mailbox`, `channels_user_profile_cache`, or the old
+`channels-subscriptions` namespace in `effect_persistence`.
+
+Before switching an old deployment, separately authorize an offline drain or
+export/import: stop old ingress and writers, inventory pending mailbox rows and
+subscriptions, and back up the old namespace. Use a separately recovered and
+validated historical runner for supported events, or export unsupported payloads
+unchanged; verify pending counts before switching ingress to new storage. Copying
+legacy rows into new delivery state is not a migration. No automated legacy
+migration or active legacy runner is provided, and no old tables may be silently
+dropped. This is separate from the shared delivery v1→v2 upgrade below.
 
 Memory is volatile. Postgres and Redis tests prove storage/lease/routing semantics,
 not power-loss or replica-failover guarantees. Redis requires appropriate persistence,

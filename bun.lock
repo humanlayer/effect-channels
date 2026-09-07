@@ -99,25 +99,6 @@
         "redis",
       ],
     },
-    "packages/postgres": {
-      "name": "@humanlayer/channels-postgres",
-      "version": "0.0.0",
-      "dependencies": {
-        "@effect/sql-pg": "catalog:",
-        "@humanlayer/channels-slack": "workspace:*",
-      },
-      "devDependencies": {
-        "@effect/platform-node": "catalog:",
-        "@effect/vitest": "catalog:",
-        "@types/bun": "catalog:",
-        "effect": "catalog:",
-        "typescript": "catalog:",
-        "vitest": "catalog:",
-      },
-      "peerDependencies": {
-        "effect": "4.0.0-rc.112",
-      },
-    },
     "packages/slack": {
       "name": "@humanlayer/channels-slack",
       "version": "0.0.0",
@@ -202,8 +183,6 @@
     "@effect/vitest": ["@effect/vitest@4.0.0-rc.112", "", { "peerDependencies": { "effect": "^4.0.0-rc.112", "vitest": ">=4.1.0 <5.0.0" } }, "sha512-mEKh/FI64mt8JK1/v9mpOrJYdnp+UFZdRUBMEdZMiKz7klg6NPqVgg/oeAGH6wOOQc2iAPcfc2H9BbAv1KyzMQ=="],
 
     "@humanlayer/channels-delivery": ["@humanlayer/channels-delivery@workspace:packages/delivery"],
-
-    "@humanlayer/channels-postgres": ["@humanlayer/channels-postgres@workspace:packages/postgres"],
 
     "@humanlayer/channels-slack": ["@humanlayer/channels-slack@workspace:packages/slack"],
 

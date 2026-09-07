@@ -93,7 +93,9 @@ that transaction even if its Effect failure were caught. Bundled versioned
 `Migrator.fromRecord` effects then run under the same transaction, with the
 generic runner's nested transaction/savepoint. Fixed `humanlayer_delivery_v1_*`
 tables and advisory-lock identifiers are owned by this adapter. The historical
-Postgres tables/package are untouched and are not automatically compatible.
+Postgres tables are untouched and are not automatically compatible. The old
+package is retired to Git history at `e7894f0` / `f27947c`; see the root README
+for the required old-data drain/export planning.
 
 ## Readiness and Redis deployment assumptions
 

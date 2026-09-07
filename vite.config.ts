@@ -22,7 +22,6 @@ export default defineConfig({
 	test: {
 		include: ['packages/*/test/**/*.test.ts', 'examples/*/test/**/*.test.ts'],
 		exclude: [
-			'packages/postgres/test/**',
 			'**/node_modules/**',
 			'**/dist/**',
 			'**/test-backends/**',
