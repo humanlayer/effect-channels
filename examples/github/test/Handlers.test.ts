@@ -7,7 +7,7 @@ import {
 	type GitHubReaction,
 } from '@humanlayer/channels-github'
 import { layer as memory } from '@humanlayer/channels-github/memory'
-import { Effect, Layer, Logger } from 'effect'
+import { Deferred, Effect, Fiber, Layer, Logger } from 'effect'
 
 import { namespace, observeActivity, observeCreation, respond } from '../src/handlers.js'
 import { acknowledge, listAcknowledgements, removeAcknowledgement, stopFollowing } from '../src/usage.js'
@@ -110,6 +110,36 @@ it.effect('native event/action discrimination logs metadata without bodies or pr
 				action: 'resolved',
 				thread: { node_id: 'thread', comments: [] },
 			}),
+			GitHubActivityEvent.make({
+				...common,
+				event: 'pull_request',
+				action: 'synchronize',
+				before: 'before-sha',
+				after: 'after-sha',
+				pull_request: {
+					...issue,
+					head: { ref: 'private branch', sha: 'after-sha' },
+					base: { ref: 'main', sha: 'base-sha' },
+				},
+			}),
+			GitHubActivityEvent.make({
+				...common,
+				event: 'pull_request_review_comment',
+				action: 'edited',
+				comment: {
+					id: 9,
+					node_id: 'inline',
+					body: 'private inline comment',
+					html_url: '',
+					user,
+					pull_request_review_id: 7,
+					path: 'private path',
+					commit_id: 'sha',
+					original_commit_id: 'sha',
+					diff_hunk: 'private diff',
+					pull_request_url: 'https://api.github.com/repos/alice/project/pulls/3',
+				},
+			}),
 		]
 		yield* Effect.forEach(events, observeActivity).pipe(
 			Effect.provide(Logger.layer([Logger.make((entry) => logs.push(JSON.stringify(entry.message)))])),
@@ -120,8 +150,45 @@ it.effect('native event/action discrimination logs metadata without bodies or pr
 		assert.include(logs[3] ?? '', '"merged":false')
 		assert.include(logs[4] ?? '', 'changes_requested')
 		assert.include(logs[5] ?? '', 'resolved')
+		assert.include(logs[6] ?? '', '"before":"before-sha"')
+		assert.include(logs[6] ?? '', '"after":"after-sha"')
+		assert.include(logs[7] ?? '', '"commentId":9')
+		for (const log of logs) {
+			assert.include(log, '"installationId":1')
+			assert.include(log, '"repositoryId":2')
+			assert.include(log, '"number":3')
+			assert.include(log, '"deliveryId":')
+			assert.include(log, '"resourceKind":')
+		}
 		assert.notInclude(logs.join(''), 'private')
+		assert.notInclude(logs.join(''), 'alice')
 	}),
+)
+
+it.effect('cleanup returns its earlier snapshot even if another caller unsubscribes first', () =>
+	Effect.gen(function* () {
+		const subscriptions = yield* GitHubSubscriptions
+		const input = { namespace, resource }
+		yield* subscriptions.subscribe(input)
+		const read = yield* Deferred.make<void>()
+		const resume = yield* Deferred.make<void>()
+		const cleanup = yield* stopFollowing(resource).pipe(
+			Effect.provideService(GitHubSubscriptions, {
+				...subscriptions,
+				isSubscribed: (input) =>
+					subscriptions.isSubscribed(input).pipe(
+						Effect.tap(() => Deferred.succeed(read, undefined)),
+						Effect.tap(() => Deferred.await(resume)),
+					),
+			}),
+			Effect.forkChild,
+		)
+		yield* Deferred.await(read)
+		assert.isTrue(yield* stopFollowing(resource))
+		yield* Deferred.succeed(resume, undefined)
+		assert.isTrue(yield* Fiber.join(cleanup))
+		assert.isFalse(yield* subscriptions.isSubscribed(input))
+	}).pipe(Effect.provide(memory({ maxMailboxes: 10 }))),
 )
 
 it.effect('callable reaction examples forward native targets and retain the returned ref for explicit removal', () =>

@@ -3,6 +3,7 @@ import {
 	GitHubSubscriptions,
 	type GitHubActivityEvent,
 	type GitHubCreationEvent,
+	type GitHubMentionEvent,
 } from '@humanlayer/channels-github'
 import { Effect, Match } from 'effect'
 
@@ -11,6 +12,11 @@ export const namespace = 'github-example'
 export const observeCreation = Effect.fn('example.github.observe_creation')(function* (event: GitHubCreationEvent) {
 	yield* Effect.logInfo('Creation observed; mention the bot to follow', {
 		event: event.event,
+		action: event.action,
+		deliveryId: event.deliveryId,
+		installationId: event.resource.repository.installationId,
+		repositoryId: event.resource.repository.id,
+		resourceKind: event.resource.kind,
 		number: event.resource.number,
 	})
 })
@@ -34,12 +40,16 @@ export const observeActivity = Effect.fn('example.github.observe_activity')(func
 	yield* Effect.logInfo('Followed GitHub activity', {
 		event: event.event,
 		action: event.action,
+		deliveryId: event.deliveryId,
+		installationId: event.resource.repository.installationId,
+		repositoryId: event.resource.repository.id,
+		resourceKind: event.resource.kind,
 		number: event.resource.number,
 		...detail,
 	})
 })
 
-export const respond = Effect.fn('example.github.respond')(function* (event: GitHubActivityEvent) {
+export const respond = Effect.fn('example.github.respond')(function* (event: GitHubMentionEvent) {
 	const subscriptions = yield* GitHubSubscriptions
 	yield* subscriptions.subscribe({ namespace, resource: event.resource })
 	const github = yield* GitHub

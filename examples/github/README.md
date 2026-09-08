@@ -37,8 +37,9 @@ events. Edits that already contained the mention are followed activity, not anot
 mention. Incorrect bot identity configuration may create loops. Titles do not target
 the bot. Subscription state is supplied explicitly by the GitHub memory subpath.
 Creation is the exception to ignoring unmentioned, unfollowed events: it is observed
-but does not opt in. Mentions take precedence over creation/followed callbacks in
-this registration, so an opened issue with a mention gets one reply.
+but does not opt in. Creation callbacks are independent and additive: an opened
+issue with a mention is both logged and replied to once. Mentions take precedence
+only over the followed callback within this registration.
 
 **App-bot assignment is not implemented or verified:** issue-opened-with-assignees
 does not target the bot. `assigned`/`unassigned` for followed issues/PRs are ordinary
@@ -72,7 +73,8 @@ or imported from library packages—there are no imports of sibling examples.
 `observeActivity` discriminates `event` before reading native fields: review
 `review.state`, comment IDs and review-thread IDs. A PR `closed` action reads
 `pull_request.merged` to distinguish a merge from an unmerged close; `synchronize`
-logs `before`/`after` commit IDs. All events log event/action/issue number, never
+logs `before`/`after` commit IDs. Both observers log event/action, delivery ID,
+installation/repository IDs, resource kind and issue number, never
 bodies, titles, diff hunks or credentials. No followed event posts a comment.
 
 `src/usage.ts` contains independently callable, typechecked effects—not startup
@@ -95,6 +97,11 @@ for removal. Provide `GitHub` for reaction effects and the application's shared
 future followed routing, not already frozen deliveries or future direct mentions;
 a later mention subscribes again. These operations have typed failures and no
 automatic mutation retries. Calling one reaction operation never calls another.
+
+`wasSubscribed` is a snapshot read before unsubscribe, not an atomic
+"removed an existing subscription" result. Concurrent cleanup calls can both
+return `true`, and a concurrent mention can subscribe again. Do not use the
+boolean as an exclusive claim or as proof of current subscription state.
 
 The installed emulator has **no reaction endpoints** (GET/POST/DELETE return 404).
 The main app therefore never invokes these helpers. Their example tests substitute

@@ -8,7 +8,7 @@ import {
 	type GitHubIssueEvent,
 } from '@humanlayer/channels-github'
 import { layer as memory } from '@humanlayer/channels-github/memory'
-import { ConfigProvider, Context, Effect, Layer, Schema } from 'effect'
+import { ConfigProvider, Context, Effect, Layer, Logger, Schema } from 'effect'
 import { FetchHttpClient, HttpClient, HttpClientResponse } from 'effect/unstable/http'
 
 import { adminCall, captureWebhooks, emulator, eventFor, host, secret } from '../../../packages/github/test/support.js'
@@ -66,7 +66,12 @@ it.live('example routes accept emulator-generated signed App deliveries and writ
 		const duplicate = webhook.clone()
 		assert.equal((yield* send(webhook)).status, 200)
 		const ingress = Context.get(environment, GitHubIngress)
-		yield* ingress.processActivity({ event: eventFor(em.repository, issue, deliveryId) })
+		const logs: string[] = []
+		yield* ingress
+			.processActivity({ event: eventFor(em.repository, issue, deliveryId) })
+			.pipe(Effect.provide(Logger.layer([Logger.make((entry) => logs.push(JSON.stringify(entry.message)))])))
+		assert.equal(logs.filter((log) => log.includes('Creation observed')).length, 1)
+		assert.notInclude(logs.join(''), 'Followed GitHub activity')
 		assert.equal((yield* send(duplicate)).status, 200)
 		yield* ingress.processActivity({ event: eventFor(em.repository, issue, deliveryId) })
 		const comments = yield* adminCall(
