@@ -2,7 +2,8 @@
 
 The standalone app subscribes to an issue/PR on its App bot's text mention and
 replies to mentions in bodies, discussion comments, reviews and inline comments.
-Other followed activity is handled silently, with no reaction invocation. Handlers are
+Unmentioned creations are logged without subscribing. Other followed activity logs
+safe native event/action metadata, with no comments or reaction invocation. Handlers are
 plain Effect functions in `src/handlers.ts`; `src/app.ts` chooses shared Delivery
 limits. Credentials, HTTP and volatile storage belong in `src/transport.ts`.
 
@@ -35,6 +36,9 @@ The app ignores its own sender/content-author identity and unmentioned unfollowe
 events. Edits that already contained the mention are followed activity, not another
 mention. Incorrect bot identity configuration may create loops. Titles do not target
 the bot. Subscription state is supplied explicitly by the GitHub memory subpath.
+Creation is the exception to ignoring unmentioned, unfollowed events: it is observed
+but does not opt in. Mentions take precedence over creation/followed callbacks in
+this registration, so an opened issue with a mention gets one reply.
 
 **App-bot assignment is not implemented or verified:** issue-opened-with-assignees
 does not target the bot. `assigned`/`unassigned` for followed issues/PRs are ordinary
@@ -53,20 +57,61 @@ Proactive callers use `GitHub.layer` without constructing `GitHubBot` or routes;
 see the provider tests for create/read/update operations with no signing secret or
 mailbox. Activity callbacks use Delivery's existing serial policy: lifecycle events
 are not coalesced. Only newly introduced mentions reply on edits; closure/deletion
-alone do not post. Add `onCreation` to the activity registration to observe an
-unmentioned issue/PR creation and choose whether to subscribe independently of
-mentions; see the provider README's typed example. All example code is local to this example
+alone do not post. `onCreation: observeCreation` deliberately leaves opt-in to a
+mention; it does not infer labels or assignments. All example code is local to this example
 or imported from library packages—there are no imports of sibling examples.
+
+## Activity and explicit operator actions
+
+`src/app.ts` registers the three named effects from `src/handlers.ts`:
+
+```ts
+{ id: 'respond', onCreation: observeCreation, onMention: respond, onSubscribedEvent: observeActivity }
+```
+
+`observeActivity` discriminates `event` before reading native fields: review
+`review.state`, comment IDs and review-thread IDs. A PR `closed` action reads
+`pull_request.merged` to distinguish a merge from an unmerged close; `synchronize`
+logs `before`/`after` commit IDs. All events log event/action/issue number, never
+bodies, titles, diff hunks or credentials. No followed event posts a comment.
+
+`src/usage.ts` contains independently callable, typechecked effects—not startup
+code or webhook callbacks:
+
+```ts
+const wasSubscribed = yield * stopFollowing(resource) // isSubscribed + unsubscribe
+const added = yield * acknowledge(target) // addReaction, content: 'eyes'
+const firstPage = yield * listAcknowledgements(target) // listReactions, page: 1, perPage: 20
+// Only on a later explicit cleanup decision:
+yield * removeAcknowledgement(added.ref) // removeReaction
+```
+
+Import these functions from `./usage.js` inside this example. Targets are native
+issue/PR body refs or discussion-comment refs (not review/inline-comment refs).
+The bounded list is one page, not all reactions. Retain the returned reaction ref
+for removal. Provide `GitHub` for reaction effects and the application's shared
+`GitHubSubscriptions` for cleanup; `bot.services` supplies these when composed with
+`transport`. Do not create a second memory store for cleanup. Unsubscribing stops
+future followed routing, not already frozen deliveries or future direct mentions;
+a later mention subscribes again. These operations have typed failures and no
+automatic mutation retries. Calling one reaction operation never calls another.
+
+The installed emulator has **no reaction endpoints** (GET/POST/DELETE return 404).
+The main app therefore never invokes these helpers. Their example tests substitute
+the `GitHub` service only to check API usage; successful HTTP reaction lifecycle
+evidence is synthetic in `packages/github/test/Reactions.test.ts`, not emulator or
+live-provider proof.
 
 ## Verify without credentials
 
 ```sh
 ./node_modules/.bin/vp test examples/github/test packages/github/test
-bun run typecheck
-bun run build
+bun run --cwd examples/github typecheck
 ```
 
-The actual app routes receive emulator-generated signed issue, PR and comment
+`test/Handlers.test.ts` checks creation opt-in, subscription cleanup against the
+memory layer, native activity discrimination/safe logs and explicit reaction calls.
+`test/App.test.ts` exercises the actual app routes with emulator-generated signed issue, PR and comment
 deliveries, admit before execution, deduplicate and create provider-visible replies.
 Tests use local ephemeral emulators and generated keys, not live GitHub. Memory is
 volatile; accepted work disappears on process exit. Provider writes can repeat

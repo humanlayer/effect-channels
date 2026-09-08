@@ -33,6 +33,29 @@ it.live('example routes accept emulator-generated signed App deliveries and writ
 				Layer.provide(config),
 			),
 		)
+		const unmentioned = yield* adminCall(em.resource.url, '/repos/alice/project/issues', GitHubIssueData, {
+			title: 'Observe only',
+			body: 'No opt-in',
+		})
+		const creation = yield* capture.take
+		const creationId = creation.headers.get('x-github-delivery')
+		assert.ok(creationId)
+		assert.equal((yield* send(creation)).status, 200)
+		yield* Context.get(environment, GitHubIngress).processActivity({
+			event: eventFor(em.repository, unmentioned, creationId),
+		})
+		assert.isFalse(
+			yield* Context.get(environment, GitHubSubscriptions).isSubscribed({
+				namespace: 'github-example',
+				resource: eventFor(em.repository, unmentioned).resource,
+			}),
+		)
+		assert.deepEqual(
+			yield* Context.get(environment, GitHub).listComments({
+				issue: eventFor(em.repository, unmentioned).resource,
+			}),
+			[],
+		)
 		const issue = yield* adminCall(em.resource.url, '/repos/alice/project/issues', GitHubIssueData, {
 			title: 'Example',
 			body: '@channels Native generated webhook',

@@ -1,8 +1,7 @@
 import { DeliveryPolicy } from '@humanlayer/channels-delivery'
 import { GitHubBot } from '@humanlayer/channels-github'
-import { Effect } from 'effect'
 
-import { respond } from './handlers.js'
+import { namespace, observeActivity, observeCreation, respond } from './handlers.js'
 
 export const policy = DeliveryPolicy.make({
 	mode: 'serial',
@@ -19,9 +18,11 @@ export const policy = DeliveryPolicy.make({
 })
 export const runner = { scanLimit: 100, concurrency: 8, pollMs: 25 }
 export const bot = GitHubBot.make({
-	namespace: 'github-example',
+	namespace,
 	policy,
 	runner,
-	activityHandlers: [{ id: 'respond', onMention: respond, onSubscribedEvent: () => Effect.void }],
+	activityHandlers: [
+		{ id: 'respond', onCreation: observeCreation, onMention: respond, onSubscribedEvent: observeActivity },
+	],
 })
 export const application = bot.layer
