@@ -1,0 +1,44 @@
+{
+	"name": "@humanlayer/channels-github",
+	"version": "0.0.0",
+	"private": true,
+	"files": [
+		"dist",
+		"README.md"
+	],
+	"type": "module",
+	"sideEffects": false,
+	"exports": {
+		"./memory": {
+			"@humanlayer/source": "./src/memory.ts",
+			"types": "./dist/memory.d.ts",
+			"import": "./dist/memory.js",
+			"default": "./dist/memory.js"
+		},
+		".": {
+			"@humanlayer/source": "./src/index.ts",
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js",
+			"default": "./dist/index.js"
+		}
+	},
+	"scripts": {
+		"build": "tsc -p tsconfig.build.json",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"dependencies": {
+		"@humanlayer/channels-delivery": "workspace:*"
+	},
+	"devDependencies": {
+		"@effect/platform-node": "catalog:",
+		"@effect/vitest": "catalog:",
+		"@types/bun": "catalog:",
+		"effect": "catalog:",
+		"emulate": "0.11.0",
+		"typescript": "catalog:",
+		"vitest": "catalog:"
+	},
+	"peerDependencies": {
+		"effect": "4.0.0-rc.112"
+	}
+}

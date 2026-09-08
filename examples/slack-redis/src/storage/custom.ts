@@ -3,8 +3,8 @@ import { connections } from '@humanlayer/channels-slack/postgres'
 import { subscriptions } from '@humanlayer/channels-slack/redis'
 import { Layer } from 'effect'
 
-import { postgresClient } from './postgres-client.ts'
-import { redisClient } from './redis-client.ts'
+import { postgresClient } from './postgres-client.js'
+import { redisClient } from './redis-client.js'
 
 export const storage = Layer.merge(
 	connections.pipe(Layer.provide(postgresClient)),

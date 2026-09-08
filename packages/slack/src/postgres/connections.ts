@@ -1,11 +1,11 @@
 import { Effect, Layer, Schema } from 'effect'
 import * as SqlClient from 'effect/unstable/sql/SqlClient'
 
-import { SlackConnectionLookupInput } from '../Schema.ts'
-import { SlackConnectionStore, UpsertSlackConnection } from '../SlackConnectionStore.ts'
-import { connectionJson } from '../storage/ConnectionCodec.ts'
-import { connectionErrors } from './errors.ts'
-import { initialized } from './migrations.ts'
+import { SlackConnectionLookupInput } from '../Schema.js'
+import { SlackConnectionStore, UpsertSlackConnection } from '../SlackConnectionStore.js'
+import { connectionJson } from '../storage/ConnectionCodec.js'
+import { connectionErrors } from './errors.js'
+import { initialized } from './migrations.js'
 
 const rowsCodec = Schema.Array(Schema.Struct({ connection_json: connectionJson })).check(Schema.isMaxLength(1))
 

@@ -33,7 +33,7 @@ A single-workspace Slack example using the native Slack APIs and shared delivery
 For example, a long-lived Hono host can forward the untouched request:
 
 ```ts
-import { handle, close } from './src/fetch.ts'
+import { handle, close } from './src/fetch.js'
 
 app.post('/api/v1/integrations/slack/webhook', (c) => handle(c.req.raw))
 // Call await close() from the host's shutdown hook.

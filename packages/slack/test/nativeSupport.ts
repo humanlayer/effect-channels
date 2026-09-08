@@ -15,9 +15,9 @@ import {
 	UserId,
 	UserProfile,
 	type SlackIngressHandlers,
-} from '../src/index.ts'
-import { slackThreadRef } from '../src/SlackThreadId.ts'
-import { stubSlackClientLayer, testChannelId, testRootTs, testTeamId } from './support.ts'
+} from '../src/index.js'
+import { slackThreadRef } from '../src/SlackThreadId.js'
+import { stubSlackClientLayer, testChannelId, testRootTs, testTeamId } from './support.js'
 
 export const expectTaggedFailure =
 	<K extends string>(tag: K) =>

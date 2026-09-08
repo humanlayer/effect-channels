@@ -2,8 +2,8 @@ import { assert, layer } from '@effect/vitest'
 import { ConfigProvider, Deferred, Effect, Queue, Stream } from 'effect'
 import * as FetchHttpClient from 'effect/unstable/http/FetchHttpClient'
 
-import { PostedMessageResponse, SlackEmulator, slackEmulatorAliceToken } from './support/SlackEmulator.ts'
-import { ChannelsStorage, makeSlackTestHost, defaultDeliveryPolicy, slack } from './support/SlackTestHost.ts'
+import { PostedMessageResponse, SlackEmulator, slackEmulatorAliceToken } from './support/SlackEmulator.js'
+import { ChannelsStorage, makeSlackTestHost, defaultDeliveryPolicy, slack } from './support/SlackTestHost.js'
 
 layer(SlackEmulator.layer, { timeout: '30 seconds' })('Slack stream cancellation integration', (it) => {
 	it.effect('interrupts the active handler before delivering one signed stop callback', () =>

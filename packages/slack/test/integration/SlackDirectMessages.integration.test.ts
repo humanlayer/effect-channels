@@ -12,8 +12,8 @@ import {
 	slackEmulatorBotToken,
 	slackEmulatorBotUserId,
 	slackEmulatorSigningSecret,
-} from './support/SlackEmulator.ts'
-import { ChannelsStorage, makeSlackTestHost, slack } from './support/SlackTestHost.ts'
+} from './support/SlackEmulator.js'
+import { ChannelsStorage, makeSlackTestHost, slack } from './support/SlackTestHost.js'
 
 layer(SlackEmulator.layer, { timeout: '30 seconds' })('Slack direct-message integration', (it) => {
 	it.effect('runs DM, MPIM, proactive open, reply, and history through the emulator', () =>

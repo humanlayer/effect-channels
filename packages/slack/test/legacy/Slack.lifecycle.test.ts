@@ -24,8 +24,8 @@ import {
 	ReactionEvent,
 	Thread,
 	ThreadId,
-} from '../../src/index.ts'
-import { testConnectionStoreLayer } from '../support.ts'
+} from '../../src/index.js'
+import { testConnectionStoreLayer } from '../support.js'
 import {
 	ingressLayer,
 	runnerOptions,
@@ -34,7 +34,7 @@ import {
 	testMessage,
 	testThread,
 	testThreadRef,
-} from './support.ts'
+} from './support.js'
 
 it.effect('the memory bot dispatches updates, deletes, and declaratively filtered typed reactions', () =>
 	Effect.gen(function* () {

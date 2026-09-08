@@ -1,0 +1,23 @@
+{
+	"name": "example-github",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"build": "bun build ./src/server.ts ./src/fetch.ts --outdir ./dist --target bun --format esm --splitting --packages external",
+		"start": "bun run ./src/server.ts",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"dependencies": {
+		"@effect/platform-node": "catalog:",
+		"@humanlayer/channels-delivery": "workspace:*",
+		"@humanlayer/channels-github": "workspace:*",
+		"effect": "catalog:"
+	},
+	"devDependencies": {
+		"@effect/vitest": "catalog:",
+		"@types/bun": "catalog:",
+		"typescript": "catalog:",
+		"vitest": "catalog:"
+	}
+}

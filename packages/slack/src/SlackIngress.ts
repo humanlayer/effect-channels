@@ -7,10 +7,10 @@ import {
 } from '@humanlayer/channels-delivery'
 import { Context, Effect, Layer } from 'effect'
 
-import { SlackIngressError } from './DomainErrors.ts'
-import type { Emoji } from './Emoji.ts'
-import type { IngressResult } from './Operations.ts'
-import { SlackAuthors } from './SlackAuthors.ts'
+import { SlackIngressError } from './DomainErrors.js'
+import type { Emoji } from './Emoji.js'
+import type { IngressResult } from './Operations.js'
+import { SlackAuthors } from './SlackAuthors.js'
 import {
 	ConversationStoppedEvent,
 	MessageDeletedEvent,
@@ -22,9 +22,9 @@ import {
 	NormalizedMessageUpdated,
 	NormalizedReaction,
 	ReactionEvent,
-} from './SlackEvents.ts'
-import * as Operations from './SlackIngressOperations.ts'
-import { SlackSubscriptions } from './SlackSubscriptions.ts'
+} from './SlackEvents.js'
+import * as Operations from './SlackIngressOperations.js'
+import { SlackSubscriptions } from './SlackSubscriptions.js'
 
 export type SlackHandlerRegistration<A, E, R> = {
 	readonly id: string

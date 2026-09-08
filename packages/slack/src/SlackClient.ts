@@ -3,9 +3,9 @@ import type { DateTime, Redacted } from 'effect'
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http'
 import type { UrlParams } from 'effect/unstable/http'
 
-import { UnknownTenant } from './DomainErrors.ts'
-import { SlackApiError, SlackTransportError } from './Errors.ts'
-import type { Message } from './Message.ts'
+import { UnknownTenant } from './DomainErrors.js'
+import { SlackApiError, SlackTransportError } from './Errors.js'
+import type { Message } from './Message.js'
 import {
 	ChannelInfo,
 	TenantId,
@@ -15,8 +15,8 @@ import {
 	type ChannelRef,
 	type FileData,
 	type ThreadRef,
-} from './Model.ts'
-import { MessagePage, ThreadPage, ThreadSummary } from './Operations.ts'
+} from './Model.js'
+import { MessagePage, ThreadPage, ThreadSummary } from './Operations.js'
 import {
 	SlackConversationsInfoResponse,
 	SlackConversationsPageResponse,
@@ -58,12 +58,12 @@ import {
 	type SlackTeamId,
 	type SlackTenantCreds,
 	type SlackUpdateMessageInput,
-} from './Schema.ts'
-import { mergeSlackBotIdentity, slackBotIdentity } from './SlackBotIdentity.ts'
-import { normalizeSlackHistoryMessage, slackTsToDateTime } from './SlackNormalize.ts'
-import { SlackTenantCredentials } from './SlackTenantCredentials.ts'
-import { slackChannelRef, slackDmConversationRef, slackThreadRef } from './SlackThreadId.ts'
-import type { StreamChunk } from './StreamChunk.ts'
+} from './Schema.js'
+import { mergeSlackBotIdentity, slackBotIdentity } from './SlackBotIdentity.js'
+import { normalizeSlackHistoryMessage, slackTsToDateTime } from './SlackNormalize.js'
+import { SlackTenantCredentials } from './SlackTenantCredentials.js'
+import { slackChannelRef, slackDmConversationRef, slackThreadRef } from './SlackThreadId.js'
+import type { StreamChunk } from './StreamChunk.js'
 
 const SlackPostMessageBody = Schema.Struct({
 	channel: Schema.String,

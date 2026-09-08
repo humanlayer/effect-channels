@@ -3,9 +3,9 @@ import { MailboxReadiness, MailboxStore } from '@humanlayer/channels-delivery'
 import { layer as deliveryMemory } from '@humanlayer/channels-delivery/memory'
 import { Effect, Exit, Fiber, Layer, Queue } from 'effect'
 
-import { PostFailed, SlackIngress, SlackSubscriptions } from '../src/index.ts'
-import { SlackAuthors } from '../src/SlackAuthors.ts'
-import { nativeIngressLayer, nativeMessage, nativePolicy, nativeRunner } from './nativeSupport.ts'
+import { PostFailed, SlackIngress, SlackSubscriptions } from '../src/index.js'
+import { SlackAuthors } from '../src/SlackAuthors.js'
+import { nativeIngressLayer, nativeMessage, nativePolicy, nativeRunner } from './nativeSupport.js'
 
 for (const failure of [false, true]) {
 	it.effect(`closes the handler scope before recording ${failure ? 'failure' : 'success'}`, () =>

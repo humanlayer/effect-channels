@@ -1,6 +1,6 @@
 import { Schema } from 'effect'
 
-import { FileUpload } from './Model.ts'
+import { FileUpload } from './Model.js'
 
 export const ActionButton = Schema.TaggedStruct('ActionButton', {
 	id: Schema.NonEmptyString,

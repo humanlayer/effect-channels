@@ -3,10 +3,10 @@ import { assert, it } from '@effect/vitest'
 import { Context, Effect, Option, Queue, Schema } from 'effect'
 import { HttpRouter } from 'effect/unstable/http'
 
-import { IngressAccepted, SlackIngress as Ingress, type NormalizedMessage } from '../src/index.ts'
-import { SlackEventCallback, type SlackBotIdentity } from '../src/Schema.ts'
-import { normalizeSlackMessage } from '../src/SlackNormalize.ts'
-import { appMentionCallback, makeTestIngress, signedSlackRequest, testRouteLayer } from './support.ts'
+import { IngressAccepted, SlackIngress as Ingress, type NormalizedMessage } from '../src/index.js'
+import { SlackEventCallback, type SlackBotIdentity } from '../src/Schema.js'
+import { normalizeSlackMessage } from '../src/SlackNormalize.js'
+import { appMentionCallback, makeTestIngress, signedSlackRequest, testRouteLayer } from './support.js'
 
 type EncodedCallback = typeof SlackEventCallback.Encoded
 

@@ -23,8 +23,8 @@ import {
 	type Author,
 	type ThreadRef,
 	type SlackIngressHandlers,
-} from '../../src/index.ts'
-import { stubSlackClientLayer } from '../support.ts'
+} from '../../src/index.js'
+import { stubSlackClientLayer } from '../support.js'
 
 export const testChannelRef = {
 	id: ChannelId.make('slack:v1:T_TEST:C_TEST'),

@@ -20,6 +20,39 @@
         "vitest": "catalog:",
       },
     },
+    "examples/github": {
+      "name": "example-github",
+      "version": "0.0.0",
+      "dependencies": {
+        "@effect/platform-node": "catalog:",
+        "@humanlayer/channels-delivery": "workspace:*",
+        "@humanlayer/channels-github": "workspace:*",
+        "effect": "catalog:",
+      },
+      "devDependencies": {
+        "@effect/vitest": "catalog:",
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
+        "vitest": "catalog:",
+      },
+    },
+    "examples/slack-github": {
+      "name": "example-slack-github",
+      "version": "0.0.0",
+      "dependencies": {
+        "@effect/platform-node": "catalog:",
+        "@humanlayer/channels-delivery": "workspace:*",
+        "@humanlayer/channels-github": "workspace:*",
+        "@humanlayer/channels-slack": "workspace:*",
+        "effect": "catalog:",
+      },
+      "devDependencies": {
+        "@effect/vitest": "catalog:",
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
+        "vitest": "catalog:",
+      },
+    },
     "examples/slack-multi-tenant": {
       "name": "example-slack-multi-tenant",
       "version": "0.0.0",
@@ -98,6 +131,25 @@
         "@types/pg",
         "redis",
       ],
+    },
+    "packages/github": {
+      "name": "@humanlayer/channels-github",
+      "version": "0.0.0",
+      "dependencies": {
+        "@humanlayer/channels-delivery": "workspace:*",
+      },
+      "devDependencies": {
+        "@effect/platform-node": "catalog:",
+        "@effect/vitest": "catalog:",
+        "@types/bun": "catalog:",
+        "effect": "catalog:",
+        "emulate": "0.11.0",
+        "typescript": "catalog:",
+        "vitest": "catalog:",
+      },
+      "peerDependencies": {
+        "effect": "4.0.0-rc.112",
+      },
     },
     "packages/slack": {
       "name": "@humanlayer/channels-slack",
@@ -183,6 +235,8 @@
     "@effect/vitest": ["@effect/vitest@4.0.0-rc.112", "", { "peerDependencies": { "effect": "^4.0.0-rc.112", "vitest": ">=4.1.0 <5.0.0" } }, "sha512-mEKh/FI64mt8JK1/v9mpOrJYdnp+UFZdRUBMEdZMiKz7klg6NPqVgg/oeAGH6wOOQc2iAPcfc2H9BbAv1KyzMQ=="],
 
     "@humanlayer/channels-delivery": ["@humanlayer/channels-delivery@workspace:packages/delivery"],
+
+    "@humanlayer/channels-github": ["@humanlayer/channels-github@workspace:packages/github"],
 
     "@humanlayer/channels-slack": ["@humanlayer/channels-slack@workspace:packages/slack"],
 
@@ -481,6 +535,10 @@
     "es-module-lexer": ["es-module-lexer@2.3.2", "", {}, "sha512-poHGpORABojJJucnV9KbOavETW8lBVnphkW77ER5/BQ5Fz7oXSoCNek7IH3vR5nRjdsEz926ibFYX8KtLQmdyw=="],
 
     "estree-walker": ["estree-walker@3.0.3", "", { "dependencies": { "@types/estree": "^1.0.0" } }, "sha512-7RUKfXgSMMkzt6ZuXmqapOurLGPPfgj6l9uRZ7lRGolvk0y2yocc35LdcxKC5PQZdn2DMqioAQ2NoWcrTKmm6g=="],
+
+    "example-github": ["example-github@workspace:examples/github"],
+
+    "example-slack-github": ["example-slack-github@workspace:examples/slack-github"],
 
     "example-slack-multi-tenant": ["example-slack-multi-tenant@workspace:examples/slack-multi-tenant"],
 

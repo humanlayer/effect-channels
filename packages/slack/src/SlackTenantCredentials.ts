@@ -1,11 +1,11 @@
 import { Cache, Config, Context, Duration, Effect, Exit, Layer, Option, Schema } from 'effect'
 
-import { CredentialStoreError } from './Errors.ts'
-import type { SlackLoadCredentialsInput, SlackSaveCredentialsInput, SlackTenantCreds } from './Schema.ts'
-import { SlackTenantCreds as SlackTenantCredsSchema } from './Schema.ts'
-import { SlackConnection, SlackConnectionLookupInput, SlackTeamId } from './Schema.ts'
-import { SlackCredentialSnapshot } from './SlackCredentialSnapshot.ts'
-import { SlackState } from './SlackState.ts'
+import { CredentialStoreError } from './Errors.js'
+import type { SlackLoadCredentialsInput, SlackSaveCredentialsInput, SlackTenantCreds } from './Schema.js'
+import { SlackTenantCreds as SlackTenantCredsSchema } from './Schema.js'
+import { SlackConnection, SlackConnectionLookupInput, SlackTeamId } from './Schema.js'
+import { SlackCredentialSnapshot } from './SlackCredentialSnapshot.js'
+import { SlackState } from './SlackState.js'
 
 export class SlackTenantCredentials extends Context.Service<
 	SlackTenantCredentials,

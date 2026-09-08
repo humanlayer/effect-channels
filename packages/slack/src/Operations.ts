@@ -1,8 +1,8 @@
 import { Schema } from 'effect'
 
-import { Content } from './Content.ts'
-import { Emoji } from './Emoji.ts'
-import { Message } from './Message.ts'
+import { Content } from './Content.js'
+import { Emoji } from './Emoji.js'
+import { Message } from './Message.js'
 import {
 	AttachmentRef,
 	Author,
@@ -14,9 +14,9 @@ import {
 	ThreadId,
 	ThreadRef,
 	UserId,
-} from './Model.ts'
-import { SentMessage } from './SentMessage.ts'
-import { MessageEvent } from './SlackEvents.ts'
+} from './Model.js'
+import { SentMessage } from './SentMessage.js'
+import { MessageEvent } from './SlackEvents.js'
 
 export const MessageHistoryOptions = Schema.Struct({
 	limit: Schema.optionalKey(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 }))),

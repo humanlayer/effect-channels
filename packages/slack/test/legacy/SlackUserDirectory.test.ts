@@ -12,7 +12,7 @@ import {
 	TenantId,
 	UserId,
 	UserProfile,
-} from '../../src/index.ts'
+} from '../../src/index.js'
 import {
 	ingressLayer,
 	makeTestAuthor,
@@ -22,7 +22,7 @@ import {
 	runnerOptions,
 	expectTaggedFailure,
 	testThreadRef,
-} from './support.ts'
+} from './support.js'
 
 const profile = (tenant: string, userId: string) =>
 	UserProfile.make({

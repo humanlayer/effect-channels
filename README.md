@@ -8,6 +8,10 @@ provider facade, app framework, or agent engine.
   ergonomic bot composition, required connection CRUD, and provider-owned state/cache.
 - [`packages/delivery`](./packages/delivery/) — one admission, latest-and-skipped,
   retry, lease, cancellation and runner implementation across all storage adapters.
+- [`packages/github`](./packages/github/) — native issues/comments and targeted issue/PR discussion mentions, signed ingress,
+  App installation authentication and repository-scoped token caching; no Slack dependency.
+- [`examples/github`](./examples/github/) and [`examples/slack-github`](./examples/slack-github/)
+  — independent and combined memory-backed Effect HTTP/Fetch hosts, verified with provider emulators.
 - [`examples/slack-thread-echo`](./examples/slack-thread-echo/) — memory storage,
   configured installation, Effect HTTP and Fetch hosts; no database.
 - [`examples/slack-multi-tenant`](./examples/slack-multi-tenant/) — the same bot
@@ -26,11 +30,23 @@ bun run check
 bun run verify:exports
 ```
 
-The workspace has five projects; Slack and delivery have built ESM/declaration
+Slack, GitHub and delivery have built ESM/declaration
 exports. Commands use the local `vp` binary. Normal tests use memory, real native
 provider/delivery code and `emulate@0.11.0`; no live credentials, database, workerd,
 recordings, or replay. Vite env loading is disabled and backend suites are excluded
 structurally, regardless of ambient `DATABASE_URL` / `REDIS_URL`.
+
+Relative imports and re-exports use emitted extensions (`.js`, or `.mjs`/`.cjs`
+for `.mts`/`.cts` sources); bundler-only code may use extensionless imports.
+Do not import TypeScript source extensions. Both `allowImportingTsExtensions`
+and `rewriteRelativeImportExtensions` stay disabled, including in build configs.
+Literal source entry paths (package export source conditions, Vite aliases, CLI
+entry files) are not module specifiers and retain their source extensions.
+`bun run verify:imports` tests compiler/lint rejection, including the compiler's
+rewrite-option loophole, and scans active code plus lint tooling. It also runs
+before `check` and `lint`. Oxlint's TypeScript plugins are bundled to ignored
+JavaScript by `build:lint` during install/prepare and before lint/check; run it
+manually after changing plugin sources if invoking `vp` directly.
 
 Optional **disposable Docker** verification:
 
@@ -80,8 +96,10 @@ See [delivery modes and the v1→v2 upgrade procedure](./packages/delivery/READM
 before upgrading an existing store. Accepted v1 work remains readable; stop old
 writers before deploying code that writes v2. Mixed-version operation is unsupported.
 
-Alchemy/Cloudflare deployment, OAuth, token rotation, interrupt delivery and other
-providers remain unimplemented. Emulate gaps such as native Slack streaming still
+Alchemy/Cloudflare deployment, OAuth, rotating App configuration, interrupt delivery,
+GitHub PR management/reviews/workflows, custom App-bot assignment routing and further providers remain unimplemented.
+GitHub installation tokens refresh before expiry; App setup remains explicit configuration.
+Emulate gaps such as native Slack streaming still
 use signed synthetic protocol tests. No live Slack or application database was used.
 
 `bun run test:live:slack` launches the echo server only when deliberately invoked;

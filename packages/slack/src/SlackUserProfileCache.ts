@@ -1,6 +1,6 @@
 import { Cache, Context, Duration, Effect, Layer, Option, Schema } from 'effect'
 
-import { ProviderName, TenantId, UserId, UserProfile } from './Model.ts'
+import { ProviderName, TenantId, UserId, UserProfile } from './Model.js'
 
 export const UserProfileCacheKey = Schema.Struct({
 	provider: ProviderName,

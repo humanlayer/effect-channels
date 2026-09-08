@@ -1,9 +1,9 @@
 import { Effect, Schema } from 'effect'
 
-import type { FileReadFailed, UnknownTenant } from './DomainErrors.ts'
-import type { FileData } from './Model.ts'
-import { AttachmentRef } from './Model.ts'
-import { Slack } from './Slack.ts'
+import type { FileReadFailed, UnknownTenant } from './DomainErrors.js'
+import type { FileData } from './Model.js'
+import { AttachmentRef } from './Model.js'
+import { Slack } from './Slack.js'
 
 export class Attachment extends Schema.TaggedClass<Attachment>()('Attachment', {
 	ref: AttachmentRef,

@@ -2,14 +2,14 @@ import { assert, it } from '@effect/vitest'
 import { Effect, Inspectable, Layer, Logger, Queue, Redacted } from 'effect'
 import * as Redis from 'effect/unstable/persistence/Redis'
 
-import { SubscriptionStoreError } from '../src/DomainErrors.ts'
-import { ThreadId } from '../src/Model.ts'
-import { layer } from '../src/redis.ts'
-import { connectionKey, routeKey, subscriptionKey } from '../src/redis/keys.ts'
-import { SlackConnectionStore, SlackConnectionStoreError } from '../src/SlackConnectionStore.ts'
-import { SubscriptionCreated, SubscriptionExisting } from '../src/SlackEvents.ts'
-import { SlackSubscriptions } from '../src/SlackSubscriptions.ts'
-import { redisCommands } from './AdapterCommands.ts'
+import { SubscriptionStoreError } from '../src/DomainErrors.js'
+import { ThreadId } from '../src/Model.js'
+import { layer } from '../src/redis.js'
+import { connectionKey, routeKey, subscriptionKey } from '../src/redis/keys.js'
+import { SlackConnectionStore, SlackConnectionStoreError } from '../src/SlackConnectionStore.js'
+import { SubscriptionCreated, SubscriptionExisting } from '../src/SlackEvents.js'
+import { SlackSubscriptions } from '../src/SlackSubscriptions.js'
+import { redisCommands } from './AdapterCommands.js'
 import {
 	encodeRoute,
 	installation,
@@ -18,7 +18,7 @@ import {
 	rootedThread,
 	routeInput,
 	workspaceId,
-} from './AdapterFixtures.ts'
+} from './AdapterFixtures.js'
 
 it.effect('Redis command seam: direct authoritative connection commands, private codec, no expiry', () =>
 	Effect.gen(function* () {

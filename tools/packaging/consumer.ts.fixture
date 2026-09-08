@@ -2,10 +2,48 @@ import { emptyMailbox, MailboxReadiness, MailboxStore } from '@humanlayer/channe
 import * as DeliveryMemory from '@humanlayer/channels-delivery/memory'
 import { MarkdownContent, Slack, SlackConnectionStore, SlackSubscriptions, SlackTeamId, ThreadId } from '@humanlayer/channels-slack'
 import * as SlackMemory from '@humanlayer/channels-slack/memory'
-import { Context, Effect, Layer } from 'effect'
+import { Context, Effect, Layer, Redacted } from 'effect'
+import { GitHub, GitHubCredentials, GitHubCrypto, GitHubIssueRef, GitHubReactionContent, type GitHubReaction, type GitHubReactionRef, type GitHubReactionTarget, type GitHubError, type AddReactionInput, type ListReactionsInput, type RemoveReactionInput } from '@humanlayer/channels-github'
 import { FetchHttpClient } from 'effect/unstable/http'
+import { GitHubSubscriptions } from '@humanlayer/channels-github'
+import * as GitHubMemory from '@humanlayer/channels-github/memory'
+
+export const githubSubscriptionRoundTrip = Effect.gen(function* () {
+	const subscriptions = yield* GitHubSubscriptions
+	const input = { namespace: 'packed', resource: GitHubIssueRef.make({ kind: 'github.issue', repository: { kind: 'github.repository', installationId: 100, id: 1, owner: 'owner', name: 'repo' }, number: 1 }) }
+	yield* subscriptions.subscribe(input)
+	const subscribed = yield* subscriptions.isSubscribed(input)
+	yield* subscriptions.unsubscribe(input)
+	return { subscribed, removed: !(yield* subscriptions.isSubscribed(input)) }
+}).pipe(Effect.provide(GitHubMemory.subscriptions()))
 
 const readyForHost = <A, E>(program: Effect.Effect<A, E>) => program
+const githubLayer = GitHub.layer.pipe(Layer.provide(GitHubCredentials.layer({ appId: 42, privateKey: Redacted.make('not-used-during-construction'), installationIds: [100], botUserId: 99, apiUrl: 'https://api.github.com' }).pipe(Layer.provide(GitHubCrypto.layerWebCrypto), Layer.provide(FetchHttpClient.layer))), Layer.provide(FetchHttpClient.layer))
+export const githubOutbound = readyForHost(Effect.flatMap(GitHub, (github) => github.getIssue({ issue: GitHubIssueRef.make({ kind: 'github.issue', repository: { kind: 'github.repository', installationId: 100, id: 1, owner: 'owner', name: 'repo' }, number: 1 }) })).pipe(Effect.provide(githubLayer)))
+export const githubIdentity = Effect.scoped(Layer.build(githubLayer).pipe(Effect.map((context) => Context.get(context, GitHub))))
+export const githubRejectsSlack = (github: GitHub['Service'], threadId: ThreadId) => {
+	// @ts-expect-error Slack IDs are not GitHub issue handles.
+	return github.getIssue({ issue: threadId })
+}
+export const githubReactions = (github: GitHub['Service'], target: GitHubReactionTarget, reaction: GitHubReactionRef) => {
+	const add: AddReactionInput = { target, content: GitHubReactionContent.make('eyes') }
+	const list: ListReactionsInput = { target, page: 1, perPage: 100 }
+	const remove: RemoveReactionInput = { reaction }
+	const added: Effect.Effect<GitHubReaction, GitHubError> = github.addReaction(add)
+	const listed: Effect.Effect<ReadonlyArray<GitHubReaction>, GitHubError> = github.listReactions(list)
+	const removed: Effect.Effect<void, GitHubError> = github.removeReaction(remove)
+	// @ts-expect-error No Slack reaction aliases or arbitrary emoji.
+	github.addReaction({ target, content: 'thumbsup' })
+	// @ts-expect-error Bounded pagination must be explicit.
+	github.listReactions({ target })
+	// @ts-expect-error Removing requires a target-scoped native reaction ref, not a number.
+	github.removeReaction({ reaction: 70 })
+	// @ts-expect-error PR review comments are outside this slice.
+	github.addReaction({ target: { kind: 'github.review-comment', id: 1 }, content: 'eyes' })
+	// @ts-expect-error Commit reactions are outside this slice.
+	github.addReaction({ target: { kind: 'github.commit', sha: 'abc' }, content: 'eyes' })
+	return { added, listed, removed }
+}
 export const outbound = readyForHost(Effect.flatMap(Slack, (slack) => slack.post({
 	threadId: ThreadId.make('slack:v1:T_PACKAGING:C_PACKAGING:100.1'),
 	content: MarkdownContent.make({ markdown: 'Hello' }),

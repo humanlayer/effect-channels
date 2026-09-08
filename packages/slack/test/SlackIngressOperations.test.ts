@@ -3,11 +3,11 @@ import { layer as deliveryMemory } from '@humanlayer/channels-delivery/memory'
 import { Deferred, Effect, Fiber, Layer, Queue, Tracer } from 'effect'
 import { TestClock } from 'effect/testing'
 
-import { Author, Thread, UserProfile } from '../src/index.ts'
-import { SlackAuthors } from '../src/SlackAuthors.ts'
-import { ConversationStoppedEvent, MessageUpdatedEvent, NormalizedConversationStopped } from '../src/SlackEvents.ts'
-import { SlackChannelId } from '../src/SlackIdentity.ts'
-import { awaitStoppedTargets } from '../src/SlackIngressBindings.ts'
+import { Author, Thread, UserProfile } from '../src/index.js'
+import { SlackAuthors } from '../src/SlackAuthors.js'
+import { ConversationStoppedEvent, MessageUpdatedEvent, NormalizedConversationStopped } from '../src/SlackEvents.js'
+import { SlackChannelId } from '../src/SlackIdentity.js'
+import { awaitStoppedTargets } from '../src/SlackIngressBindings.js'
 import {
 	acceptConversationStopped,
 	acceptMessage,
@@ -15,11 +15,11 @@ import {
 	resolveUpdated,
 	run,
 	SlackIngressBindings,
-} from '../src/SlackIngressOperations.ts'
-import { SlackSubscriptions } from '../src/SlackSubscriptions.ts'
-import { SlackDmConversationTs, slackThreadRef } from '../src/SlackThreadId.ts'
-import { nativeMailbox, nativeMessage, nativePolicy, nativeRunner, testAuthor, testMessage } from './nativeSupport.ts'
-import { stubSlackClientLayer, testRootTs, testTeamId } from './support.ts'
+} from '../src/SlackIngressOperations.js'
+import { SlackSubscriptions } from '../src/SlackSubscriptions.js'
+import { SlackDmConversationTs, slackThreadRef } from '../src/SlackThreadId.js'
+import { nativeMailbox, nativeMessage, nativePolicy, nativeRunner, testAuthor, testMessage } from './nativeSupport.js'
+import { stubSlackClientLayer, testRootTs, testTeamId } from './support.js'
 
 it.effect('enriches an update and its previous message with only the author dependency graph', () =>
 	Effect.gen(function* () {

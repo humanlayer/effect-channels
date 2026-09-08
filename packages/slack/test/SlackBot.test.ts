@@ -2,9 +2,9 @@ import { assert, it } from '@effect/vitest'
 import { Context, Effect, Fiber, Layer, Queue, Ref } from 'effect'
 import { HttpClient, HttpClientResponse } from 'effect/unstable/http'
 
-import { Slack, SlackBot, SlackIngress, SlackSubscriptions, type MessageEvent } from '../src/index.ts'
-import { nativeMessage, nativeRunner, testAuthor } from './nativeSupport.ts'
-import { testConnectionStoreLayer } from './support.ts'
+import { Slack, SlackBot, SlackIngress, SlackSubscriptions, type MessageEvent } from '../src/index.js'
+import { nativeMessage, nativeRunner, testAuthor } from './nativeSupport.js'
+import { testConnectionStoreLayer } from './support.js'
 
 class Replies extends Context.Service<
 	Replies,

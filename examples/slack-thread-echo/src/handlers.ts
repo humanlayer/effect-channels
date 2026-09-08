@@ -9,7 +9,7 @@ import {
 } from '@humanlayer/channels-slack'
 import { Effect, Stream } from 'effect'
 
-import { respond, demonstrateLifecycle } from './responses.ts'
+import { respond, demonstrateLifecycle } from './responses.js'
 
 export const handlers = {
 	onNewMention: Effect.fn('example.echo.onNewMention')(function* ({ thread, message }: MessageEvent) {

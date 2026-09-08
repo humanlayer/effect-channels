@@ -55,9 +55,15 @@ const Metafile = Schema.Struct({
 	),
 })
 const NodeInfo = Schema.Struct({ executable: Schema.String, platform: Schema.String, arch: Schema.String })
-const packageDirectories = ['delivery', 'slack'] as const
+const packageDirectories = ['delivery', 'slack', 'github'] as const
 const expectedEntries = ['.', './memory', './postgres', './redis', './postgres/client', './redis/client'] as const
-const browserEntries = ['browser-delivery', 'browser-slack', 'browser-outbound'] as const
+const browserEntries = [
+	'browser-delivery',
+	'browser-slack',
+	'browser-outbound',
+	'browser-github',
+	'browser-github-outbound',
+] as const
 const forbiddenBrowserInput =
 	/(?:node:|\/node_modules\/(?:@effect\/(?:sql-[^/]+|platform-node[^/]*)|@redis|redis|ioredis|pg(?:-[^/]+)?|postgres|alchemy)\/|\/unstable\/(?:sql\/|persistence\/Redis)|\/(?:postgres|redis)\/|\/(?:postgres|redis)\.js$)/i
 
@@ -176,8 +182,9 @@ const checkInstalled = Effect.fn('packaging.checkInstalled')(function* (
 			'packed manifest',
 			source.name,
 		)
-		yield* expect(Object.keys(published.exports).length === expectedEntries.length, 'export map', source.name)
-		for (const entry of expectedEntries) {
+		const entriesForPackage = source.name === '@humanlayer/channels-github' ? ['.', './memory'] : expectedEntries
+		yield* expect(Object.keys(published.exports).length === entriesForPackage.length, 'export map', source.name)
+		for (const entry of entriesForPackage) {
 			const target = published.exports[entry]
 			if (target === undefined)
 				return yield* new PackagingFailure({
@@ -248,10 +255,24 @@ const checkBundle = Effect.fn('packaging.checkBundle')(function* (consumer: stri
 			`${entry}: ${input}`,
 		)
 		yield* expect(
-			entry !== 'browser-outbound' ||
+			!entry.endsWith('outbound') ||
 				!emitted.has(input) ||
 				!normalized.includes('/@humanlayer/channels-delivery/'),
 			'outbound contains no delivery engine or storage',
+			input,
+		)
+		yield* expect(
+			!entry.startsWith('browser-github') ||
+				!emitted.has(input) ||
+				!normalized.includes('/@humanlayer/channels-slack/'),
+			'GitHub has no Slack runtime',
+			input,
+		)
+		yield* expect(
+			entry !== 'browser-github-outbound' ||
+				!emitted.has(input) ||
+				!normalized.endsWith('/GitHubSubscriptions.js'),
+			'GitHub outbound contains no subscription runtime',
 			input,
 		)
 		yield* expect(

@@ -3,8 +3,8 @@ import { MailboxReadiness, MailboxStore } from '@humanlayer/channels-delivery'
 import { Clock, Context, Effect, Exit, Layer, Queue, Scope } from 'effect'
 import { HttpRouter } from 'effect/unstable/http'
 
-import { bot } from '../src/app.ts'
-import { close, handle } from '../src/fetch.ts'
+import { bot } from '../src/app.js'
+import { close, handle } from '../src/fetch.js'
 import {
 	SlackEmulator,
 	makeExampleTestTransport,
@@ -12,7 +12,7 @@ import {
 	HistoryResponse,
 	slackEmulatorAliceToken,
 	slackEmulatorBotToken,
-} from './support.ts'
+} from './support.js'
 
 const { routes, services, worker } = bot
 

@@ -10,8 +10,8 @@ import {
 	SlackSubscriptions,
 	SlackTeamId,
 	type MessageEvent,
-} from '../src/index.ts'
-import { nativeMessage, nativeRunner, testAuthor } from '../test/nativeSupport.ts'
+} from '../src/index.js'
+import { nativeMessage, nativeRunner, testAuthor } from '../test/nativeSupport.js'
 
 /** Same production bot over the ambient real storage bundle; only Slack's external HTTP is replaced. */
 export const botContract = Effect.gen(function* () {

@@ -4,12 +4,12 @@ import { Clock, ConfigProvider, Context, Effect, Layer, Logger, Queue, Schema } 
 import { TestClock } from 'effect/testing'
 import { HttpRouter } from 'effect/unstable/http'
 
-import { UnknownTenant } from '../src/DomainErrors.ts'
-import { SlackApiError, SlackTransportError } from '../src/Errors.ts'
-import { SlackIngress, IngressAccepted, TenantId, type NormalizedReaction } from '../src/index.ts'
-import { SlackEventCallback } from '../src/Schema.ts'
-import { SlackRoutes } from '../src/SlackRoutes.ts'
-import { reactionAddedCallback, signSlackBody, stubSlackClientLayer, testCredentialsLayer } from './support.ts'
+import { UnknownTenant } from '../src/DomainErrors.js'
+import { SlackApiError, SlackTransportError } from '../src/Errors.js'
+import { SlackIngress, IngressAccepted, TenantId, type NormalizedReaction } from '../src/index.js'
+import { SlackEventCallback } from '../src/Schema.js'
+import { SlackRoutes } from '../src/SlackRoutes.js'
+import { reactionAddedCallback, signSlackBody, stubSlackClientLayer, testCredentialsLayer } from './support.js'
 
 const failures = [
 	{

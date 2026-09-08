@@ -29,7 +29,7 @@ import {
 import { ConfigProvider, Effect, Layer } from 'effect'
 import { HttpClient, HttpRouter, HttpServerResponse } from 'effect/unstable/http'
 
-import { testConnectionStoreLayer } from '../../support.ts'
+import { testConnectionStoreLayer } from '../../support.js'
 
 export type SlackProviderConfig<E = never, R = never> = {
 	readonly provider: 'slack'

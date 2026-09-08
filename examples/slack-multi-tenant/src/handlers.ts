@@ -9,7 +9,7 @@ import {
 } from '@humanlayer/channels-slack'
 import { Effect } from 'effect'
 
-import { respond } from './responses.ts'
+import { respond } from './responses.js'
 
 const reactionRequest = /\breact(?:ion)?\b/i
 const reply = ({ thread, message }: MessageEvent) => respond({ thread, text: message.text }).pipe(Effect.asVoid)

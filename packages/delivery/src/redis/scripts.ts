@@ -1,6 +1,6 @@
 import * as Redis from 'effect/unstable/persistence/Redis'
 
-import { readyKeys, recordKey } from './keys.ts'
+import { readyKeys, recordKey } from './keys.js'
 
 type CommitScriptInput = {
 	readonly key: string

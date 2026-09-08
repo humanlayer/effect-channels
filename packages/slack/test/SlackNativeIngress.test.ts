@@ -6,9 +6,9 @@ import { Clock, Context, Deferred, Effect, Fiber, Layer, Queue, Ref, Schema } fr
 import { TestClock } from 'effect/testing'
 import { HttpRouter } from 'effect/unstable/http'
 
-import { IngressAccepted, MessageEvent, SlackEventCallback, SlackIngress, SlackSubscriptions } from '../src/index.ts'
-import { nativeIngressLayer, nativeMailbox, nativeMessage, nativeRunner } from './nativeSupport.ts'
-import { appMentionCallback, signedSlackRequest, signSlackBody, testRouteLayer } from './support.ts'
+import { IngressAccepted, MessageEvent, SlackEventCallback, SlackIngress, SlackSubscriptions } from '../src/index.js'
+import { nativeIngressLayer, nativeMailbox, nativeMessage, nativeRunner } from './nativeSupport.js'
+import { appMentionCallback, signedSlackRequest, signSlackBody, testRouteLayer } from './support.js'
 
 it.effect('rejects partial fan-out, repairs on retry, and keeps mention ownership after subscription changes', () =>
 	Effect.gen(function* () {

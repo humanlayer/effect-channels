@@ -4,7 +4,7 @@ import { SlackState } from '@humanlayer/channels-slack'
 import { connections } from '@humanlayer/channels-slack/postgres'
 import { Config, Effect, Layer } from 'effect'
 
-import { seedRecordsFromConfig } from '../src/seed-config.ts'
+import { seedRecordsFromConfig } from '../src/seed-config.js'
 
 const DatabaseLive = PgClient.layerConfig({ url: Config.redacted('DATABASE_URL') })
 const SeedLive = SlackState.layer.pipe(Layer.provide(connections), Layer.provide(DatabaseLive))

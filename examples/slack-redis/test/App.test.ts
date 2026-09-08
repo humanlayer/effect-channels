@@ -9,8 +9,8 @@ import {
 	HistoryResponse,
 	slackEmulatorAliceToken,
 	slackEmulatorBotToken,
-} from '../../slack-thread-echo/test/support.ts'
-import { application } from '../src/app.ts'
+} from '../../slack-thread-echo/test/support.js'
+import { application } from '../src/app.js'
 
 it.live('the actual storage example subscribes on a signed mention and echoes a subscribed reply', () =>
 	Effect.gen(function* () {

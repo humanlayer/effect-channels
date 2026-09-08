@@ -5,7 +5,7 @@ export default defineConfig({
 	envDir: false,
 	resolve: {
 		conditions: ['@humanlayer/source'],
-		alias: ['delivery', 'slack'].flatMap((name) => [
+		alias: ['delivery', 'slack', 'github'].flatMap((name) => [
 			{
 				find: new RegExp(`^@humanlayer/channels-${name}$`),
 				replacement: new URL(`./packages/${name}/src/index.ts`, import.meta.url).pathname,
@@ -40,11 +40,12 @@ export default defineConfig({
 			typeCheck: true,
 		},
 		jsPlugins: [
+			{ name: 'import-extensions', specifier: './tools/oxlint/import-extensions.mjs' },
 			{ name: 'vite-plus', specifier: 'vite-plus/oxlint-plugin' },
-			{ name: 'anti-slop', specifier: './tools/oxlint/anti-slop/index.ts' },
+			{ name: 'anti-slop', specifier: './tools/oxlint/dist/index.js' },
 			{
 				name: 'anti-slop-effect',
-				specifier: './tools/oxlint/anti-slop/effect/index.ts',
+				specifier: './tools/oxlint/dist/effect/index.js',
 			},
 		],
 		ignorePatterns: [
@@ -65,6 +66,7 @@ export default defineConfig({
 			'tools/oxlint/anti-slop/**',
 		],
 		rules: {
+			'import-extensions/no-typescript-specifiers': 'error',
 			'vite-plus/prefer-vite-plus-imports': 'error',
 			'anti-slop/no-chained-type-assertions': 'error',
 			'anti-slop/no-comments': 'error',

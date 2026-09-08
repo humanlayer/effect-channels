@@ -2,12 +2,12 @@ import { assert, it } from '@effect/vitest'
 import { Config, Context, Effect, Layer, Redacted, Schema } from 'effect'
 import * as SqlClient from 'effect/unstable/sql/SqlClient'
 
-import { layer } from '../src/postgres.ts'
-import * as Client from '../src/postgres/client.ts'
-import { migrate } from '../src/postgres/migrations.ts'
-import { SlackConnectionStore } from '../src/SlackConnectionStore.ts'
-import { SubscriptionCreated } from '../src/SlackEvents.ts'
-import { SlackSubscriptions } from '../src/SlackSubscriptions.ts'
+import { layer } from '../src/postgres.js'
+import * as Client from '../src/postgres/client.js'
+import { migrate } from '../src/postgres/migrations.js'
+import { SlackConnectionStore } from '../src/SlackConnectionStore.js'
+import { SubscriptionCreated } from '../src/SlackEvents.js'
+import { SlackSubscriptions } from '../src/SlackSubscriptions.js'
 import {
 	installation,
 	installationJson,
@@ -15,9 +15,9 @@ import {
 	rootedThread,
 	routeInput,
 	workspaceId,
-} from '../test/AdapterFixtures.ts'
-import { botContract } from './BotContract.ts'
-import { OtherConnections, OtherSubscriptions, replicaContract } from './StoreContract.ts'
+} from '../test/AdapterFixtures.js'
+import { botContract } from './BotContract.js'
+import { OtherConnections, OtherSubscriptions, replicaContract } from './StoreContract.js'
 
 const client = Layer.unwrap(
 	Effect.gen(function* () {

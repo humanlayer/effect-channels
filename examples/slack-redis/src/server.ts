@@ -4,8 +4,8 @@ import { NodeHttpServer, NodeRuntime } from '@effect/platform-node'
 import { Config, Layer } from 'effect'
 import { HttpRouter } from 'effect/unstable/http'
 
-import { application } from './app.ts'
-import { transport } from './transport.ts'
+import { application } from './app.js'
+import { transport } from './transport.js'
 
 const HttpLive = HttpRouter.serve(application.pipe(Layer.provide(transport))).pipe(
 	Layer.provide(

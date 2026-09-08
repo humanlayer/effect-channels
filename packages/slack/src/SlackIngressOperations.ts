@@ -1,10 +1,10 @@
 import { MailboxStore, type RunnerOptions } from '@humanlayer/channels-delivery'
 import { Effect } from 'effect'
 
-import { SlackIngressError } from './DomainErrors.ts'
-import { Message } from './Message.ts'
-import { type ThreadRef } from './Model.ts'
-import { IngressAccepted, IngressDropped, type IngressResult } from './Operations.ts'
+import { SlackIngressError } from './DomainErrors.js'
+import { Message } from './Message.js'
+import { type ThreadRef } from './Model.js'
+import { IngressAccepted, IngressDropped, type IngressResult } from './Operations.js'
 import {
 	ConversationStoppedEvent,
 	DirectMessageDelivery,
@@ -19,9 +19,9 @@ import {
 	NormalizedReaction,
 	ReactionEvent,
 	SubscribedMessageDelivery,
-} from './SlackEvents.ts'
-import { SlackSubscriptions } from './SlackSubscriptions.ts'
-import { Thread } from './Thread.ts'
+} from './SlackEvents.js'
+import { SlackSubscriptions } from './SlackSubscriptions.js'
+import { Thread } from './Thread.js'
 
 export {
 	SlackIngressBindings,
@@ -29,8 +29,8 @@ export {
 	resolveUpdated,
 	resolveDeleted,
 	resolveReaction,
-} from './SlackIngressBindings.ts'
-import { AdmitInput, SlackIngressBindings } from './SlackIngressBindings.ts'
+} from './SlackIngressBindings.js'
+import { AdmitInput, SlackIngressBindings } from './SlackIngressBindings.js'
 const messageInThread = (message: Message, threadRef: ThreadRef) => {
 	const fields = {
 		ref: message.ref,

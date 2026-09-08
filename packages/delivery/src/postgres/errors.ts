@@ -2,7 +2,7 @@ import { Effect } from 'effect'
 import type { Schema } from 'effect'
 import type { SqlError } from 'effect/unstable/sql/SqlError'
 
-import { MailboxStoreError } from '../MailboxStore.ts'
+import { MailboxStoreError } from '../MailboxStore.js'
 
 type StoreOperation = Pick<MailboxStoreError, 'operation'>
 

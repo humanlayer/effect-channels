@@ -5,7 +5,7 @@ import { connections } from '@humanlayer/channels-slack/postgres'
 import { Effect, Layer, Option, Queue, Random, Redacted } from 'effect'
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http'
 
-import { database } from './database.ts'
+import { database } from './database.js'
 
 const RepositoryLive = SlackState.layer.pipe(Layer.provideMerge(connections), Layer.provideMerge(database))
 

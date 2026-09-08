@@ -3,8 +3,8 @@ import { activeBatches, HandlerFailure, type DeliveryPolicy } from '@humanlayer/
 import { Deferred, Effect, Fiber, Queue } from 'effect'
 import { TestClock } from 'effect/testing'
 
-import { NormalizedConversationStopped, NormalizedMessageUpdated, SlackIngress } from '../src/index.ts'
-import { nativeIngressLayer, nativeMailbox, nativeMessage, nativePolicy, nativeRunner } from './nativeSupport.ts'
+import { NormalizedConversationStopped, NormalizedMessageUpdated, SlackIngress } from '../src/index.js'
+import { nativeIngressLayer, nativeMailbox, nativeMessage, nativePolicy, nativeRunner } from './nativeSupport.js'
 
 const policies: ReadonlyArray<DeliveryPolicy> = [
 	{ ...nativePolicy, mode: 'concurrent', maxConcurrency: 2 },

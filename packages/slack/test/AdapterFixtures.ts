@@ -1,10 +1,10 @@
 import { Redacted, Schema } from 'effect'
 
-import { IdempotencyKey } from '../src/Model.ts'
-import { SlackConnection } from '../src/Schema.ts'
-import { SlackChannelId, SlackMessageTs, SlackTeamId } from '../src/SlackIdentity.ts'
-import { SlackDirectMessageRoute } from '../src/SlackSubscriptions.ts'
-import { slackDmConversationRef, slackThreadRef } from '../src/SlackThreadId.ts'
+import { IdempotencyKey } from '../src/Model.js'
+import { SlackConnection } from '../src/Schema.js'
+import { SlackChannelId, SlackMessageTs, SlackTeamId } from '../src/SlackIdentity.js'
+import { SlackDirectMessageRoute } from '../src/SlackSubscriptions.js'
+import { slackDmConversationRef, slackThreadRef } from '../src/SlackThreadId.js'
 
 export const workspaceId = SlackTeamId.make('T-adapter-{other}:😀')
 export const installation = SlackConnection.make({

@@ -1,7 +1,7 @@
 import { Effect, Option, Stream } from 'effect'
 
-import { HistoryFailed, UnsupportedContextScope } from './DomainErrors.ts'
-import type { Message } from './Message.ts'
+import { HistoryFailed, UnsupportedContextScope } from './DomainErrors.js'
+import type { Message } from './Message.js'
 import type {
 	ChannelThreadsInput,
 	ContainerMessagesInput,
@@ -10,8 +10,8 @@ import type {
 	MessagesInput,
 	ThreadPage,
 	ThreadSummary,
-} from './Operations.ts'
-import type { SlackService } from './SlackService.ts'
+} from './Operations.js'
+import type { SlackService } from './SlackService.js'
 
 interface HistoryOptionsDraft {
 	limit?: number

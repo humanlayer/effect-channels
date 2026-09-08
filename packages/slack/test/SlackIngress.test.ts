@@ -10,16 +10,16 @@ import {
 	type NormalizedConversationStopped,
 	type NormalizedMessage,
 	type NormalizedReaction,
-} from '../src/index.ts'
-import { SlackEventCallback } from '../src/Schema.ts'
-import { SlackRoutes } from '../src/SlackRoutes.ts'
+} from '../src/index.js'
+import { SlackEventCallback } from '../src/Schema.js'
+import { SlackRoutes } from '../src/SlackRoutes.js'
 import {
 	appMentionCallback,
 	signSlackBody,
 	testCredentialsLayer,
 	testRouteSlackClientLayer,
 	unimplemented,
-} from './support.ts'
+} from './support.js'
 
 const routeLayer = SlackRoutes.layer.pipe(
 	HttpRouter.provideRequest(NodeCrypto.layer),

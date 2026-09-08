@@ -2,12 +2,12 @@ import { assert, it } from '@effect/vitest'
 import { Cause, Clock, Deferred, Effect, Exit, Fiber, Layer, Logger, Queue, Schema } from 'effect'
 import { TestClock } from 'effect/testing'
 
-import { bind, DeliveryError, HandlerFailure } from '../src/Delivery.ts'
-import { DeliveryPolicy } from '../src/DeliveryPolicy.ts'
-import type { EventDefinition } from '../src/EventDefinition.ts'
-import { emptyMailbox, mailboxKey } from '../src/Mailbox.ts'
-import { MailboxReadiness, MailboxStore, MailboxStoreError } from '../src/MailboxStore.ts'
-import { layer } from '../src/memory.ts'
+import { bind, DeliveryError, HandlerFailure } from '../src/Delivery.js'
+import { DeliveryPolicy } from '../src/DeliveryPolicy.js'
+import type { EventDefinition } from '../src/EventDefinition.js'
+import { emptyMailbox, mailboxKey } from '../src/Mailbox.js'
+import { MailboxReadiness, MailboxStore, MailboxStoreError } from '../src/MailboxStore.js'
+import { layer } from '../src/memory.js'
 
 const Event = Schema.Struct({
 	id: Schema.String,

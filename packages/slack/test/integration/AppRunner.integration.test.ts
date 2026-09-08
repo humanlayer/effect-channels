@@ -13,8 +13,8 @@ import {
 	slackEmulatorBotUserId,
 	slackEmulatorBotId,
 	slackEmulatorSigningSecret,
-} from './support/SlackEmulator.ts'
-import { ChannelsStorage, makeSlackTestHost, defaultDeliveryPolicy, slack } from './support/SlackTestHost.ts'
+} from './support/SlackEmulator.js'
+import { ChannelsStorage, makeSlackTestHost, defaultDeliveryPolicy, slack } from './support/SlackTestHost.js'
 
 it.live('routes commit without executing; a scoped runner replies then finalizes on shutdown', () =>
 	Effect.gen(function* () {

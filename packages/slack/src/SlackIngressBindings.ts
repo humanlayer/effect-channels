@@ -11,17 +11,17 @@ import {
 } from '@humanlayer/channels-delivery'
 import { Context, Data, Effect, Layer, Match, Schema } from 'effect'
 
-import { RetryabilityMetadata, SlackIngressError } from './DomainErrors.ts'
-import { ThreadId } from './Model.ts'
-import { SlackAuthors } from './SlackAuthors.ts'
+import { RetryabilityMetadata, SlackIngressError } from './DomainErrors.js'
+import { ThreadId } from './Model.js'
+import { SlackAuthors } from './SlackAuthors.js'
 import {
 	ConversationStoppedEvent,
 	MessageDeletedEvent,
 	MessageEvent,
 	MessageUpdatedEvent,
 	ReactionEvent,
-} from './SlackEvents.ts'
-import type { SlackHandlerRegistration, SlackIngressOptions } from './SlackIngress.ts'
+} from './SlackEvents.js'
+import type { SlackHandlerRegistration, SlackIngressOptions } from './SlackIngress.js'
 
 const SlackDeliveryResource = Schema.Struct({ threadId: ThreadId })
 type SlackDeliveryResource = typeof SlackDeliveryResource.Type

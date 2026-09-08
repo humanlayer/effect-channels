@@ -1,0 +1,2 @@
+export * from '@humanlayer/channels-github'
+export * as GitHubMemory from '@humanlayer/channels-github/memory'

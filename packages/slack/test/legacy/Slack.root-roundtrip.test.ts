@@ -18,15 +18,15 @@ import {
 import { TestClock } from 'effect/testing'
 import { HttpClient, HttpClientRequest, HttpClientResponse, HttpRouter } from 'effect/unstable/http'
 
-import { SlackEventCallback } from '../../src/index.ts'
-import { SlackClient } from '../../src/index.ts'
-import { Slack } from '../../src/index.ts'
-import { SlackRoutes } from '../../src/index.ts'
-import { SlackTenantCredentials } from '../../src/index.ts'
-import { SlackIngress, SlackSubscriptions, MarkdownContent, ThreadId } from '../../src/index.ts'
-import { testConnectionStoreLayer } from '../support.ts'
-import { appMentionCallback, signSlackBody } from '../support.ts'
-import { policy, runnerOptions } from './support.ts'
+import { SlackEventCallback } from '../../src/index.js'
+import { SlackClient } from '../../src/index.js'
+import { Slack } from '../../src/index.js'
+import { SlackRoutes } from '../../src/index.js'
+import { SlackTenantCredentials } from '../../src/index.js'
+import { SlackIngress, SlackSubscriptions, MarkdownContent, ThreadId } from '../../src/index.js'
+import { testConnectionStoreLayer } from '../support.js'
+import { appMentionCallback, signSlackBody } from '../support.js'
+import { policy, runnerOptions } from './support.js'
 
 const testRootThreadId = ThreadId.make('slack:v1:T_TEST:C_TEST:100.1')
 

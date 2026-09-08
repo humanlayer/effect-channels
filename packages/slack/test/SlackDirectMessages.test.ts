@@ -2,7 +2,7 @@ import { NodeCrypto } from '@effect/platform-node'
 import { assert, it } from '@effect/vitest'
 import { Effect, Fiber, Layer, Option, Queue, Schema } from 'effect'
 
-import { SlackApiError } from '../src/Errors.ts'
+import { SlackApiError } from '../src/Errors.js'
 import {
 	IdempotencyKey,
 	SlackIngress,
@@ -18,14 +18,14 @@ import {
 	Thread,
 	ThreadId,
 	UserId,
-} from '../src/index.ts'
-import { SlackChannelId, SlackEventCallback, type SlackBotIdentity } from '../src/Schema.ts'
-import { Slack } from '../src/Slack.ts'
-import { SlackClient } from '../src/SlackClient.ts'
-import { normalizeSlackMessage } from '../src/SlackNormalize.ts'
-import { expectTaggedFailure, nativeIngressLayer, nativeMailbox, nativeRunner } from './nativeSupport.ts'
-import { testConnectionStoreLayer } from './support.ts'
-import { makeSlackClientHarness, makeStubSlackClient, slackJsonResponse } from './support.ts'
+} from '../src/index.js'
+import { SlackChannelId, SlackEventCallback, type SlackBotIdentity } from '../src/Schema.js'
+import { Slack } from '../src/Slack.js'
+import { SlackClient } from '../src/SlackClient.js'
+import { normalizeSlackMessage } from '../src/SlackNormalize.js'
+import { expectTaggedFailure, nativeIngressLayer, nativeMailbox, nativeRunner } from './nativeSupport.js'
+import { testConnectionStoreLayer } from './support.js'
+import { makeSlackClientHarness, makeStubSlackClient, slackJsonResponse } from './support.js'
 
 const identity: SlackBotIdentity = { botUserId: 'U_BOT', botId: 'B_BOT' }
 

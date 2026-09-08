@@ -1,12 +1,12 @@
 import { Crypto, DateTime, Effect, Match, Option, Schema } from 'effect'
 
-import { Attachment } from './Attachment.ts'
-import { Emoji } from './Emoji.ts'
-import { SlackWebhookError } from './Errors.ts'
-import { Message } from './Message.ts'
-import { AttachmentRef, IdempotencyKey, MessageRef, TenantId, UserId, type Author, type ThreadRef } from './Model.ts'
-import type { SlackBotIdentity, SlackFileMetadata, SlackMessageTs, SlackTeamId } from './Schema.ts'
-import { SlackEventCallback, SlackHistoryMessage } from './Schema.ts'
+import { Attachment } from './Attachment.js'
+import { Emoji } from './Emoji.js'
+import { SlackWebhookError } from './Errors.js'
+import { Message } from './Message.js'
+import { AttachmentRef, IdempotencyKey, MessageRef, TenantId, UserId, type Author, type ThreadRef } from './Model.js'
+import type { SlackBotIdentity, SlackFileMetadata, SlackMessageTs, SlackTeamId } from './Schema.js'
+import { SlackEventCallback, SlackHistoryMessage } from './Schema.js'
 import {
 	NormalizedConversationStopped,
 	NormalizedMessage,
@@ -15,9 +15,9 @@ import {
 	NormalizedReaction,
 	ReactionAdded,
 	ReactionRemoved,
-} from './SlackEvents.ts'
-import { slackEventThreadRefs } from './SlackThreadId.ts'
-import { Thread } from './Thread.ts'
+} from './SlackEvents.js'
+import { slackEventThreadRefs } from './SlackThreadId.js'
+import { Thread } from './Thread.js'
 
 const ineligibleMessageSubtypes = new Set([
 	'message_changed',

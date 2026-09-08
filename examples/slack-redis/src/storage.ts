@@ -1,1 +1,1 @@
-export { storage } from './storage/redis.ts'
+export { storage } from './storage/redis.js'

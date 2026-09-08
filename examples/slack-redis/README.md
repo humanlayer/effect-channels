@@ -62,7 +62,7 @@ The Redis composition is simply:
 ```ts
 import { layer } from '@humanlayer/channels-slack/redis'
 import { Layer } from 'effect'
-import { redisClient } from './redis-client.ts'
+import { redisClient } from './redis-client.js'
 
 export const storage = layer.pipe(Layer.provide(redisClient))
 ```
@@ -83,7 +83,7 @@ startup does not import/acquire the Postgres client or read `DATABASE_URL`.
 Change the single export in `src/storage.ts`:
 
 ```ts
-export { storage } from './storage/postgres.ts'
+export { storage } from './storage/postgres.js'
 ```
 
 Then, from this example directory:
@@ -116,7 +116,7 @@ These recipes never copy records or drop old tables/keys.
 Change `src/storage.ts` to:
 
 ```ts
-export { storage } from './storage/custom.ts'
+export { storage } from './storage/custom.js'
 ```
 
 Start both stores before seeding/starting:

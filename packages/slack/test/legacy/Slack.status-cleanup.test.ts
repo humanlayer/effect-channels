@@ -1,12 +1,12 @@
 import { assert, it } from '@effect/vitest'
 import { Deferred, Effect, Fiber, Layer, Queue } from 'effect'
 
-import { SlackApiError } from '../../src/index.ts'
-import { SlackMessageTs, SlackSentMessage } from '../../src/index.ts'
-import { Slack } from '../../src/index.ts'
-import { MarkdownContent, Thread } from '../../src/index.ts'
-import { stubSlackClientLayer, testChannelId } from '../support.ts'
-import { expectTaggedFailure, testThreadRef } from './support.ts'
+import { SlackApiError } from '../../src/index.js'
+import { SlackMessageTs, SlackSentMessage } from '../../src/index.js'
+import { Slack } from '../../src/index.js'
+import { MarkdownContent, Thread } from '../../src/index.js'
+import { stubSlackClientLayer, testChannelId } from '../support.js'
+import { expectTaggedFailure, testThreadRef } from './support.js'
 
 const content = MarkdownContent.make({ markdown: 'working on it' })
 const sentReply = SlackSentMessage.make({ channelId: testChannelId, ts: SlackMessageTs.make('100.2') })

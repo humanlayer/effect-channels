@@ -1,10 +1,10 @@
 import { assert, it } from '@effect/vitest'
 import { Effect, Schema } from 'effect'
 
-import { InvalidSlackThreadId } from '../src/Errors.ts'
-import { ThreadId } from '../src/index.ts'
-import { SlackChannelId, SlackMessageTs, SlackTeamId, SlackThreadRef } from '../src/Schema.ts'
-import { decodeSlackThreadId, encodeSlackThreadId } from '../src/SlackThreadId.ts'
+import { InvalidSlackThreadId } from '../src/Errors.js'
+import { ThreadId } from '../src/index.js'
+import { SlackChannelId, SlackMessageTs, SlackTeamId, SlackThreadRef } from '../src/Schema.js'
+import { decodeSlackThreadId, encodeSlackThreadId } from '../src/SlackThreadId.js'
 
 it.effect('round-trips and pins canonical escaped Slack thread ids', () =>
 	Effect.gen(function* () {

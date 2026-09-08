@@ -1,11 +1,11 @@
 import { Effect, Layer, Schema } from 'effect'
 import * as SqlClient from 'effect/unstable/sql/SqlClient'
 
-import { SubscriptionInput } from '../Operations.ts'
-import { SubscriptionCreated, SubscriptionExisting } from '../SlackEvents.ts'
-import { ResolveSlackDirectMessageRoute, SlackDirectMessageRoute, SlackSubscriptions } from '../SlackSubscriptions.ts'
-import { subscriptionErrors } from './errors.ts'
-import { initialized } from './migrations.ts'
+import { SubscriptionInput } from '../Operations.js'
+import { SubscriptionCreated, SubscriptionExisting } from '../SlackEvents.js'
+import { ResolveSlackDirectMessageRoute, SlackDirectMessageRoute, SlackSubscriptions } from '../SlackSubscriptions.js'
+import { subscriptionErrors } from './errors.js'
+import { initialized } from './migrations.js'
 
 const routeJson = Schema.fromJsonString(SlackDirectMessageRoute)
 const createdRows = Schema.Tuple([Schema.Struct({ created: Schema.Boolean })])

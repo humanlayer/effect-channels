@@ -1,7 +1,7 @@
 import { assert, it } from '@effect/vitest'
 import { ConfigProvider, Effect, Redacted } from 'effect'
 
-import { seedRecordsFromConfig } from '../src/seed-config.ts'
+import { seedRecordsFromConfig } from '../src/seed-config.js'
 
 const primary = {
 	SLACK_TEAM_ID: 'T_ONE',

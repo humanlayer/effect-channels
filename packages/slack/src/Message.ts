@@ -1,7 +1,7 @@
 import { Schema } from 'effect'
 
-import { Attachment } from './Attachment.ts'
-import { Author, MessageMetadata, MessageRef, ThreadRef } from './Model.ts'
+import { Attachment } from './Attachment.js'
+import { Author, MessageMetadata, MessageRef, ThreadRef } from './Model.js'
 
 export class Message extends Schema.TaggedClass<Message>()('Message', {
 	ref: MessageRef,

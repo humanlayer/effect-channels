@@ -10,7 +10,7 @@ import {
 	slackEmulatorBotUserId,
 	slackEmulatorBotId,
 	slackEmulatorSigningSecret,
-} from '../../../packages/slack/test/integration/support/SlackEmulator.ts'
+} from '../../../packages/slack/test/integration/support/SlackEmulator.js'
 
 export {
 	SlackEmulator,
@@ -19,7 +19,7 @@ export {
 	OpenConversationResponse,
 	slackEmulatorAliceToken,
 	slackEmulatorBotToken,
-} from '../../../packages/slack/test/integration/support/SlackEmulator.ts'
+} from '../../../packages/slack/test/integration/support/SlackEmulator.js'
 
 export const makeExampleTestTransport = Effect.gen(function* () {
 	const emulator = yield* SlackEmulator

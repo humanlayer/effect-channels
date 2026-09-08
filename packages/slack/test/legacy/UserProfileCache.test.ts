@@ -10,7 +10,7 @@ import {
 	UserProfileCacheKey,
 	UserProfileFound,
 	UserProfileUnavailable,
-} from '../../src/index.ts'
+} from '../../src/index.js'
 
 const key = (userId: string) =>
 	UserProfileCacheKey.make({ provider: 'slack', tenant: TenantId.make('T_TEST'), userId: UserId.make(userId) })

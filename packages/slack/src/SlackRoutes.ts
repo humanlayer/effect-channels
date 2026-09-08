@@ -2,21 +2,21 @@ import { Config, Effect, Layer, Match, Option, Predicate, Schema } from 'effect'
 import type { Redacted } from 'effect'
 import { HttpRouter, HttpServerResponse } from 'effect/unstable/http'
 
-import { SlackWebhookError } from './Errors.ts'
-import type { SlackBotIdentity, SlackChannelId, SlackEventCallback } from './Schema.ts'
-import { SlackChannelInfoInput, SlackEventsRequest, SlackMessageTs } from './Schema.ts'
-import { mergeSlackBotIdentity, slackBotIdentity } from './SlackBotIdentity.ts'
-import { SlackClient } from './SlackClient.ts'
-import { SlackIngress } from './SlackIngress.ts'
+import { SlackWebhookError } from './Errors.js'
+import type { SlackBotIdentity, SlackChannelId, SlackEventCallback } from './Schema.js'
+import { SlackChannelInfoInput, SlackEventsRequest, SlackMessageTs } from './Schema.js'
+import { mergeSlackBotIdentity, slackBotIdentity } from './SlackBotIdentity.js'
+import { SlackClient } from './SlackClient.js'
+import { SlackIngress } from './SlackIngress.js'
 import {
 	normalizeSlackConversationStopped,
 	normalizeSlackMessage,
 	normalizeSlackMessageDeleted,
 	normalizeSlackMessageUpdated,
 	normalizeSlackReaction,
-} from './SlackNormalize.ts'
-import { verifySlackSignature } from './SlackSignature.ts'
-import { SlackTenantCredentials } from './SlackTenantCredentials.ts'
+} from './SlackNormalize.js'
+import { verifySlackSignature } from './SlackSignature.js'
+import { SlackTenantCredentials } from './SlackTenantCredentials.js'
 
 type SlackRoutesConfig = {
 	readonly signingSecret: Redacted.Redacted<string>

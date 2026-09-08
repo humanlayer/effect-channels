@@ -1,14 +1,14 @@
 import { layer as deliveryMemory } from '@humanlayer/channels-delivery/memory'
 import { Effect, Layer, Schema } from 'effect'
 
-import { SlackConnection, SlackConnectionLookupInput } from './Schema.ts'
+import { SlackConnection, SlackConnectionLookupInput } from './Schema.js'
 import {
 	connectionFromConfig,
 	SlackConnectionStore,
 	SlackConnectionStoreError,
 	UpsertSlackConnection,
-} from './SlackConnectionStore.ts'
-import { SlackSubscriptions } from './SlackSubscriptions.ts'
+} from './SlackConnectionStore.js'
+import { SlackSubscriptions } from './SlackSubscriptions.js'
 
 export interface MemoryConnectionsOptions {
 	readonly connections?: ReadonlyArray<UpsertSlackConnection>

@@ -3,12 +3,12 @@ import { Config, Effect, Layer, Schema } from 'effect'
 import { TestClock } from 'effect/testing'
 import * as Redis from 'effect/unstable/persistence/Redis'
 
-import { emptyMailbox } from '../src/Mailbox.ts'
-import { MailboxReadiness, MailboxStore, MailboxStoreError } from '../src/MailboxStore.ts'
-import { layer } from '../src/redis.ts'
-import * as Client from '../src/redis/client.ts'
-import { readyKey, readyKeys, recordKey } from '../src/redis/keys.ts'
-import { encodeKey } from '../test/AdapterCommands.ts'
+import { emptyMailbox } from '../src/Mailbox.js'
+import { MailboxReadiness, MailboxStore, MailboxStoreError } from '../src/MailboxStore.js'
+import { layer } from '../src/redis.js'
+import * as Client from '../src/redis/client.js'
+import { readyKey, readyKeys, recordKey } from '../src/redis/keys.js'
+import { encodeKey } from '../test/AdapterCommands.js'
 import {
 	interruptForReconstruction,
 	policy,
@@ -16,7 +16,7 @@ import {
 	staleAttemptContract,
 	storageContract,
 	storedState,
-} from './StoreContract.ts'
+} from './StoreContract.js'
 
 const client = Layer.unwrap(
 	Effect.gen(function* () {

@@ -1,7 +1,7 @@
 import { Cause, Clock, Effect, Exit, Fiber, Match, Schedule, Schema, SchemaIssue } from 'effect'
 
-import { DeliveryPolicy } from './DeliveryPolicy.ts'
-import type { EventDefinition } from './EventDefinition.ts'
+import { DeliveryPolicy } from './DeliveryPolicy.js'
+import type { EventDefinition } from './EventDefinition.js'
 import {
 	ActiveBatch,
 	activeBatches,
@@ -15,8 +15,8 @@ import {
 	MailboxAddress,
 	MailboxState,
 	Outcome,
-} from './Mailbox.ts'
-import { MailboxReadiness, MailboxStore } from './MailboxStore.ts'
+} from './Mailbox.js'
+import { MailboxReadiness, MailboxStore } from './MailboxStore.js'
 
 export class DeliveryError extends Schema.TaggedError<DeliveryError>()('DeliveryError', {
 	reason: Schema.Literals(['conflict', 'capacity', 'payload', 'definition', 'stale', 'configuration']),

@@ -1,8 +1,8 @@
 import { assert, it } from '@effect/vitest'
 import { Effect, Queue, Stream } from 'effect'
 
-import { Slack, SlackApiError, type SlackHistoryInput, type SlackRepliesInput } from '../../src/index.ts'
-import { testTeamId, testChannelId, testRootTs } from '../support.ts'
+import { Slack, SlackApiError, type SlackHistoryInput, type SlackRepliesInput } from '../../src/index.js'
+import { testTeamId, testChannelId, testRootTs } from '../support.js'
 import {
 	expectTaggedFailure,
 	makeTestAuthor,
@@ -11,7 +11,7 @@ import {
 	testChannelRef,
 	testMessageEvent,
 	testThreadRef,
-} from './support.ts'
+} from './support.js'
 
 const human = makeTestAuthor({ userId: 'U_HUMAN' })
 const me = makeTestAuthor({ userId: 'U_BOT', isBot: true, isMe: true })

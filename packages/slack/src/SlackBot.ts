@@ -3,11 +3,11 @@ import { layer as memory } from '@humanlayer/channels-delivery/memory'
 import { Crypto, Effect, Layer, Predicate, Schema } from 'effect'
 import { HttpRouter } from 'effect/unstable/http'
 
-import { SlackIngressError } from './DomainErrors.ts'
-import { Slack } from './Slack.ts'
-import { SlackIngress, type SlackHandlerRegistration, type SlackIngressHandlers } from './SlackIngress.ts'
-import { SlackRoutes } from './SlackRoutes.ts'
-import { SlackSubscriptions } from './SlackSubscriptions.ts'
+import { SlackIngressError } from './DomainErrors.js'
+import { Slack } from './Slack.js'
+import { SlackIngress, type SlackHandlerRegistration, type SlackIngressHandlers } from './SlackIngress.js'
+import { SlackRoutes } from './SlackRoutes.js'
+import { SlackSubscriptions } from './SlackSubscriptions.js'
 
 /** Bounded initial policy, not a production capacity recommendation or an exactly-once guarantee. */
 const defaultPolicy = DeliveryPolicy.make({

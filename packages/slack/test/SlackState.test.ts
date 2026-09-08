@@ -14,10 +14,10 @@ import {
 	SlackTenantCredentials,
 	TenantId,
 	UserId,
-} from '../src/index.ts'
-import * as Memory from '../src/memory.ts'
-import { expectTaggedFailure, testAuthor } from './nativeSupport.ts'
-import { makeStubSlackClient } from './support.ts'
+} from '../src/index.js'
+import * as Memory from '../src/memory.js'
+import { expectTaggedFailure, testAuthor } from './nativeSupport.js'
+import { makeStubSlackClient } from './support.js'
 
 const workspaceId = SlackTeamId.make('T_STATE')
 const input = { provider: 'slack' as const, tenant: TenantId.make(workspaceId), userId: UserId.make('U_PERSON') }

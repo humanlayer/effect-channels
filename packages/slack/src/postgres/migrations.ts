@@ -2,7 +2,7 @@ import { Effect, Layer } from 'effect'
 import * as Migrator from 'effect/unstable/sql/Migrator'
 import * as SqlClient from 'effect/unstable/sql/SqlClient'
 
-import { SlackConnectionStoreError } from '../SlackConnectionStore.ts'
+import { SlackConnectionStoreError } from '../SlackConnectionStore.js'
 
 const initial = Effect.gen(function* () {
 	const sql = (yield* SqlClient.SqlClient).withoutTransforms()

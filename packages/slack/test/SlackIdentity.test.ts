@@ -3,7 +3,7 @@ import { assert, it } from '@effect/vitest'
 import { ConfigProvider, Context, Effect, Layer, Option, Queue, Redacted, Ref, Schema } from 'effect'
 import { HttpRouter } from 'effect/unstable/http'
 
-import { CredentialStoreError } from '../src/Errors.ts'
+import { CredentialStoreError } from '../src/Errors.js'
 import {
 	IngressAccepted,
 	IngressDropped,
@@ -12,7 +12,7 @@ import {
 	type IngressResult,
 	type Message,
 	type NormalizedMessage,
-} from '../src/index.ts'
+} from '../src/index.js'
 import {
 	SlackEventCallback,
 	SlackGetUserInput,
@@ -21,10 +21,10 @@ import {
 	SlackRepliesInput,
 	SlackTeamId,
 	type SlackLoadCredentialsInput,
-} from '../src/Schema.ts'
-import { SlackClient } from '../src/SlackClient.ts'
-import { SlackRoutes } from '../src/SlackRoutes.ts'
-import { SlackTenantCredentials } from '../src/SlackTenantCredentials.ts'
+} from '../src/Schema.js'
+import { SlackClient } from '../src/SlackClient.js'
+import { SlackRoutes } from '../src/SlackRoutes.js'
+import { SlackTenantCredentials } from '../src/SlackTenantCredentials.js'
 import {
 	makeSlackClientHarness,
 	makeTestIngress,
@@ -34,7 +34,7 @@ import {
 	testRouteSlackClientLayer,
 	testChannelId,
 	type RecordedSlackRequest,
-} from './support.ts'
+} from './support.js'
 
 const identityIngressLayer = Layer.succeed(
 	Ingress,

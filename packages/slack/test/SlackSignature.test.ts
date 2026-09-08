@@ -3,8 +3,8 @@ import { assert, it } from '@effect/vitest'
 import { Effect, Redacted } from 'effect'
 import { TestClock } from 'effect/testing'
 
-import { hmacSha256, verifySlackSignature } from '../src/SlackSignature.ts'
-import { bytesToHex, signSlackBody, signingSecret } from './support.ts'
+import { hmacSha256, verifySlackSignature } from '../src/SlackSignature.js'
+import { bytesToHex, signSlackBody, signingSecret } from './support.js'
 
 it.effect('verifies the exact body bytes inside the replay window', () =>
 	Effect.gen(function* () {

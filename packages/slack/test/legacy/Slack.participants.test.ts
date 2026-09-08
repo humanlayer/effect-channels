@@ -1,9 +1,9 @@
 import { assert, it } from '@effect/vitest'
 import { Effect, Layer, Ref } from 'effect'
 
-import { Slack, SlackApiError, Thread, type MessageHistoryOptions, type MessagePage } from '../../src/index.ts'
-import { stubSlackClientLayer } from '../support.ts'
-import { makeTestAuthor, makeTestMessage, testThreadRef } from './support.ts'
+import { Slack, SlackApiError, Thread, type MessageHistoryOptions, type MessagePage } from '../../src/index.js'
+import { stubSlackClientLayer } from '../support.js'
+import { makeTestAuthor, makeTestMessage, testThreadRef } from './support.js'
 
 const humanA = makeTestAuthor({ userId: 'U_A', isBot: 'unknown' })
 const botB = makeTestAuthor({ userId: 'B_B', isBot: true })

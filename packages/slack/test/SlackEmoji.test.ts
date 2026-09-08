@@ -1,7 +1,7 @@
 import { assert, it } from '@effect/vitest'
 import { Effect, Schema } from 'effect'
 
-import { Emoji } from '../src/index.ts'
+import { Emoji } from '../src/index.js'
 
 it.effect('round-trips canonical and custom typed emoji', () =>
 	Effect.gen(function* () {

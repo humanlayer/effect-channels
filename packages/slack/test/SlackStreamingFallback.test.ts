@@ -2,13 +2,13 @@ import { assert, it } from '@effect/vitest'
 import { Effect, Exit, Fiber, Layer, Queue, Stream } from 'effect'
 import { TestClock } from 'effect/testing'
 
-import { SlackApiError } from '../src/Errors.ts'
-import { MarkdownTextChunk, PlanUpdateChunk, PostFailed, ThreadId } from '../src/index.ts'
-import { SlackMessageTs } from '../src/Schema.ts'
-import { Slack } from '../src/Slack.ts'
-import { SlackClient } from '../src/SlackClient.ts'
-import { testConnectionStoreLayer } from './support.ts'
-import { makeStubSlackClient, testChannelId, testRootThreadId } from './support.ts'
+import { SlackApiError } from '../src/Errors.js'
+import { MarkdownTextChunk, PlanUpdateChunk, PostFailed, ThreadId } from '../src/index.js'
+import { SlackMessageTs } from '../src/Schema.js'
+import { Slack } from '../src/Slack.js'
+import { SlackClient } from '../src/SlackClient.js'
+import { testConnectionStoreLayer } from './support.js'
+import { makeStubSlackClient, testChannelId, testRootThreadId } from './support.js'
 
 it.effect('falls back to one post plus throttled edits with final raw markdown', () =>
 	Effect.gen(function* () {

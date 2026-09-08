@@ -1,11 +1,11 @@
 import { assert, it } from '@effect/vitest'
 import { Effect, Layer, Logger, Predicate, Queue, Schema } from 'effect'
 
-import { SlackApiError, type SlackTransportError } from '../src/Errors.ts'
-import { AttachmentRef, FileUpload, TenantId, type UnknownTenant } from '../src/index.ts'
-import { SlackFileDownloadInput, SlackFileUploadInput } from '../src/Schema.ts'
-import { SlackClient, slackFileLimits } from '../src/SlackClient.ts'
-import { makeSlackClientHarness, slackJsonResponse, testChannelId, testTeamId } from './support.ts'
+import { SlackApiError, type SlackTransportError } from '../src/Errors.js'
+import { AttachmentRef, FileUpload, TenantId, type UnknownTenant } from '../src/index.js'
+import { SlackFileDownloadInput, SlackFileUploadInput } from '../src/Schema.js'
+import { SlackClient, slackFileLimits } from '../src/SlackClient.js'
+import { makeSlackClientHarness, slackJsonResponse, testChannelId, testTeamId } from './support.js'
 
 const attachment = AttachmentRef.make({
 	provider: 'slack',

@@ -1,7 +1,7 @@
 import { Effect, Schema, Stream } from 'effect'
 
-import { Channel } from './Channel.ts'
-import type { Content } from './Content.ts'
+import { Channel } from './Channel.js'
+import type { Content } from './Content.js'
 import type {
 	HistoryFailed,
 	MetadataFailed,
@@ -9,17 +9,17 @@ import type {
 	SubscriptionStoreError,
 	ThreadGone,
 	UnknownTenant,
-} from './DomainErrors.ts'
-import { Message } from './Message.ts'
-import type { Author, ThreadInfo } from './Model.ts'
-import { ThreadRef } from './Model.ts'
-import type { EphemeralFallback, EphemeralResult, MessageHistoryOptions, MessagePage } from './Operations.ts'
-import { MessageHistoryOptions as MessageHistoryOptionsSchema, MessagesInput } from './Operations.ts'
-import type { SentMessage } from './SentMessage.ts'
-import { Slack } from './Slack.ts'
-import type { SubscriptionTransition } from './SlackEvents.ts'
-import { SlackSubscriptions } from './SlackSubscriptions.ts'
-import type { StreamChunk } from './StreamChunk.ts'
+} from './DomainErrors.js'
+import { Message } from './Message.js'
+import type { Author, ThreadInfo } from './Model.js'
+import { ThreadRef } from './Model.js'
+import type { EphemeralFallback, EphemeralResult, MessageHistoryOptions, MessagePage } from './Operations.js'
+import { MessageHistoryOptions as MessageHistoryOptionsSchema, MessagesInput } from './Operations.js'
+import type { SentMessage } from './SentMessage.js'
+import { Slack } from './Slack.js'
+import type { SubscriptionTransition } from './SlackEvents.js'
+import { SlackSubscriptions } from './SlackSubscriptions.js'
+import type { StreamChunk } from './StreamChunk.js'
 
 export class Thread extends Schema.TaggedClass<Thread>()('Thread', {
 	ref: ThreadRef,

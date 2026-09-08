@@ -2,10 +2,10 @@ import { assert, it } from '@effect/vitest'
 import { Effect, Layer, Logger, Queue } from 'effect'
 import { ConnectionError, SqlError } from 'effect/unstable/sql/SqlError'
 
-import { emptyMailbox } from '../src/Mailbox.ts'
-import { MailboxReadiness, MailboxStore, MailboxStoreError } from '../src/MailboxStore.ts'
-import { layer, migrate, PostgresInitializationError } from '../src/postgres.ts'
-import { encodeState, mailboxCodecCases, sqlCommands } from './AdapterCommands.ts'
+import { emptyMailbox } from '../src/Mailbox.js'
+import { MailboxReadiness, MailboxStore, MailboxStoreError } from '../src/MailboxStore.js'
+import { layer, migrate, PostgresInitializationError } from '../src/postgres.js'
+import { encodeState, mailboxCodecCases, sqlCommands } from './AdapterCommands.js'
 
 it.effect('Postgres fake command contract: lock precedes migrator creation; conditional writes include readiness', () =>
 	Effect.gen(function* () {

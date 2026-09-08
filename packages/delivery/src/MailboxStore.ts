@@ -1,6 +1,6 @@
 import { Context, Effect, Schema } from 'effect'
 
-import { MailboxSnapshot, MailboxState } from './Mailbox.ts'
+import { MailboxSnapshot, MailboxState } from './Mailbox.js'
 
 export class MailboxStoreError extends Schema.TaggedError<MailboxStoreError>()('MailboxStoreError', {
 	operation: Schema.Literals(['load', 'commit', 'scan']),

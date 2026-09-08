@@ -2,8 +2,8 @@ import { assert, it } from '@effect/vitest'
 import { Deferred, Effect, Fiber, Queue, Ref } from 'effect'
 import { TestClock } from 'effect/testing'
 
-import { HistoryFailed, IngressAccepted, SlackIngress, type MessageEvent } from '../../src/index.ts'
-import { ingressLayer, makeTestNormalizedMessage, runnerOptions } from './support.ts'
+import { HistoryFailed, IngressAccepted, SlackIngress, type MessageEvent } from '../../src/index.js'
+import { ingressLayer, makeTestNormalizedMessage, runnerOptions } from './support.js'
 
 it.effect('delivers a duplicate notification once and still delivers the next same-thread message', () =>
 	Effect.gen(function* () {

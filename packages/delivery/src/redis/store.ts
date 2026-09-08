@@ -1,7 +1,7 @@
 import { Context, Effect, Layer, Schema } from 'effect'
 import * as Redis from 'effect/unstable/persistence/Redis'
 
-import { MailboxSnapshot } from '../Mailbox.ts'
+import { MailboxSnapshot } from '../Mailbox.js'
 import {
 	CommitMailbox,
 	LoadMailbox,
@@ -9,9 +9,9 @@ import {
 	MailboxStore,
 	MailboxStoreError,
 	ScanReady,
-} from '../MailboxStore.ts'
-import { readyKey, recordKey } from './keys.ts'
-import * as Scripts from './scripts.ts'
+} from '../MailboxStore.js'
+import { readyKey, recordKey } from './keys.js'
+import * as Scripts from './scripts.js'
 
 const snapshotCodec = Schema.fromJsonString(MailboxSnapshot)
 const storedRecord = Schema.Union([

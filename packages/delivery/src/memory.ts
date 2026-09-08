@@ -1,7 +1,7 @@
 import { Context, Effect, Layer, Schema } from 'effect'
 
-import { MailboxSnapshot } from './Mailbox.ts'
-import { MailboxReadiness, MailboxStore, MailboxStoreError, ScanReady } from './MailboxStore.ts'
+import { MailboxSnapshot } from './Mailbox.js'
+import { MailboxReadiness, MailboxStore, MailboxStoreError, ScanReady } from './MailboxStore.js'
 
 export const MemoryOptions = Schema.Struct({ maxMailboxes: Schema.Int.check(Schema.isGreaterThan(0)) })
 export type MemoryOptions = typeof MemoryOptions.Type

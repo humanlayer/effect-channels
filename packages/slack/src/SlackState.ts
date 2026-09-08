@@ -1,12 +1,12 @@
 import { Cache, Cause, Context, Data, Duration, Effect, Exit, Layer, Option, Schema } from 'effect'
 
-import { UnknownTenant, UserLookupFailed } from './DomainErrors.ts'
-import type { UserProfile } from './Model.ts'
-import type { GetUserInput } from './Operations.ts'
-import { SlackConnection, SlackConnectionLookupInput, SlackGetUserInput, SlackTeamId } from './Schema.ts'
-import { SlackClient } from './SlackClient.ts'
-import { SlackConnectionStore, SlackConnectionStoreError, UpsertSlackConnection } from './SlackConnectionStore.ts'
-import { SlackCredentialSnapshot } from './SlackCredentialSnapshot.ts'
+import { UnknownTenant, UserLookupFailed } from './DomainErrors.js'
+import type { UserProfile } from './Model.js'
+import type { GetUserInput } from './Operations.js'
+import { SlackConnection, SlackConnectionLookupInput, SlackGetUserInput, SlackTeamId } from './Schema.js'
+import { SlackClient } from './SlackClient.js'
+import { SlackConnectionStore, SlackConnectionStoreError, UpsertSlackConnection } from './SlackConnectionStore.js'
+import { SlackCredentialSnapshot } from './SlackCredentialSnapshot.js'
 
 class UserKey extends Data.Class<GetUserInput & SlackConnection['credentials']> {}
 const retryableApiErrors = new Set(['ratelimited', 'internal_error', 'fatal_error', 'service_unavailable'])

@@ -9,12 +9,12 @@ import {
 	PlainTextContent,
 	TenantId,
 	ThreadId,
-} from '../src/index.ts'
-import { SlackFileUploadInput, SlackSentMessage, SlackThreadRef } from '../src/Schema.ts'
-import { Slack } from '../src/Slack.ts'
-import { SlackClient } from '../src/SlackClient.ts'
-import { normalizeSlackHistoryMessage, slackFileAttachments } from '../src/SlackNormalize.ts'
-import { slackThreadRef } from '../src/SlackThreadId.ts'
+} from '../src/index.js'
+import { SlackFileUploadInput, SlackSentMessage, SlackThreadRef } from '../src/Schema.js'
+import { Slack } from '../src/Slack.js'
+import { SlackClient } from '../src/SlackClient.js'
+import { normalizeSlackHistoryMessage, slackFileAttachments } from '../src/SlackNormalize.js'
+import { slackThreadRef } from '../src/SlackThreadId.js'
 import {
 	makeSlackClientHarness,
 	slackJsonResponse,
@@ -22,7 +22,7 @@ import {
 	testRootThreadId,
 	testRootTs,
 	testTeamId,
-} from './support.ts'
+} from './support.js'
 
 const encoder = new TextEncoder()
 

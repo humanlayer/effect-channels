@@ -3,7 +3,7 @@ import { SlackConnectionStore, SlackState, SlackTeamId } from '@humanlayer/chann
 import { connections } from '@humanlayer/channels-slack/memory'
 import { ConfigProvider, Effect, Layer, Logger, Redacted, Ref, Result } from 'effect'
 
-import { seed } from '../src/seed.ts'
+import { seed } from '../src/seed.js'
 
 const workspaceId = SlackTeamId.make('T_SEED')
 const config = {

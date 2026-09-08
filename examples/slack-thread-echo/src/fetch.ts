@@ -1,8 +1,8 @@
 import { Layer } from 'effect'
 import { HttpRouter } from 'effect/unstable/http'
 
-import { application } from './app.ts'
-import { transport } from './transport.ts'
+import { application } from './app.js'
+import { transport } from './transport.js'
 
 const web = HttpRouter.toWebHandler(application.pipe(Layer.provide(transport)))
 let closed = false

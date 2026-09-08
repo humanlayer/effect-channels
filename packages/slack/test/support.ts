@@ -3,14 +3,14 @@ import { Clock, ConfigProvider, Effect, Layer, Option, Queue, Redacted, Schema }
 import { TestClock } from 'effect/testing'
 import { HttpClient, HttpClientRequest, HttpClientResponse, HttpRouter } from 'effect/unstable/http'
 
-import { ChannelInfo, MessagePage, SlackIngress as Ingress } from '../src/index.ts'
-import { SlackChannelId, SlackEventCallback, SlackMessageTs, SlackTeamId } from '../src/Schema.ts'
-import { SlackClient } from '../src/SlackClient.ts'
-import { SlackConnectionStore } from '../src/SlackConnectionStore.ts'
-import { SlackRoutes } from '../src/SlackRoutes.ts'
-import { hmacSha256 } from '../src/SlackSignature.ts'
-import { SlackTenantCredentials } from '../src/SlackTenantCredentials.ts'
-import { slackChannelRef } from '../src/SlackThreadId.ts'
+import { ChannelInfo, MessagePage, SlackIngress as Ingress } from '../src/index.js'
+import { SlackChannelId, SlackEventCallback, SlackMessageTs, SlackTeamId } from '../src/Schema.js'
+import { SlackClient } from '../src/SlackClient.js'
+import { SlackConnectionStore } from '../src/SlackConnectionStore.js'
+import { SlackRoutes } from '../src/SlackRoutes.js'
+import { hmacSha256 } from '../src/SlackSignature.js'
+import { SlackTenantCredentials } from '../src/SlackTenantCredentials.js'
+import { slackChannelRef } from '../src/SlackThreadId.js'
 
 export const signingSecret = Redacted.make('test-signing-secret')
 

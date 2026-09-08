@@ -10,11 +10,11 @@ import {
 	type MessagePage,
 	type ThreadPage,
 	type ThreadSummary,
-} from '../../src/index.ts'
-import type { SlackClient } from '../../src/SlackClient.ts'
-import { testConnectionStoreLayer } from '../support.ts'
-import { stubSlackClientLayer } from '../support.ts'
-import { makeTestMessage, testChannelRef, testThreadRef, testThreadRefFor } from './support.ts'
+} from '../../src/index.js'
+import type { SlackClient } from '../../src/SlackClient.js'
+import { testConnectionStoreLayer } from '../support.js'
+import { stubSlackClientLayer } from '../support.js'
+import { makeTestMessage, testChannelRef, testThreadRef, testThreadRefFor } from './support.js'
 
 const message = (messageTs: string) => makeTestMessage({ messageTs })
 

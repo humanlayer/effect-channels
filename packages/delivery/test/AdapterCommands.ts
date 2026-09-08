@@ -6,7 +6,7 @@ import type { Connection } from 'effect/unstable/sql/SqlConnection'
 import type { SqlError } from 'effect/unstable/sql/SqlError'
 import * as Statement from 'effect/unstable/sql/Statement'
 
-import { ActiveBatch, currentMailbox, Envelope, eventIdentity, MailboxSnapshot, MailboxState } from '../src/Mailbox.ts'
+import { ActiveBatch, currentMailbox, Envelope, eventIdentity, MailboxSnapshot, MailboxState } from '../src/Mailbox.js'
 
 export interface SqlCommand {
 	readonly sql: string

@@ -2,7 +2,7 @@ import { assert, it } from '@effect/vitest'
 import { Deferred, Effect, Exit, Fiber, Layer, Queue, Stream } from 'effect'
 import { TestClock } from 'effect/testing'
 
-import { SlackApiError } from '../src/Errors.ts'
+import { SlackApiError } from '../src/Errors.js'
 import {
 	NormalizedConversationStopped,
 	SlackIngress,
@@ -10,13 +10,13 @@ import {
 	ThreadId,
 	UserId,
 	MarkdownTextChunk,
-} from '../src/index.ts'
-import { SlackMessageTs, type SlackPostMessageInput, SlackSentMessage, SlackStreamRef } from '../src/Schema.ts'
-import { Slack } from '../src/Slack.ts'
-import { SlackClient } from '../src/SlackClient.ts'
-import { nativeIngressLayer, nativeMailbox, nativeMessage, nativeRunner } from './nativeSupport.ts'
-import { testConnectionStoreLayer } from './support.ts'
-import { makeStubSlackClient, testChannelId, testRootThreadId, testRootTs } from './support.ts'
+} from '../src/index.js'
+import { SlackMessageTs, type SlackPostMessageInput, SlackSentMessage, SlackStreamRef } from '../src/Schema.js'
+import { Slack } from '../src/Slack.js'
+import { SlackClient } from '../src/SlackClient.js'
+import { nativeIngressLayer, nativeMailbox, nativeMessage, nativeRunner } from './nativeSupport.js'
+import { testConnectionStoreLayer } from './support.js'
+import { makeStubSlackClient, testChannelId, testRootThreadId, testRootTs } from './support.js'
 
 it.effect('cancels the targeted head and delivers the stop callback next without retrying it', () =>
 	Effect.gen(function* () {

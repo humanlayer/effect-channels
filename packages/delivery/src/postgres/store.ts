@@ -1,10 +1,10 @@
 import { Context, Effect, Layer, Schema } from 'effect'
 import * as SqlClient from 'effect/unstable/sql/SqlClient'
 
-import { MailboxState } from '../Mailbox.ts'
-import { CommitMailbox, LoadMailbox, MailboxReadiness, MailboxStore, ScanReady } from '../MailboxStore.ts'
-import { storeErrors } from './errors.ts'
-import { migrate } from './migrations.ts'
+import { MailboxState } from '../Mailbox.js'
+import { CommitMailbox, LoadMailbox, MailboxReadiness, MailboxStore, ScanReady } from '../MailboxStore.js'
+import { storeErrors } from './errors.js'
+import { migrate } from './migrations.js'
 
 const stateCodec = Schema.fromJsonString(MailboxState)
 const storedRows = Schema.Array(

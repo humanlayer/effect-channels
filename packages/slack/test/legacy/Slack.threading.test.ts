@@ -11,8 +11,8 @@ import {
 	type Message,
 	type NormalizedMessage,
 	type Thread,
-} from '../../src/index.ts'
-import { ingressLayer, runnerOptions, makeTestAuthor, makeTestNormalizedMessage } from './support.ts'
+} from '../../src/index.js'
+import { ingressLayer, runnerOptions, makeTestAuthor, makeTestNormalizedMessage } from './support.js'
 
 type Delivery = { readonly threadId: string; readonly messageRef: string }
 
