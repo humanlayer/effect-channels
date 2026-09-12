@@ -45,11 +45,12 @@ it.effect(
 			const migrations = yield* Effect.all([migrate, migrate], { concurrency: 2 })
 			assert.deepStrictEqual(
 				migrations.map((result) => result.length).sort((left, right) => left - right),
-				[0, 1],
+				[0, 2],
 			)
 			assert.deepStrictEqual(yield* migrate, [])
 			assert.deepStrictEqual(yield* sql`SELECT migration_id, name FROM humanlayer_delivery_v1_migrations`, [
 				{ migration_id: 1, name: 'mailboxes' },
+				{ migration_id: 2, name: 'delivery_locators' },
 			])
 			yield* storageContract.pipe(Effect.provide(layer))
 			const rows =

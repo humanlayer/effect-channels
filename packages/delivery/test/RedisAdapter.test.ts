@@ -46,18 +46,19 @@ it.effect(
 					yield* Schema.decodeUnknownEffect(Schema.fromJsonString(MailboxSnapshot))(args[2]),
 					{ revision: 0, state: { ...emptyMailbox(), readyAt: 0 } },
 				)
-				assert.deepStrictEqual(args.slice(3), ['0', encodeKey(key)])
+				assert.deepStrictEqual(args.slice(3), ['0', encodeKey(key), '[]'])
 				yield* Queue.offer(fake.replies, Effect.succeed(0))
 				assert.strictEqual(
 					yield* store.commitMailbox({ key, expectedRevision: 5, nextState: emptyMailbox() }),
 					'conflict',
 				)
-				assert.deepStrictEqual((yield* Queue.take(fake.commands)).args.slice(-5), [
+				assert.deepStrictEqual((yield* Queue.take(fake.commands)).args.slice(-6), [
 					'5',
 					'6',
 					encodeSnapshot({ revision: 6, state: emptyMailbox() }),
 					'',
 					encodeKey(key),
+					'[]',
 				])
 			}).pipe(Effect.provide(layer.pipe(Layer.provide(fake.layer))))
 		}),

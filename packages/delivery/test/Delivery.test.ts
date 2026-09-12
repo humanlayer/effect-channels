@@ -90,6 +90,26 @@ it.effect('two host-owned runners share one claim and stop with their scope', ()
 	}).pipe(Effect.provide(memory)),
 )
 
+it.effect('direct and polling execution use the same finite ready-mailbox pass', () =>
+	Effect.gen(function* () {
+		const calls = yield* Queue.unbounded<string>()
+		const delivery = bind({
+			namespace: 'shared-pass',
+			handlerId: 'runner',
+			definition,
+			policy,
+			handler: (input) => Queue.offer(calls, input.id).pipe(Effect.asVoid),
+		})
+		yield* delivery.admit({ event: event('A') })
+		assert.deepStrictEqual(yield* delivery.runOnce({ scanLimit: 1, concurrency: 1 }), [true])
+		assert.deepStrictEqual(yield* Queue.takeAll(calls), ['A'])
+		yield* delivery.admit({ event: { ...event('B'), resource: 'another-thread' } })
+		const runner = yield* delivery.run({ scanLimit: 1, concurrency: 1, pollMs: 10 }).pipe(Effect.forkChild)
+		assert.strictEqual(yield* Queue.take(calls), 'B')
+		yield* Fiber.interrupt(runner)
+	}).pipe(Effect.provide(memory)),
+)
+
 it.effect('commits before executing, queues A then D with typed skipped B/C and retains readiness', () =>
 	Effect.gen(function* () {
 		const started = yield* Deferred.make<void>()

@@ -5,6 +5,10 @@ import {
 	MailboxStore,
 	MailboxReadiness,
 	DeliveryError,
+	type DeliveryDefinitionMismatch,
+	type NativeResolvedDelivery,
+	resolveDeliveryFor,
+	type ResolvedDelivery,
 	type MailboxStoreError,
 	type EventDefinition,
 	type RunnerOptions,
@@ -25,12 +29,12 @@ import type { SlackHandlerRegistration, SlackIngressOptions } from './SlackIngre
 import { resolveSlackIngressAttribution } from './SlackIngressAttribution.js'
 import { SlackOrganizations } from './SlackOrganizations.js'
 
-const SlackDeliveryResource = Schema.Struct({ threadId: ThreadId })
-type SlackDeliveryResource = typeof SlackDeliveryResource.Type
+export const SlackDeliveryResource = Schema.Struct({ threadId: ThreadId })
+export type SlackDeliveryResource = typeof SlackDeliveryResource.Type
 
 const resourceKey = (resource: SlackDeliveryResource) => String(resource.threadId.length) + ':' + resource.threadId
 
-const messageDefinition = {
+export const messageDefinition = {
 	provider: 'slack',
 	name: 'slack.message',
 	version: '1',
@@ -42,9 +46,9 @@ const messageDefinition = {
 		eventId: event.idempotencyKey,
 		resource: SlackDeliveryResource.make({ threadId: event.thread.ref.id }),
 	}),
-} satisfies EventDefinition<typeof MessageEvent, typeof SlackDeliveryResource>
+} satisfies EventDefinition<typeof MessageEvent, typeof SlackDeliveryResource, 'slack'>
 
-const updatedDefinition = {
+export const updatedDefinition = {
 	provider: 'slack',
 	name: 'slack.message_updated',
 	version: '1',
@@ -56,9 +60,9 @@ const updatedDefinition = {
 		eventId: event.idempotencyKey,
 		resource: SlackDeliveryResource.make({ threadId: event.thread.ref.id }),
 	}),
-} satisfies EventDefinition<typeof MessageUpdatedEvent, typeof SlackDeliveryResource>
+} satisfies EventDefinition<typeof MessageUpdatedEvent, typeof SlackDeliveryResource, 'slack'>
 
-const deletedDefinition = {
+export const deletedDefinition = {
 	provider: 'slack',
 	name: 'slack.message_deleted',
 	version: '1',
@@ -70,9 +74,9 @@ const deletedDefinition = {
 		eventId: event.idempotencyKey,
 		resource: SlackDeliveryResource.make({ threadId: event.threadRef.id }),
 	}),
-} satisfies EventDefinition<typeof MessageDeletedEvent, typeof SlackDeliveryResource>
+} satisfies EventDefinition<typeof MessageDeletedEvent, typeof SlackDeliveryResource, 'slack'>
 
-const reactionDefinition = {
+export const reactionDefinition = {
 	provider: 'slack',
 	name: 'slack.reaction',
 	version: '1',
@@ -84,9 +88,9 @@ const reactionDefinition = {
 		eventId: event.idempotencyKey,
 		resource: SlackDeliveryResource.make({ threadId: event.thread.ref.id }),
 	}),
-} satisfies EventDefinition<typeof ReactionEvent, typeof SlackDeliveryResource>
+} satisfies EventDefinition<typeof ReactionEvent, typeof SlackDeliveryResource, 'slack'>
 
-const stoppedDefinition = {
+export const stoppedDefinition = {
 	provider: 'slack',
 	name: 'slack.conversation_stopped',
 	version: '1',
@@ -98,7 +102,40 @@ const stoppedDefinition = {
 		eventId: event.idempotencyKey,
 		resource: SlackDeliveryResource.make({ threadId: event.threadRef.id }),
 	}),
-} satisfies EventDefinition<typeof ConversationStoppedEvent, typeof SlackDeliveryResource>
+} satisfies EventDefinition<typeof ConversationStoppedEvent, typeof SlackDeliveryResource, 'slack'>
+
+export const slackDeliveryDefinitions = [
+	messageDefinition,
+	updatedDefinition,
+	deletedDefinition,
+	reactionDefinition,
+	stoppedDefinition,
+] as const
+
+/** Decode delivery-control identity into the correlated native Slack event and resource. */
+export type SlackResolvedDelivery =
+	| NativeResolvedDelivery<MessageEvent, SlackDeliveryResource, 'slack'>
+	| NativeResolvedDelivery<MessageUpdatedEvent, SlackDeliveryResource, 'slack'>
+	| NativeResolvedDelivery<MessageDeletedEvent, SlackDeliveryResource, 'slack'>
+	| NativeResolvedDelivery<ReactionEvent, SlackDeliveryResource, 'slack'>
+	| NativeResolvedDelivery<ConversationStoppedEvent, SlackDeliveryResource, 'slack'>
+
+export const resolveSlackDelivery = (
+	delivery: ResolvedDelivery,
+): Effect.Effect<SlackResolvedDelivery, DeliveryDefinitionMismatch | Schema.SchemaError> => {
+	switch (delivery.definition) {
+		case updatedDefinition.name:
+			return resolveDeliveryFor(delivery, updatedDefinition)
+		case deletedDefinition.name:
+			return resolveDeliveryFor(delivery, deletedDefinition)
+		case reactionDefinition.name:
+			return resolveDeliveryFor(delivery, reactionDefinition)
+		case stoppedDefinition.name:
+			return resolveDeliveryFor(delivery, stoppedDefinition)
+		default:
+			return resolveDeliveryFor(delivery, messageDefinition)
+	}
+}
 
 const mapIngressError =
 	(operation: string) =>
@@ -284,7 +321,7 @@ const makeBindings = <E, R>(options: SlackIngressOptions<E, R>) =>
 					Effect.gen(function* () {
 						const resolved = yield* resolve(event)
 						const skipped = yield* Effect.forEach(context.skipped, resolve)
-						yield* registration
+						return yield* registration
 							.handler(resolved, { ...context, skipped })
 							.pipe(Effect.scoped, Effect.provide(handlerContext))
 					}).pipe(handlerFailure),

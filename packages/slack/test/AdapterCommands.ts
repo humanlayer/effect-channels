@@ -26,6 +26,14 @@ export const sqlCommands = Effect.gen(function* () {
 				return []
 			}
 			if (sql.startsWith('SELECT migration_id')) {
+				if (sql.includes('humanlayer_delivery_v1_migrations'))
+					return [
+						{
+							migration_id: 1,
+							name: 'mailboxes',
+							created_at: DateTime.toDateUtc(DateTime.makeUnsafe(0)),
+						},
+					]
 				const reply = yield* Queue.poll(migrationReplies)
 				return Option.isSome(reply)
 					? yield* reply.value
@@ -50,6 +58,7 @@ export const sqlCommands = Effect.gen(function* () {
 				sql.startsWith('ROLLBACK TO SAVEPOINT') ||
 				sql.startsWith('select ') ||
 				sql.startsWith('LOCK TABLE') ||
+				sql.startsWith('INSERT INTO "humanlayer_delivery_v1_migrations"') ||
 				sql.startsWith('INSERT INTO "humanlayer_slack_v1_migrations"') ||
 				sql.includes('LIMIT 128 FOR UPDATE SKIP LOCKED')
 			)

@@ -5,7 +5,7 @@ import { bind, DeliveryError } from '../src/Delivery.js'
 import { DeliveryPolicy } from '../src/DeliveryPolicy.js'
 import type { EventDefinition } from '../src/EventDefinition.js'
 import { emptyMailbox, MailboxState } from '../src/Mailbox.js'
-import { MailboxReadiness, MailboxStore } from '../src/MailboxStore.js'
+import { DeliveryLocatorStore, MailboxReadiness, MailboxStore, MailboxStoreError } from '../src/MailboxStore.js'
 
 export const storedState = MailboxState.make({
 	...emptyMailbox(),
@@ -25,6 +25,7 @@ export const storedState = MailboxState.make({
 export const storageContract = Effect.gen(function* () {
 	const store = yield* MailboxStore
 	const readiness = yield* MailboxReadiness
+	const locators = yield* DeliveryLocatorStore
 	const key = 'contract%_!\\:cas'
 	const input = { key, expectedRevision: null, nextState: storedState }
 	assert.strictEqual(yield* store.loadMailbox({ key }), undefined)
@@ -76,6 +77,27 @@ export const storageContract = Effect.gen(function* () {
 	})
 	yield* store.commitMailbox({ key: literalKey, expectedRevision: null, nextState: storedState })
 	assert.deepStrictEqual(yield* readiness.scanReady({ prefix: 'literal%_!\\:', now: 10, limit: 1 }), [literalKey])
+	const deliveryId = 'delivery:v2:backend-contract-locator'
+	const locatedState = {
+		...emptyMailbox(),
+		outcomes: [
+			{ identity: 'skipped', kind: 'completed' as const, expiresAt: 60_000, deliveryId },
+			{ identity: 'located', kind: 'completed' as const, expiresAt: 60_000, deliveryId },
+		],
+	}
+	assert.strictEqual(
+		yield* store.commitMailbox({ key: 'locator:owner', expectedRevision: null, nextState: locatedState }),
+		'committed',
+	)
+	assert.strictEqual(yield* locators.locateDelivery({ deliveryId }), 'locator:owner')
+	assert.deepStrictEqual(
+		yield* store
+			.commitMailbox({ key: 'locator:collision', expectedRevision: null, nextState: locatedState })
+			.pipe(Effect.flip),
+		MailboxStoreError.make({ operation: 'commit' }),
+	)
+	assert.strictEqual(yield* store.loadMailbox({ key: 'locator:collision' }), undefined)
+	assert.strictEqual(yield* locators.locateDelivery({ deliveryId }), 'locator:owner')
 })
 
 const Event = Schema.Struct({ id: Schema.String })

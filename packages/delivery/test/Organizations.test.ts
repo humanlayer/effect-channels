@@ -217,7 +217,7 @@ for (const version of [1, 2] as const) {
 				])
 				yield* bind({ ...registration, legacyOrganizationId: 'fixed' }).processMailbox({ key })
 				assert.strictEqual(yield* Queue.take(observed), 'fixed')
-				assert.strictEqual((yield* store.loadMailbox({ key }))?.state.version, 3)
+				assert.strictEqual((yield* store.loadMailbox({ key }))?.state.version, 4)
 			}).pipe(Effect.provide(memory)),
 	)
 }

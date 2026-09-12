@@ -1,5 +1,5 @@
 import { assert, it } from '@effect/vitest'
-import { MailboxReadiness, MailboxStore, MailboxStoreError } from '@humanlayer/channels-delivery'
+import { DeliveryLocatorStore, MailboxReadiness, MailboxStore, MailboxStoreError } from '@humanlayer/channels-delivery'
 import { layer as memory } from '@humanlayer/channels-delivery/memory'
 import { Context, Deferred, Effect, Fiber, Layer, Logger, Queue, Ref, Schema } from 'effect'
 
@@ -261,8 +261,9 @@ it.effect('partial fan-out reconstruction uses the saved attribution, not a reas
 					),
 			}),
 		)
-		const storage = Layer.merge(
+		const storage = Layer.mergeAll(
 			Layer.succeed(MailboxReadiness, Context.get(retained, MailboxReadiness)),
+			Layer.succeed(DeliveryLocatorStore, Context.get(retained, DeliveryLocatorStore)),
 			Layer.succeed(
 				MailboxStore,
 				MailboxStore.of({

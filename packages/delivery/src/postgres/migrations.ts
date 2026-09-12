@@ -31,6 +31,14 @@ const initial = Effect.gen(function* () {
 	Effect.asVoid,
 )
 
+const deliveryLocators = Effect.gen(function* () {
+	const sql = (yield* SqlClient.SqlClient).withoutTransforms()
+	yield* sql`CREATE TABLE humanlayer_delivery_v1_locators (
+		delivery_id text COLLATE "C" PRIMARY KEY,
+		mailbox_key text COLLATE "C" NOT NULL REFERENCES humanlayer_delivery_v1_mailboxes(key)
+	)`
+}).pipe(Effect.asVoid)
+
 export const migrate = Effect.gen(function* () {
 	const sql = (yield* SqlClient.SqlClient).withoutTransforms()
 	return yield* sql.withTransaction(
@@ -43,7 +51,7 @@ export const migrate = Effect.gen(function* () {
 		)`
 			return yield* Migrator.make({})({
 				table: 'humanlayer_delivery_v1_migrations',
-				loader: Migrator.fromRecord({ '1_mailboxes': initial }),
+				loader: Migrator.fromRecord({ '1_mailboxes': initial, '2_delivery_locators': deliveryLocators }),
 			}).pipe(Effect.provideService(SqlClient.SqlClient, sql))
 		}),
 	)

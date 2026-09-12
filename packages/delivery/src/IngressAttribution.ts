@@ -37,7 +37,8 @@ export const loadIngressAttribution = Effect.fn('delivery.attribution.load')(fun
 	const store = yield* MailboxStore
 	const snapshot = yield* store.loadMailbox({ key: keyFor(identity) })
 	if (snapshot === undefined) return undefined
-	if (snapshot.state.version !== 3) return yield* reject({ operation: 'load', classification: 'incompatible_record' })
+	if (snapshot.state.version !== 3 && snapshot.state.version !== 4)
+		return yield* reject({ operation: 'load', classification: 'incompatible_record' })
 	if (snapshot.state.attribution === undefined)
 		return yield* reject({ operation: 'load', classification: 'missing_attribution' })
 	return snapshot.state.attribution

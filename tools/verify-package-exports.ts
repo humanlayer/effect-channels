@@ -57,6 +57,7 @@ const Metafile = Schema.Struct({
 const NodeInfo = Schema.Struct({ executable: Schema.String, platform: Schema.String, arch: Schema.String })
 const packageDirectories = ['delivery', 'slack', 'github'] as const
 const expectedEntries = ['.', './memory', './postgres', './redis', './postgres/client', './redis/client'] as const
+const deliveryEntries = [...expectedEntries, './contract', './client', './protocol', './server'] as const
 const browserEntries = [
 	'browser-delivery',
 	'browser-slack',
@@ -182,7 +183,15 @@ const checkInstalled = Effect.fn('packaging.checkInstalled')(function* (
 			'packed manifest',
 			source.name,
 		)
-		const entriesForPackage = source.name === '@humanlayer/channels-github' ? ['.', './memory'] : expectedEntries
+		let entriesForPackage: ReadonlyArray<string> = expectedEntries
+		switch (source.name) {
+			case '@humanlayer/channels-github':
+				entriesForPackage = ['.', './memory']
+				break
+			case '@humanlayer/channels-delivery':
+				entriesForPackage = deliveryEntries
+				break
+		}
 		yield* expect(Object.keys(published.exports).length === entriesForPackage.length, 'export map', source.name)
 		for (const entry of entriesForPackage) {
 			const target = published.exports[entry]
@@ -428,6 +437,7 @@ const verify = Effect.gen(function* () {
 		'guard.mjs',
 		'runtime.mjs',
 		'backends.mjs',
+		'remote.mjs',
 		...browserEntries.map((entry) => `${entry}.ts`),
 	]) {
 		const source = file.endsWith('.ts') ? `${file}.fixture` : file
@@ -446,6 +456,11 @@ const verify = Effect.gen(function* () {
 		'node_modules/typescript/bin/tsc',
 		'-p',
 		'tsconfig.json',
+	])
+	yield* node('delivery contract/client imports are inert and implementation-free (30s)', [
+		'--import',
+		'./guard.mjs',
+		'./remote.mjs',
 	])
 	yield* node('Node ESM, memory service identity across entries and Slack, no network (30s)', [
 		'--import',

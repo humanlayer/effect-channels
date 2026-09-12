@@ -1,7 +1,7 @@
 import { Context, Effect, Layer, Schema } from 'effect'
 
-import { MailboxSnapshot } from './Mailbox.js'
-import { MailboxReadiness, MailboxStore, MailboxStoreError, ScanReady } from './MailboxStore.js'
+import { deliveryIds, MailboxSnapshot } from './Mailbox.js'
+import { DeliveryLocatorStore, MailboxReadiness, MailboxStore, MailboxStoreError, ScanReady } from './MailboxStore.js'
 
 export const MemoryOptions = Schema.Struct({ maxMailboxes: Schema.Int.check(Schema.isGreaterThan(0)) })
 export type MemoryOptions = typeof MemoryOptions.Type
@@ -14,6 +14,7 @@ export const layer = (options: MemoryOptions) =>
 				string,
 				{ readonly revision: number; readonly json: string; readonly readyAt: number | null }
 			>()
+			const deliveryLocations = new Map<string, string>()
 			const codec = Schema.fromJsonString(MailboxSnapshot)
 			const store = MailboxStore.of({
 				loadMailbox: Effect.fn('delivery.memory.load')(function* (input) {
@@ -35,7 +36,14 @@ export const layer = (options: MemoryOptions) =>
 						if (current === undefined && entries.size >= options.maxMailboxes) {
 							return Effect.fail(MailboxStoreError.make({ operation: 'commit' }))
 						}
+						for (const deliveryId of deliveryIds(input.nextState)) {
+							const existing = deliveryLocations.get(deliveryId)
+							if (existing !== undefined && existing !== input.key)
+								return Effect.fail(MailboxStoreError.make({ operation: 'commit' }))
+						}
 						entries.set(input.key, { revision, json, readyAt: input.nextState.readyAt })
+						for (const deliveryId of deliveryIds(input.nextState))
+							deliveryLocations.set(deliveryId, input.key)
 						return Effect.succeed('committed' as const)
 					})
 				}),
@@ -58,6 +66,14 @@ export const layer = (options: MemoryOptions) =>
 						.map(([key]) => key)
 				}),
 			})
-			return Context.make(MailboxStore, store).pipe(Context.add(MailboxReadiness, readiness))
+			const locator = DeliveryLocatorStore.of({
+				locateDelivery: Effect.fn('delivery.memory.locate')((input) =>
+					Effect.succeed(deliveryLocations.get(input.deliveryId)),
+				),
+			})
+			return Context.make(MailboxStore, store).pipe(
+				Context.add(MailboxReadiness, readiness),
+				Context.add(DeliveryLocatorStore, locator),
+			)
 		}),
 	)

@@ -26,7 +26,10 @@ it.effect('Postgres fake command contract: lock precedes migrator creation; cond
 				}),
 				'committed',
 			)
-			const insert = yield* Queue.take(fake.commands)
+			const insert = (yield* Queue.takeAll(fake.commands)).find((command) =>
+				command.sql.includes('ON CONFLICT (key) DO NOTHING RETURNING key'),
+			)
+			assert.isDefined(insert)
 			assert.ok(insert.sql.includes('ON CONFLICT (key) DO NOTHING RETURNING key'))
 			assert.deepStrictEqual(insert.params, ['key', 0, encodeState({ ...emptyMailbox(), readyAt: 42 }), 42])
 			yield* Queue.offer(fake.replies, Effect.succeed([]))
@@ -34,7 +37,10 @@ it.effect('Postgres fake command contract: lock precedes migrator creation; cond
 				yield* store.commitMailbox({ key: 'key', expectedRevision: 0, nextState: emptyMailbox() }),
 				'conflict',
 			)
-			const update = yield* Queue.take(fake.commands)
+			const update = (yield* Queue.takeAll(fake.commands)).find((command) =>
+				command.sql.includes('WHERE key = $4 AND revision = $5 RETURNING key'),
+			)
+			assert.isDefined(update)
 			assert.ok(update.sql.includes('WHERE key = $4 AND revision = $5 RETURNING key'))
 			assert.deepStrictEqual(update.params, [1, encodeState(emptyMailbox()), null, 'key', 0])
 		}).pipe(Effect.provide(layer.pipe(Layer.provide(fake.layer))))
@@ -64,6 +70,35 @@ it.effect('Postgres fake command contract: literal-prefix scan filters before it
 	}),
 )
 
+it.effect('Postgres locator upsert deduplicates one delivery shared by multiple outcomes', () =>
+	Effect.gen(function* () {
+		const fake = yield* sqlCommands
+		yield* Effect.gen(function* () {
+			const store = yield* MailboxStore
+			yield* Queue.takeAll(fake.commands)
+			const deliveryId = 'delivery:v2:shared-outcome'
+			const state = {
+				...emptyMailbox(),
+				outcomes: [
+					{ identity: 'first', kind: 'completed' as const, expiresAt: 1000, deliveryId },
+					{ identity: 'second', kind: 'completed' as const, expiresAt: 1000, deliveryId },
+				],
+			}
+			yield* Queue.offer(fake.replies, Effect.succeed([{ key: 'duplicate-locator' }]))
+			yield* Queue.offer(fake.replies, Effect.succeed([{ delivery_id: deliveryId }]))
+			assert.strictEqual(
+				yield* store.commitMailbox({ key: 'duplicate-locator', expectedRevision: null, nextState: state }),
+				'committed',
+			)
+			const locator = (yield* Queue.takeAll(fake.commands)).find((command) =>
+				command.sql.startsWith('INSERT INTO humanlayer_delivery_v1_locators'),
+			)
+			assert.isDefined(locator)
+			assert.deepStrictEqual(locator.params, ['duplicate-locator', `["${deliveryId}"]`])
+		}).pipe(Effect.provide(layer.pipe(Layer.provide(fake.layer))))
+	}),
+)
+
 it.effect('Postgres SQL seam decodes complete snapshots and rejects corruption with safe logs', () =>
 	Effect.gen(function* () {
 		const fake = yield* sqlCommands
@@ -82,7 +117,7 @@ it.effect('Postgres SQL seam decodes complete snapshots and rejects corruption w
 			}
 			for (const state of [
 				'private-payload-sentinel',
-				encodeState(emptyMailbox()).replace('"version":3', '"version":99'),
+				encodeState(emptyMailbox()).replace('"version":4', '"version":99'),
 			]) {
 				yield* Queue.offer(fake.replies, Effect.succeed([{ revision: 7, state_json: state, ready_at: null }]))
 				assert.deepStrictEqual(

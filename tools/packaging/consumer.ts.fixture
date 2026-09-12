@@ -1,14 +1,17 @@
 import { emptyMailbox, MailboxReadiness, MailboxStore } from '@humanlayer/channels-delivery'
 import * as DeliveryMemory from '@humanlayer/channels-delivery/memory'
-import { MarkdownContent, Slack, SlackConnectionStore, SlackSubscriptions, SlackTeamId, ThreadId } from '@humanlayer/channels-slack'
+import { MarkdownContent, resolveSlackDelivery, Slack, SlackConnectionStore, SlackSubscriptions, SlackTeamId, ThreadId } from '@humanlayer/channels-slack'
 import * as SlackMemory from '@humanlayer/channels-slack/memory'
 import { Context, Effect, Layer, Redacted } from 'effect'
-import { GitHub, GitHubCredentials, GitHubCrypto, GitHubIssueRef, GitHubEmoji, GitHubReactionContent, type GitHubReaction, type GitHubReactionRef, type GitHubReactionTarget, type GitHubError, type AddReactionInput, type ListReactionsInput, type RemoveReactionInput } from '@humanlayer/channels-github'
+import { GitHub, GitHubCredentials, GitHubCrypto, GitHubIssueRef, GitHubEmoji, GitHubReactionContent, resolveGitHubDelivery, type GitHubReaction, type GitHubReactionRef, type GitHubReactionTarget, type GitHubError, type AddReactionInput, type ListReactionsInput, type RemoveReactionInput } from '@humanlayer/channels-github'
 import { FetchHttpClient } from 'effect/unstable/http'
 import { GitHubSubscriptions } from '@humanlayer/channels-github'
 import * as GitHubMemory from '@humanlayer/channels-github/memory'
 import { GitHubBot, GitHubIngress, GitHubIngressError, GitHubSubscriptionStore, type GitHubHandlerRegistration, type GitHubActivityEvent } from '@humanlayer/channels-github'
-import { type DeliveryPolicy } from '@humanlayer/channels-delivery'
+import { type DeliveryPolicy, type ResolvedDelivery } from '@humanlayer/channels-delivery'
+import { makeDeliveryClient } from '@humanlayer/channels-delivery/client'
+import { DeliveryContract } from '@humanlayer/channels-delivery/contract'
+import { DeliveryId, DeliveryNotFound } from '@humanlayer/channels-delivery/protocol'
 import { HttpClient } from 'effect/unstable/http'
 // @ts-expect-error Removed registration name; there is no compatibility export.
 import type { GitHubActivityRegistration } from '@humanlayer/channels-github'
@@ -17,6 +20,31 @@ import type { issueEventDefinition } from '@humanlayer/channels-github'
 
 class FirstHandlerDependency extends Context.Service<FirstHandlerDependency, { readonly value: string }>()('packed/FirstHandlerDependency') {}
 class SecondHandlerDependency extends Context.Service<SecondHandlerDependency, { readonly value: number }>()('packed/SecondHandlerDependency') {}
+
+export const remoteContractConsumer = {
+	contract: DeliveryContract,
+	client: makeDeliveryClient,
+	deliveryId: DeliveryId.make('delivery:v1:eA:eA'),
+	notFound: DeliveryNotFound.make({
+		deliveryId: DeliveryId.make('delivery:v1:eA:eA'),
+		message: 'The requested delivery was not found.',
+	}),
+}
+
+export const providerNarrowingConsumer = (delivery: ResolvedDelivery) => ({
+	slack: resolveSlackDelivery(delivery).pipe(
+		Effect.map((native) => {
+			const provider: 'slack' = native.provider
+			return { provider, event: native.event, threadId: native.resource.threadId }
+		}),
+	),
+	github: resolveGitHubDelivery(delivery).pipe(
+		Effect.map((native) => {
+			const provider: 'github' = native.provider
+			return { provider, event: native.event, resource: native.resource }
+		}),
+	),
+})
 
 export const githubHandlers = (policy: DeliveryPolicy) => {
 	const bot = GitHubBot.make({

@@ -378,7 +378,7 @@ it.effect('decodes and upgrades v1 accepted work, preserving frozen retry, faile
 		yield* store.commitMailbox({ key, expectedRevision: null, nextState: snapshot.state })
 		assert.strictEqual((yield* store.loadMailbox({ key }))?.state.version, 1)
 		assert.strictEqual((yield* delivery.admit(arrival('B'))).accepted, false)
-		assert.strictEqual((yield* store.loadMailbox({ key }))?.state.version, 3)
+		assert.strictEqual((yield* store.loadMailbox({ key }))?.state.version, 4)
 		assert.strictEqual(yield* delivery.processMailbox({ key }), false)
 		yield* TestClock.adjust(100)
 		yield* delivery.processMailbox({ key })

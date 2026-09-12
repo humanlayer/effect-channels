@@ -178,12 +178,7 @@ import { Config, Layer } from 'effect'
 const durable = storage.pipe(Layer.provide(layerConfig({ url: Config.redacted('DATABASE_URL') })))
 ```
 
-`/postgres` and `/redis` export Layer **values**, each providing `MailboxStore`
-and `MailboxReadiness`. They depend on ambient `SqlClient.SqlClient` or neutral
-`Redis.Redis`; they do not construct pools/clients. Only `/postgres/client` and
-`/redis/client` require optional platform peers. Postgres migrations are bundled,
-versioned and acquisition-time, serialized before migration-table bootstrap.
-Snapshot and readiness updates commit together; failed CAS changes neither.
+`/postgres` and `/redis` export Layer **values**, each providing `MailboxStore`, `MailboxReadiness`, and `DeliveryLocatorStore`. They depend on ambient `SqlClient.SqlClient` or neutral `Redis.Redis`; they do not construct pools/clients. Only `/postgres/client` and `/redis/client` require optional platform peers. Postgres migrations are bundled, versioned and acquisition-time, serialized before migration-table bootstrap. Snapshot, readiness, and bounded opaque-locator updates commit together; failed CAS changes none of them.
 
 Redis uses atomic scripts and literal-prefix readiness indexes, with no TTL on
 delivery records. Every touched key occupies the fixed `{mailboxes}` slot.

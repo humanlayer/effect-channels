@@ -2,6 +2,7 @@ import {
 	MailboxReadiness,
 	MailboxStore,
 	DeliveryPolicy,
+	type DeliveryHandoff,
 	type HandlerContext,
 	type RunnerOptions,
 } from '@humanlayer/channels-delivery'
@@ -28,7 +29,7 @@ import { SlackSubscriptions } from './SlackSubscriptions.js'
 
 export type SlackHandlerRegistration<A, E, R> = {
 	readonly id: string
-	readonly handler: (event: A, context: HandlerContext<A>) => Effect.Effect<void, E, R>
+	readonly handler: (event: A, context: HandlerContext<A>) => Effect.Effect<void | DeliveryHandoff, E, R>
 }
 
 export type SlackIngressHandlers<E, R> = {

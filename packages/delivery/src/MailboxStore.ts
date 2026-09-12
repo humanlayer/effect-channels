@@ -1,9 +1,10 @@
 import { Context, Effect, Schema } from 'effect'
 
 import { MailboxSnapshot, MailboxState } from './Mailbox.js'
+import { DeliveryId } from './protocol.js'
 
 export class MailboxStoreError extends Schema.TaggedError<MailboxStoreError>()('MailboxStoreError', {
-	operation: Schema.Literals(['load', 'commit', 'scan']),
+	operation: Schema.Literals(['load', 'commit', 'scan', 'locate']),
 }) {}
 
 export const LoadMailbox = Schema.Struct({ key: Schema.NonEmptyString })
@@ -35,3 +36,11 @@ export class MailboxReadiness extends Context.Service<
 	MailboxReadiness,
 	{ readonly scanReady: (input: ScanReady) => Effect.Effect<ReadonlyArray<string>, MailboxStoreError> }
 >()('delivery/MailboxReadiness') {}
+
+export const LocateDelivery = Schema.Struct({ deliveryId: DeliveryId })
+export type LocateDelivery = typeof LocateDelivery.Type
+
+export class DeliveryLocatorStore extends Context.Service<
+	DeliveryLocatorStore,
+	{ readonly locateDelivery: (input: LocateDelivery) => Effect.Effect<string | undefined, MailboxStoreError> }
+>()('delivery/DeliveryLocatorStore') {}

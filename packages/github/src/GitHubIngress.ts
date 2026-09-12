@@ -1,5 +1,6 @@
 import {
 	bind,
+	type DeliveryHandoff,
 	DeliveryPolicy,
 	HandlerFailure,
 	MailboxReadiness,
@@ -26,15 +27,15 @@ export interface GitHubHandlerRegistration<E, R> {
 	readonly onCreation?: (
 		event: GitHubCreationEvent,
 		context: HandlerContext<GitHubActivityEvent>,
-	) => Effect.Effect<void, E, R>
+	) => Effect.Effect<void | DeliveryHandoff, E, R>
 	readonly onMention?: (
 		event: GitHubMentionEvent,
 		context: HandlerContext<GitHubActivityEvent>,
-	) => Effect.Effect<void, E, R>
+	) => Effect.Effect<void | DeliveryHandoff, E, R>
 	readonly onSubscribedEvent?: (
 		event: GitHubActivityEvent,
 		context: HandlerContext<GitHubActivityEvent>,
-	) => Effect.Effect<void, E, R>
+	) => Effect.Effect<void | DeliveryHandoff, E, R>
 }
 
 export interface GitHubIngressOptions<E, R> {

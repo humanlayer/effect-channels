@@ -12,6 +12,7 @@ const encode = (input: string) => {
 }
 
 export const recordKey = (input: MailboxKeyInput) => `${namespace}:record:${encode(input.key)}`
+export const deliveryLocatorKey = `${namespace}:delivery-locators`
 export const readyKey = (input: PrefixInput) => `${namespace}:ready:${encode(input.prefix)}`
 export const readyKeys = (input: MailboxKeyInput) => {
 	const keys: Array<string> = []

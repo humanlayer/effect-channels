@@ -1,5 +1,5 @@
 import { assert, it } from '@effect/vitest'
-import { MailboxReadiness, MailboxStore } from '@humanlayer/channels-delivery'
+import { DeliveryHandoff, MailboxReadiness, MailboxStore } from '@humanlayer/channels-delivery'
 import { GitHub, GitHubComment, GitHubIngress, GitHubOrganizations } from '@humanlayer/channels-github'
 import { layer as memory } from '@humanlayer/channels-github/memory'
 import {
@@ -18,9 +18,16 @@ import { testMessageEvent } from '../../../packages/slack/test/legacy/support.js
 import { githubFollowup, githubReply, slackReply } from '../src/handlers.js'
 import { githubOrganizations, organizations, slackOrganizations } from '../src/organizations.js'
 
+const handlerContext = (organizationId: string) => ({
+	organizationId,
+	skipped: [],
+	deliveryId: 'delivery:v1:dGVzdA:dGVzdA',
+	handoff: () => Effect.succeed(DeliveryHandoff.make({ deliveryId: 'delivery:v1:dGVzdA:dGVzdA' })),
+})
+
 it.effect('followed GitHub status, label, deleted, blank and bot events do not produce replies', () =>
 	Effect.gen(function* () {
-		const context = { organizationId: 'north', skipped: [] }
+		const context = handlerContext('north')
 		for (const action of ['closed', 'reopened', 'labeled', 'unlabeled', 'assigned', 'unassigned'] as const) {
 			yield* githubFollowup({ ...event, action }, context)
 		}
@@ -173,7 +180,7 @@ it.effect('the Slack handler replies using saved organization context, not the n
 		})
 		const dependencies = Layer.merge(outbound, SlackSubscriptions.layerMemory())
 		for (const organizationId of ['north', 'south']) {
-			yield* slackReply(testMessageEvent, { organizationId, skipped: [] }).pipe(Effect.provide(dependencies))
+			yield* slackReply(testMessageEvent, handlerContext(organizationId)).pipe(Effect.provide(dependencies))
 		}
 		assert.deepStrictEqual(yield* Queue.takeAll(posts), [
 			MarkdownContent.make({ markdown: 'Organization: north' }),

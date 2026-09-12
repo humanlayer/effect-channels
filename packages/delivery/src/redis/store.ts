@@ -1,16 +1,18 @@
 import { Context, Effect, Layer, Schema } from 'effect'
 import * as Redis from 'effect/unstable/persistence/Redis'
 
-import { MailboxSnapshot } from '../Mailbox.js'
+import { deliveryIds, MailboxSnapshot } from '../Mailbox.js'
 import {
 	CommitMailbox,
+	DeliveryLocatorStore,
 	LoadMailbox,
+	LocateDelivery,
 	MailboxReadiness,
 	MailboxStore,
 	MailboxStoreError,
 	ScanReady,
 } from '../MailboxStore.js'
-import { readyKey, recordKey } from './keys.js'
+import { deliveryLocatorKey, readyKey, recordKey } from './keys.js'
 import * as Scripts from './scripts.js'
 
 const snapshotCodec = Schema.fromJsonString(MailboxSnapshot)
@@ -62,11 +64,29 @@ const commitMailbox = Effect.fn('delivery.redis.commit')(
 		const revision = yield* Schema.decodeEffect(Schema.Natural)((input.expectedRevision ?? -1) + 1)
 		const json = yield* Schema.encodeEffect(snapshotCodec)({ revision, state: input.nextState })
 		const redis = yield* Redis.Redis
-		const result = yield* redis.eval(Scripts.commit)({ ...input, revision, json, readyAt: input.nextState.readyAt })
+		const result = yield* redis.eval(Scripts.commit)({
+			...input,
+			revision,
+			json,
+			readyAt: input.nextState.readyAt,
+			deliveryIds: deliveryIds(input.nextState).filter((deliveryId) => deliveryId.startsWith('delivery:v2:')),
+		})
 		const committed = yield* Schema.decodeUnknownEffect(Schema.Literals([0, 1]))(result)
 		return committed === 1 ? ('committed' as const) : ('conflict' as const)
 	},
 	storeErrors({ operation: 'commit' }),
+)
+
+const locateDelivery = Effect.fn('delivery.redis.locate')(
+	function* (input: LocateDelivery) {
+		yield* Schema.decodeEffect(LocateDelivery)(input)
+		const redis = yield* Redis.Redis
+		const result = yield* redis.send('HGET', deliveryLocatorKey, input.deliveryId)
+		return yield* Schema.decodeUnknownEffect(Schema.NullOr(Schema.fromJsonString(Schema.NonEmptyString)))(
+			result,
+		).pipe(Effect.map((key) => key ?? undefined))
+	},
+	storeErrors({ operation: 'locate' }),
 )
 
 const scanReady = Effect.fn('delivery.redis.scan')(
@@ -106,6 +126,12 @@ export const layer = Layer.effectContext(
 				MailboxReadiness,
 				MailboxReadiness.of({
 					scanReady: (input) => scanReady(input).pipe(Effect.provideService(Redis.Redis, redis)),
+				}),
+			),
+			Context.add(
+				DeliveryLocatorStore,
+				DeliveryLocatorStore.of({
+					locateDelivery: (input) => locateDelivery(input).pipe(Effect.provideService(Redis.Redis, redis)),
 				}),
 			),
 		)

@@ -1,4 +1,4 @@
-import type { EventDefinition } from '@humanlayer/channels-delivery'
+import { type EventDefinition, resolveDeliveryFor, type ResolvedDelivery } from '@humanlayer/channels-delivery'
 import { Match, Schema } from 'effect'
 
 import { GitHubCommentData, GitHubIssueData, GitHubUser } from './GitHubEvents.js'
@@ -220,6 +220,10 @@ export const activityEventDefinition = {
 		eventId: event.deliveryId,
 		resource: event.resource,
 	}),
-} satisfies EventDefinition<typeof GitHubActivityEvent, typeof GitHubDiscussionRef>
+} satisfies EventDefinition<typeof GitHubActivityEvent, typeof GitHubDiscussionRef, 'github'>
+
+/** Decode delivery-control identity into the correlated native GitHub event and resource. */
+export const resolveGitHubDelivery = (delivery: ResolvedDelivery) =>
+	resolveDeliveryFor(delivery, activityEventDefinition)
 
 export const reviewCommentRootId = (comment: GitHubReviewCommentData) => comment.in_reply_to_id ?? comment.id

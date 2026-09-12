@@ -33,10 +33,13 @@ export const sqlCommands = Effect.gen(function* () {
 				if (Option.isSome(reply)) yield* reply.value
 				return []
 			}
-			if (sql.includes('humanlayer_delivery_v1_mailboxes')) return yield* yield* Queue.take(replies)
 			if (sql.startsWith('SELECT migration_id')) {
 				return [{ migration_id: 1, name: 'mailboxes', created_at: DateTime.toDateUtc(DateTime.makeUnsafe(0)) }]
 			}
+			if (sql.startsWith('CREATE TABLE humanlayer_delivery_v1_locators')) return []
+			if (sql.includes('humanlayer_delivery_v1_locators')) return yield* yield* Queue.take(replies)
+			if (sql.includes('humanlayer_delivery_v1_migrations')) return []
+			if (sql.includes('humanlayer_delivery_v1_mailboxes')) return yield* yield* Queue.take(replies)
 			if (
 				sql === 'BEGIN' ||
 				sql === 'COMMIT' ||

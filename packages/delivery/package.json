@@ -15,6 +15,30 @@
 			"import": "./dist/index.js",
 			"default": "./dist/index.js"
 		},
+		"./contract": {
+			"@humanlayer/source": "./src/contract.ts",
+			"types": "./dist/contract.d.ts",
+			"import": "./dist/contract.js",
+			"default": "./dist/contract.js"
+		},
+		"./protocol": {
+			"@humanlayer/source": "./src/protocol.ts",
+			"types": "./dist/protocol.d.ts",
+			"import": "./dist/protocol.js",
+			"default": "./dist/protocol.js"
+		},
+		"./client": {
+			"@humanlayer/source": "./src/client.ts",
+			"types": "./dist/client.d.ts",
+			"import": "./dist/client.js",
+			"default": "./dist/client.js"
+		},
+		"./server": {
+			"@humanlayer/source": "./src/server.ts",
+			"types": "./dist/server.d.ts",
+			"import": "./dist/server.js",
+			"default": "./dist/server.js"
+		},
 		"./memory": {
 			"@humanlayer/source": "./src/memory.ts",
 			"types": "./dist/memory.d.ts",

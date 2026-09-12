@@ -4,6 +4,7 @@ import { registerHooks } from 'node:module'
 
 const consumer = new URL('./', import.meta.url).href
 const effectRoots = new Set()
+export const resolvedModules = new Set()
 const networkResources = new Set([
 	'TCPWRAP',
 	'TCPCONNECTWRAP',
@@ -26,6 +27,7 @@ registerHooks({
 	resolve(specifier, context, nextResolve) {
 		const resolved = nextResolve(specifier, context)
 		if (resolved.url.startsWith('file:')) {
+			resolvedModules.add(resolved.url)
 			assert.ok(resolved.url.startsWith(consumer), 'Module resolution escaped the isolated consumer')
 			assert.ok(!resolved.url.endsWith('.ts'), 'Node loaded TypeScript instead of built JavaScript')
 			const marker = '/node_modules/effect/'
