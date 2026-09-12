@@ -21,4 +21,5 @@ export class GitHubWebhookError extends Schema.TaggedError<GitHubWebhookError>()
 
 export class GitHubIngressError extends Schema.TaggedError<GitHubIngressError>()('GitHubIngressError', {
 	operation: Schema.Literals(['configuration', 'admit', 'process', 'run']),
+	reason: Schema.optionalKey(Schema.Literals(['unavailable', 'unexpected'])),
 }) {}

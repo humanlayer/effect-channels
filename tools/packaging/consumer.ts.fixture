@@ -7,6 +7,86 @@ import { GitHub, GitHubCredentials, GitHubCrypto, GitHubIssueRef, GitHubReaction
 import { FetchHttpClient } from 'effect/unstable/http'
 import { GitHubSubscriptions } from '@humanlayer/channels-github'
 import * as GitHubMemory from '@humanlayer/channels-github/memory'
+import { GitHubBot, GitHubIngress, GitHubIngressError, GitHubSubscriptionStore, type GitHubHandlerRegistration, type GitHubActivityEvent } from '@humanlayer/channels-github'
+import { type DeliveryPolicy } from '@humanlayer/channels-delivery'
+import { HttpClient } from 'effect/unstable/http'
+// @ts-expect-error Removed registration name; there is no compatibility export.
+import type { GitHubActivityRegistration } from '@humanlayer/channels-github'
+// @ts-expect-error Removed legacy delivery definition; the native parser is not an ingress pipeline.
+import type { issueEventDefinition } from '@humanlayer/channels-github'
+
+class FirstHandlerDependency extends Context.Service<FirstHandlerDependency, { readonly value: string }>()('packed/FirstHandlerDependency') {}
+class SecondHandlerDependency extends Context.Service<SecondHandlerDependency, { readonly value: number }>()('packed/SecondHandlerDependency') {}
+
+export const githubHandlers = (policy: DeliveryPolicy) => {
+	const bot = GitHubBot.make({
+		namespace: 'packed', policy,
+		handlers: [{
+			id: 'first',
+			onCreation: (event, context) => {
+				const action: 'opened' = event.action
+				const organizationId: string = context.organizationId
+				const skipped: ReadonlyArray<GitHubActivityEvent> = context.skipped
+				if (event.event === 'pull_request') {
+					const kind: 'github.pull-request' = event.resource.kind
+					const body: string | null = event.pull_request.body
+					// @ts-expect-error Native PR events do not fabricate an issue snapshot.
+					event.issue
+				}
+				return Effect.andThen(FirstHandlerDependency, Effect.fail('first' as const))
+			},
+			onMention: (event) => {
+				const action: 'opened' | 'created' | 'edited' | 'submitted' = event.action
+				return Effect.andThen(SecondHandlerDependency, Effect.fail(42 as const))
+			},
+		}, {
+			id: 'second',
+			onSubscribedEvent: (event) => {
+				if (event.event === 'pull_request_review_thread') {
+					const nodeId: string = event.thread.node_id
+					// @ts-expect-error A review thread is not a discussion comment.
+					event.comment
+				}
+				return Effect.void
+			},
+		}],
+	})
+	type Requirements = FirstHandlerDependency | SecondHandlerDependency | MailboxStore | MailboxReadiness | GitHubSubscriptionStore | GitHubCredentials | HttpClient.HttpClient
+	const services: Layer.Layer<GitHub | GitHubIngress, GitHubIngressError, Requirements> = bot.services
+	// @ts-expect-error Required callback services must not disappear or become optional.
+	const missing: Layer.Layer<GitHub | GitHubIngress, GitHubIngressError, Exclude<Requirements, SecondHandlerDependency>> = bot.services
+	// @ts-expect-error Ingress configuration failures are typed, not never.
+	const noErrors: Layer.Layer<GitHub | GitHubIngress, never, Requirements> = bot.services
+	const partial = GitHubBot.make({ namespace: 'partial', policy, handlers: [], runner: { pollMs: 50 } })
+	const empty: Layer.Layer<GitHub | GitHubIngress, GitHubIngressError, Exclude<Requirements, FirstHandlerDependency | SecondHandlerDependency>> = partial.services
+	const registration: GitHubHandlerRegistration<'first' | 42, FirstHandlerDependency | SecondHandlerDependency> = {
+		id: 'typed',
+		onCreation: () => Effect.andThen(FirstHandlerDependency, Effect.fail('first' as const)),
+		onMention: () => Effect.andThen(SecondHandlerDependency, Effect.fail(42 as const)),
+	}
+	const typed = GitHubBot.make({ namespace: 'typed', policy, handlers: [registration] })
+	const typedServices: typeof services = typed.services
+	return { services, empty, typedServices }
+}
+
+export const rejectedGitHubForms = (policy: DeliveryPolicy, ingress: GitHubIngress['Service']) => {
+	// @ts-expect-error The old property is not an alias, even alongside canonical handlers.
+	GitHubBot.make({ namespace: 'old', policy, handlers: [], activityHandlers: [] })
+	// @ts-expect-error Bare issue-event handlers are removed.
+	GitHubBot.make({ namespace: 'old', policy, handlers: [{ id: 'old', handler: () => Effect.void }] })
+	// @ts-expect-error Mixing old and new callback fields is rejected too.
+	GitHubBot.make({ namespace: 'old', policy, handlers: [{ id: 'old', onCreation: () => Effect.void, handler: () => Effect.void }] })
+	// @ts-expect-error Ingress has the same sole registration API.
+	GitHubIngress.layer({ namespace: 'old', policy, handlers: [{ id: 'old', handler: () => Effect.void }] })
+	// @ts-expect-error No alternate activityHandlers ingress mode.
+	GitHubIngress.layer({ namespace: 'old', policy, handlers: [], activityHandlers: [] })
+	// @ts-expect-error Removed legacy admission operation.
+	ingress.accept
+	// @ts-expect-error Removed legacy processing operation.
+	ingress.process
+	// @ts-expect-error Routes cannot select an old pipeline.
+	ingress.activityEnabled
+}
 
 export const githubSubscriptionRoundTrip = Effect.gen(function* () {
 	const subscriptions = yield* GitHubSubscriptions

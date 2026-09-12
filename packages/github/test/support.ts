@@ -14,7 +14,13 @@ import {
 } from 'effect/unstable/http'
 import { createEmulator } from 'emulate'
 
-import { GitHubCredentials, GitHubCrypto, GitHubRepository, GitHubIssueEvent, GitHubIssueData } from '../src/index.js'
+import {
+	GitHubCredentials,
+	GitHubCrypto,
+	GitHubRepository,
+	GitHubActivityEvent,
+	GitHubIssueData,
+} from '../src/index.js'
 
 export const secret = 'github-test-webhook-secret'
 export const availablePort = Effect.promise(
@@ -118,7 +124,7 @@ export const eventFor = (
 	repository: GitHubRepository,
 	issue: GitHubIssueData,
 	deliveryId = 'delivery-1',
-): Extract<GitHubIssueEvent, { event: 'issues' }> => ({
+): Extract<GitHubActivityEvent, { event: 'issues'; action: 'opened' }> => ({
 	event: 'issues',
 	action: 'opened',
 	deliveryId,
@@ -126,7 +132,7 @@ export const eventFor = (
 	issue,
 	sender: issue.user,
 })
-export const payloadFor = (event: GitHubIssueEvent) => ({
+export const payloadFor = (event: GitHubActivityEvent) => ({
 	action: event.action,
 	installation: { id: event.resource.repository.installationId },
 	repository: {
@@ -134,8 +140,8 @@ export const payloadFor = (event: GitHubIssueEvent) => ({
 		name: event.resource.repository.name,
 		owner: { login: event.resource.repository.owner },
 	},
-	issue: event.event === 'pull_request' ? undefined : event.issue,
-	pull_request: event.event === 'pull_request' ? event.pull_request : undefined,
+	issue: event.event === 'issues' || event.event === 'issue_comment' ? event.issue : undefined,
+	pull_request: event.event === 'issues' || event.event === 'issue_comment' ? undefined : event.pull_request,
 	sender: event.sender,
 	comment: event.event === 'issue_comment' ? event.comment : undefined,
 })

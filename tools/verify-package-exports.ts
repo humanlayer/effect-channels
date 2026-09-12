@@ -423,6 +423,7 @@ const verify = Effect.gen(function* () {
 		)
 	for (const file of [
 		'consumer.ts',
+		'organizations.ts',
 		'backends.ts',
 		'guard.mjs',
 		'runtime.mjs',

@@ -36,6 +36,23 @@
         "vitest": "catalog:",
       },
     },
+    "examples/organization-lookup": {
+      "name": "example-organization-lookup",
+      "version": "0.0.0",
+      "dependencies": {
+        "@effect/platform-node": "catalog:",
+        "@humanlayer/channels-delivery": "workspace:*",
+        "@humanlayer/channels-github": "workspace:*",
+        "@humanlayer/channels-slack": "workspace:*",
+        "effect": "catalog:",
+      },
+      "devDependencies": {
+        "@effect/vitest": "catalog:",
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
+        "vitest": "catalog:",
+      },
+    },
     "examples/slack-github": {
       "name": "example-slack-github",
       "version": "0.0.0",
@@ -537,6 +554,8 @@
     "estree-walker": ["estree-walker@3.0.3", "", { "dependencies": { "@types/estree": "^1.0.0" } }, "sha512-7RUKfXgSMMkzt6ZuXmqapOurLGPPfgj6l9uRZ7lRGolvk0y2yocc35LdcxKC5PQZdn2DMqioAQ2NoWcrTKmm6g=="],
 
     "example-github": ["example-github@workspace:examples/github"],
+
+    "example-organization-lookup": ["example-organization-lookup@workspace:examples/organization-lookup"],
 
     "example-slack-github": ["example-slack-github@workspace:examples/slack-github"],
 

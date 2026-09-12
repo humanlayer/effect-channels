@@ -133,7 +133,7 @@ for (const fixture of [cases[0], cases[1], cases[3], cases[6]]) {
 					handlers: [
 						{
 							id: 'reply',
-							handler: () =>
+							onCreation: () =>
 								Effect.flatMap(GitHub, (github) =>
 									github.createIssue({
 										repository: event.resource.repository,
@@ -153,23 +153,23 @@ for (const fixture of [cases[0], cases[1], cases[3], cases[6]]) {
 				),
 			)
 			const ingress = Context.get(environment, GitHubIngress)
-			yield* ingress.accept({ event })
-			const first = yield* ingress.process({ event }).pipe(Effect.forkChild)
+			yield* ingress.acceptActivity({ event, mentioned: false, own: false })
+			const first = yield* ingress.processActivity({ event }).pipe(Effect.forkChild)
 			yield* Deferred.await(entered)
 			if (fixture.delay !== undefined) {
 				yield* TestClock.adjust(fixture.delay - 1)
-				yield* ingress.process({ event })
+				yield* ingress.processActivity({ event })
 				assert.equal(yield* Ref.get(calls), 1)
 				yield* TestClock.adjust(1)
 			}
 			yield* Fiber.join(first)
-			yield* ingress.process({ event })
+			yield* ingress.processActivity({ event })
 			assert.equal(yield* Ref.get(calls), 1)
 			yield* TestClock.adjust(policy.retryBaseMs)
-			yield* ingress.process({ event })
+			yield* ingress.processActivity({ event })
 			assert.equal(yield* Ref.get(calls), fixture.delay === undefined ? 1 : 2)
 			yield* TestClock.adjust(60_000)
-			yield* ingress.process({ event })
+			yield* ingress.processActivity({ event })
 			assert.equal(yield* Ref.get(calls), fixture.delay === undefined ? 1 : 2)
 		}),
 	)

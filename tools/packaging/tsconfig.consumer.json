@@ -12,5 +12,5 @@
 		"noEmitOnError": true,
 		"outDir": "compiled"
 	},
-	"files": ["consumer.ts"]
+	"files": ["consumer.ts", "organizations.ts"]
 }

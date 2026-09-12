@@ -21,8 +21,6 @@ export const bot = GitHubBot.make({
 	namespace,
 	policy,
 	runner,
-	activityHandlers: [
-		{ id: 'respond', onCreation: observeCreation, onMention: respond, onSubscribedEvent: observeActivity },
-	],
+	handlers: [{ id: 'respond', onCreation: observeCreation, onMention: respond, onSubscribedEvent: observeActivity }],
 })
 export const application = bot.layer

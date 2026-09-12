@@ -90,22 +90,24 @@ drop, not a promise of handler execution. Duplicate admissions return `false`.
 Dropped identities count against `maxOutcomes` and expire under `retentionMs`;
 capacity exhaustion rejects admission rather than acknowledging an unrecorded drop.
 
-## Persisted mailbox upgrade (v1 → v2)
+## Persisted mailbox upgrade (v1/v2 → v3)
 
-New code reads both mailbox document versions. Its next conditional commit writes
-v2 in the **same key/table/Redis namespace**, preserving revision fencing and all
-pending, active, failed and outcome records. No SQL or Redis policy/migration script
-changes are needed: those backends store the document and readiness atomically.
-V2 adds `pendingReadyAt`, `burstDraining`, and `additionalActive`; `active` remains
-the first batch. Use `activeBatches(state)` to inspect all concurrent batches.
-V1 queue/serial work retains its existing eligibility and frozen retry deadlines.
+New code reads v1, v2, and v3 mailbox documents. Its next conditional commit writes v3 in the **same key/table/Redis namespace**, preserving revision fencing and all pending, active, failed and outcome records. No SQL or Redis policy/migration script changes are needed: those backends store the document and readiness atomically. V2 added `pendingReadyAt`, `burstDraining`, and `additionalActive`; v3 adds organization metadata. Use `activeBatches(state)` to inspect all concurrent batches. V1 queue/serial work retains its existing eligibility and frozen retry deadlines.
+
+New admissions save `organizationId` outside the native payload. Handlers receive that saved ID, including retries. A selected batch containing different organizations fails before claiming or changing membership. For legacy envelopes, the generic binding defaults to fixed organization `default`; `legacyOrganizationId` can select another fixed organization, or `null` to reject unattributed legacy work before claiming. Slack custom directory deployments use the latter unless explicitly configured for fixed attribution. Automatic one-time custom-directory legacy migration is not implemented yet.
+
+Ingress attribution is a separate, immutable record under `delivery-attribution:v1:`, using the same `MailboxStore` codec and create-if-absent revision guard. It has no readiness deadline and is never executed by workers. A concurrent losing writer reads the winning organization. The key includes application namespace, provider, installation and event identity, not handler ID, so unfinished fan-out uses the original decision.
+
+The root export provides `AttributionIdentity`, `IngressAttribution`, and `SaveIngressAttribution` schemas with same-name inferred interfaces, plus `loadIngressAttribution` and `saveIngressAttribution` effects requiring ambient `MailboxStore`. Invalid input and incompatible/incomplete attribution records emit safe classifications before returning `MailboxStoreError`; mixed-organization and unowned legacy batches remain `DeliveryError` configuration failures with distinct diagnostics. Logs omit supplied IDs, payloads, and raw records. Storage adapters remain responsible for safely capturing their own underlying driver failures.
+
+**Current increment limitation:** positive attribution records are retained without expiry; they consume storage and count against the memory adapter's `maxMailboxes`. Capacity failure rejects ingress. They must not be pruned merely because an outcome's deduplication TTL expires: unfinished fan-out or accepted work could still need them. A safe bounded retention/reconciliation policy remains follow-up work. Unknown organizations are not persisted as positive attribution. The lookup itself remains outside storage and never executes in a retried conditional write.
 
 Upgrade procedure: pause ingress, stop **all** old workers/writers, back up the
 store, then start the new code with the same handler IDs, definitions, keys and
 queue/serial policies before resuming ingress. Existing work need not be discarded
 or drained to read it. Change a handler's mode only when its mailbox work is idle,
-and use the same configuration on all hosts. Old binaries reject v2; mixed-version
-operation and in-place rollback after a v2 write are unsupported. To roll back,
+and use the same configuration on all hosts. Old binaries reject v3; mixed-version
+operation and in-place rollback after a v3 write are unsupported. To roll back,
 stop new writers and reconcile/export post-upgrade admissions before restoring a
 backup—blind restoration would lose accepted work. No upgrade or live store
 operation is performed by the test suite.

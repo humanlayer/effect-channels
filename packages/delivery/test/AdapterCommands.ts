@@ -6,7 +6,15 @@ import type { Connection } from 'effect/unstable/sql/SqlConnection'
 import type { SqlError } from 'effect/unstable/sql/SqlError'
 import * as Statement from 'effect/unstable/sql/Statement'
 
-import { ActiveBatch, currentMailbox, Envelope, eventIdentity, MailboxSnapshot, MailboxState } from '../src/Mailbox.js'
+import {
+	ActiveBatch,
+	currentMailbox,
+	emptyMailbox,
+	Envelope,
+	eventIdentity,
+	MailboxSnapshot,
+	MailboxState,
+} from '../src/Mailbox.js'
 
 export interface SqlCommand {
 	readonly sql: string
@@ -119,6 +127,9 @@ export const completeMailbox = MailboxState.make({
 })
 export const mailboxCodecCases: ReadonlyArray<MailboxState> = [
 	completeMailbox,
+	{ ...currentMailbox(completeMailbox), version: 2 },
+	{ ...emptyMailbox(), attribution: { organizationId: 'directory-owned' } },
+	{ ...currentMailbox(completeMailbox), pending: [{ ...envelope, organizationId: 'directory-owned' }] },
 	{
 		...currentMailbox(completeMailbox),
 		additionalActive: [{ ...active, owner: 18, envelopes: [{ ...envelope, eventId: 'C' }] }],

@@ -17,9 +17,9 @@ it('infers all heterogeneous handler requirements without caller unions or widen
 		handlers: [
 			{
 				id: 'first',
-				handler: () => Effect.andThen(First, Effect.fail(GitHubError.make({ reason: 'unavailable' }))),
+				onMention: () => Effect.andThen(First, Effect.fail(GitHubError.make({ reason: 'unavailable' }))),
 			},
-			{ id: 'second', handler: () => Effect.andThen(Second, Effect.fail(SecondError.make({}))) },
+			{ id: 'second', onMention: () => Effect.andThen(Second, Effect.fail(SecondError.make({}))) },
 		],
 	})
 	expectTypeOf<Extract<Layer.Services<typeof bot.services>, First | Second>>().toEqualTypeOf<First | Second>()
@@ -30,7 +30,7 @@ it('infers heterogeneous optional activity callbacks and exposes explicit storag
 		namespace: 'activity-inference',
 		policy,
 		runner: { scanLimit: 10, concurrency: 2, pollMs: 10 },
-		activityHandlers: [
+		handlers: [
 			{
 				id: 'first',
 				onCreation: (event) => {

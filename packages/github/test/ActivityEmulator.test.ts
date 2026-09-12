@@ -25,7 +25,7 @@ it.live('native emulator creation selects subscriptions; issue and PR lifecycle 
 			GitHubIngress.layer({
 				namespace: 'emulator-activity',
 				policy,
-				activityHandlers: [
+				handlers: [
 					{
 						id: 'observe',
 						onCreation: (event) =>

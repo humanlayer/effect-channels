@@ -161,6 +161,7 @@ export class IngressError extends Schema.TaggedError<IngressError>()('IngressErr
 
 export class SlackIngressError extends Schema.TaggedError<SlackIngressError>()('SlackIngressError', {
 	operation: Schema.NonEmptyString,
+	reason: Schema.optionalKey(Schema.Literals(['unavailable', 'unexpected'])),
 }) {}
 
 export class OrganizationStoreError extends Schema.TaggedError<OrganizationStoreError>()('OrganizationStoreError', {

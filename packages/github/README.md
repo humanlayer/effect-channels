@@ -30,15 +30,7 @@ submission, workflow operations, OAuth or installation lifecycle management.
   WebCrypto, isolated because Effect Crypto does not provide those operations.
   Both unencrypted PKCS#1 and PKCS#8 RSA PEM private keys are accepted. No Node
   crypto import enters the library. Hosts must provide WebCrypto.
-- `GitHubIngress.layer({ namespace, policy, activityHandlers })` binds stable handler IDs
-  to shared Delivery. `accept` commits all required handlers; `process({ event })`
-  processes at most one ready batch per registration for that event's resource;
-  `run(options)` owns a scoped polling runner. It does not run handlers in admission.
-  For activity registrations use `acceptActivity({ event, mentioned, own })` and
-  `processActivity({ event })`; normally the signed route owns admission and bot
-  identity classification. Every ingress requires an explicitly supplied
-  `GitHubSubscriptionStore`. Legacy `handlers` use the original `accept`/`process`
-  methods and cannot be mixed with `activityHandlers` in one ingress.
+- `GitHubIngress.layer({ namespace, policy, handlers })` accepts only `GitHubHandlerRegistration` entries with `id`, `onCreation`, `onMention`, and `onSubscribedEvent`. `acceptActivity({ event, mentioned, own })` saves routing and commits all selected callbacks; `processActivity({ event })` processes at most one ready batch per callback for that resource. `run(options)` owns a scoped polling runner. Admission never runs handlers. Normally the signed route owns normalization and bot identity classification. Every ingress requires an explicitly supplied `GitHubSubscriptionStore`. There is no bare `handler(event)` registration, alternate registration property, mode switch, or legacy `accept`/`process` pipeline.
 - `GitHubRoutes.layer({ signingSecret, maxBodyBytes, botLogin })` mounts
   `POST /api/v1/integrations/github/webhook`. `layerConfig` reads
   `GITHUB_WEBHOOK_SECRET` and **required `GITHUB_BOT_LOGIN`**, and limits raw bodies
@@ -46,12 +38,7 @@ submission, workflow operations, OAuth or installation lifecycle management.
   account, installation owner, or App display name. Supply services
   using `Layer.provide`; mount with Effect `HttpRouter.serve` or
   `HttpRouter.toWebHandler`. Forward the untouched request, including in Hono.
-- `GitHubBot.make` assembles native operations, ingress, `routes`, `worker` and
-  combined `layer`. Policies and runner limits are explicit. Routes alone start no
-  worker; hosts deliberately choose the combined Layer for long-running servers.
-  Heterogeneous handlers infer the union of their Effect dependencies and errors;
-  callers need no `ReturnType` union or explicit generic parameters. The library
-  owns that inference, and captures the complete handler environment once.
+- `GitHubBot.make` assembles native operations, ingress, `routes`, `worker` and combined `layer`. Namespace and delivery policy remain explicit. `runner` is optional and accepts `Partial<RunnerOptions>`; omitted fields default to `scanLimit: 100`, `concurrency: 8`, and `pollMs: 25`, matching Slack. These are runner defaults, not changes to delivery policy or mailbox namespaces. Routes alone start no worker; hosts deliberately choose the combined Layer for long-running servers. Heterogeneous callbacks retain their typed errors and infer all required Effect services; handler failures are classified for delivery retry, while ingress exposes `GitHubIngressError`, not arbitrary application errors. Callers need no `ReturnType` union or explicit generic parameters. The library owns that inference and captures the complete handler environment once.
 
 See [the GitHub example](../../examples/github) and
 [the combined example](../../examples/slack-github) for complete, typechecked roots.
@@ -73,12 +60,11 @@ import { Effect } from 'effect'
 import { GitHub, GitHubBot, GitHubSubscriptions } from '@humanlayer/channels-github'
 import { layer as memory } from '@humanlayer/channels-github/memory'
 
-// policy and runner are explicit application limits, as in the standalone example.
+// policy is explicit; runner may be omitted or partially overridden.
 const bot = GitHubBot.make({
 	namespace: 'agent',
 	policy,
-	runner,
-	activityHandlers: [
+	handlers: [
 		{
 			id: 'respond',
 			onCreation: (event) =>
@@ -171,12 +157,9 @@ not route capacity. A long-running production application needs a durable adapte
 with an explicit safe archival/replay policy; restarting memory loses all guarantees
 for previous deliveries. There is no disk backend in this slice.
 
-Routing records have schema version `1`; activity envelopes use the new
-`github.activity` definition version `1`. Legacy `github.issue` v1 is unchanged,
-not silently relabeled or upgraded. Drain old ingress/workers/mailboxes before
-switching to activity registrations. Mixed writer/registration revisions and
-automatic migration/rollback are unsupported. Memory reconstruction tests prove
-logical recovery only, not process-crash persistence. External writes can repeat.
+Routing records have schema version `1`; envelopes retain `github.activity` definition version `1`. The rename from `activityHandlers` to `handlers` preserves every current callback mailbox ID exactly: `JSON.stringify([registration.id, 'creation' | 'mention' | 'subscribed'])`. Keep registration IDs and namespaces unchanged to recover current saved activity work and frozen fan-out routes.
+
+**Breaking API cleanup:** older bare `handler(event: GitHubIssueEvent)` work used `github.issue` v1 and different handler IDs. That older legacy API work is **not migrated or processed by this release**. Drain it using the previous release before upgrading, or explicitly handle it operationally; changing a namespace does not migrate it. There is no compatibility alias, second bot/ingress pipeline, migration framework, automatic rollback, or mixed-writer support. The standalone `GitHubIssueEvent` parser remains available, but `issueEventDefinition` is removed. Memory reconstruction proves logical recovery only, not process-crash persistence. External writes can repeat.
 
 ## Outbound reactions
 
@@ -295,20 +278,7 @@ check and observed assigned state for the actual bot ID, not a substituted user.
 
 ## Identity, admission and recovery
 
-The retained legacy `GitHubIssueEvent` union retains native `issues` (`opened`, `edited`, `closed`,
-`reopened`), `issue_comment` (`created`, `edited`, `deleted`), and `pull_request`
-(`opened`, `edited`, `reopened`) discriminants. It retains sender, issue/comment
-fields and native `pull_request` body/identity fields, not arbitrary webhook fields
-or PR head/base/review data. Targeted routes apply the narrower rules above.
-Legacy low-level routes without `botLogin` retain the original all-issue lifecycle
-mode and ignore PRs. `activityHandlers` select the expanded routing above; without
-a bot login they support creation/followed activity but not mention detection.
-Supported events share installation + stable repository ID + resource kind +
-number identity; PR bodies and PR discussion comments share the same PR mailbox,
-distinct from issue mailboxes. Existing issue keys remain unchanged. Mutable
-owner/name fields are API routing information, not mailbox
-identity. Namespace and handler ID independently scope mailboxes. Use different
-namespaces for different GitHub origins/Apps and do not change IDs on redeploy.
+All routes normalize into the native discriminated `GitHubActivityEvent` union and use the same registration/routing pipeline. Without `botLogin`, creation and subscribed activity still work, but mention detection is disabled; there is no all-issue legacy routing fallback. Supported events share installation + stable repository ID + resource kind + number identity. PR bodies and PR discussion comments share the same PR mailbox, distinct from issue mailboxes. Mutable owner/name fields are API routing information, not mailbox identity. Namespace and callback ID independently scope mailboxes. Use different namespaces for different GitHub origins/Apps and keep IDs stable on redeploy.
 
 HMAC verification operates on original bytes before JSON decoding. The bounded
 stream reader rejects oversized bodies. Bad signatures receive 401, malformed
@@ -326,13 +296,7 @@ attacker replaying a captured valid body with changed headers. Protect secrets a
 transport. GitHub does not automatically redeliver every failed webhook: arrange
 operational redelivery/monitoring of failures.
 
-The legacy shared queue executes latest pending plus typed `context.skipped`; it does not
-interrupt active work. Activity callbacks always use shared `serial`. Handler
-Effects must remain open until their work finishes. Known permanent GitHub failures
-do not retry; `unavailable` and other application errors use the configured finite
-handler retry policy. Defects retain Delivery's terminal behavior. Error responses
-are empty; logs retain safe failure categories, never tokens or payload bodies.
-Applications should add their own safe diagnostics for custom handler failures.
+All GitHub callbacks use shared `serial` delivery, retaining native lifecycle events without coalescing or interrupting active work. Context retains typed `skipped` events and saved organization attribution. Handler Effects must remain open until their work finishes. Known permanent GitHub failures do not retry; `unavailable` and other application errors use the configured finite handler retry policy. Defects retain Delivery's terminal behavior. Error responses are empty; logs retain safe failure categories, never tokens or payload bodies. Applications should add their own safe diagnostics for custom handler failures.
 
 GitHub 403 responses are not always permission failures: exhausted
 `x-ratelimit-remaining`, valid numeric `retry-after`, or bounded inspection of known
@@ -350,8 +314,7 @@ a worker slot during the wait, including on the last attempt. It is not a shared
 installation-wide limiter or a persisted rate-limit deadline across restart. No
 shared Delivery contracts are changed.
 Application handler scopes close before this wait, releasing callback resources
-while the delivery lease/heartbeat remains active. This applies to legacy and
-activity callbacks alike.
+while the delivery lease/heartbeat remains active. This applies to every registered callback.
 
 ## Authentication and security boundaries
 
@@ -404,3 +367,17 @@ delivery contracts, **not disk/crash persistence**. External comments and Slack
 notifications can repeat after a crash between provider success and mailbox
 completion. There is no exactly-once external-write guarantee, live permission
 certification, deployment, or automatic retry/redelivery service in this checkpoint.
+
+## Application organization lookup
+
+`GitHubOrganizations` is a separate optional service, supplied through a Layer. `resolve({ installationId })` receives the existing native numeric `GitHubId` validated at ingress and returns `{ organizationId }` or `null`, with `GitHubOrganizationLookupError` for dependency failure. This complements the existing synchronous `GitHubCredentials.acceptsInstallation` check; it does not replace or change credentials, signature verification, or installation authorization.
+
+Without an override, admitted events belong to `default`. `GitHubOrganizations.fixed({ organizationId: 'single-org' })` configures another fixed organization. Use `GitHubOrganizations.layer(({ installationId }) => findOrganization({ installationId }))` with your application's Effect-returning lookup. The callback returns `Effect<GitHubOrganization | null, E, R>`; native input, errors and dependencies are inferred. The factory captures `R` once during Layer construction; provide it privately using `Layer.provide`. It owns the `github.organizations.resolve` span, safe diagnostic classifications, decoding, and mapping application errors to `GitHubOrganizationLookupError`. No user spans or error mapping are required. Direct custom service Layers remain supported. Provide the Layer to the entire bot composition. Configured null/failure never falls back to the default; credentials and delivery storage remain independent.
+
+Unified ingress persists attribution before admitting fan-out. Duplicate delivery and reconstruction reuse that decision, and ordinary handlers receive the saved `context.organizationId`. Unknown mappings return HTTP 200 without admitted handler work; expected typed lookup/storage failures retain HTTP 503. `GitHubOrganizations.layer` suspends the callback and catches causes, including synchronous throws before it returns an Effect. Defects are safely classified as `unexpected_defect` and carried as optional `reason: 'unexpected'` through lookup/ingress errors to an empty HTTP 500 at the unified webhook route. Omitted reason retains unavailable behavior, including existing `GitHubOrganizationLookupError.make({})` callers. Interruption takes priority over failure/defect classification and preserves cancellation without lookup-failure recovery or logging. GitHub does not guarantee automatic redelivery, so applications must arrange redelivery after operational failures where needed.
+
+Custom lookup results are decoded as `GitHubOrganization | null` before any attribution write. Undefined, malformed, or empty-ID results fail rather than mean absence. Diagnostics report fixed classifications, not application error messages or returned data. The exported lookup/organization schemas have same-name inferred interfaces; `fixed` still validates configuration with `makeEffect` and retains its rc.112 `SchemaIssue.Issue` error type. The extracted ingress-attribution effect is package-internal, not an additional public API or service. Organization emulator tests use the live clock specifically for App JWT timestamps checked by the independently running emulator, not simply because they are integration tests.
+
+See [the executable organization lookup recipe](../../examples/organization-lookup/README.md): application callbacks supply both native provider Layers. The library introduces no universal ID, registry, shared installation schema, or cyclic provider dependencies. Provider-visible tests use actual emulator-generated signed requests, real App authentication, and native comment reads; overlapping installation tests additionally exercise one shared acquired ingress with deterministic gates.
+
+Mailbox v3 is a stop-old-writers upgrade. Fixed deployments explicitly attribute legacy unowned work to their configured organization. Custom-directory deployments refuse to dispatch it unless the application deliberately supplies fixed legacy attribution; automatic per-event legacy migration remains deferred. Positive attribution records are conservatively retained and consume delivery-store capacity, including memory `maxMailboxes`; new admissions fail on exhaustion rather than discarding an accepted association. See delivery's README for the full upgrade and retention limitations.

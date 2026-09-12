@@ -1,13 +1,6 @@
-import type { EventDefinition } from '@humanlayer/channels-delivery'
 import { Schema } from 'effect'
 
-import {
-	GitHubDiscussionRef,
-	GitHubId,
-	GitHubIssueRef,
-	GitHubPullRequestRef,
-	issueResourceKey,
-} from './GitHubResource.js'
+import { GitHubDiscussionRef, GitHubId, GitHubIssueRef, GitHubPullRequestRef } from './GitHubResource.js'
 
 export const GitHubUser = Schema.Struct({ id: GitHubId, login: Schema.NonEmptyString, type: Schema.String })
 export interface GitHubUser extends Schema.Schema.Type<typeof GitHubUser> {}
@@ -33,6 +26,7 @@ const common = {
 	deliveryId: Schema.NonEmptyString,
 	sender: GitHubUser,
 }
+/** Standalone native issue/comment parser; bot ingress uses GitHubActivityEvent. */
 export const GitHubIssueEvent = Schema.Union([
 	Schema.Struct({
 		...common,
@@ -67,17 +61,3 @@ export const GitHubIssueEvent = Schema.Union([
 	}),
 )
 export type GitHubIssueEvent = typeof GitHubIssueEvent.Type
-
-export const issueEventDefinition: EventDefinition<typeof GitHubIssueEvent, typeof GitHubDiscussionRef> = {
-	name: 'github.issue',
-	version: '1',
-	provider: 'github',
-	event: GitHubIssueEvent,
-	resource: GitHubDiscussionRef,
-	resourceKey: issueResourceKey,
-	identify: (event) => ({
-		installation: String(event.resource.repository.installationId),
-		eventId: event.deliveryId,
-		resource: event.resource,
-	}),
-}

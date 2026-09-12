@@ -1,13 +1,13 @@
 import { assert, it } from '@effect/vitest'
 import { layer as memory } from '@humanlayer/channels-github/memory'
-import { Context, Deferred, Effect, Exit, Fiber, Layer, Ref } from 'effect'
+import { Context, Deferred, Effect, Exit, Fiber, Layer, Match, Ref } from 'effect'
 import { TestClock } from 'effect/testing'
 
-import { GitHubError, GitHubIngress } from '../src/index.js'
+import { GitHubError, GitHubIngress, GitHubSubscriptions } from '../src/index.js'
 import { event, policy } from './fixtures.js'
 
-for (const activity of [false, true]) {
-	it.effect(`releases ${activity ? 'activity' : 'legacy'} handler resources before the rate-limit wait`, () =>
+for (const callback of ['onCreation', 'onMention', 'onSubscribedEvent'] as const) {
+	it.effect(`releases ${callback} handler resources before the rate-limit wait`, () =>
 		Effect.gen(function* () {
 			const released = yield* Deferred.make<void>()
 			const handler = () =>
@@ -19,17 +19,23 @@ for (const activity of [false, true]) {
 				GitHubIngress.layer({
 					namespace: 'rate-limit-scope',
 					policy,
-					...(activity
-						? { activityHandlers: [{ id: 'receive', onCreation: handler }] }
-						: { handlers: [{ id: 'receive', handler }] }),
-				}).pipe(Layer.provide(memory({ maxMailboxes: 10 }))),
+					handlers: [
+						Match.value(callback).pipe(
+							Match.when('onCreation', () => ({ id: 'receive', onCreation: handler })),
+							Match.when('onMention', () => ({ id: 'receive', onMention: handler })),
+							Match.when('onSubscribedEvent', () => ({ id: 'receive', onSubscribedEvent: handler })),
+							Match.exhaustive,
+						),
+					],
+				}).pipe(Layer.provideMerge(memory({ maxMailboxes: 10 }))),
 			)
 			const ingress = Context.get(environment, GitHubIngress)
-			if (activity) yield* ingress.acceptActivity({ event, mentioned: false, own: false })
-			else yield* ingress.accept({ event })
-			const work = yield* (activity ? ingress.processActivity({ event }) : ingress.process({ event })).pipe(
-				Effect.forkChild,
-			)
+			yield* Context.get(environment, GitHubSubscriptions).subscribe({
+				namespace: 'rate-limit-scope',
+				resource: event.resource,
+			})
+			yield* ingress.acceptActivity({ event, mentioned: true, own: false })
+			const work = yield* ingress.processActivity({ event }).pipe(Effect.forkChild)
 			yield* Deferred.await(released)
 			yield* TestClock.adjust(60_000)
 			yield* Fiber.join(work)
@@ -49,7 +55,7 @@ for (const outcome of ['success', 'failure', 'defect', 'interruption'] as const)
 					handlers: [
 						{
 							id: 'receive',
-							handler: () =>
+							onCreation: () =>
 								Effect.gen(function* () {
 									yield* Effect.addFinalizer(() => Ref.update(released, (n) => n + 1))
 									yield* Deferred.succeed(entered, undefined)
@@ -59,11 +65,11 @@ for (const outcome of ['success', 'failure', 'defect', 'interruption'] as const)
 								}),
 						},
 					],
-				}).pipe(Layer.provide(memory({ maxMailboxes: 10 }))),
+				}).pipe(Layer.provideMerge(memory({ maxMailboxes: 10 }))),
 			)
 			const ingress = Context.get(environment, GitHubIngress)
-			yield* ingress.accept({ event })
-			const work = yield* ingress.process({ event }).pipe(Effect.forkChild)
+			yield* ingress.acceptActivity({ event, mentioned: false, own: false })
+			const work = yield* ingress.processActivity({ event }).pipe(Effect.forkChild)
 			yield* Deferred.await(entered)
 			if (outcome === 'interruption') yield* Fiber.interrupt(work)
 			else if (outcome === 'defect') assert.ok(Exit.isFailure(yield* Fiber.await(work)))

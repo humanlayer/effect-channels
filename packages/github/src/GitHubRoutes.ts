@@ -12,7 +12,7 @@ import {
 import { GitHubCredentials } from './GitHubCredentials.js'
 import { GitHubCrypto } from './GitHubCrypto.js'
 import { GitHubWebhookError } from './GitHubErrors.js'
-import { GitHubCommentData, GitHubIssueData, GitHubIssueEvent, GitHubUser } from './GitHubEvents.js'
+import { GitHubCommentData, GitHubIssueData, GitHubUser } from './GitHubEvents.js'
 import { GitHubIngress } from './GitHubIngress.js'
 import { GitHubDiscussionRef, GitHubId } from './GitHubResource.js'
 
@@ -77,20 +77,6 @@ const layer = (options: GitHubRoutesOptions) =>
 			const isOwn = (user: Pick<GitHubUser, 'id' | 'login'> | null | undefined) =>
 				user != null &&
 				(user.id === credentials.botUserId || user.login.toLowerCase() === config.botLogin?.toLowerCase())
-			const isTargeted = (input: {
-				readonly event: string
-				readonly payload: typeof Payload.Type
-				readonly issue: GitHubIssueData | GitHubPullRequestData
-			}) => {
-				if (mention === undefined) return true
-				const { event, payload, issue } = input
-				const body = event === 'issue_comment' ? payload.comment?.body : issue.body
-				if (!['opened', 'created', 'edited'].includes(payload.action) || !mention.test(body ?? '')) return false
-				return (
-					payload.action !== 'edited' ||
-					(payload.changes?.body !== undefined && !mention.test(payload.changes.body.from ?? ''))
-				)
-			}
 			const acceptActivity = Effect.fn('github.webhook.accept_activity')(function* (input: {
 				readonly event: string
 				readonly deliveryId: string
@@ -188,9 +174,9 @@ const layer = (options: GitHubRoutesOptions) =>
 						'issues',
 						'issue_comment',
 						'pull_request',
-						...(ingress.activityEnabled
-							? ['pull_request_review', 'pull_request_review_comment', 'pull_request_review_thread']
-							: []),
+						'pull_request_review',
+						'pull_request_review_comment',
+						'pull_request_review_thread',
 					].includes(event)
 				)
 					return HttpServerResponse.empty({ status: 200 })
@@ -206,37 +192,7 @@ const layer = (options: GitHubRoutesOptions) =>
 				const issue = event.startsWith('pull_request') ? payload.pull_request : payload.issue
 				if (issue === undefined || (event === 'issue_comment' && payload.comment === undefined))
 					return yield* GitHubWebhookError.make({ reason: 'decode' })
-				if (ingress.activityEnabled) return yield* acceptActivity({ event, deliveryId, payload, issue })
-				const author = event === 'issue_comment' ? payload.comment?.user : issue.user
-				if (isOwn(payload.sender) || isOwn(author)) return HttpServerResponse.empty({ status: 200 })
-				const isPullRequest = event === 'pull_request' || issue.pull_request !== undefined
-				if (mention === undefined && isPullRequest) return HttpServerResponse.empty({ status: 200 })
-				const supported = Match.value(event).pipe(
-					Match.when('issue_comment', () => ['created', 'edited', 'deleted']),
-					Match.when('issues', () => ['opened', 'edited', 'closed', 'reopened']),
-					Match.orElse(() => ['opened', 'edited', 'reopened']),
-				)
-				if (!supported.includes(payload.action)) return HttpServerResponse.empty({ status: 200 })
-				if (!isTargeted({ event, payload, issue })) return HttpServerResponse.empty({ status: 200 })
-				const resource = yield* GitHubDiscussionRef.makeEffect({
-					kind: isPullRequest ? 'github.pull-request' : 'github.issue',
-					repository: {
-						kind: 'github.repository',
-						installationId: payload.installation.id,
-						id: payload.repository.id,
-						owner: payload.repository.owner.login,
-						name: payload.repository.name,
-					},
-					number: issue.number,
-				}).pipe(Effect.mapError(() => GitHubWebhookError.make({ reason: 'decode' })))
-				const normalized = yield* Schema.decodeUnknownEffect(GitHubIssueEvent)({
-					...payload,
-					event,
-					deliveryId,
-					resource,
-				}).pipe(Effect.mapError(() => GitHubWebhookError.make({ reason: 'decode' })))
-				yield* ingress.accept({ event: normalized })
-				return HttpServerResponse.empty({ status: 200 })
+				return yield* acceptActivity({ event, deliveryId, payload, issue })
 			})
 			return HttpRouter.add('POST', '/api/v1/integrations/github/webhook', (request) =>
 				Effect.gen(function* () {
@@ -294,7 +250,10 @@ const layer = (options: GitHubRoutesOptions) =>
 									),
 								}),
 							),
-						GitHubIngressError: () => Effect.succeed(HttpServerResponse.empty({ status: 503 })),
+						GitHubIngressError: (error) =>
+							Effect.succeed(
+								HttpServerResponse.empty({ status: error.reason === 'unexpected' ? 500 : 503 }),
+							),
 					}),
 					Effect.withSpan('github.webhook'),
 				),

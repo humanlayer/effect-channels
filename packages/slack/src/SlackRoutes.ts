@@ -209,7 +209,7 @@ const routes = (config: SlackRoutesConfig) =>
 				SlackWebhookError: webhookErrorResponse,
 				SlackIngressError: (error) =>
 					Effect.logError('Slack ingress admission failed', error).pipe(
-						Effect.as(HttpServerResponse.empty({ status: 503 })),
+						Effect.as(HttpServerResponse.empty({ status: error.reason === 'unexpected' ? 500 : 503 })),
 					),
 				CredentialStoreError: (error) =>
 					Effect.logError('Slack credential lookup failed', error).pipe(

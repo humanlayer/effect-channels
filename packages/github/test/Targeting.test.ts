@@ -2,7 +2,7 @@ import { assert, it } from '@effect/vitest'
 import { layer as memory } from '@humanlayer/channels-github/memory'
 import { Context, Effect, Layer, Queue, Redacted } from 'effect'
 
-import { GitHubCrypto, GitHubIngress, GitHubRoutes, type GitHubIssueEvent, issueResourceKey } from '../src/index.js'
+import { GitHubCrypto, GitHubIngress, GitHubRoutes, type GitHubActivityEvent, issueResourceKey } from '../src/index.js'
 import { event, policy, routeCredentials, user } from './fixtures.js'
 import { host, payloadFor, secret, signedRequest } from './support.js'
 
@@ -10,13 +10,13 @@ it.live(
 	'targeted issue/PR bodies and discussion comments only; edits, boundaries, assignments and own-loop safety',
 	() =>
 		Effect.gen(function* () {
-			const seen = yield* Queue.unbounded<GitHubIssueEvent>()
+			const seen = yield* Queue.unbounded<GitHubActivityEvent>()
 			const environment = yield* Layer.build(
 				GitHubIngress.layer({
 					namespace: 'mentions',
 					policy,
-					handlers: [{ id: 'receive', handler: (value) => Queue.offer(seen, value).pipe(Effect.asVoid) }],
-				}).pipe(Layer.provide(memory({ maxMailboxes: 10 }))),
+					handlers: [{ id: 'receive', onMention: (value) => Queue.offer(seen, value).pipe(Effect.asVoid) }],
+				}).pipe(Layer.provide(memory({ maxMailboxes: 64 }))),
 			)
 			const send = yield* host(
 				GitHubRoutes.layer({
@@ -33,7 +33,13 @@ it.live(
 			const base = payloadFor(event)
 			const bot = { ...user, id: 99, login: 'channels[bot]', type: 'Bot' }
 			const issue = { ...event.issue, body: '@channels please help' }
-			const pull_request = { ...issue, number: 2 }
+			const pull_request = {
+				...issue,
+				number: 2,
+				merged: false,
+				head: { ref: 'feature', sha: 'after' },
+				base: { ref: 'main', sha: 'base' },
+			}
 			const comment = { id: 60, body: '@channels[bot] help', html_url: 'https://test/comment', user }
 			const fixtures = [
 				{ event: 'issues', payload: { ...base, issue }, accepted: true },
@@ -129,8 +135,8 @@ it.live(
 					},
 					accepted: true,
 				},
-				{ event: 'pull_request_review_comment', payload: { ...base, comment }, accepted: false },
-				{ event: 'pull_request_review', payload: base, accepted: false },
+				{ event: 'pull_request_review_comment', payload: { ...base, comment }, accepted: false, status: 400 },
+				{ event: 'pull_request_review', payload: base, accepted: false, status: 400 },
 				{ event: 'workflow_run', payload: base, accepted: false },
 				{ event: 'issues', payload: { ...base, action: 'closed', issue }, accepted: false },
 				{ event: 'issues', payload: { ...base, action: 'reopened', issue }, accepted: false },
@@ -191,6 +197,8 @@ it.live(
 						issue: undefined,
 						pull_request,
 						changes: { body: { from: '@channels existing' } },
+						before: 'before',
+						after: 'after',
 					},
 					accepted: false,
 				})),
@@ -200,9 +208,9 @@ it.live(
 				const deliveryId = `target-${id++}`
 				const request = signedRequest(fixture.event, JSON.stringify(fixture.payload), deliveryId)
 				const duplicate = request.clone()
-				assert.equal((yield* send(request)).status, 200)
-				yield* ingress.process({ event })
-				const prEvent: GitHubIssueEvent = {
+				assert.equal((yield* send(request)).status, ('status' in fixture ? fixture.status : undefined) ?? 200)
+				yield* ingress.processActivity({ event })
+				const prEvent: GitHubActivityEvent = {
 					event: 'pull_request',
 					action: 'opened',
 					deliveryId,
@@ -210,7 +218,7 @@ it.live(
 					pull_request,
 					sender: user,
 				}
-				yield* ingress.process({ event: prEvent })
+				yield* ingress.processActivity({ event: prEvent })
 				assert.equal(yield* Queue.size(seen), fixture.accepted ? 1 : 0, fixture.event + ' ' + deliveryId)
 				if (fixture.accepted) {
 					const received = yield* Queue.take(seen)
@@ -218,7 +226,9 @@ it.live(
 					assert.equal(received.deliveryId, deliveryId)
 					assert.equal(
 						received.resource.number,
-						received.event === 'pull_request' ? received.pull_request.number : received.issue.number,
+						received.event === 'issues' || received.event === 'issue_comment'
+							? received.issue.number
+							: received.pull_request.number,
 					)
 					if (received.event === 'issue_comment')
 						assert.equal(
@@ -230,9 +240,9 @@ it.live(
 						assert.equal(received.resource.kind, 'github.pull-request')
 					}
 				}
-				assert.equal((yield* send(duplicate)).status, 200)
-				yield* ingress.process({ event })
-				yield* ingress.process({ event: prEvent })
+				assert.equal((yield* send(duplicate)).status, ('status' in fixture ? fixture.status : undefined) ?? 200)
+				yield* ingress.processActivity({ event })
+				yield* ingress.processActivity({ event: prEvent })
 				assert.equal(yield* Queue.size(seen), 0)
 			}
 			assert.notEqual(

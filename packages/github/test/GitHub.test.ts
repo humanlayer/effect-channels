@@ -11,7 +11,7 @@ import {
 	GitHubIngress,
 	GitHubIssueData,
 	GitHubRoutes,
-	issueEventDefinition,
+	activityEventDefinition,
 } from '../src/index.js'
 import { policy } from './fixtures.js'
 import { adminCall, emulator, eventFor, host, payloadFor, secret, signedRequest } from './support.js'
@@ -71,8 +71,8 @@ it.live(
 			const event = eventFor(em.repository, data)
 			const storage = memory({ maxMailboxes: 10 })
 			const handler = (
-				event: typeof issueEventDefinition.event.Type,
-				context: { readonly skipped: ReadonlyArray<typeof issueEventDefinition.event.Type> },
+				event: typeof activityEventDefinition.event.Type,
+				context: { readonly skipped: ReadonlyArray<typeof activityEventDefinition.event.Type> },
 			) =>
 				Effect.flatMap(GitHub, (github) =>
 					github.createComment({
@@ -83,7 +83,7 @@ it.live(
 			const services = GitHubIngress.layer({
 				namespace: 'test',
 				policy,
-				handlers: [{ id: 'reply', handler }],
+				handlers: [{ id: 'reply', onCreation: handler }],
 			}).pipe(Layer.provideMerge(GitHub.layer), Layer.provideMerge(storage), Layer.provideMerge(em.credentials))
 			const environment = yield* Layer.build(services)
 			const request = yield* host(
@@ -101,14 +101,14 @@ it.live(
 				[],
 			)
 			const ingress = Context.get(environment, GitHubIngress)
-			yield* ingress.process({ event })
+			yield* ingress.processActivity({ event })
 			assert.equal((yield* request(signedRequest('issues', JSON.stringify(payloadFor(event))))).status, 200)
-			yield* ingress.process({ event })
+			yield* ingress.processActivity({ event })
 			const binding = bind({
 				namespace: 'test',
-				handlerId: 'reply',
+				handlerId: '["reply","creation"]',
 				policy,
-				definition: issueEventDefinition,
+				definition: activityEventDefinition,
 				handler: () => Effect.fail(HandlerFailure.make({ retryable: false })),
 			})
 			assert.equal(

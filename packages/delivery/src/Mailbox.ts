@@ -7,6 +7,7 @@ export const Envelope = Schema.Struct({
 	resource: Schema.String,
 	payload: Schema.String,
 	acceptedAt: Schema.Finite,
+	organizationId: Schema.optionalKey(Schema.NonEmptyString),
 })
 export type Envelope = typeof Envelope.Type
 
@@ -44,25 +45,34 @@ const fields = {
 
 const LegacyMailboxState = Schema.Struct({ ...fields, version: Schema.Literal(1) })
 
-export const CurrentMailboxState = Schema.Struct({
+const V2MailboxState = Schema.Struct({
 	...fields,
 	version: Schema.Literal(2),
 	additionalActive: Schema.Array(ActiveBatch),
 	pendingReadyAt: Schema.NullOr(Schema.Finite),
 	burstDraining: Schema.Boolean,
 })
+
+export const IngressAttribution = Schema.Struct({ organizationId: Schema.NonEmptyString })
+export interface IngressAttribution extends Schema.Schema.Type<typeof IngressAttribution> {}
+
+export const CurrentMailboxState = Schema.Struct({
+	...V2MailboxState.fields,
+	version: Schema.Literal(3),
+	attribution: Schema.optionalKey(IngressAttribution),
+})
 export type CurrentMailboxState = typeof CurrentMailboxState.Type
 
-export const MailboxState = Schema.Union([LegacyMailboxState, CurrentMailboxState])
+export const MailboxState = Schema.Union([LegacyMailboxState, V2MailboxState, CurrentMailboxState])
 export type MailboxState = typeof MailboxState.Type
 
-/** Upgrade on conditional commit without changing keys, envelopes, owners or retries. Old binaries reject v2. */
+/** Upgrade under revision fencing. Stop old writers before the first v3 write. */
 export const currentMailbox = (state: MailboxState): CurrentMailboxState =>
-	state.version === 2
-		? state
+	state.version !== 1
+		? { ...state, version: 3 }
 		: {
 				...state,
-				version: 2,
+				version: 3,
 				additionalActive: [],
 				pendingReadyAt: state.pending[0]?.acceptedAt ?? null,
 				burstDraining: false,
@@ -70,7 +80,7 @@ export const currentMailbox = (state: MailboxState): CurrentMailboxState =>
 
 export const activeBatches = (state: MailboxState): ReadonlyArray<ActiveBatch> => [
 	...(state.active === null ? [] : [state.active]),
-	...(state.version === 2 ? state.additionalActive : []),
+	...(state.version !== 1 ? state.additionalActive : []),
 ]
 
 export const MailboxSnapshot = Schema.Struct({ revision: Schema.Natural, state: MailboxState })
@@ -78,7 +88,7 @@ export type MailboxSnapshot = typeof MailboxSnapshot.Type
 
 export const emptyMailbox = (): CurrentMailboxState =>
 	CurrentMailboxState.make({
-		version: 2,
+		version: 3,
 		pending: [],
 		active: null,
 		additionalActive: [],

@@ -198,3 +198,33 @@ The profile client dependency is supplied at lookup, not State acquisition, so
 this call relationship is not a circular Layer construction. `SlackBot.make`
 owns assembly. The selected storage bundle implements Connections, Subscriptions,
 and Delivery; the host owns HTTP, crypto, pool/Redis connection and shutdown.
+
+## Organization lookup
+
+`SlackOrganizations` is an optional, independently supplied Effect service. With no override, verified admitted events belong to `default`. For another single organization, provide `SlackOrganizations.fixed({ organizationId: 'my-organization' })` to the bot's services/routes/worker composition. This fixed layer also explicitly attributes legacy unowned work to that organization.
+
+A multi-organization application supplies its own Layer:
+
+```ts
+import { SlackOrganizations } from '@humanlayer/channels-slack'
+import { Effect, Layer } from 'effect'
+
+const organizations = SlackOrganizations.layer(({ workspaceId }) =>
+	Effect.gen(function* () {
+		const directory = yield* ApplicationDirectory
+		return yield* directory.findOrganization({ workspaceId })
+	}),
+)
+
+const services = bot.services.pipe(Layer.provide(organizations))
+```
+
+`ApplicationDirectory` represents an existing application dependency, not a required new service. The callback accepts native branded `SlackTeamId` and returns `Effect<SlackOrganization | null, E, R>`. `layer` infers and captures `R` once at Layer construction; provide those dependencies privately with `Layer.provide`. It owns the `slack.organizations.resolve` span, safe failure classification, result decoding, and mapping application errors to `SlackOrganizationLookupError`. No callback error mapping or user span is required. Direct custom Layers and `.fixed` remain compatible. Provide the organization Layer consistently to routes and workers, not only handlers; credentials and delivery storage remain independent.
+
+The lookup occurs during verified ingress, before fan-out admission. Positive attribution is saved in delivery storage and reused across duplicate delivery, partial fan-out, and handler retry. An unknown mapping returns HTTP 200 without admitting handler work; expected typed lookup/storage failures retain HTTP 503. `SlackOrganizations.layer` suspends the callback and catches causes, including synchronous throws before it returns an Effect. Defects are safely classified as `unexpected_defect` and carried as optional `reason: 'unexpected'` through lookup/ingress errors to an empty HTTP 500 at the webhook route. Omitted reason retains unavailable behavior, including existing `SlackOrganizationLookupError.make({})` callers. Interruption takes priority over failure/defect classification and preserves cancellation without lookup-failure recovery or logging. A configured lookup never falls back to the default after returning null or failing. Signature verification and credential checks are unchanged. Handlers receive `context.organizationId` without changing native events or handles.
+
+Custom lookup results are decoded as `SlackOrganization | null` before any attribution write. Undefined, malformed, or empty-ID results fail rather than mean absence. Diagnostics report fixed classifications, not application error messages or returned data. The exported lookup/organization schemas have same-name inferred interfaces; `fixed` still validates configuration with `makeEffect` and retains its rc.112 `SchemaIssue.Issue` error type. The extracted ingress-attribution effect is package-internal, not an additional public API or service.
+
+Stop events pass organization lookup before cancellation: an unknown or failed lookup cannot mutate the active mailbox. Existing native-mailbox Stop targeting is unchanged; organization attribution is not a new authorization policy. Delivery also refuses to claim a batch whose selected envelopes have different organizations rather than silently splitting membership or changing mailbox identity.
+
+The native service stays in the Slack package: it imports only Effect and the existing identity codec. GitHub supplies its analogous `GitHubOrganizations` service with native numeric installation IDs. Generic delivery imports neither provider. Application callbacks can supply both provider Layers without a registry, universal installation ID, facade, or package cycle; see [the executable organization recipe](../../examples/organization-lookup/README.md). Custom-directory legacy work fails closed rather than inventing an owner; automatic one-time migration remains deferred behind that explicit upgrade gate. See the delivery README for v3 upgrade instructions and the attribution-record retention limitation.

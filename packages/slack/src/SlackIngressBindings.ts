@@ -9,7 +9,7 @@ import {
 	type EventDefinition,
 	type RunnerOptions,
 } from '@humanlayer/channels-delivery'
-import { Context, Data, Effect, Layer, Match, Schema } from 'effect'
+import { Context, Data, Effect, Layer, Match, Option, Schema } from 'effect'
 
 import { RetryabilityMetadata, SlackIngressError } from './DomainErrors.js'
 import { ThreadId } from './Model.js'
@@ -22,6 +22,8 @@ import {
 	ReactionEvent,
 } from './SlackEvents.js'
 import type { SlackHandlerRegistration, SlackIngressOptions } from './SlackIngress.js'
+import { resolveSlackIngressAttribution } from './SlackIngressAttribution.js'
+import { SlackOrganizations } from './SlackOrganizations.js'
 
 const SlackDeliveryResource = Schema.Struct({ threadId: ThreadId })
 type SlackDeliveryResource = typeof SlackDeliveryResource.Type
@@ -103,7 +105,9 @@ const mapIngressError =
 	<E, A, R>(effect: Effect.Effect<A, E, R>) =>
 		effect.pipe(
 			Effect.tapError(Effect.logError),
-			Effect.mapError(() => SlackIngressError.make({ operation })),
+			Effect.mapError((error) =>
+				Schema.is(SlackIngressError)(error) ? error : SlackIngressError.make({ operation }),
+			),
 		)
 
 const handlerFailure = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
@@ -121,6 +125,7 @@ export type BindingError = DeliveryError | MailboxStoreError
 type DeliveryBinding<A> = {
 	readonly admit: (input: {
 		readonly event: A
+		readonly organizationId: string
 	}) => Effect.Effect<{ readonly key: string; readonly accepted: boolean }, BindingError, MailboxStore>
 	readonly keyForResource: (input: {
 		readonly installation: string
@@ -249,6 +254,19 @@ const makeBindings = <E, R>(options: SlackIngressOptions<E, R>) =>
 			return yield* SlackIngressError.make({ operation: 'duplicate_or_empty_handler_id' })
 		}
 		const handlerContext = yield* Effect.context<R>()
+		const configuredOrganizations = yield* Effect.serviceOption(SlackOrganizations)
+		const organizations = Option.getOrElse(configuredOrganizations, () =>
+			SlackOrganizations.of({
+				legacyOrganizationId: 'default',
+				resolve: Effect.fn('slack.organizations.default')(() => Effect.succeed({ organizationId: 'default' })),
+			}),
+		)
+		const organizationFor = (event: { readonly tenant: string; readonly idempotencyKey: string }) =>
+			resolveSlackIngressAttribution({
+				namespace: options.namespace,
+				workspaceId: event.tenant,
+				eventId: event.idempotencyKey,
+			}).pipe(Effect.provideService(SlackOrganizations, organizations))
 
 		const bindRegistration = <A, I>(
 			definition: EventDefinition<Schema.Codec<A, I>, typeof SlackDeliveryResource>,
@@ -258,6 +276,7 @@ const makeBindings = <E, R>(options: SlackIngressOptions<E, R>) =>
 			const delivery = bind({
 				namespace: options.namespace,
 				handlerId: registration.id,
+				legacyOrganizationId: organizations.legacyOrganizationId ?? null,
 				definition,
 				policy:
 					definition.name === messageDefinition.name ? options.policy : { ...options.policy, mode: 'serial' },
@@ -266,7 +285,7 @@ const makeBindings = <E, R>(options: SlackIngressOptions<E, R>) =>
 						const resolved = yield* resolve(event)
 						const skipped = yield* Effect.forEach(context.skipped, resolve)
 						yield* registration
-							.handler(resolved, { skipped })
+							.handler(resolved, { ...context, skipped })
 							.pipe(Effect.scoped, Effect.provide(handlerContext))
 					}).pipe(handlerFailure),
 			})
@@ -309,6 +328,7 @@ const makeBindings = <E, R>(options: SlackIngressOptions<E, R>) =>
 				namespace: options.namespace,
 				handlerId: registration.id,
 				definition: stoppedDefinition,
+				legacyOrganizationId: organizations.legacyOrganizationId ?? null,
 				policy: { ...options.policy, mode: 'serial' },
 				handler: (event, context) =>
 					awaitStoppedTargets({ event }).pipe(
@@ -322,10 +342,20 @@ const makeBindings = <E, R>(options: SlackIngressOptions<E, R>) =>
 		)
 		const allBindings = [...messageBindings, ...updated, ...deleted, ...reactions, ...stopped]
 
-		const admit = <A>(bindings: ReadonlyArray<DeliveryBinding<A>>, event: A) =>
-			Effect.forEach(bindings, (binding) => binding.admit({ event }), { discard: true }).pipe(
-				mapIngressError('delivery_admit'),
-			)
+		const admit = <A extends { readonly tenant: string; readonly idempotencyKey: string }>(
+			bindings: ReadonlyArray<DeliveryBinding<A>>,
+			event: A,
+		) =>
+			Effect.gen(function* () {
+				if (bindings.length === 0) return
+				const organization = yield* organizationFor(event)
+				if (organization === null) return
+				yield* Effect.forEach(
+					bindings,
+					(binding) => binding.admit({ event, organizationId: organization.organizationId }),
+					{ discard: true },
+				)
+			}).pipe(mapIngressError('delivery_admit'))
 		const targets = (event: ConversationStoppedEvent) =>
 			Effect.forEach(messageBindings, (binding) =>
 				binding
@@ -352,6 +382,8 @@ const makeBindings = <E, R>(options: SlackIngressOptions<E, R>) =>
 					Effect.withSpan('slack.ingress.admit'),
 				),
 			stopConversation: Effect.fn('slack.ingress.stop_conversation')(function* ({ event }: StopInput) {
+				const organization = yield* organizationFor(event)
+				if (organization === null) return
 				const selected = yield* targets(event).pipe(mapIngressError('cancel_active'))
 				yield* Effect.forEach(
 					selected,

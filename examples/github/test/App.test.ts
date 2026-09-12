@@ -5,7 +5,7 @@ import {
 	GitHubIngress,
 	GitHubIssueData,
 	GitHubSubscriptions,
-	type GitHubIssueEvent,
+	type GitHubActivityEvent,
 } from '@humanlayer/channels-github'
 import { layer as memory } from '@humanlayer/channels-github/memory'
 import { ConfigProvider, Context, Effect, Layer, Logger, Schema } from 'effect'
@@ -184,7 +184,7 @@ it.live('emulator PR mention and native discussion writes with synthetic shared 
 		assert.equal(webhook.headers.get('x-github-event'), 'pull_request')
 		const deliveryId = webhook.headers.get('x-github-delivery')
 		assert.ok(deliveryId)
-		const event: GitHubIssueEvent = {
+		const event: GitHubActivityEvent = {
 			event: 'pull_request',
 			action: 'opened',
 			deliveryId,

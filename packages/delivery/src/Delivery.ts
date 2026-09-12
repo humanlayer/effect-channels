@@ -26,7 +26,7 @@ export class HandlerFailure extends Schema.TaggedError<HandlerFailure>()('Handle
 	retryable: Schema.Boolean,
 }) {}
 
-export type HandlerContext<A> = { readonly skipped: ReadonlyArray<A> }
+export type HandlerContext<A> = { readonly skipped: ReadonlyArray<A>; readonly organizationId: string }
 
 type Transition<A> = {
 	readonly state: CurrentMailboxState
@@ -90,6 +90,7 @@ export type HandlerRegistration<Event extends Schema.Constraint, Resource extend
 	readonly handlerId: string
 	readonly definition: EventDefinition<Event, Resource>
 	readonly policy: DeliveryPolicy
+	readonly legacyOrganizationId?: string | null
 	readonly handler: (
 		event: Event['Type'],
 		context: HandlerContext<Event['Type']>,
@@ -160,6 +161,7 @@ export const bind = <Event extends Schema.Constraint, Resource extends Schema.Co
 	const configured = Effect.all([
 		DeliveryPolicy.makeEffect(policy),
 		RegistrationIdentity.makeEffect({ ...registration, ...definition }),
+		Schema.UndefinedOr(Schema.NullOr(Schema.NonEmptyString)).makeEffect(registration.legacyOrganizationId),
 	]).pipe(Effect.mapError(() => DeliveryError.make({ reason: 'configuration' })))
 	const decode = (envelope: Envelope) =>
 		Effect.gen(function* () {
@@ -214,7 +216,10 @@ export const bind = <Event extends Schema.Constraint, Resource extends Schema.Co
 		return (yield* identify(input)).key
 	})
 
-	const admit = Effect.fn('delivery.admit')(function* (input: { readonly event: Event['Type'] }) {
+	const admit = Effect.fn('delivery.admit')(function* (input: {
+		readonly event: Event['Type']
+		readonly organizationId?: string
+	}) {
 		const identified = yield* identify(input)
 		const identity = identified.identity
 		const payload = yield* Schema.encodeEffect(eventCodec)(input.event).pipe(
@@ -232,6 +237,7 @@ export const bind = <Event extends Schema.Constraint, Resource extends Schema.Co
 			resource,
 			payload,
 			acceptedAt: now,
+			organizationId: input.organizationId ?? 'default',
 		}).pipe(Effect.mapError(() => DeliveryError.make({ reason: 'definition' })))
 		const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(Envelope))(envelope).pipe(
 			Effect.mapError(() => DeliveryError.make({ reason: 'payload' })),
@@ -281,6 +287,29 @@ export const bind = <Event extends Schema.Constraint, Resource extends Schema.Co
 		return { key, accepted }
 	})
 
+	const attributeEnvelopes = (
+		envelopes: readonly [Envelope, ...Envelope[]],
+	): Effect.Effect<readonly [Envelope, ...Envelope[]], DeliveryError> => {
+		const legacyOrganizationId =
+			registration.legacyOrganizationId === undefined ? 'default' : registration.legacyOrganizationId
+		const organizationId = envelopes[0].organizationId ?? legacyOrganizationId
+		if (envelopes.some((entry) => entry.organizationId === undefined) && legacyOrganizationId === null)
+			return Effect.logError('Delivery organization attribution rejected', {
+				classification: 'unattributed_legacy_batch',
+			}).pipe(Effect.andThen(Effect.fail(DeliveryError.make({ reason: 'configuration' }))))
+		if (
+			organizationId === null ||
+			envelopes.some((entry) => (entry.organizationId ?? legacyOrganizationId) !== organizationId)
+		)
+			return Effect.logError('Delivery organization attribution rejected', {
+				classification: 'mixed_organization_batch',
+			}).pipe(Effect.andThen(Effect.fail(DeliveryError.make({ reason: 'configuration' }))))
+		return Effect.succeed([
+			{ ...envelopes[0], organizationId },
+			...envelopes.slice(1).map((entry) => ({ ...entry, organizationId })),
+		] as const)
+	}
+
 	const claim = Effect.fn('delivery.claim')(function* (input: { readonly key: string }) {
 		yield* configured
 		if (!input.key.startsWith(prefix)) return yield* DeliveryError.make({ reason: 'definition' })
@@ -304,30 +333,34 @@ export const bind = <Event extends Schema.Constraint, Resource extends Schema.Co
 				const first = selected[0]
 				if (first === undefined)
 					return Effect.succeed({ state: { ...state, readyAt: null }, result: undefined })
-				const active = ActiveBatch.make({
-					envelopes: [first, ...selected.slice(1)],
-					attempt: (batch?.attempt ?? 0) + 1,
-					owner: revision,
-					leaseUntil: now + policy.leaseMs,
-					cancelled: batch?.cancelled ?? false,
-				})
-				const pending = batch === undefined ? state.pending.slice(selected.length) : state.pending
-				return Effect.succeed({
-					state: scheduled(
-						withBatches(
-							{
-								...state,
-								pending,
-								pendingReadyAt: pending.length === 0 ? null : state.pendingReadyAt,
-								burstDraining: policy.mode === 'burst' || state.burstDraining,
-							},
-							batch === undefined
-								? [...batches, active]
-								: batches.map((entry) => (entry === batch ? active : entry)),
-						),
-					),
-					result: active,
-				})
+				return attributeEnvelopes([first, ...selected.slice(1)]).pipe(
+					Effect.map((envelopes) => {
+						const active = ActiveBatch.make({
+							envelopes,
+							attempt: (batch?.attempt ?? 0) + 1,
+							owner: revision,
+							leaseUntil: now + policy.leaseMs,
+							cancelled: batch?.cancelled ?? false,
+						})
+						const pending = batch === undefined ? state.pending.slice(selected.length) : state.pending
+						return {
+							state: scheduled(
+								withBatches(
+									{
+										...state,
+										pending,
+										pendingReadyAt: pending.length === 0 ? null : state.pendingReadyAt,
+										burstDraining: policy.mode === 'burst' || state.burstDraining,
+									},
+									batch === undefined
+										? [...batches, active]
+										: batches.map((entry) => (entry === batch ? active : entry)),
+								),
+							),
+							result: active,
+						}
+					}),
+				)
 			},
 		})
 	})
@@ -475,7 +508,9 @@ export const bind = <Event extends Schema.Constraint, Resource extends Schema.Co
 			const events = yield* Effect.forEach(batch.envelopes, decode)
 			const event = events.at(-1)
 			if (event === undefined) return yield* DeliveryError.make({ reason: 'payload' })
-			yield* registration.handler(event, { skipped: events.slice(0, -1) })
+			const organizationId = batch.envelopes[0].organizationId
+			if (organizationId === undefined) return yield* DeliveryError.make({ reason: 'configuration' })
+			yield* registration.handler(event, { skipped: events.slice(0, -1), organizationId })
 		}).pipe(Effect.scoped)
 		const renew = transition({
 			key: input.key,

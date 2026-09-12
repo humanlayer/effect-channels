@@ -1,0 +1,70 @@
+import { GitHubId, GitHubOrganizationLookup, GitHubOrganizationLookupError, GitHubOrganizations } from '@humanlayer/channels-github'
+import { SlackOrganizationLookup, SlackOrganizationLookupError, SlackOrganizations, SlackTeamId } from '@humanlayer/channels-slack'
+import { Context, Effect, Layer, SchemaIssue } from 'effect'
+import { SaveIngressAttribution, saveIngressAttribution, MailboxStore, type MailboxStoreError, type IngressAttribution } from '@humanlayer/channels-delivery'
+
+export const saveAttribution = (input: SaveIngressAttribution): Effect.Effect<IngressAttribution, MailboxStoreError, MailboxStore> => saveIngressAttribution(input)
+
+class Directory extends Context.Service<Directory, {
+	readonly slack: (input: SlackOrganizationLookup) => Effect.Effect<{ readonly organizationId: string } | null, SlackOrganizationLookupError>
+	readonly github: (input: GitHubOrganizationLookup) => Effect.Effect<{ readonly organizationId: string } | null, GitHubOrganizationLookupError>
+}>()('packed/ApplicationDirectory') {}
+
+export const slack: Layer.Layer<SlackOrganizations, never, Directory> = Layer.effect(SlackOrganizations, Effect.gen(function* () {
+	const directory = yield* Directory
+	return SlackOrganizations.of({ resolve: (input) => {
+		const workspaceId: SlackTeamId = input.workspaceId
+		// @ts-expect-error Slack's native workspace is not a GitHub installation number.
+		const invalid: number = input.workspaceId
+		return directory.slack({ workspaceId })
+	} })
+}))
+
+export const github: Layer.Layer<GitHubOrganizations, never, Directory> = Layer.effect(GitHubOrganizations, Effect.gen(function* () {
+	const directory = yield* Directory
+	return GitHubOrganizations.of({ resolve: (input) => {
+		const installationId: typeof GitHubId.Type = input.installationId
+		// @ts-expect-error GitHub installations retain their native number type.
+		const invalid: SlackTeamId = input.installationId
+		return directory.github({ installationId })
+	} })
+}))
+
+export const nativeInputs = () => {
+	SlackOrganizationLookup.make({ workspaceId: SlackTeamId.make('T_PACKED') })
+	GitHubOrganizationLookup.make({ installationId: 100 })
+	// @ts-expect-error Raw unparsed workspace strings are not branded SlackTeamId values.
+	SlackOrganizationLookup.make({ workspaceId: 'T_PACKED' })
+	// @ts-expect-error Do not replace native GitHub installation IDs with strings.
+	GitHubOrganizationLookup.make({ installationId: '100' })
+}
+
+export const fixedSlack: Layer.Layer<SlackOrganizations, SchemaIssue.Issue> = SlackOrganizations.fixed({ organizationId: 'single' })
+export const fixedGitHub: Layer.Layer<GitHubOrganizations, SchemaIssue.Issue> = GitHubOrganizations.fixed({ organizationId: 'single' })
+
+class ApplicationLookup extends Context.Service<ApplicationLookup, { readonly organizationId: string }>()('packed/Lookup') {}
+
+export const inferredSlack = SlackOrganizations.layer(({ workspaceId }) => Effect.gen(function* () {
+	const native: SlackTeamId = workspaceId
+	// @ts-expect-error Native Slack identity is not numeric.
+	const wrong: number = workspaceId
+	return { organizationId: (yield* ApplicationLookup).organizationId }
+}))
+export const inferredGitHub = GitHubOrganizations.layer(({ installationId }) => Effect.gen(function* () {
+	const native: typeof GitHubId.Type = installationId
+	// @ts-expect-error Native GitHub identity is not a string.
+	const wrong: string = installationId
+	if (installationId === 0) return yield* Effect.fail({ applicationFailure: true })
+	return { organizationId: (yield* ApplicationLookup).organizationId }
+}))
+export const slackRequired: Layer.Layer<SlackOrganizations, never, ApplicationLookup> = inferredSlack
+export const githubRequired: Layer.Layer<GitHubOrganizations, never, ApplicationLookup> = inferredGitHub
+// @ts-expect-error The callback dependency must be provided.
+export const missingSlack: Layer.Layer<SlackOrganizations> = inferredSlack
+// @ts-expect-error The callback dependency must be provided.
+export const missingGitHub: Layer.Layer<GitHubOrganizations> = inferredGitHub
+const dependency = Layer.succeed(ApplicationLookup, { organizationId: 'packed' })
+export const fulfilledSlack: Layer.Layer<SlackOrganizations> = inferredSlack.pipe(Layer.provide(dependency))
+export const fulfilledGitHub: Layer.Layer<GitHubOrganizations> = inferredGitHub.pipe(Layer.provide(dependency))
+export const noLeakSlack = Effect.flatMap(SlackOrganizations, (service): Effect.Effect<unknown, SlackOrganizationLookupError> => service.resolve({ workspaceId: SlackTeamId.make('T_PACKED') }))
+export const noLeakGitHub = Effect.flatMap(GitHubOrganizations, (service): Effect.Effect<unknown, GitHubOrganizationLookupError> => service.resolve({ installationId: 100 }))

@@ -23,7 +23,7 @@ export const githubBot = GitHubBot.make({
 	namespace: 'combined-github',
 	policy,
 	runner: { scanLimit: 100, concurrency: 8, pollMs: 25 },
-	activityHandlers: [
+	handlers: [
 		{ id: 'respond', onMention: respond, onSubscribedEvent: () => Effect.void },
 		{ id: 'notify-slack', onMention: notifySlack },
 	],

@@ -1,7 +1,7 @@
 import { DeliveryPolicy } from '@humanlayer/channels-delivery'
 import { Layer } from 'effect'
 
-import { GitHubCredentials, GitHubIssueEvent } from '../src/index.js'
+import { GitHubCredentials, GitHubActivityEvent } from '../src/index.js'
 
 export const policy = DeliveryPolicy.make({
 	mode: 'queue',
@@ -37,7 +37,7 @@ export const event = {
 		state: 'open',
 		html_url: 'https://github.test/alice/project/issues/1',
 	},
-} satisfies GitHubIssueEvent
+} satisfies GitHubActivityEvent
 export const routeCredentials = Layer.mock(GitHubCredentials, {
 	apiUrl: 'https://api.github.test',
 	botUserId: 99,

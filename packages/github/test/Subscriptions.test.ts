@@ -1,5 +1,5 @@
 import { assert, it } from '@effect/vitest'
-import { MailboxStore, MailboxStoreError } from '@humanlayer/channels-delivery'
+import { MailboxStore, MailboxStoreError, mailboxKey } from '@humanlayer/channels-delivery'
 import { Context, Effect, Layer, Queue, Redacted, Ref, Schema } from 'effect'
 import { TestClock } from 'effect/testing'
 
@@ -13,6 +13,7 @@ import {
 	GitHubSubscriptions,
 	GitHubSubscriptionRoute,
 	GitHubSubscriptionStore,
+	issueResourceKey,
 	reviewCommentRootId,
 } from '../src/index.js'
 import { layer as memory } from '../src/memory.js'
@@ -63,8 +64,7 @@ const setup = Effect.gen(function* () {
 		GitHubIngress.layer({
 			namespace: subscription.namespace,
 			policy,
-			handlers: [],
-			activityHandlers: [
+			handlers: [
 				{
 					id: 'agent',
 					onCreation: record('creation'),
@@ -434,28 +434,33 @@ it.effect('partial fanout is frozen before admission and survives unsubscribe an
 		const storage = yield* Layer.build(memory({ maxMailboxes: 20 }))
 		const store = Context.get(storage, MailboxStore)
 		const subscriptions = Context.get(storage, GitHubSubscriptions)
-		const writes = yield* Ref.make(0)
+		const failSecond = yield* Ref.make(true)
+		const keyForHandler = (id: string) =>
+			mailboxKey({
+				namespace: subscription.namespace,
+				handlerId: JSON.stringify([id, 'subscribed']),
+				provider: 'github',
+				installation: String(event.resource.repository.installationId),
+				resourceKey: issueResourceKey(event.resource),
+			})
 		const seen = yield* Queue.unbounded<string>()
 		const fault = Layer.succeed(
 			MailboxStore,
 			MailboxStore.of({
 				loadMailbox: store.loadMailbox,
 				commitMailbox: (input) =>
-					Ref.updateAndGet(writes, (n) => n + 1).pipe(
-						Effect.flatMap((n) =>
-							n === 2
-								? Effect.fail(MailboxStoreError.make({ operation: 'commit' }))
-								: store.commitMailbox(input),
-						),
-					),
+					Effect.gen(function* () {
+						if (input.key === keyForHandler('two') && (yield* Ref.getAndSet(failSecond, false)))
+							return yield* MailboxStoreError.make({ operation: 'commit' })
+						return yield* store.commitMailbox(input)
+					}),
 			}),
 		)
 		const make = () =>
 			GitHubIngress.layer({
 				namespace: subscription.namespace,
 				policy,
-				handlers: [],
-				activityHandlers: ['one', 'two'].map((id) => ({
+				handlers: ['one', 'two'].map((id) => ({
 					id,
 					onSubscribedEvent: () => Queue.offer(seen, id).pipe(Effect.asVoid),
 				})),
@@ -475,6 +480,11 @@ it.effect('partial fanout is frozen before admission and survives unsubscribe an
 		yield* subscriptions.subscribe(subscription)
 		const request = () => send(signedRequest('issues', JSON.stringify({ ...base, action: 'closed' }), 'partial'))
 		assert.equal((yield* request()).status, 503)
+		assert.strictEqual(
+			(yield* store.loadMailbox({ key: keyForHandler('one') }))?.state.pending[0]?.eventId,
+			'partial',
+		)
+		assert.strictEqual(yield* store.loadMailbox({ key: keyForHandler('two') }), undefined)
 		yield* subscriptions.unsubscribe(subscription)
 		assert.equal((yield* request()).status, 200)
 		const reconstructed = yield* Layer.build(make())
@@ -692,27 +702,32 @@ it.effect('a first admitted mention may subscribe without adding new consumers d
 		const storage = yield* Layer.build(memory({ maxMailboxes: 20 }))
 		const store = Context.get(storage, MailboxStore)
 		const subscriptions = Context.get(storage, GitHubSubscriptions)
-		const writes = yield* Ref.make(0)
+		const failSecond = yield* Ref.make(true)
+		const secondKey = mailboxKey({
+			namespace: subscription.namespace,
+			handlerId: '["two","mention"]',
+			provider: 'github',
+			installation: String(event.resource.repository.installationId),
+			resourceKey: issueResourceKey(event.resource),
+		})
 		const seen = yield* Queue.unbounded<string>()
 		const fault = Layer.succeed(
 			MailboxStore,
 			MailboxStore.of({
 				loadMailbox: store.loadMailbox,
 				commitMailbox: (input) =>
-					Ref.updateAndGet(writes, (n) => n + 1).pipe(
-						Effect.flatMap((n) =>
-							n === 2
-								? Effect.fail(MailboxStoreError.make({ operation: 'commit' }))
-								: store.commitMailbox(input),
-						),
-					),
+					Effect.gen(function* () {
+						if (input.key === secondKey && (yield* Ref.getAndSet(failSecond, false)))
+							return yield* MailboxStoreError.make({ operation: 'commit' })
+						return yield* store.commitMailbox(input)
+					}),
 			}),
 		)
 		const services = yield* Layer.build(
 			GitHubIngress.layer({
 				namespace: subscription.namespace,
 				policy,
-				activityHandlers: [
+				handlers: [
 					...['one', 'two'].map((id) => ({
 						id,
 						onMention: () =>
@@ -768,7 +783,7 @@ it.effect('frozen handler retry survives unsubscribe and retains its native even
 			GitHubIngress.layer({
 				namespace: subscription.namespace,
 				policy,
-				activityHandlers: [
+				handlers: [
 					{
 						id: 'retry',
 						onSubscribedEvent: (event) =>
