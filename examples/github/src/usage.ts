@@ -1,5 +1,6 @@
 import {
 	GitHub,
+	GitHubEmoji,
 	GitHubSubscriptions,
 	type GitHubDiscussionRef,
 	type GitHubReactionRef,
@@ -19,14 +20,14 @@ export const stopFollowing = Effect.fn('example.github.stop_following')(function
 
 export const acknowledge = Effect.fn('example.github.acknowledge')(function* (target: GitHubReactionTarget) {
 	const github = yield* GitHub
-	return yield* github.addReaction({ target, content: 'eyes' })
+	return yield* github.addReaction({ target, content: GitHubEmoji.Eyes })
 })
 
 export const listAcknowledgements = Effect.fn('example.github.list_acknowledgements')(function* (
 	target: GitHubReactionTarget,
 ) {
 	const github = yield* GitHub
-	return yield* github.listReactions({ target, content: 'eyes', page: 1, perPage: 20 })
+	return yield* github.listReactions({ target, content: GitHubEmoji.Eyes, page: 1, perPage: 20 })
 })
 
 export const removeAcknowledgement = Effect.fn('example.github.remove_acknowledgement')(function* (

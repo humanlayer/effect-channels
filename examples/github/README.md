@@ -82,7 +82,7 @@ code or webhook callbacks:
 
 ```ts
 const wasSubscribed = yield * stopFollowing(resource) // isSubscribed + unsubscribe
-const added = yield * acknowledge(target) // addReaction, content: 'eyes'
+const added = yield * acknowledge(target) // addReaction, content: GitHubEmoji.Eyes
 const firstPage = yield * listAcknowledgements(target) // listReactions, page: 1, perPage: 20
 // Only on a later explicit cleanup decision:
 yield * removeAcknowledgement(added.ref) // removeReaction

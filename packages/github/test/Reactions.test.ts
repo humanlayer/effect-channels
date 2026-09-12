@@ -10,6 +10,7 @@ import {
 
 import {
 	GitHub,
+	GitHubEmoji,
 	GitHubCredentials,
 	GitHubCrypto,
 	GitHubIssueData,
@@ -134,6 +135,35 @@ const harness = (options: HarnessOptions) => {
 	}
 }
 
+for (const content of GitHubEmoji.literals) {
+	it.effect(`encodes named GitHub emoji ${content} in reaction requests and filters`, () => {
+		const data = { ...reaction, content }
+		const add = harness({ target: issue, body: JSON.stringify(data) })
+		const list = harness({ target: issue, body: JSON.stringify([data]) })
+		return Effect.gen(function* () {
+			const added = yield* Effect.flatMap(GitHub, (github) =>
+				github.addReaction({ target: issue, content }),
+			).pipe(Effect.provide(add.layer))
+			assert.strictEqual(added.data.content, content)
+			const listed = yield* Effect.flatMap(GitHub, (github) =>
+				github.listReactions({ target: issue, content, page: 1, perPage: 10 }),
+			).pipe(Effect.provide(list.layer))
+			assert.deepEqual(listed, [added])
+			const post = add.requests.find((request) => request.method === 'POST')
+			assert.ok(post)
+			assert.ok(Predicate.isTagged(post.body, 'Uint8Array'))
+			assert.strictEqual(new TextDecoder().decode(post.body.body), JSON.stringify({ content }))
+			assert.ok(
+				list.requests.some(
+					(request) =>
+						request.url ===
+						`${origin}${reactionPath(issue)}?per_page=10&page=1&content=${encodeURIComponent(content)}`,
+				),
+			)
+		})
+	})
+}
+
 for (const target of targets) {
 	it.effect(
 		`native reaction add/list/remove contract: ${target.kind} ${target.kind === 'github.issue-comment' ? target.issue.kind : ''}`,
@@ -141,10 +171,13 @@ for (const target of targets) {
 			const h = harness({ target })
 			return Effect.gen(function* () {
 				const github = yield* GitHub
-				const added = yield* github.addReaction({ target, content: '+1' })
+				const added = yield* github.addReaction({ target, content: GitHubEmoji.ThumbsUp })
 				assert.deepEqual(added, { ref: { kind: 'github.reaction', target, id: 70 }, data: reaction })
 				assert.deepEqual([...h.visible.values()], [reaction])
-				assert.deepEqual(yield* github.listReactions({ target, page: 2, perPage: 1, content: '+1' }), [added])
+				assert.deepEqual(
+					yield* github.listReactions({ target, page: 2, perPage: 1, content: GitHubEmoji.ThumbsUp }),
+					[added],
+				)
 				assert.equal(yield* github.removeReaction({ reaction: added.ref }), undefined)
 				assert.equal(h.visible.size, 0)
 				const calls = h.requests.filter((request) => request.url.includes('/reactions'))

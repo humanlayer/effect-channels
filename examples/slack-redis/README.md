@@ -33,8 +33,10 @@ https://YOUR-TUNNEL/api/v1/integrations/slack/webhook
 ```
 
 The server listens on port `3000` (`PORT` overrides it). Invite the bot to a
-channel, mention it, and reply in the thread: the mention subscribes the thread,
-and both messages receive `Durable echo: …`. DMs receive the same echo. Stop the
+channel and mention it. **Wait for the initial mention's echo/subscription before
+testing plain threaded messages**, then reply in that thread. The mention and an
+isolated follow-up each receive `Durable echo: …` after the quiet period. Rapid
+follow-ups produce only the latest echo. DMs use the same debounce policy. Stop the
 app, restart it **without seeding again**, and reply in the subscribed thread;
 its connection and subscription remain in Redis (subject to subscription TTL).
 
@@ -45,6 +47,27 @@ overwrites them from environment variables. After seeding, the server only needs
 available securely if you need to seed again. This is not OAuth or token rotation.
 
 ## The composition
+
+The actual [`src/app.ts`](./src/app.ts) selects non-default delivery:
+
+```ts
+import { SlackBot } from '@humanlayer/channels-slack'
+
+import { handlers } from './handlers.js'
+
+export const bot = SlackBot.make({
+	namespace: 'slack-redis',
+	handlers,
+	policy: { mode: 'debounce', quietPeriodMs: 1500 },
+})
+export const application = bot.layer
+```
+
+Within a message mailbox, debounce waits for a 1500 ms quiet period. Each new
+eligible message resets that period; duplicate deliveries do not. Active work is
+not interrupted. Earlier events in the selected batch are available through
+`context.skipped`, but this echo handler ignores that context and replies only to
+the latest message. Lifecycle delivery stays serial; it is not debounced.
 
 | File                                                           | Responsibility                                             |
 | -------------------------------------------------------------- | ---------------------------------------------------------- |
@@ -191,9 +214,9 @@ backup/replication policy, noeviction, memory headroom and compatible worker clo
 The initial delivery adapter uses a single Redis hash slot with prefix-index write
 amplification. See [delivery guarantees](../../packages/delivery/README.md).
 
-The example inherits the bounded `SlackBot.make` defaults: queue/latest pending
-with skipped context, five attempts, 100 ms–30 s retry backoff, 30 s lease with
-5 s heartbeat, and bounded payload/envelope/outcome retention. These are example
+Only the message delivery mode and quiet period are overridden. The remaining
+bounded `SlackBot.make` defaults are unchanged: five attempts, 100 ms–30 s retry
+backoff, 30 s lease with 5 s heartbeat, and bounded payload/envelope/outcome retention. These are example
 defaults, not production capacity recommendations. ACK follows durable admission;
 handlers run in the scoped worker. External Slack posts are **not exactly once**
 and may repeat after a crash between posting and committing completion.
@@ -219,8 +242,10 @@ docker compose -f examples/slack-redis/compose.yaml config --quiet
 ```
 
 Default example tests use the actual application, signed webhooks, memory stores
-and Emulate, plus isolated seed configuration tests. They do not connect to the
-example's Redis/Postgres or prove disk durability. Optional library backend
+and Emulate, plus isolated seed configuration tests. A TestClock test uses the
+actual bot's routes and scoped worker to verify quiet-period resets, duplicate
+admission, and a latest-only emulator-visible reply without wall-clock sleeps.
+They do not connect to the example's Redis/Postgres or prove disk durability. Optional library backend
 contracts use fresh disposable containers, not these application URLs:
 
 ```sh

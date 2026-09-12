@@ -3,7 +3,7 @@ import * as DeliveryMemory from '@humanlayer/channels-delivery/memory'
 import { MarkdownContent, Slack, SlackConnectionStore, SlackSubscriptions, SlackTeamId, ThreadId } from '@humanlayer/channels-slack'
 import * as SlackMemory from '@humanlayer/channels-slack/memory'
 import { Context, Effect, Layer, Redacted } from 'effect'
-import { GitHub, GitHubCredentials, GitHubCrypto, GitHubIssueRef, GitHubReactionContent, type GitHubReaction, type GitHubReactionRef, type GitHubReactionTarget, type GitHubError, type AddReactionInput, type ListReactionsInput, type RemoveReactionInput } from '@humanlayer/channels-github'
+import { GitHub, GitHubCredentials, GitHubCrypto, GitHubIssueRef, GitHubEmoji, GitHubReactionContent, type GitHubReaction, type GitHubReactionRef, type GitHubReactionTarget, type GitHubError, type AddReactionInput, type ListReactionsInput, type RemoveReactionInput } from '@humanlayer/channels-github'
 import { FetchHttpClient } from 'effect/unstable/http'
 import { GitHubSubscriptions } from '@humanlayer/channels-github'
 import * as GitHubMemory from '@humanlayer/channels-github/memory'
@@ -106,8 +106,15 @@ export const githubRejectsSlack = (github: GitHub['Service'], threadId: ThreadId
 	return github.getIssue({ issue: threadId })
 }
 export const githubReactions = (github: GitHub['Service'], target: GitHubReactionTarget, reaction: GitHubReactionRef) => {
-	const add: AddReactionInput = { target, content: GitHubReactionContent.make('eyes') }
-	const list: ListReactionsInput = { target, page: 1, perPage: 100 }
+	const emoji: GitHubEmoji = GitHubEmoji.Eyes
+	const native: GitHubReactionContent = '+1'
+	const add: AddReactionInput = { target, content: emoji }
+	const list: ListReactionsInput = { target, page: 1, perPage: 100, content: GitHubEmoji.ThumbsUp }
+	GitHubReactionContent.make(native)
+	// @ts-expect-error GitHub has no custom emoji constructor.
+	GitHubEmoji.custom('party_parrot')
+	// @ts-expect-error Named values preserve their exact native literal types.
+	const wrong: typeof GitHubEmoji.ThumbsUp = 'eyes'
 	const remove: RemoveReactionInput = { reaction }
 	const added: Effect.Effect<GitHubReaction, GitHubError> = github.addReaction(add)
 	const listed: Effect.Effect<ReadonlyArray<GitHubReaction>, GitHubError> = github.listReactions(list)
@@ -119,9 +126,9 @@ export const githubReactions = (github: GitHub['Service'], target: GitHubReactio
 	// @ts-expect-error Removing requires a target-scoped native reaction ref, not a number.
 	github.removeReaction({ reaction: 70 })
 	// @ts-expect-error PR review comments are outside this slice.
-	github.addReaction({ target: { kind: 'github.review-comment', id: 1 }, content: 'eyes' })
+	github.addReaction({ target: { kind: 'github.review-comment', id: 1 }, content: GitHubEmoji.Eyes })
 	// @ts-expect-error Commit reactions are outside this slice.
-	github.addReaction({ target: { kind: 'github.commit', sha: 'abc' }, content: 'eyes' })
+	github.addReaction({ target: { kind: 'github.commit', sha: 'abc' }, content: GitHubEmoji.Eyes })
 	return { added, listed, removed }
 }
 export const outbound = readyForHost(Effect.flatMap(Slack, (slack) => slack.post({

@@ -165,13 +165,13 @@ Routing records have schema version `1`; envelopes retain `github.activity` defi
 
 ```ts
 import { Effect } from 'effect'
-import { GitHub, type GitHubReactionTarget } from '@humanlayer/channels-github'
+import { GitHub, GitHubEmoji, type GitHubReactionTarget } from '@humanlayer/channels-github'
 
 // target is an issue.ref, a GitHubPullRequestRef, or a comment.ref.
 export const acknowledge = (target: GitHubReactionTarget) =>
 	Effect.gen(function* () {
 		const github = yield* GitHub
-		const added = yield* github.addReaction({ target, content: 'eyes' })
+		const added = yield* github.addReaction({ target, content: GitHubEmoji.Eyes })
 		const page = yield* github.listReactions({ target, page: 1, perPage: 100 })
 		yield* github.removeReaction({ reaction: added.ref })
 		return page
@@ -183,6 +183,13 @@ inbox or signing secret is needed. `GitHubReaction` contains a target-scoped
 `GitHubReactionRef` and decoded native `data` (`id`, `node_id`, nullable `user`,
 `content`, `created_at`). Native content is exactly `+1`, `-1`, `laugh`, `confused`,
 `heart`, `hooray`, `rocket`, or `eyes`, not Slack aliases, custom emoji or Unicode.
+
+Use `GitHubEmoji.ThumbsUp`, `.ThumbsDown`, `.Laugh`, `.Confused`, `.Heart`,
+`.Hooray`, `.Rocket`, or `.Eyes`. These named values are native strings, not
+object handles: `GitHubEmoji.ThumbsUp` is `'+1'`. `GitHubEmoji` is also the
+closed Effect schema; `GitHubReactionContent` remains its compatible alias.
+Existing native-string callers still work. Unlike Slack's `Emoji`, there is
+no `custom()` constructor or provider-name normalization.
 
 `listReactions` requires explicit positive safe-integer `page` and `perPage`
 (1–100); optional `content` filters the page. It fetches **one page**, rejects an

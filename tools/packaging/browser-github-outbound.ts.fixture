@@ -1,1 +1,1 @@
-export { GitHub, GitHubCredentials, GitHubCrypto, GitHubReaction, GitHubReactionData, GitHubReactionRef, GitHubReactionContent, GitHubReactionTarget, AddReactionInput, ListReactionsInput, RemoveReactionInput } from '@humanlayer/channels-github'
+export { GitHub, GitHubCredentials, GitHubCrypto, GitHubEmoji, GitHubReaction, GitHubReactionData, GitHubReactionRef, GitHubReactionContent, GitHubReactionTarget, AddReactionInput, ListReactionsInput, RemoveReactionInput } from '@humanlayer/channels-github'

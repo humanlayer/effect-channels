@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import * as Delivery from '@humanlayer/channels-delivery'
 import * as GitHub from '@humanlayer/channels-github'
 import * as Slack from '@humanlayer/channels-slack'
-import { Effect } from 'effect'
+import { Effect, Schema } from 'effect'
 
 import { deliveryIdentity, slackIdentity, githubIdentity, githubSubscriptionRoundTrip } from './compiled/consumer.js'
 import { assertBuiltEntry, assertOneEffect } from './guard.mjs'
@@ -49,4 +49,11 @@ assert.ok(GitHub.GitHubReaction)
 assert.ok(GitHub.GitHubReactionData)
 assert.ok(GitHub.GitHubReactionRef)
 assert.ok(GitHub.GitHubReactionContent)
+assert.equal(GitHub.GitHubEmoji.Eyes, 'eyes')
+assert.equal(GitHub.GitHubEmoji.ThumbsUp, '+1')
+assert.equal(GitHub.GitHubReactionContent, GitHub.GitHubEmoji)
+for (const emoji of GitHub.GitHubEmoji.literals) {
+	assert.equal(Schema.decodeSync(GitHub.GitHubEmoji)(emoji), emoji)
+	assert.equal(Schema.encodeSync(GitHub.GitHubEmoji)(emoji), emoji)
+}
 assertOneEffect()

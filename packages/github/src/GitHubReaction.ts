@@ -3,16 +3,20 @@ import { Schema } from 'effect'
 import { GitHubUser } from './GitHubEvents.js'
 import { GitHubCommentRef, GitHubDiscussionRef, GitHubId } from './GitHubResource.js'
 
-export const GitHubReactionContent = Schema.Literals([
-	'+1',
-	'-1',
-	'laugh',
-	'confused',
-	'heart',
-	'hooray',
-	'rocket',
-	'eyes',
-])
+const emojiValues = {
+	ThumbsUp: '+1',
+	ThumbsDown: '-1',
+	Laugh: 'laugh',
+	Confused: 'confused',
+	Heart: 'heart',
+	Hooray: 'hooray',
+	Rocket: 'rocket',
+	Eyes: 'eyes',
+} as const
+
+export const GitHubEmoji = Object.assign(Schema.Literals(Object.values(emojiValues)), emojiValues)
+export type GitHubEmoji = typeof GitHubEmoji.Type
+export const GitHubReactionContent = GitHubEmoji
 export type GitHubReactionContent = typeof GitHubReactionContent.Type
 export const GitHubReactionTarget = Schema.Union([GitHubDiscussionRef, GitHubCommentRef])
 export type GitHubReactionTarget = typeof GitHubReactionTarget.Type
