@@ -9,6 +9,12 @@ export const DeliveryId = Schema.NonEmptyString.check(
 )
 export type DeliveryId = typeof DeliveryId.Type
 
+export const DeliveryOperationId = Schema.NonEmptyString.check(
+	Schema.isMaxLength(4_096),
+	Schema.isPattern(/^operation:v1:[A-Za-z0-9_-]+:final$/),
+)
+export type DeliveryOperationId = typeof DeliveryOperationId.Type
+
 export const DeliveryTerminalOutcome = Schema.Literals(['completed', 'failed'])
 export type DeliveryTerminalOutcome = typeof DeliveryTerminalOutcome.Type
 
@@ -24,6 +30,27 @@ export class DeliveryOutcomeConflict extends Schema.TaggedError<DeliveryOutcomeC
 	message: Schema.String,
 }) {}
 
+export class DeliveryTerminalRequestConflict extends Schema.TaggedError<DeliveryTerminalRequestConflict>()(
+	'DeliveryTerminalRequestConflict',
+	{
+		deliveryId: DeliveryId,
+		message: Schema.String,
+	},
+) {}
+
+export class DeliveryTerminalRequestInvalid extends Schema.TaggedError<DeliveryTerminalRequestInvalid>()(
+	'DeliveryTerminalRequestInvalid',
+	{ reason: Schema.Literals(['markdown_too_large', 'invalid_markdown']) },
+) {}
+
+export class DeliveryTerminalCapacityExceeded extends Schema.TaggedError<DeliveryTerminalCapacityExceeded>()(
+	'DeliveryTerminalCapacityExceeded',
+	{
+		deliveryId: DeliveryId,
+		message: Schema.String,
+	},
+) {}
+
 export class DeliveryControlUnavailable extends Schema.TaggedError<DeliveryControlUnavailable>()(
 	'DeliveryControlUnavailable',
 	{
@@ -36,6 +63,12 @@ export const DeliveryTerminalReceipt = Schema.Struct({
 	deliveryId: DeliveryId,
 	outcome: DeliveryTerminalOutcome,
 	status: Schema.Literals(['accepted', 'already_recorded']),
+	finalMessage: Schema.optionalKey(
+		Schema.Struct({
+			operationId: DeliveryOperationId,
+			status: Schema.Literals(['pending', 'delivering', 'retrying', 'delivered', 'delivery_failed']),
+		}),
+	),
 })
 export interface DeliveryTerminalReceipt extends Schema.Schema.Type<typeof DeliveryTerminalReceipt> {}
 
@@ -54,3 +87,15 @@ export const deliveryOutcomeConflict = (input: {
 
 export const deliveryControlUnavailable = (operation: string) =>
 	DeliveryControlUnavailable.make({ operation, message: 'Delivery control is temporarily unavailable.' })
+
+export const deliveryTerminalRequestConflict = (deliveryId: DeliveryId) =>
+	DeliveryTerminalRequestConflict.make({
+		deliveryId,
+		message: 'The terminal outcome was already recorded with different final Markdown.',
+	})
+
+export const deliveryTerminalCapacityExceeded = (deliveryId: DeliveryId) =>
+	DeliveryTerminalCapacityExceeded.make({
+		deliveryId,
+		message: 'The mailbox cannot retain a final message; retry terminal completion without Markdown.',
+	})

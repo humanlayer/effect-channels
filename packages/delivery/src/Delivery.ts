@@ -1,5 +1,27 @@
-import { Cause, Clock, Effect, Exit, Fiber, Match, Random, Schedule, Schema, SchemaIssue } from 'effect'
+import {
+	Cause,
+	Clock,
+	Data,
+	Effect,
+	Exit,
+	Fiber,
+	Match,
+	Option,
+	Predicate,
+	Random,
+	Schedule,
+	Schema,
+	SchemaIssue,
+} from 'effect'
 
+import {
+	DeliveredDeliveryOperation,
+	DeliveryOutputError,
+	type DeliveryOutputReceipt,
+	type FinalMessageOperation,
+	FailedDeliveryOperation,
+	PendingDeliveryOperation,
+} from './DeliveryOperation.js'
 import { DeliveryPolicy } from './DeliveryPolicy.js'
 import { encodeDeliveryId } from './DeliveryReference.js'
 import { runDeliveryPass } from './DeliveryRunner.js'
@@ -8,20 +30,29 @@ import {
 	ActiveBatch,
 	activeBatches,
 	CurrentMailboxState,
+	cancellationPending,
 	currentMailbox,
 	emptyMailbox,
 	Envelope,
 	eventIdentity,
 	ExternalDeliveryStage,
 	LocalDeliveryStage,
+	mailboxCapacityUsage,
+	mailboxEnvelopes,
 	mailboxKey,
 	mailboxPrefix,
 	MailboxAddress,
 	MailboxState,
 	Outcome,
+	retainedOutcomes,
 } from './Mailbox.js'
 import { MailboxStore } from './MailboxStore.js'
 import { DeliveryId } from './protocol.js'
+
+type OutputResult =
+	| { readonly _tag: 'Delivered'; readonly receipt: DeliveryOutputReceipt }
+	| { readonly _tag: 'Failed'; readonly error: DeliveryOutputError; readonly retryDelay: number }
+const OutputResult = Data.taggedEnum<OutputResult>()
 
 export class DeliveryError extends Schema.TaggedError<DeliveryError>()('DeliveryError', {
 	reason: Schema.Literals(['conflict', 'capacity', 'payload', 'definition', 'stale', 'configuration']),
@@ -44,6 +75,7 @@ export type HandlerContext<A> = {
 type Transition<A> = {
 	readonly state: CurrentMailboxState
 	readonly result: A
+	readonly commit?: boolean
 }
 
 const transition = <A>(input: {
@@ -65,6 +97,7 @@ const transition = <A>(input: {
 				(current?.revision ?? -1) + 1,
 				now,
 			)
+			if (next.commit === false) return next.result
 			const committed = yield* store.commitMailbox({
 				key: input.key,
 				expectedRevision: current?.revision ?? null,
@@ -75,25 +108,8 @@ const transition = <A>(input: {
 		return yield* DeliveryError.make({ reason: 'conflict' })
 	})
 
-const cancellationPending = (state: MailboxState, outcome: Outcome) => {
-	const target = outcome.cancellationTarget
-	if (target === null) return false
-	return activeBatches(state).some((batch) =>
-		target === undefined
-			? batch.cancelled
-			: eventIdentity(batch.envelopes[0]) === target.identity &&
-				batch.envelopes[0].acceptedAt === target.acceptedAt,
-	)
-}
-const retained = (state: MailboxState, now: number) =>
-	state.outcomes.filter(
-		(outcome) => outcome.expiresAt > now || (outcome.kind === 'control' && cancellationPending(state, outcome)),
-	)
-const envelopes = (state: MailboxState) => [
-	...state.pending,
-	...activeBatches(state).flatMap((batch) => batch.envelopes),
-	...state.failed.flatMap((batch) => batch.envelopes),
-]
+const retained = retainedOutcomes
+const envelopes = mailboxEnvelopes
 const known = (state: MailboxState, identity: string) =>
 	state.outcomes.some((outcome) => outcome.identity === identity) ||
 	envelopes(state).some((event) => eventIdentity(event) === identity)
@@ -108,6 +124,9 @@ export type HandlerRegistration<Event extends Schema.Constraint, Resource extend
 		event: Event['Type'],
 		context: HandlerContext<Event['Type']>,
 	) => Effect.Effect<void | DeliveryHandoff, HandlerFailure | DeliveryError, R>
+	readonly deliverFinalMessage?: (
+		operation: FinalMessageOperation,
+	) => Effect.Effect<DeliveryOutputReceipt, DeliveryOutputError, R>
 }
 
 const RegistrationIdentity = Schema.Struct({
@@ -166,6 +185,10 @@ export const bind = <Event extends Schema.Constraint, Resource extends Schema.Co
 		})
 		if (state.pending.length > 0 && batches.length < concurrency && state.pendingReadyAt !== null)
 			deadlines.push(state.pendingReadyAt)
+		for (const operation of state.operations ?? []) {
+			if (Predicate.isTagged('Pending')(operation.state)) deadlines.push(operation.state.readyAt)
+			if (Predicate.isTagged('Delivering')(operation.state)) deadlines.push(operation.state.leaseUntil)
+		}
 		return {
 			...state,
 			readyAt: deadlines.length === 0 ? null : Math.min(...deadlines),
@@ -268,10 +291,14 @@ export const bind = <Event extends Schema.Constraint, Resource extends Schema.Co
 			key,
 			retries: policy.conflictRetries,
 			calculate: (current, _revision, now) => {
-				const state = { ...current, outcomes: retained(current, now) }
+				const state = {
+					...current,
+					outcomes: retained(current, now),
+					maxOutcomes: policy.maxOutcomes,
+				}
 				if (known(state, eventIdentity(envelope))) return Effect.succeed({ state, result: false })
 				if (policy.mode === 'drop' && (state.pending.length > 0 || activeBatches(state).length > 0)) {
-					if (state.outcomes.length + envelopes(state).length >= policy.maxOutcomes)
+					if (mailboxCapacityUsage(state) >= policy.maxOutcomes)
 						return Effect.fail(DeliveryError.make({ reason: 'capacity' }))
 					return Effect.succeed({
 						state: {
@@ -288,10 +315,7 @@ export const bind = <Event extends Schema.Constraint, Resource extends Schema.Co
 						result: true,
 					})
 				}
-				if (
-					envelopes(state).length >= policy.maxEnvelopes ||
-					state.outcomes.length + envelopes(state).length >= policy.maxOutcomes
-				)
+				if (envelopes(state).length >= policy.maxEnvelopes || mailboxCapacityUsage(state) >= policy.maxOutcomes)
 					return Effect.fail(DeliveryError.make({ reason: 'capacity' }))
 				const pendingReadyAt =
 					policy.mode === 'debounce'
@@ -463,6 +487,15 @@ export const bind = <Event extends Schema.Constraint, Resource extends Schema.Co
 			),
 		)
 
+	const replaceOperation = (
+		state: CurrentMailboxState,
+		operation: FinalMessageOperation,
+		next: FinalMessageOperation,
+	): CurrentMailboxState => ({
+		...state,
+		operations: (state.operations ?? []).map((entry) => (entry === operation ? next : entry)),
+	})
+
 	const handoff = Effect.fn('delivery.handoff')(function* (input: {
 		readonly key: string
 		readonly batch: ActiveBatch
@@ -525,8 +558,28 @@ export const bind = <Event extends Schema.Constraint, Resource extends Schema.Co
 				if (input.expired === true && (batch.stage.cleanupLeaseUntil ?? Number.POSITIVE_INFINITY) > now)
 					return Effect.succeed({ state: scheduled(state), result: false })
 				const outcome = batch.cancelled ? 'cancelled' : batch.stage.terminalOutcome
-				if (outcome !== undefined)
-					return Effect.succeed({ state: retireBatch(state, batch, outcome, now), result: true })
+				if (outcome !== undefined) {
+					const operation = state.operations?.find((entry) => entry.deliveryId === batch.deliveryId)
+					if (
+						operation === undefined ||
+						Predicate.isTagged('Delivered')(operation.state) ||
+						Predicate.isTagged('DeliveryFailed')(operation.state)
+					)
+						return Effect.succeed({ state: retireBatch(state, batch, outcome, now), result: true })
+					const released = {
+						...batch,
+						stage: { ...batch.stage, cleanupOwner: null, cleanupLeaseUntil: null },
+					}
+					return Effect.succeed({
+						state: scheduled(
+							withBatches(
+								state,
+								activeBatches(state).map((entry) => (entry === batch ? released : entry)),
+							),
+						),
+						result: true,
+					})
+				}
 				const released = { ...batch, stage: { ...batch.stage, cleanupOwner: null, cleanupLeaseUntil: null } }
 				return Effect.succeed({
 					state: scheduled(
@@ -539,6 +592,196 @@ export const bind = <Event extends Schema.Constraint, Resource extends Schema.Co
 				})
 			},
 		})
+	})
+
+	const claimOutput = Effect.fn('delivery.claim_output')(function* (input: { readonly key: string }) {
+		return yield* transition<FinalMessageOperation | undefined>({
+			key: input.key,
+			retries: policy.conflictRetries,
+			calculate: (state, revision, now) => {
+				const operation = (state.operations ?? []).find(
+					(entry) =>
+						(Predicate.isTagged('Pending')(entry.state) && entry.state.readyAt <= now) ||
+						(Predicate.isTagged('Delivering')(entry.state) && entry.state.leaseUntil <= now),
+				)
+				if (operation === undefined)
+					return Effect.succeed({ state: scheduled(state), result: undefined, commit: false })
+				const claimed = {
+					...operation,
+					state: {
+						_tag: 'Delivering' as const,
+						owner: revision,
+						attempt: operation.state.attempt + 1,
+						leaseUntil: now + policy.leaseMs,
+						hadAmbiguousAttempt:
+							operation.state.hadAmbiguousAttempt || Predicate.isTagged('Delivering')(operation.state),
+					},
+				}
+				return Effect.succeed({
+					state: scheduled(replaceOperation(state, operation, claimed)),
+					result: claimed,
+				})
+			},
+		})
+	})
+
+	const finishOutput = Effect.fn('delivery.finish_output')(function* (input: {
+		readonly key: string
+		readonly operation: FinalMessageOperation
+		readonly result: OutputResult
+	}) {
+		return yield* transition({
+			key: input.key,
+			retries: policy.conflictRetries,
+			calculate: (state, _revision, now) => {
+				const operation = state.operations?.find((entry) => entry.operationId === input.operation.operationId)
+				if (
+					operation === undefined ||
+					!Predicate.isTagged('Delivering')(operation.state) ||
+					!Predicate.isTagged('Delivering')(input.operation.state) ||
+					operation.state.owner !== input.operation.state.owner
+				)
+					return Effect.fail(DeliveryError.make({ reason: 'stale' }))
+				const nextState = Match.value(input.result).pipe(
+					Match.tagsExhaustive({
+						Delivered: ({ receipt }) =>
+							DeliveredDeliveryOperation.make({
+								attempt: operation.state.attempt,
+								deliveredAt: now,
+								providerReceipt: receipt.providerReceipt,
+								hadAmbiguousAttempt: operation.state.hadAmbiguousAttempt,
+							}),
+						Failed: ({ error, retryDelay }) =>
+							error.retryable && operation.state.attempt < policy.maxAttempts
+								? PendingDeliveryOperation.make({
+										attempt: operation.state.attempt,
+										readyAt: now + Math.max(retryDelay, error.retryAfterMs ?? 0),
+										hadAmbiguousAttempt: operation.state.hadAmbiguousAttempt,
+									})
+								: error.safeCode === undefined
+									? FailedDeliveryOperation.make({
+											attempt: operation.state.attempt,
+											failedAt: now,
+											reason: error.retryable ? 'exhausted' : 'non_retryable',
+											hadAmbiguousAttempt: operation.state.hadAmbiguousAttempt,
+										})
+									: FailedDeliveryOperation.make({
+											attempt: operation.state.attempt,
+											failedAt: now,
+											reason: error.retryable ? 'exhausted' : 'non_retryable',
+											safeCode: error.safeCode,
+											hadAmbiguousAttempt: operation.state.hadAmbiguousAttempt,
+										}),
+					}),
+				)
+				const completed = { ...operation, state: nextState }
+				let next = replaceOperation(state, operation, completed)
+				if (Predicate.isTagged('Delivered')(nextState) || Predicate.isTagged('DeliveryFailed')(nextState)) {
+					const batch = activeBatches(next).find((entry) => entry.deliveryId === operation.deliveryId)
+					if (
+						batch !== undefined &&
+						batch.stage !== undefined &&
+						Predicate.isTagged('External')(batch.stage) &&
+						batch.stage.cleanupOwner === null &&
+						batch.stage.terminalOutcome !== undefined
+					)
+						next = retireBatch(
+							next,
+							batch,
+							batch.cancelled ? 'cancelled' : batch.stage.terminalOutcome,
+							now,
+						)
+				}
+				return Effect.succeed({ state: scheduled(next), result: completed })
+			},
+		})
+	})
+
+	const renewOutput = Effect.fn('delivery.renew_output')(function* (input: {
+		readonly key: string
+		readonly operation: FinalMessageOperation
+	}) {
+		return yield* transition({
+			key: input.key,
+			retries: policy.conflictRetries,
+			calculate: (state, _revision, now) => {
+				const operation = state.operations?.find((entry) => entry.operationId === input.operation.operationId)
+				if (operation !== undefined && !Predicate.isTagged('Delivering')(operation.state))
+					return Effect.succeed({ state: scheduled(state), result: false, commit: false })
+				if (
+					operation === undefined ||
+					!Predicate.isTagged('Delivering')(operation.state) ||
+					!Predicate.isTagged('Delivering')(input.operation.state) ||
+					operation.state.owner !== input.operation.state.owner
+				)
+					return Effect.fail(DeliveryError.make({ reason: 'stale' }))
+				const renewed = {
+					...operation,
+					state: { ...operation.state, leaseUntil: now + policy.leaseMs },
+				}
+				return Effect.succeed({
+					state: scheduled(replaceOperation(state, operation, renewed)),
+					result: true,
+				})
+			},
+		})
+	})
+
+	const processOutput = Effect.fn('delivery.process_output')(function* (input: { readonly key: string }) {
+		const operation = yield* claimOutput(input)
+		if (operation === undefined) return false
+		const execution =
+			registration.deliverFinalMessage === undefined
+				? Effect.fail(DeliveryOutputError.make({ retryable: false, safeCode: 'unsupported_provider' }))
+				: registration.deliverFinalMessage(operation)
+		const settle = Effect.gen(function* () {
+			const result = yield* execution.pipe(Effect.exit)
+			if (Exit.isFailure(result) && Cause.hasInterruptsOnly(result.cause))
+				return yield* Effect.failCause(result.cause)
+			if (Exit.isSuccess(result)) {
+				yield* finishOutput({
+					key: input.key,
+					operation,
+					result: OutputResult.Delivered({ receipt: result.value }),
+				})
+				return true
+			}
+			const failure = Cause.findErrorOption(result.cause)
+			let error: DeliveryOutputError
+			if (Option.isNone(failure)) {
+				error = DeliveryOutputError.make({ retryable: false, safeCode: 'unexpected_failure' })
+			} else {
+				if (!Schema.is(DeliveryOutputError)(failure.value)) return yield* Effect.failCause(result.cause)
+				error = failure.value
+			}
+			yield* Effect.logError('Delivery output attempt failed', {
+				delivery_id: operation.deliveryId,
+				operation_id: operation.operationId,
+				provider: operation.provider,
+				attempt: Predicate.isTagged('Delivering')(operation.state) ? operation.state.attempt : 0,
+				retryable: error.retryable,
+				safe_code: error.safeCode,
+			})
+			const jitter = yield* Random.next
+			const attempt = Predicate.isTagged('Delivering')(operation.state) ? operation.state.attempt : 1
+			const retryDelay = Math.floor(
+				Math.min(policy.retryMaxMs, policy.retryBaseMs * 2 ** (attempt - 1)) * (0.5 + jitter),
+			)
+			yield* finishOutput({ key: input.key, operation, result: OutputResult.Failed({ error, retryDelay }) })
+			return true
+		})
+		return yield* Effect.scoped(
+			Effect.gen(function* () {
+				const task = yield* settle.pipe(Effect.forkScoped)
+				const monitor = Effect.gen(function* () {
+					while (true) {
+						yield* Effect.sleep(policy.heartbeatMs)
+						if (!(yield* renewOutput({ key: input.key, operation }))) return yield* Effect.never
+					}
+				})
+				return yield* Effect.raceFirst(Fiber.join(task), monitor)
+			}),
+		)
 	})
 
 	const finish = Effect.fn('delivery.finish')(function* (input: {
@@ -576,6 +819,33 @@ export const bind = <Event extends Schema.Constraint, Resource extends Schema.Co
 					})
 				}
 				const kind = outcome === 'retry' ? 'failed' : outcome
+				const operation = state.operations?.find((entry) => entry.deliveryId === batch.deliveryId)
+				if (
+					operation !== undefined &&
+					!Predicate.isTagged('Delivered')(operation.state) &&
+					!Predicate.isTagged('DeliveryFailed')(operation.state)
+				) {
+					const waiting = {
+						...batch,
+						owner: null,
+						leaseUntil: now,
+						stage: ExternalDeliveryStage.make({
+							cleanupOwner: null,
+							cleanupLeaseUntil: null,
+							handedOffAt: now,
+							terminalOutcome: operation.outcome,
+						}),
+					}
+					return Effect.succeed({
+						state: scheduled(
+							withBatches(
+								state,
+								batches.map((entry) => (entry === batch ? waiting : entry)),
+							),
+						),
+						result: undefined,
+					})
+				}
 				return Effect.succeed({
 					state: retireBatch(state, batch, kind, now),
 					result: undefined,
@@ -623,7 +893,7 @@ export const bind = <Event extends Schema.Constraint, Resource extends Schema.Co
 				const state = { ...current, outcomes: retained(current, now) }
 				if (state.outcomes.some((outcome) => outcome.identity === identity))
 					return Effect.succeed({ state, result: false })
-				if (state.outcomes.length + envelopes(state).length >= policy.maxOutcomes)
+				if (mailboxCapacityUsage(state) >= policy.maxOutcomes)
 					return Effect.fail(DeliveryError.make({ reason: 'capacity' }))
 				const batches = activeBatches(state)
 				const targeted =
@@ -665,16 +935,24 @@ export const bind = <Event extends Schema.Constraint, Resource extends Schema.Co
 	})
 
 	const processMailbox = Effect.fn('delivery.process_mailbox')(function* (input: { readonly key: string }) {
+		yield* configured
+		if (!input.key.startsWith(prefix)) return yield* DeliveryError.make({ reason: 'definition' })
+		if (yield* processOutput(input)) return true
 		const store = yield* MailboxStore
 		const snapshot = yield* store.loadMailbox(input)
+		const snapshotState = snapshot === undefined ? undefined : currentMailbox(snapshot.state)
 		const now = yield* Clock.currentTimeMillis
 		const readyExternal =
-			snapshot === undefined
+			snapshotState === undefined
 				? undefined
-				: activeBatches(snapshot.state).find(
+				: activeBatches(snapshotState).find(
 						(batch) =>
 							batch.stage?._tag === 'External' &&
-							((batch.stage.cleanupOwner === null && batch.stage.terminalOutcome !== undefined) ||
+							((batch.stage.cleanupOwner === null &&
+								batch.stage.terminalOutcome !== undefined &&
+								!snapshotState.operations?.some(
+									(operation) => operation.deliveryId === batch.deliveryId,
+								)) ||
 								(batch.stage.cleanupLeaseUntil !== null && batch.stage.cleanupLeaseUntil <= now)),
 					)
 		if (readyExternal !== undefined)

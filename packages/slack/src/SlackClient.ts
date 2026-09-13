@@ -145,11 +145,19 @@ interface UserProfileFields {
 	avatarUrl?: URL
 }
 
-const toTransportError = (operation: string, status?: number) => {
+const toTransportError = (operation: string, status?: number, retryAfterMs?: number) => {
 	if (status === undefined) {
 		return SlackTransportError.make({ operation })
 	}
-	return SlackTransportError.make({ operation, status })
+	return retryAfterMs === undefined
+		? SlackTransportError.make({ operation, status })
+		: SlackTransportError.make({ operation, status, retryAfterMs })
+}
+
+const retryAfterMilliseconds = (header: string | undefined) => {
+	if (header === undefined) return undefined
+	const seconds = Number(header)
+	return Number.isFinite(seconds) && seconds >= 0 ? Math.ceil(seconds * 1000) : undefined
 }
 
 const defaultSlackApiOrigin = new URL('https://slack.com/api')
@@ -225,7 +233,11 @@ const fetchSlackJson = <S extends Schema.Constraint>(input: {
 			.execute(input.request)
 			.pipe(Effect.mapError(() => toTransportError(input.operation)))
 		if (response.status < 200 || response.status >= 300) {
-			return yield* toTransportError(input.operation, response.status)
+			return yield* toTransportError(
+				input.operation,
+				response.status,
+				retryAfterMilliseconds(response.headers['retry-after']),
+			)
 		}
 		return yield* HttpClientResponse.schemaBodyJson(input.schema)(response).pipe(
 			Effect.mapError(() => SlackApiError.make({ operation: input.operation, code: 'malformed_response' })),

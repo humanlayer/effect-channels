@@ -2,6 +2,7 @@ import { assert } from '@effect/vitest'
 import { Clock, Deferred, Effect, Exit, Fiber, Queue, Schema } from 'effect'
 
 import { bind, DeliveryError } from '../src/Delivery.js'
+import { finalMessageOperationId, FinalMessageOperation, PendingDeliveryOperation } from '../src/DeliveryOperation.js'
 import { DeliveryPolicy } from '../src/DeliveryPolicy.js'
 import type { EventDefinition } from '../src/EventDefinition.js'
 import { emptyMailbox, MailboxState } from '../src/Mailbox.js'
@@ -90,6 +91,62 @@ export const storageContract = Effect.gen(function* () {
 		'committed',
 	)
 	assert.strictEqual(yield* locators.locateDelivery({ deliveryId }), 'locator:owner')
+	const outputKey = 'operation:atomic'
+	const outputDeliveryId = 'delivery:v2:backend-output'
+	const output = FinalMessageOperation.make({
+		operationId: finalMessageOperationId(outputDeliveryId),
+		deliveryId: outputDeliveryId,
+		outcome: 'completed',
+		markdown: 'persisted final output',
+		provider: 'test',
+		installation: 'T',
+		destination: 'root',
+		presentation: 'backend.test',
+		presentationVersion: '1',
+		state: PendingDeliveryOperation.make({ attempt: 0, readyAt: 25, hadAmbiguousAttempt: false }),
+	})
+	const acceptedOutput = {
+		...emptyMailbox(),
+		outcomes: [{ identity: 'output', kind: 'completed' as const, expiresAt: 60_000, deliveryId: outputDeliveryId }],
+		operations: [output],
+		readyAt: 25,
+	}
+	assert.strictEqual(
+		yield* store.commitMailbox({ key: outputKey, expectedRevision: null, nextState: acceptedOutput }),
+		'committed',
+	)
+	assert.deepStrictEqual(yield* readiness.scanReady({ prefix: outputKey, now: 25, limit: 1 }), [outputKey])
+	assert.deepStrictEqual((yield* store.loadMailbox({ key: outputKey }))?.state, acceptedOutput)
+	const claims = yield* Effect.all(
+		[1, 2].map((owner) =>
+			store.commitMailbox({
+				key: outputKey,
+				expectedRevision: 0,
+				nextState: {
+					...acceptedOutput,
+					operations: [
+						{
+							...output,
+							state: {
+								_tag: 'Delivering' as const,
+								owner,
+								attempt: 1,
+								leaseUntil: 100,
+								hadAmbiguousAttempt: false,
+							},
+						},
+					],
+					readyAt: 100,
+				},
+			}),
+		),
+		{ concurrency: 2 },
+	)
+	assert.deepStrictEqual([...claims].sort(), ['committed', 'conflict'])
+	const claimedOutput = yield* store.loadMailbox({ key: outputKey })
+	if (claimedOutput?.state.version !== 5) return yield* Effect.die('Expected a current output mailbox')
+	assert.strictEqual(claimedOutput.state.operations?.[0]?.state._tag, 'Delivering')
+	assert.strictEqual(claimedOutput?.state.readyAt, 100)
 	assert.deepStrictEqual(
 		yield* store
 			.commitMailbox({ key: 'locator:collision', expectedRevision: null, nextState: locatedState })

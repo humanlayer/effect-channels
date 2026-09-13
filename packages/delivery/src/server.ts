@@ -24,7 +24,7 @@ export interface DeliveryApiContextInput {
 }
 
 export interface DeliveryApiMiddlewareInput<C> extends DeliveryApiContextInput {
-	readonly input: { readonly deliveryId: DeliveryId }
+	readonly input: { readonly deliveryId: DeliveryId; readonly markdown?: string }
 	readonly delivery: ResolvedDelivery
 	readonly context: C
 	readonly next: () => Effect.Effect<DeliveryTerminalReceipt, DeliveryControlError>
@@ -72,6 +72,7 @@ const makeEndpoint = <C, RC, RM>(
 ) =>
 	Effect.fn(`delivery.api.${outcome}`)(function* (request: {
 		readonly params: { readonly deliveryId: DeliveryId }
+		readonly payload: { readonly markdown?: string }
 		readonly request: HttpServerRequest.HttpServerRequest
 	}) {
 		const delivery = yield* control.resolve({ deliveryId: request.params.deliveryId })
@@ -79,11 +80,12 @@ const makeEndpoint = <C, RC, RM>(
 			options.context === undefined
 				? null
 				: yield* options.context({ request: request.request, delivery }).pipe(Effect.provide(runtime))
-		const next = yield* Effect.cached(control.finish({ deliveryId: request.params.deliveryId, outcome }))
+		const input = { deliveryId: request.params.deliveryId, ...request.payload }
+		const next = yield* Effect.cached(control.finish({ ...input, outcome }))
 		if (middleware === undefined) return yield* next
 		// SAFETY: the overload fixes C to null without context; otherwise this value came from the context callback.
 		return yield* middleware({
-			input: { deliveryId: request.params.deliveryId },
+			input,
 			request: request.request,
 			delivery,
 			context: context as C,

@@ -117,7 +117,7 @@ it.effect('Postgres SQL seam decodes complete snapshots and rejects corruption w
 			}
 			for (const state of [
 				'private-payload-sentinel',
-				encodeState(emptyMailbox()).replace('"version":4', '"version":99'),
+				encodeState(emptyMailbox()).replace('"version":5', '"version":99'),
 			]) {
 				yield* Queue.offer(fake.replies, Effect.succeed([{ revision: 7, state_json: state, ready_at: null }]))
 				assert.deepStrictEqual(

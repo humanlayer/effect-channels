@@ -1,6 +1,7 @@
 import {
 	bind,
 	type DeliveryHandoff,
+	DeliveryOutputError,
 	DeliveryPolicy,
 	HandlerFailure,
 	MailboxReadiness,
@@ -10,12 +11,14 @@ import {
 } from '@humanlayer/channels-delivery'
 import { Context, Effect, Layer, Match, Option, Schema } from 'effect'
 
+import { GitHub } from './GitHub.js'
 import {
 	GitHubActivityEvent,
 	GitHubCreationEvent,
 	GitHubMentionEvent,
 	activityEventDefinition,
 } from './GitHubActivity.js'
+import { deliverGitHubFinalMessage } from './GitHubDeliveryOutput.js'
 import { GitHubError, GitHubIngressError } from './GitHubErrors.js'
 import { resolveGitHubIngressAttribution } from './GitHubIngressAttribution.js'
 import { GitHubOrganizations } from './GitHubOrganizations.js'
@@ -63,6 +66,7 @@ export class GitHubIngress extends Context.Service<
 			Effect.gen(function* () {
 				const subscriptions = yield* GitHubSubscriptionStore
 				const context = yield* Effect.context<R | MailboxStore | MailboxReadiness>()
+				const configuredGitHub = yield* Effect.serviceOption(GitHub)
 				const configuredOrganizations = yield* Effect.serviceOption(GitHubOrganizations)
 				const organizations = Option.getOrElse(configuredOrganizations, () =>
 					GitHubOrganizations.of({
@@ -145,6 +149,20 @@ export class GitHubIngress extends Context.Service<
 									),
 								)
 							},
+							deliverFinalMessage: (operation) =>
+								Option.match(configuredGitHub, {
+									onNone: () =>
+										Effect.fail(
+											DeliveryOutputError.make({
+												retryable: false,
+												safeCode: 'provider_unavailable',
+											}),
+										),
+									onSome: (github) =>
+										deliverGitHubFinalMessage(operation).pipe(
+											Effect.provideService(GitHub, github),
+										),
+								}),
 						})
 						bindings.push({ id, binding })
 					}

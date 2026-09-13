@@ -7,12 +7,18 @@ import { makeMountedDeliveryClient } from '../src/client.js'
 import { DeliveryContract, Forbidden, Unauthorized, Unavailable } from '../src/contract.js'
 import { bind } from '../src/Delivery.js'
 import { DeliveryControl } from '../src/DeliveryControl.js'
+import { FINAL_MESSAGE_MARKDOWN_MAX_BYTES } from '../src/DeliveryOperation.js'
 import { DeliveryPolicy } from '../src/DeliveryPolicy.js'
 import { resolveDeliveryFor } from '../src/DeliveryResolution.js'
 import type { EventDefinition } from '../src/EventDefinition.js'
 import { MailboxStore } from '../src/MailboxStore.js'
 import { layer as memoryLayer } from '../src/memory.js'
-import { deliveryNotFound, DeliveryNotFound, DeliveryOutcomeConflict } from '../src/protocol.js'
+import {
+	deliveryNotFound,
+	DeliveryNotFound,
+	DeliveryOutcomeConflict,
+	DeliveryTerminalCapacityExceeded,
+} from '../src/protocol.js'
 import { deliveryApiServerLayer } from '../src/server.js'
 
 class Calls extends Context.Service<Calls, Array<string>>()('test/Calls') {}
@@ -72,8 +78,57 @@ it.effect('runs with neither context nor middleware', () =>
 	Effect.gen(function* () {
 		const deliveryId = yield* makeHandoff('neither')
 		const client = yield* HttpApiTest.groups(DeliveryContract.prefix('/hooks'), ['deliveries'])
+		const oversized = yield* Effect.exit(
+			client.deliveries.complete({
+				params: { deliveryId },
+				payload: { markdown: '😀'.repeat(FINAL_MESSAGE_MARKDOWN_MAX_BYTES / 2) },
+			}),
+		)
+		assert.strictEqual(oversized._tag, 'Failure')
+		const unresolved = yield* (yield* DeliveryControl).resolve({ deliveryId })
+		assert.strictEqual(unresolved.deliveryId, deliveryId)
 		assert.strictEqual(
 			(yield* client.deliveries.complete({ params: { deliveryId }, payload: {} })).status,
+			'accepted',
+		)
+	}).pipe(
+		Effect.provide(
+			Layer.merge(deliveryApiServerLayer({ mountPath: '/hooks' }).pipe(Layer.provideMerge(base)), testPlatform),
+		),
+	),
+)
+
+it.effect('returns a typed capacity error without accepting partial terminal state', () =>
+	Effect.gen(function* () {
+		const delivery = bind({
+			namespace: 'h',
+			handlerId: 'h',
+			definition,
+			policy: DeliveryPolicy.make({ ...policy, maxOutcomes: 1 }),
+			handler: (_event, context) => context.handoff(),
+		})
+		const receipt = yield* delivery.admit({
+			event: Event.make({ id: 'A', installation: 'i', resource: 'r' }),
+			organizationId: 'org-one',
+		})
+		yield* delivery.processMailbox(receipt)
+		const store = yield* MailboxStore
+		const before = yield* store.loadMailbox(receipt)
+		assert(before?.state.active?.deliveryId !== undefined)
+		const client = yield* HttpApiTest.groups(DeliveryContract.prefix('/hooks'), ['deliveries'])
+		const error = yield* Effect.flip(
+			client.deliveries.complete({
+				params: { deliveryId: before.state.active.deliveryId },
+				payload: { markdown: 'No retained capacity remains.' },
+			}),
+		)
+		assert(Schema.is(DeliveryTerminalCapacityExceeded)(error))
+		assert.deepStrictEqual(yield* store.loadMailbox(receipt), before)
+		assert.strictEqual(
+			(yield* client.deliveries.complete({
+				params: { deliveryId: before.state.active.deliveryId },
+				payload: {},
+			})).status,
 			'accepted',
 		)
 	}).pipe(
@@ -219,6 +274,7 @@ it.effect('runs context then endpoint middleware through the generated client', 
 						complete: ({ context, delivery, input, next }) =>
 							context.actor === 'allowed'
 								? Effect.gen(function* () {
+										assert.strictEqual(input.markdown, 'HTTP final answer')
 										const recorded = yield* Calls
 										const accepted = yield* next()
 										const replay = yield* next()
@@ -292,11 +348,11 @@ it.effect('runs context then endpoint middleware through the generated client', 
 			})
 			const accepted = yield* client.deliveries.complete({
 				params: { deliveryId: snapshot.deliveryId },
-				payload: {},
+				payload: { markdown: 'HTTP final answer' },
 			})
 			const replayed = yield* client.deliveries.complete({
 				params: { deliveryId: snapshot.deliveryId },
-				payload: {},
+				payload: { markdown: 'HTTP final answer' },
 			})
 			const conflict = yield* Effect.flip(
 				client.deliveries.fail({ params: { deliveryId: snapshot.deliveryId }, payload: {} }),

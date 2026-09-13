@@ -6,6 +6,7 @@ import type { Connection } from 'effect/unstable/sql/SqlConnection'
 import type { SqlError } from 'effect/unstable/sql/SqlError'
 import * as Statement from 'effect/unstable/sql/Statement'
 
+import { finalMessageOperationId, FinalMessageOperation, PendingDeliveryOperation } from '../src/DeliveryOperation.js'
 import {
 	ActiveBatch,
 	currentMailbox,
@@ -130,7 +131,13 @@ export const completeMailbox = MailboxState.make({
 })
 export const mailboxCodecCases: ReadonlyArray<MailboxState> = [
 	completeMailbox,
-	{ ...currentMailbox(completeMailbox), version: 2 },
+	MailboxState.make({
+		...completeMailbox,
+		version: 2,
+		additionalActive: [],
+		pendingReadyAt: 10,
+		burstDraining: false,
+	}),
 	{ ...emptyMailbox(), attribution: { organizationId: 'directory-owned' } },
 	{ ...currentMailbox(completeMailbox), pending: [{ ...envelope, organizationId: 'directory-owned' }] },
 	{
@@ -151,6 +158,24 @@ export const mailboxCodecCases: ReadonlyArray<MailboxState> = [
 			},
 			{ identity: 'control:empty', kind: 'control', expiresAt: 300, cancellationTarget: null },
 		],
+	},
+	{
+		...emptyMailbox(),
+		operations: [
+			FinalMessageOperation.make({
+				operationId: finalMessageOperationId('delivery:v2:codec-output'),
+				deliveryId: 'delivery:v2:codec-output',
+				outcome: 'completed',
+				markdown: 'saved final output',
+				provider: 'test',
+				installation: 'one',
+				destination: 'root',
+				presentation: 'codec.test',
+				presentationVersion: '1',
+				state: PendingDeliveryOperation.make({ attempt: 1, readyAt: 250, hadAmbiguousAttempt: true }),
+			}),
+		],
+		readyAt: 250,
 	},
 ]
 export const encodeState = Schema.encodeSync(Schema.fromJsonString(MailboxState))

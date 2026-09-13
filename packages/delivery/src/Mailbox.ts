@@ -1,5 +1,6 @@
 import { Array as Arr, Schema } from 'effect'
 
+import { DeliveryOperation } from './DeliveryOperation.js'
 import { DeliveryId } from './protocol.js'
 
 export const Envelope = Schema.Struct({
@@ -82,8 +83,10 @@ export interface IngressAttribution extends Schema.Schema.Type<typeof IngressAtt
 
 export const CurrentMailboxState = Schema.Struct({
 	...V2MailboxState.fields,
-	version: Schema.Literals([3, 4]),
+	version: Schema.Literals([3, 4, 5]),
 	attribution: Schema.optionalKey(IngressAttribution),
+	operations: Schema.optionalKey(Schema.Array(DeliveryOperation)),
+	maxOutcomes: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
 })
 export type CurrentMailboxState = typeof CurrentMailboxState.Type
 
@@ -93,13 +96,18 @@ export type MailboxState = typeof MailboxState.Type
 /** Upgrade under revision fencing. Stop old writers before the first v3 write. */
 export const currentMailbox = (state: MailboxState): CurrentMailboxState =>
 	state.version !== 1
-		? { ...state, version: 4 }
+		? {
+				...state,
+				version: 5,
+				operations: state.version === 2 ? [] : (state.operations ?? []),
+			}
 		: {
 				...state,
-				version: 4,
+				version: 5,
 				additionalActive: [],
 				pendingReadyAt: state.pending[0]?.acceptedAt ?? null,
 				burstDraining: false,
+				operations: [],
 			}
 
 export const activeBatches = (state: MailboxState): ReadonlyArray<ActiveBatch> => [
@@ -118,7 +126,7 @@ export type MailboxSnapshot = typeof MailboxSnapshot.Type
 
 export const emptyMailbox = (): CurrentMailboxState =>
 	CurrentMailboxState.make({
-		version: 4,
+		version: 5,
 		pending: [],
 		active: null,
 		additionalActive: [],
@@ -127,10 +135,39 @@ export const emptyMailbox = (): CurrentMailboxState =>
 		failed: [],
 		outcomes: [],
 		readyAt: null,
+		operations: [],
 	})
 
 export const eventIdentity = (envelope: Envelope) =>
 	`${envelope.definition.length}:${envelope.definition}${envelope.eventId.length}:${envelope.eventId}`
+
+export const cancellationPending = (state: MailboxState, outcome: Outcome) => {
+	const target = outcome.cancellationTarget
+	if (target === null) return false
+	return activeBatches(state).some((batch) =>
+		target === undefined
+			? batch.cancelled
+			: eventIdentity(batch.envelopes[0]) === target.identity &&
+				batch.envelopes[0].acceptedAt === target.acceptedAt,
+	)
+}
+
+export const retainedOutcomes = (state: MailboxState, now: number) =>
+	state.outcomes.filter(
+		(outcome) => outcome.expiresAt > now || (outcome.kind === 'control' && cancellationPending(state, outcome)),
+	)
+
+export const mailboxEnvelopes = (state: MailboxState) => [
+	...state.pending,
+	...activeBatches(state).flatMap((batch) => batch.envelopes),
+	...state.failed.flatMap((batch) => batch.envelopes),
+]
+
+/** Records retained by a mailbox and charged against its configured capacity. */
+export const mailboxCapacityUsage = (state: MailboxState) =>
+	state.outcomes.length +
+	mailboxEnvelopes(state).length +
+	(state.version === 1 || state.version === 2 ? 0 : (state.operations?.length ?? 0))
 
 export const MailboxAddress = Schema.Struct({
 	namespace: Schema.NonEmptyString,

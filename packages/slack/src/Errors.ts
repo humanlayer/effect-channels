@@ -15,6 +15,7 @@ export class SlackWebhookError extends Schema.TaggedError<SlackWebhookError>()('
 export class SlackTransportError extends Schema.TaggedError<SlackTransportError>()('SlackTransportError', {
 	operation: Schema.String,
 	status: Schema.optionalKey(Schema.Finite),
+	retryAfterMs: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
 }) {}
 
 export class SlackApiError extends Schema.TaggedError<SlackApiError>()('SlackApiError', {

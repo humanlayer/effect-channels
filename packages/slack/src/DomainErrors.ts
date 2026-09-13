@@ -44,6 +44,7 @@ export class PostFailed extends Schema.TaggedError<PostFailed>()('PostFailed', {
 	threadId: ThreadId,
 	message: Schema.String,
 	retryability: Schema.optionalKey(Retryability),
+	retryAfterMs: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
 }) {}
 
 export class DirectMessageOpenFailed extends Schema.TaggedError<DirectMessageOpenFailed>()('DirectMessageOpenFailed', {

@@ -1,9 +1,18 @@
 import { assert, it } from '@effect/vitest'
-import { activeBatches, HandlerFailure, type DeliveryPolicy } from '@humanlayer/channels-delivery'
-import { Deferred, Effect, Fiber, Queue } from 'effect'
+import {
+	activeBatches,
+	currentMailbox,
+	DeliveryControl,
+	HandlerFailure,
+	type DeliveryId,
+	type DeliveryPolicy,
+} from '@humanlayer/channels-delivery'
+import { layer as deliveryMemory } from '@humanlayer/channels-delivery/memory'
+import { Deferred, Effect, Fiber, Layer, Queue } from 'effect'
 import { TestClock } from 'effect/testing'
 
 import { NormalizedConversationStopped, NormalizedMessageUpdated, SlackIngress } from '../src/index.js'
+import { SlackMessageTs } from '../src/Schema.js'
 import { nativeIngressLayer, nativeMailbox, nativeMessage, nativePolicy, nativeRunner } from './nativeSupport.js'
 
 const policies: ReadonlyArray<DeliveryPolicy> = [
@@ -155,3 +164,55 @@ for (const policy of policies) {
 		}),
 	)
 }
+
+it.effect('delivers final Markdown returned by an onConversationStopped registration', () =>
+	Effect.gen(function* () {
+		const deliveryIds = yield* Queue.unbounded<DeliveryId>()
+		const storage = deliveryMemory({ maxMailboxes: 100 })
+		const ingress = nativeIngressLayer(
+			{
+				onConversationStopped: [
+					{
+						id: 'stopped-output',
+						handler: (_event, context) =>
+							Effect.gen(function* () {
+								yield* Queue.offer(deliveryIds, context.deliveryId)
+								yield* (yield* DeliveryControl).finish({
+									deliveryId: context.deliveryId,
+									outcome: 'completed',
+									markdown: 'Conversation stopped.',
+								})
+							}),
+					},
+				],
+			},
+			storage,
+			nativePolicy,
+			{
+				postMessage: (input) =>
+					Effect.succeed({ channelId: input.channelId, ts: SlackMessageTs.make('100.2') }),
+			},
+		)
+		const services = ingress.pipe(Layer.provideMerge(DeliveryControl.layer.pipe(Layer.provide(storage))))
+		yield* Effect.gen(function* () {
+			const slackIngress = yield* SlackIngress
+			const message = nativeMessage('d')
+			yield* slackIngress.acceptConversationStopped(
+				NormalizedConversationStopped.make({
+					...message,
+					threadRef: message.thread.ref,
+				}),
+			)
+			const runner = yield* slackIngress.run(nativeRunner).pipe(Effect.forkChild)
+			yield* Queue.take(deliveryIds)
+			yield* TestClock.adjust(120)
+			const mailbox = yield* nativeMailbox('stopped-output', message)
+			assert.strictEqual(
+				mailbox === undefined ? undefined : currentMailbox(mailbox.state).operations?.[0]?.state._tag,
+				'Delivered',
+			)
+			assert.strictEqual(activeBatches(mailbox?.state ?? assert.fail('missing mailbox')).length, 0)
+			yield* Fiber.interrupt(runner)
+		}).pipe(Effect.provide(services))
+	}),
+)

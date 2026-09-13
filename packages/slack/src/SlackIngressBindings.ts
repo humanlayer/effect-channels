@@ -1,6 +1,7 @@
 import {
 	bind,
 	DeliveryPolicy,
+	DeliveryOutputError,
 	HandlerFailure,
 	MailboxStore,
 	MailboxReadiness,
@@ -17,7 +18,9 @@ import { Context, Data, Effect, Layer, Match, Option, Schema } from 'effect'
 
 import { RetryabilityMetadata, SlackIngressError } from './DomainErrors.js'
 import { ThreadId } from './Model.js'
+import { Slack } from './Slack.js'
 import { SlackAuthors } from './SlackAuthors.js'
+import { deliverSlackFinalMessage } from './SlackDeliveryOutput.js'
 import {
 	ConversationStoppedEvent,
 	MessageDeletedEvent,
@@ -291,6 +294,7 @@ const makeBindings = <E, R>(options: SlackIngressOptions<E, R>) =>
 			return yield* SlackIngressError.make({ operation: 'duplicate_or_empty_handler_id' })
 		}
 		const handlerContext = yield* Effect.context<R>()
+		const configuredSlack = yield* Effect.serviceOption(Slack)
 		const configuredOrganizations = yield* Effect.serviceOption(SlackOrganizations)
 		const organizations = Option.getOrElse(configuredOrganizations, () =>
 			SlackOrganizations.of({
@@ -325,6 +329,15 @@ const makeBindings = <E, R>(options: SlackIngressOptions<E, R>) =>
 							.handler(resolved, { ...context, skipped })
 							.pipe(Effect.scoped, Effect.provide(handlerContext))
 					}).pipe(handlerFailure),
+				deliverFinalMessage: (operation) =>
+					Option.match(configuredSlack, {
+						onNone: () =>
+							Effect.fail(
+								DeliveryOutputError.make({ retryable: false, safeCode: 'provider_unavailable' }),
+							),
+						onSome: (slack) =>
+							deliverSlackFinalMessage(operation).pipe(Effect.provideService(Slack, slack)),
+					}),
 			})
 			return delivery
 		}
@@ -375,6 +388,15 @@ const makeBindings = <E, R>(options: SlackIngressOptions<E, R>) =>
 						handlerFailure,
 						Effect.withSpan('slack.ingress.execute_stopped'),
 					),
+				deliverFinalMessage: (operation) =>
+					Option.match(configuredSlack, {
+						onNone: () =>
+							Effect.fail(
+								DeliveryOutputError.make({ retryable: false, safeCode: 'provider_unavailable' }),
+							),
+						onSome: (slack) =>
+							deliverSlackFinalMessage(operation).pipe(Effect.provideService(Slack, slack)),
+					}),
 			}),
 		)
 		const allBindings = [...messageBindings, ...updated, ...deleted, ...reactions, ...stopped]

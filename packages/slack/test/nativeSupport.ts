@@ -16,6 +16,7 @@ import {
 	UserProfile,
 	type SlackIngressHandlers,
 } from '../src/index.js'
+import type { SlackClient } from '../src/SlackClient.js'
 import { slackThreadRef } from '../src/SlackThreadId.js'
 import { stubSlackClientLayer, testChannelId, testRootTs, testTeamId } from './support.js'
 
@@ -89,6 +90,7 @@ export const nativeIngressLayer = <E, R>(
 	handlers: SlackIngressHandlers<E, R>,
 	storage = deliveryMemory({ maxMailboxes: 100 }),
 	policy: DeliveryPolicy = nativePolicy,
+	clientOverrides: Partial<SlackClient['Service']> = {},
 ) => {
 	const slack = Slack.layer.pipe(
 		Layer.provide(
@@ -99,6 +101,7 @@ export const nativeIngressLayer = <E, R>(
 							author: Author.make({ ...testAuthor, userId: input.userId, fullName: 'Hydrated User' }),
 						}),
 					),
+				...clientOverrides,
 			}),
 		),
 	)

@@ -452,15 +452,19 @@ export class Slack extends Context.Service<Slack, SlackService>()('slack/Slack')
 								),
 							),
 							Effect.catchTags({
-								SlackTransportError: (error) =>
-									Effect.fail(
-										PostFailed.make({
-											provider: 'slack',
-											threadId: input.threadId,
-											message: 'Slack transport failed',
-											retryability: slackErrorRetryability(error),
-										}),
-									),
+								SlackTransportError: (error) => {
+									const fields = {
+										provider: 'slack' as const,
+										threadId: input.threadId,
+										message: 'Slack transport failed',
+										retryability: slackErrorRetryability(error),
+									}
+									return Effect.fail(
+										error.retryAfterMs === undefined
+											? PostFailed.make(fields)
+											: PostFailed.make({ ...fields, retryAfterMs: error.retryAfterMs }),
+									)
+								},
 								SlackApiError: (error) =>
 									Effect.fail(
 										PostFailed.make({

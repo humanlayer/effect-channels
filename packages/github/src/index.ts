@@ -1,6 +1,7 @@
 export * from './GitHub.js'
 export * from './GitHubBot.js'
 export * from './GitHubCredentials.js'
+export * from './GitHubDeliveryOutput.js'
 export * from './GitHubCrypto.js'
 export * from './GitHubErrors.js'
 export * from './GitHubEvents.js'

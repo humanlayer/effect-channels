@@ -1,5 +1,7 @@
 export * from './Delivery.js'
 export * from './DeliveryControl.js'
+export * from './DeliveryAdmin.js'
+export * from './DeliveryOperation.js'
 export * from './DeliveryPolicy.js'
 export * from './protocol.js'
 export * from './DeliveryReference.js'
