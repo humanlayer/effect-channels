@@ -3,8 +3,8 @@ import { Effect } from 'effect'
 
 import {
 	DeliveryAdmission,
-	DeliveryQueueRejected,
-	DeliveryQueueUnavailable,
+	MailboxDeliveryRejected,
+	MailboxDeliveryUnavailable,
 	ProviderWebhookEvent,
 	ProviderWebhookIgnored,
 	ProviderWebhookResponse,
@@ -54,7 +54,7 @@ describe('ProviderWebhook routing tests', () => {
 
 	it.effect('Admitted events return a 200 after the queue accepts them', ({ expect }) =>
 		Effect.gen(function* () {
-			const app = yield* makeWebhookTestApp(() => Effect.succeed(ProviderWebhookEvent.make({ admission })))
+			const app = yield* makeWebhookTestApp(() => Effect.succeed(ProviderWebhookEvent.make({ event: admission })))
 
 			const response = yield* app.post()
 
@@ -86,11 +86,14 @@ describe('ProviderWebhook routing tests', () => {
 		}),
 	)
 
-	it.effect('Unavailable delivery queues return a 503', ({ expect }) =>
+	it.effect('Unavailable mailbox delivery returns a 503', ({ expect }) =>
 		Effect.gen(function* () {
-			const app = yield* makeWebhookTestApp(() => Effect.succeed(ProviderWebhookEvent.make({ admission })), {
-				enqueue: () => Effect.fail(new DeliveryQueueUnavailable({ reason: 'test queue failure' })),
-			})
+			const app = yield* makeWebhookTestApp(
+				() => Effect.succeed(ProviderWebhookEvent.make({ event: admission })),
+				{
+					deliver: () => Effect.fail(new MailboxDeliveryUnavailable({ reason: 'test delivery failure' })),
+				},
+			)
 			const response = yield* app.post()
 
 			expect(response.status).toBe(503)
@@ -100,9 +103,12 @@ describe('ProviderWebhook routing tests', () => {
 
 	it.effect('Rejected delivery admissions return a 503', ({ expect }) =>
 		Effect.gen(function* () {
-			const app = yield* makeWebhookTestApp(() => Effect.succeed(ProviderWebhookEvent.make({ admission })), {
-				enqueue: () => Effect.fail(new DeliveryQueueRejected({ reason: 'test queue rejection' })),
-			})
+			const app = yield* makeWebhookTestApp(
+				() => Effect.succeed(ProviderWebhookEvent.make({ event: admission })),
+				{
+					deliver: () => Effect.fail(new MailboxDeliveryRejected({ reason: 'test queue rejection' })),
+				},
+			)
 			const response = yield* app.post()
 
 			expect(response.status).toBe(503)

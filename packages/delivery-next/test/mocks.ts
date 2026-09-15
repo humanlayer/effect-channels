@@ -1,13 +1,13 @@
 import { Context, Effect } from 'effect'
 import { HttpRouter } from 'effect/unstable/http'
 
-import { DeliveryQueue, DeliveryReceipt, webhookRoutes, type WebhookProvider } from '../src'
+import { DeliveryReceipt, MailboxDelivery, webhookRoutes, type WebhookProvider } from '../src'
 
 /**
- * Test DeliveryQueue that accepts every admission without storing it.
+ * Test MailboxDelivery that accepts every admission without storing it.
  */
-export const noopDeliveryQueue: typeof DeliveryQueue.Service = {
-	enqueue: () =>
+export const noopMailboxDelivery: typeof MailboxDelivery.Service = {
+	deliver: () =>
 		Effect.succeed(
 			DeliveryReceipt.make({
 				mailboxKey: 'test-mailbox',
@@ -18,18 +18,18 @@ export const noopDeliveryQueue: typeof DeliveryQueue.Service = {
 
 export const makeWebhookTestApp = (
 	handle: WebhookProvider<never>['handle'],
-	queue: typeof DeliveryQueue.Service = noopDeliveryQueue,
+	mailboxDelivery: typeof MailboxDelivery.Service = noopMailboxDelivery,
 ) =>
 	Effect.gen(function* () {
 		const provider: WebhookProvider<never> = {
-			key: 'example',
+			providerName: 'example',
 			handle,
 		}
 		const web = HttpRouter.toWebHandler(webhookRoutes([provider]), { disableLogger: true })
 		yield* Effect.addFinalizer(() => Effect.promise(web.dispose))
-		const context = Context.make(DeliveryQueue, queue)
+		const context = Context.make(MailboxDelivery, mailboxDelivery)
 		return {
-			post: (integration = provider.key) =>
+			post: (integration = provider.providerName) =>
 				Effect.promise(() =>
 					web.handler(
 						new Request(`http://localhost/integrations/${integration}/webhook`, { method: 'POST' }),

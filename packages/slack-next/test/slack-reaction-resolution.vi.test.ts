@@ -43,7 +43,7 @@ describe('Slack reaction thread resolution', () => {
 
 			expect(outcome).toEqual(
 				ProviderWebhookEvent.make({
-					admission: DeliveryAdmission.make({
+					event: DeliveryAdmission.make({
 						namespace: 'reaction-test',
 						provider: 'slack',
 						installationId: 'T_TEST',
@@ -64,7 +64,7 @@ describe('Slack reaction thread resolution', () => {
 
 			expect(outcome).toEqual(
 				ProviderWebhookEvent.make({
-					admission: DeliveryAdmission.make({
+					event: DeliveryAdmission.make({
 						namespace: 'reaction-test',
 						provider: 'slack',
 						installationId: 'T_TEST',

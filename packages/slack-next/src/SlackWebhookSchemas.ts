@@ -4,7 +4,9 @@ import { SlackTeamId } from './SlackIdentity'
 import {
 	SlackAppMentionEvent,
 	SlackAgentSessionStoppedEvent,
+	SlackMessageDeletedEvent,
 	SlackMessageEvent,
+	SlackMessageUpdatedEvent,
 	SlackReactionAddedEvent,
 	SlackReactionRemovedEvent,
 } from './SlackWebhookEventSchemas'
@@ -63,6 +65,24 @@ export const SlackMessageEnvelope = Schema.Struct({
 	event: SlackMessageEvent,
 })
 export type SlackMessageEnvelope = typeof SlackMessageEnvelope.Type
+
+export const SlackMessageUpdatedEnvelope = Schema.Struct({
+	type: Schema.Literal('event_callback'),
+	team_id: SlackTeamId,
+	event_id: Schema.NonEmptyString,
+	event_time: Schema.Finite,
+	event: SlackMessageUpdatedEvent,
+})
+export type SlackMessageUpdatedEnvelope = typeof SlackMessageUpdatedEnvelope.Type
+
+export const SlackMessageDeletedEnvelope = Schema.Struct({
+	type: Schema.Literal('event_callback'),
+	team_id: SlackTeamId,
+	event_id: Schema.NonEmptyString,
+	event_time: Schema.Finite,
+	event: SlackMessageDeletedEvent,
+})
+export type SlackMessageDeletedEnvelope = typeof SlackMessageDeletedEnvelope.Type
 
 export const SlackReactionAddedEnvelope = Schema.Struct({
 	type: Schema.Literal('event_callback'),

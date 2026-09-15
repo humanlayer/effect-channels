@@ -18,7 +18,9 @@ import {
 	SlackAgentSessionStoppedEnvelope,
 	SlackAppMentionEnvelope,
 	SlackEventEnvelope,
+	SlackMessageDeletedEnvelope,
 	SlackMessageEnvelope,
+	SlackMessageUpdatedEnvelope,
 	SlackReactionAddedEnvelope,
 	type SlackReactionAddedEnvelope as SlackReactionAddedEnvelopeType,
 	SlackReactionRemovedEnvelope,
@@ -82,7 +84,7 @@ const slackWebhookHandler =
 export const makeSlackWebhookProvider = (
 	options: SlackWebhookProviderOptions,
 ): WebhookProvider<Crypto.Crypto | SlackReactionThreadResolver> => ({
-	key: 'slack',
+	providerName: 'slack',
 	handle: slackWebhookHandler(options),
 })
 
@@ -150,21 +152,72 @@ const handleMessage = (
 ): Effect.Effect<ProviderWebhookOutcome, WebhookPayloadInvalidError> =>
 	Schema.decodeUnknownEffect(SlackMessageEnvelope)(eventEnvelope, { onExcessProperty: 'preserve' }).pipe(
 		Effect.mapError(() => WebhookPayloadInvalidError.make({ reason: 'invalid_message' })),
-		Effect.map((envelope) =>
-			envelope.event.subtype === undefined
-				? makeSlackAdmissionOutcome({
-						options,
-						installationId: envelope.team_id,
-						resourceId: slackThreadResourceId({
-							teamId: envelope.team_id,
-							channelId: envelope.event.channel,
-							threadTs: envelope.event.thread_ts ?? envelope.event.ts,
+		Effect.flatMap((envelope) =>
+			Match.value(envelope.event.subtype).pipe(
+				Match.when(undefined, () =>
+					Effect.succeed(
+						makeSlackAdmissionOutcome({
+							options,
+							installationId: envelope.team_id,
+							resourceId: slackThreadResourceId({
+								teamId: envelope.team_id,
+								channelId: envelope.event.channel,
+								threadTs: envelope.event.thread_ts ?? envelope.event.ts,
+							}),
+							eventId: envelope.event_id,
+							payload: envelope,
 						}),
-						eventId: envelope.event_id,
-						payload: envelope,
-					})
-				: ProviderWebhookIgnored.make({}),
+					),
+				),
+				Match.when('message_changed', () => handleMessageUpdated(options, eventEnvelope)),
+				Match.when('message_deleted', () => handleMessageDeleted(options, eventEnvelope)),
+				Match.orElse(() => Effect.succeed(ProviderWebhookIgnored.make({}))),
+			),
 		),
+	)
+
+const handleMessageUpdated = (
+	options: SlackWebhookProviderOptions,
+	eventEnvelope: unknown,
+): Effect.Effect<ProviderWebhookOutcome, WebhookPayloadInvalidError> =>
+	Schema.decodeUnknownEffect(SlackMessageUpdatedEnvelope)(eventEnvelope, { onExcessProperty: 'preserve' }).pipe(
+		Effect.mapError(() => WebhookPayloadInvalidError.make({ reason: 'invalid_message_changed' })),
+		Effect.map((envelope) =>
+			makeSlackAdmissionOutcome({
+				options,
+				installationId: envelope.team_id,
+				resourceId: slackThreadResourceId({
+					teamId: envelope.team_id,
+					channelId: envelope.event.channel,
+					threadTs: envelope.event.message.thread_ts ?? envelope.event.message.ts,
+				}),
+				eventId: envelope.event_id,
+				payload: envelope,
+			}),
+		),
+	)
+
+const handleMessageDeleted = (
+	options: SlackWebhookProviderOptions,
+	eventEnvelope: unknown,
+): Effect.Effect<ProviderWebhookOutcome, WebhookPayloadInvalidError> =>
+	Schema.decodeUnknownEffect(SlackMessageDeletedEnvelope)(eventEnvelope, { onExcessProperty: 'preserve' }).pipe(
+		Effect.mapError(() => WebhookPayloadInvalidError.make({ reason: 'invalid_message_deleted' })),
+		Effect.map((envelope) => {
+			const deletedMessageTs =
+				envelope.event.deleted_ts ?? envelope.event.previous_message?.ts ?? envelope.event.ts
+			return makeSlackAdmissionOutcome({
+				options,
+				installationId: envelope.team_id,
+				resourceId: slackThreadResourceId({
+					teamId: envelope.team_id,
+					channelId: envelope.event.channel,
+					threadTs: envelope.event.previous_message?.thread_ts ?? deletedMessageTs,
+				}),
+				eventId: envelope.event_id,
+				payload: envelope,
+			})
+		}),
 	)
 
 const makeSlackAdmissionOutcome = (input: {
@@ -175,7 +228,7 @@ const makeSlackAdmissionOutcome = (input: {
 	readonly payload: DeliveryAdmission['payload']
 }): ProviderWebhookOutcome =>
 	ProviderWebhookEvent.make({
-		admission: DeliveryAdmission.make({
+		event: DeliveryAdmission.make({
 			namespace: input.options.namespace,
 			provider: 'slack',
 			installationId: input.installationId,

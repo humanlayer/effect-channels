@@ -4,7 +4,7 @@ import * as NodeHttp from 'node:http'
 import { NodeCrypto } from '@effect/platform-node'
 import { createServer, serve } from '@emulators/core'
 import { getSlackStore, seedFromConfig, slackPlugin, type SlackSeedConfig } from '@emulators/slack'
-import { DeliveryQueue, webhookRoutes, type RawWebhookInput } from '@humanlayer/channels-delivery-next'
+import { MailboxDelivery, webhookRoutes, type RawWebhookInput } from '@humanlayer/channels-delivery-next'
 import { Context, Effect, Redacted } from 'effect'
 import { Headers, HttpRouter } from 'effect/unstable/http'
 
@@ -16,7 +16,7 @@ export const slackEmulatorBotToken = 'xoxb-slack-next-emulator'
 export const slackEmulatorAliceToken = 'xoxp-slack-next-alice'
 
 export type SlackEmulatorFixtureOptions = {
-	readonly deliveryQueue: typeof DeliveryQueue.Service
+	readonly mailboxDelivery: typeof MailboxDelivery.Service
 	readonly reactionThreadResolver: typeof SlackReactionThreadResolver.Service
 }
 
@@ -155,7 +155,7 @@ export const makeSlackEmulatorFixture = (options: SlackEmulatorFixtureOptions) =
 		yield* Effect.addFinalizer(() => Effect.promise(web.dispose))
 
 		const context = Context.empty().pipe(
-			Context.add(DeliveryQueue, options.deliveryQueue),
+			Context.add(MailboxDelivery, options.mailboxDelivery),
 			Context.add(SlackReactionThreadResolver, options.reactionThreadResolver),
 		)
 

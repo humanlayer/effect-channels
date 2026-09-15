@@ -36,7 +36,7 @@ const handleMessage = (payload: unknown) =>
 
 const expectedEvent = (payload: ReturnType<typeof message>, resourceTs: string) =>
 	ProviderWebhookEvent.make({
-		admission: DeliveryAdmission.make({
+		event: DeliveryAdmission.make({
 			namespace: 'message-test',
 			provider: 'slack',
 			installationId: 'T_TEST',
@@ -76,13 +76,49 @@ describe('Slack message admission', () => {
 		}),
 	)
 
-	it.effect('ignores edited, deleted, and bot message subtypes', ({ expect }) =>
+	it.effect('admits edited and deleted messages using their thread roots', ({ expect }) =>
 		Effect.gen(function* () {
-			for (const subtype of ['message_changed', 'message_deleted', 'bot_message']) {
-				const ordinary = message('C_PUBLIC', 'channel')
-				const payload = { ...ordinary, event: { ...ordinary.event, subtype } }
-				expect(yield* handleMessage(payload)).toEqual(ProviderWebhookIgnored.make({}))
+			const ordinary = message('C_PUBLIC', 'channel')
+			const updated = {
+				...ordinary,
+				event_id: 'Ev_UPDATED',
+				event: {
+					...ordinary.event,
+					subtype: 'message_changed',
+					message: {
+						user: 'U_TEST',
+						text: 'edited text',
+						ts: ordinary.event.ts,
+						thread_ts: '1700000000.000001',
+					},
+				},
 			}
+			const deleted = {
+				...ordinary,
+				event_id: 'Ev_DELETED',
+				event: {
+					...ordinary.event,
+					subtype: 'message_deleted',
+					deleted_ts: ordinary.event.ts,
+					previous_message: {
+						user: 'U_TEST',
+						text: 'deleted text',
+						ts: ordinary.event.ts,
+						thread_ts: '1700000000.000001',
+					},
+				},
+			}
+
+			expect(yield* handleMessage(updated)).toEqual(expectedEvent(updated, '1700000000.000001'))
+			expect(yield* handleMessage(deleted)).toEqual(expectedEvent(deleted, '1700000000.000001'))
+		}),
+	)
+
+	it.effect('ignores unsupported message subtypes', ({ expect }) =>
+		Effect.gen(function* () {
+			const ordinary = message('C_PUBLIC', 'channel')
+			const payload = { ...ordinary, event: { ...ordinary.event, subtype: 'bot_message' } }
+			expect(yield* handleMessage(payload)).toEqual(ProviderWebhookIgnored.make({}))
 		}),
 	)
 })

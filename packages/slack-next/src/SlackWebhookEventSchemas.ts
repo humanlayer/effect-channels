@@ -58,6 +58,19 @@ export const SlackMessageEvent = Schema.Struct({
 })
 export type SlackMessageEvent = typeof SlackMessageEvent.Type
 
+export const SlackMessageUpdatedEvent = Schema.Struct({
+	...SlackMessageEvent.fields,
+	subtype: Schema.Literal('message_changed'),
+	message: SlackMessageSnapshot,
+})
+export type SlackMessageUpdatedEvent = typeof SlackMessageUpdatedEvent.Type
+
+export const SlackMessageDeletedEvent = Schema.Struct({
+	...SlackMessageEvent.fields,
+	subtype: Schema.Literal('message_deleted'),
+})
+export type SlackMessageDeletedEvent = typeof SlackMessageDeletedEvent.Type
+
 export const SlackReactionItem = Schema.Struct({
 	type: Schema.Literal('message'),
 	channel: SlackChannelId,
@@ -95,6 +108,8 @@ export type SlackAgentSessionStoppedEvent = typeof SlackAgentSessionStoppedEvent
 
 export const SlackInnerEvent = Schema.Union([
 	SlackAppMentionEvent,
+	SlackMessageUpdatedEvent,
+	SlackMessageDeletedEvent,
 	SlackMessageEvent,
 	SlackReactionAddedEvent,
 	SlackReactionRemovedEvent,

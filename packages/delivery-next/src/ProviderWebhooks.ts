@@ -9,7 +9,7 @@ import * as Effect from 'effect/Effect'
 import { HttpRouter, HttpServerResponse } from 'effect/unstable/http'
 import type { HttpIncomingMessage } from 'effect/unstable/http/HttpIncomingMessage'
 
-import { DeliveryAdmission, DeliveryQueue } from './DeliveryQueue'
+import { DeliveryAdmission, MailboxDelivery } from './MailboxDelivery'
 
 /**
  * The provider failed to authenticate the webhook
@@ -42,7 +42,7 @@ export type RawWebhookInput = {
  * Event outcomes are admitted to the delivery queue; Response outcomes preserve the provider's status, body, and headers.
  */
 export const ProviderWebhookEvent = Schema.TaggedStruct('Event', {
-	admission: DeliveryAdmission,
+	event: DeliveryAdmission,
 })
 
 /**
@@ -72,7 +72,7 @@ export type ProviderWebhookOutcome = typeof ProviderWebhookOutcome.Type
  * Each provider implements this - it is used by the HttpRouter to handle creating the things
  */
 export type WebhookProvider<R = never> = {
-	readonly key: string
+	readonly providerName: string
 	readonly handle: (input: RawWebhookInput) => Effect.Effect<ProviderWebhookOutcome, ProviderWebhookError, R>
 }
 
@@ -82,12 +82,12 @@ export type WebhookProvider<R = never> = {
 export const webhookRoutes = <R>(providers: ReadonlyArray<WebhookProvider<R>>) =>
 	HttpRouter.add('POST', '/integrations/:integration/webhook', (request) =>
 		Effect.gen(function* () {
-			// Get the delivery Queue service
-			const queue = yield* DeliveryQueue
+			// Get the mailbox delivery service.
+			const mailbox = yield* MailboxDelivery
 			const { integration } = yield* HttpRouter.schemaPathParams(
 				Schema.Struct({ integration: Schema.NonEmptyString }),
 			)
-			const provider = providers.find((candidate) => candidate.key === integration)
+			const provider = providers.find((candidate) => candidate.providerName === integration)
 			if (provider === undefined) return HttpServerResponse.empty({ status: 404 })
 
 			const outcome = yield* provider.handle({
@@ -97,8 +97,8 @@ export const webhookRoutes = <R>(providers: ReadonlyArray<WebhookProvider<R>>) =
 
 			return yield* Match.value(outcome).pipe(
 				Match.tagsExhaustive({
-					Event: ({ admission }) =>
-						queue.enqueue(admission).pipe(Effect.as(HttpServerResponse.empty({ status: 200 }))),
+					Event: ({ event }) =>
+						mailbox.deliver(event).pipe(Effect.as(HttpServerResponse.empty({ status: 200 }))),
 					Ignored: () => Effect.succeed(HttpServerResponse.empty({ status: 200 })),
 					// Return the provider-indicated response to the webhook - most LIKELY a 200 but depends
 					// is provider-specific so there is not a generic case
@@ -120,11 +120,11 @@ export const webhookRoutes = <R>(providers: ReadonlyArray<WebhookProvider<R>>) =
 					Effect.logWarning('Webhook payload was invalid', error).pipe(
 						Effect.as(HttpServerResponse.text('Invalid webhook payload', { status: 400 })),
 					),
-				DeliveryQueueUnavailable: (error) =>
+				MailboxDeliveryUnavailable: (error) =>
 					Effect.logError('Webhook admission was unavailable', error).pipe(
 						Effect.as(HttpServerResponse.text('Webhook admission unavailable', { status: 503 })),
 					),
-				DeliveryQueueRejected: (error) =>
+				MailboxDeliveryRejected: (error) =>
 					Effect.logWarning('Webhook admission was rejected', error).pipe(
 						Effect.as(HttpServerResponse.text('Webhook admission rejected', { status: 503 })),
 					),

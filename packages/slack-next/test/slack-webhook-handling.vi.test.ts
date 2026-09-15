@@ -130,7 +130,7 @@ describe('Slack webhook handling', () => {
 			} as const
 			expect(yield* handle(signedSlackInput(signingSecret, payload))).toEqual(
 				ProviderWebhookEvent.make({
-					admission: DeliveryAdmission.make({
+					event: DeliveryAdmission.make({
 						namespace: 'webhook-test',
 						provider: 'slack',
 						installationId: 'T_TEST',

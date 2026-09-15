@@ -1,5 +1,5 @@
 /**
- * This file defines the delivery queue service
+ * This file defines the mailbox delivery service.
  *
  * It is acceptable for processing parsed provider events and
  * saving or routing them to the appropriate "mailbox"
@@ -10,8 +10,8 @@ import { Context, Effect, Schema } from 'effect'
 /**
  * Mailbox was unavailable for network/storage reasons, webhook should receive 503
  */
-export class DeliveryQueueUnavailable extends Schema.TaggedError<DeliveryQueueUnavailable>()(
-	'DeliveryQueueUnavailable',
+export class MailboxDeliveryUnavailable extends Schema.TaggedError<MailboxDeliveryUnavailable>()(
+	'MailboxDeliveryUnavailable',
 	{
 		reason: Schema.String,
 	},
@@ -20,14 +20,14 @@ export class DeliveryQueueUnavailable extends Schema.TaggedError<DeliveryQueueUn
 /**
  * admission cannot be accepted e.g. capacity exhaustion
  */
-export class DeliveryQueueRejected extends Schema.TaggedError<DeliveryQueueRejected>()('DeliveryQueueRejected', {
+export class MailboxDeliveryRejected extends Schema.TaggedError<MailboxDeliveryRejected>()('MailboxDeliveryRejected', {
 	reason: Schema.String,
 }) {}
 
-export type DeliveryQueueError = typeof DeliveryQueueUnavailable.Type | typeof DeliveryQueueRejected.Type
+export type MailboxDeliveryError = typeof MailboxDeliveryUnavailable.Type | typeof MailboxDeliveryRejected.Type
 
 /**
- * DeliveryQueueAdmission - the thing that gets saved to a given mailbox by the delivery system
+ * The provider event delivered to a mailbox.
  *
  * @property namespace - the namespace of the app; exists in case you want multiple apps in the same system
  * @property installationId - e.g. slack Team ID or github organization Id from the webhook that identifies who it's for
@@ -59,9 +59,9 @@ export const DeliveryReceipt = Schema.TaggedStruct('DeliveryReceipt', {
 })
 export type DeliveryReceipt = typeof DeliveryReceipt.Type
 
-export class DeliveryQueue extends Context.Service<
-	DeliveryQueue,
+export class MailboxDelivery extends Context.Service<
+	MailboxDelivery,
 	{
-		readonly enqueue: (admission: DeliveryAdmission) => Effect.Effect<DeliveryReceipt, DeliveryQueueError>
+		readonly deliver: (admission: DeliveryAdmission) => Effect.Effect<DeliveryReceipt, MailboxDeliveryError>
 	}
->()('DeliveryQueue') {}
+>()('@humanlayer/channels-delivery-next/MailboxDelivery') {}

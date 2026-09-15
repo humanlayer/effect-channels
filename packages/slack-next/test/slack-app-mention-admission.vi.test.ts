@@ -43,7 +43,7 @@ describe('Slack app mention admission', () => {
 
 			expect(outcome).toEqual(
 				ProviderWebhookEvent.make({
-					admission: DeliveryAdmission.make({
+					event: DeliveryAdmission.make({
 						namespace: 'mention-test',
 						provider: 'slack',
 						installationId: 'T_TEST',
@@ -63,7 +63,7 @@ describe('Slack app mention admission', () => {
 			const payload = appMention('1700000000.000001')
 			expect(outcome).toEqual(
 				ProviderWebhookEvent.make({
-					admission: DeliveryAdmission.make({
+					event: DeliveryAdmission.make({
 						namespace: 'mention-test',
 						provider: 'slack',
 						installationId: 'T_TEST',
