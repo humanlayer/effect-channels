@@ -6,11 +6,14 @@ import { createServer, serve } from '@emulators/core'
 import { getGitHubStore, githubPlugin, seedFromConfig, type GitHubSeedConfig } from '@emulators/github'
 import {
 	DeliveryAdmission,
+	DeliveryReceipt,
 	MailboxDelivery,
+	processProviderEvent,
+	type ProviderEventProcessor,
 	webhookRoutes,
 	type RawWebhookInput,
 } from '@humanlayer/channels-delivery-next'
-import { Context, Effect, Match, Redacted, Schema } from 'effect'
+import { Context, Effect, Match, Queue, Redacted, Schema } from 'effect'
 import { Headers, HttpRouter } from 'effect/unstable/http'
 
 import { makeGitHubWebhookProvider } from '../src/GitHubWebhookProvider'
@@ -18,6 +21,44 @@ import { makeGitHubWebhookProvider } from '../src/GitHubWebhookProvider'
 export const githubWebhookSecret = 'github-next-test-secret'
 export const githubEmulatorAliceToken = 'github-next-alice-token'
 export const githubEmulatorReviewerToken = 'github-next-reviewer-token'
+
+const inMemoryMailboxKey = (admission: DeliveryAdmission) =>
+	[admission.namespace, admission.provider, admission.installationId, admission.resourceId]
+		.map((segment) => `${segment.length}:${segment}`)
+		.join('|')
+
+/** Test-only keyed mailbox that stores admissions until the test explicitly processes one. */
+export const makeInMemoryMailboxFixture = <R>(processors: ReadonlyArray<ProviderEventProcessor<R>>) =>
+	Effect.gen(function* () {
+		const mailboxes = new Map<string, Queue.Queue<DeliveryAdmission>>()
+		const createdMailboxKeys = yield* Queue.unbounded<string>()
+
+		const mailboxDelivery: typeof MailboxDelivery.Service = {
+			deliver: (admission) =>
+				Effect.gen(function* () {
+					const key = inMemoryMailboxKey(admission)
+					let mailbox = mailboxes.get(key)
+					if (mailbox === undefined) {
+						mailbox = yield* Queue.unbounded<DeliveryAdmission>()
+						mailboxes.set(key, mailbox)
+						yield* Queue.offer(createdMailboxKeys, key)
+					}
+					yield* Queue.offer(mailbox, admission)
+					return DeliveryReceipt.make({ mailboxKey: key, accepted: true })
+				}),
+		}
+
+		return {
+			mailboxDelivery,
+			awaitMailboxKey: Queue.take(createdMailboxKeys),
+			processNext: (mailboxKey: string) => {
+				const mailbox = mailboxes.get(mailboxKey)
+				return mailbox === undefined
+					? Effect.die(new Error(`In-memory mailbox not found: ${mailboxKey}`))
+					: Queue.take(mailbox).pipe(Effect.flatMap(processProviderEvent(processors)))
+			},
+		}
+	})
 
 const githubUser = { id: 400, login: 'alice', type: 'User' }
 

@@ -1,15 +1,46 @@
 import { describe, it } from '@effect/vitest'
-import { DeliveryReceipt, type DeliveryAdmission } from '@humanlayer/channels-delivery-next'
+import { DeliveryReceipt, type DeliveryAdmission, ProviderEventHandled } from '@humanlayer/channels-delivery-next'
 import { Deferred, Effect } from 'effect'
+import { vi } from 'vitest'
 
+import { makeGitHubEventProcessor } from '../src/GitHubEventProcessor'
 import {
 	decodeGitHubIdentifiedResponse,
 	decodeGitHubNumberedResponse,
 	githubEmulatorRequest as request,
 	makeGitHubEmulatorFixture,
+	makeInMemoryMailboxFixture,
 } from './fixtures'
 
 describe('GitHub webhook routing', () => {
+	it.effect('processes an emulator issue through its keyed mailbox and calls onIssue', ({ expect }) =>
+		Effect.gen(function* () {
+			const onIssue = vi.fn(() => Effect.void)
+			const processor = makeGitHubEventProcessor({
+				namespace: 'github-emulator-test',
+				handlers: { onIssue },
+			})
+			const mailbox = yield* makeInMemoryMailboxFixture([processor])
+			const github = yield* makeGitHubEmulatorFixture({ mailboxDelivery: mailbox.mailboxDelivery })
+
+			const issueResponse = yield* request(github.url, '/repos/alice/project/issues', github.aliceToken, {
+				body: { title: 'Process this issue', body: 'Issue body' },
+			})
+			const issueNumber = (yield* decodeGitHubNumberedResponse(issueResponse)).number
+			const mailboxKey = yield* mailbox.awaitMailboxKey
+
+			expect(onIssue).not.toHaveBeenCalled()
+			expect(yield* mailbox.processNext(mailboxKey)).toEqual(ProviderEventHandled.make({}))
+			expect(onIssue).toHaveBeenCalledOnce()
+			expect(onIssue).toHaveBeenCalledWith(
+				expect.objectContaining({
+					action: 'opened',
+					issue: expect.objectContaining({ number: issueNumber, title: 'Process this issue' }),
+				}),
+			)
+		}),
+	)
+
 	it.live('delivers every webhook the emulator can produce through normal REST mutations', ({ expect }) =>
 		Effect.gen(function* () {
 			const admissions: Array<DeliveryAdmission> = []
