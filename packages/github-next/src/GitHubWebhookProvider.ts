@@ -1,0 +1,118 @@
+import {
+	DeliveryAdmission,
+	ProviderWebhookEvent,
+	ProviderWebhookIgnored,
+	WebhookAuthenticationError,
+	WebhookPayloadInvalidError,
+	type ProviderWebhookOutcome,
+	type WebhookProvider,
+} from '@humanlayer/channels-delivery-next'
+import { Crypto, Effect, Redacted, Schema } from 'effect'
+
+import { githubDiscussionResourceId } from './GitHubIdentity'
+import {
+	GitHubSupportedWebhook,
+	type GitHubSupportedWebhook as GitHubSupportedWebhookType,
+	GitHubWebhookEnvelope,
+	GitHubWebhookHeaders,
+} from './GitHubWebhookSchemas'
+import { verifyGitHubWebhookSignature } from './GitHubWebhookSignature'
+
+export type GitHubWebhookProviderOptions = {
+	readonly namespace: string
+	readonly webhookSecret: Redacted.Redacted<string>
+}
+
+const SupportedGitHubEvent = Schema.Literals([
+	'issues',
+	'issue_comment',
+	'pull_request',
+	'pull_request_review',
+	'pull_request_review_comment',
+	'pull_request_review_thread',
+])
+type SupportedGitHubEvent = typeof SupportedGitHubEvent.Type
+
+const actionsByEvent: Record<SupportedGitHubEvent, ReadonlyArray<string>> = {
+	issues: ['opened', 'edited', 'closed', 'reopened', 'assigned', 'unassigned', 'labeled', 'unlabeled'],
+	issue_comment: ['created', 'edited', 'deleted'],
+	pull_request: [
+		'opened',
+		'edited',
+		'closed',
+		'reopened',
+		'synchronize',
+		'review_requested',
+		'review_request_removed',
+		'assigned',
+		'unassigned',
+		'labeled',
+		'unlabeled',
+		'converted_to_draft',
+		'ready_for_review',
+	],
+	pull_request_review: ['submitted', 'edited', 'dismissed'],
+	pull_request_review_comment: ['created', 'edited', 'deleted'],
+	pull_request_review_thread: ['resolved', 'unresolved'],
+}
+
+const isSupportedEvent = Schema.is(SupportedGitHubEvent)
+
+const makeGitHubWebhookEvent = (
+	options: GitHubWebhookProviderOptions,
+	deliveryId: string,
+	webhook: GitHubSupportedWebhookType,
+): ProviderWebhookOutcome => {
+	const payload = webhook.payload
+	const discussion = 'pull_request' in payload ? payload.pull_request : payload.issue
+	const kind = 'pull_request' in payload || discussion.pull_request !== undefined ? 'pull-request' : 'issue'
+	return ProviderWebhookEvent.make({
+		event: DeliveryAdmission.make({
+			namespace: options.namespace,
+			provider: 'github',
+			installationId: String(payload.installation.id),
+			resourceId: githubDiscussionResourceId({
+				repositoryId: payload.repository.id,
+				kind,
+				number: discussion.number,
+			}),
+			eventId: deliveryId,
+			payload: webhook,
+		}),
+	})
+}
+
+export const makeGitHubWebhookProvider = (options: GitHubWebhookProviderOptions): WebhookProvider<Crypto.Crypto> => ({
+	providerName: 'github',
+	handle: (input) =>
+		Effect.gen(function* () {
+			const headers = yield* Schema.decodeUnknownEffect(GitHubWebhookHeaders)(input.headers).pipe(
+				Effect.mapError(() => WebhookAuthenticationError.make({ reason: 'invalid_signature_headers' })),
+			)
+			yield* verifyGitHubWebhookSignature({
+				body: input.body,
+				signature: headers['x-hub-signature-256'],
+				webhookSecret: options.webhookSecret,
+			})
+			const event = headers['x-github-event']
+			if (!isSupportedEvent(event)) return ProviderWebhookIgnored.make({})
+
+			const unknownPayload = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(
+				new TextDecoder().decode(input.body),
+			).pipe(Effect.mapError(() => WebhookPayloadInvalidError.make({ reason: 'invalid_json' })))
+			const action = yield* Schema.decodeUnknownEffect(GitHubWebhookEnvelope)(unknownPayload).pipe(
+				Effect.mapError(() => WebhookPayloadInvalidError.make({ reason: 'invalid_event_envelope' })),
+			)
+			if (!(actionsByEvent[event] as ReadonlyArray<string>).includes(action.action)) {
+				return ProviderWebhookIgnored.make({})
+			}
+			const decoded = yield* Schema.decodeUnknownEffect(GitHubSupportedWebhook)(
+				{
+					event,
+					payload: unknownPayload,
+				},
+				{ onExcessProperty: 'preserve' },
+			).pipe(Effect.mapError(() => WebhookPayloadInvalidError.make({ reason: `invalid_${event}` })))
+			return makeGitHubWebhookEvent(options, headers['x-github-delivery'], decoded)
+		}),
+})
