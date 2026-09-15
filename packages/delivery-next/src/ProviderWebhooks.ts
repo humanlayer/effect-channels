@@ -59,6 +59,7 @@ export const ProviderWebhookResponse = Schema.TaggedStruct('Response', {
 	body: Schema.NullOr(Schema.Uint8Array),
 	headers: Schema.Record(Schema.String, Schema.String),
 })
+export type ProviderWebhookResponse = typeof ProviderWebhookResponse.Type
 
 export const ProviderWebhookOutcome = Schema.Union([
 	ProviderWebhookEvent,

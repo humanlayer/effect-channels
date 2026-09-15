@@ -1,6 +1,13 @@
 import { Schema } from 'effect'
 
-import { SlackChannelId, SlackMessageTs, SlackTeamId } from './SlackIdentity'
+import { SlackTeamId } from './SlackIdentity'
+import {
+	SlackAppMentionEvent,
+	SlackAgentSessionStoppedEvent,
+	SlackMessageEvent,
+	SlackReactionAddedEvent,
+	SlackReactionRemovedEvent,
+} from './SlackWebhookEventSchemas'
 
 export const SlackWebhookHeaders = Schema.Struct({
 	'x-slack-request-timestamp': Schema.NonEmptyString,
@@ -19,7 +26,7 @@ export const SlackUrlVerification = Schema.Struct({
 })
 export type SlackUrlVerification = typeof SlackUrlVerification.Type
 
-export const SlackEventCallbackEnvelope = Schema.Struct({
+export const SlackEventEnvelope = Schema.Struct({
 	type: Schema.Literal('event_callback'),
 	team_id: SlackTeamId,
 	event_id: Schema.NonEmptyString,
@@ -28,24 +35,49 @@ export const SlackEventCallbackEnvelope = Schema.Struct({
 		type: Schema.NonEmptyString,
 	}),
 })
-export type SlackEventCallbackEnvelope = typeof SlackEventCallbackEnvelope.Type
+export type SlackEventEnvelope = typeof SlackEventEnvelope.Type
 
-export const SlackAppMentionEvent = Schema.Struct({
-	type: Schema.Literal('app_mention'),
-	user: Schema.optionalKey(Schema.NonEmptyString),
-	bot_id: Schema.optionalKey(Schema.NonEmptyString),
-	text: Schema.String,
-	ts: SlackMessageTs,
-	thread_ts: Schema.optionalKey(SlackMessageTs),
-	channel: SlackChannelId,
-})
-export type SlackAppMentionEvent = typeof SlackAppMentionEvent.Type
-
-export const SlackAppMentionCallback = Schema.Struct({
+export const SlackAppMentionEnvelope = Schema.Struct({
 	type: Schema.Literal('event_callback'),
 	team_id: SlackTeamId,
 	event_id: Schema.NonEmptyString,
 	event_time: Schema.Finite,
 	event: SlackAppMentionEvent,
 })
-export type SlackAppMentionCallback = typeof SlackAppMentionCallback.Type
+export type SlackAppMentionEnvelope = typeof SlackAppMentionEnvelope.Type
+
+export const SlackAgentSessionStoppedEnvelope = Schema.Struct({
+	type: Schema.Literal('event_callback'),
+	team_id: SlackTeamId,
+	event_id: Schema.NonEmptyString,
+	event_time: Schema.Finite,
+	event: SlackAgentSessionStoppedEvent,
+})
+export type SlackAgentSessionStoppedEnvelope = typeof SlackAgentSessionStoppedEnvelope.Type
+
+export const SlackMessageEnvelope = Schema.Struct({
+	type: Schema.Literal('event_callback'),
+	team_id: SlackTeamId,
+	event_id: Schema.NonEmptyString,
+	event_time: Schema.Finite,
+	event: SlackMessageEvent,
+})
+export type SlackMessageEnvelope = typeof SlackMessageEnvelope.Type
+
+export const SlackReactionAddedEnvelope = Schema.Struct({
+	type: Schema.Literal('event_callback'),
+	team_id: SlackTeamId,
+	event_id: Schema.NonEmptyString,
+	event_time: Schema.Finite,
+	event: SlackReactionAddedEvent,
+})
+export type SlackReactionAddedEnvelope = typeof SlackReactionAddedEnvelope.Type
+
+export const SlackReactionRemovedEnvelope = Schema.Struct({
+	type: Schema.Literal('event_callback'),
+	team_id: SlackTeamId,
+	event_id: Schema.NonEmptyString,
+	event_time: Schema.Finite,
+	event: SlackReactionRemovedEvent,
+})
+export type SlackReactionRemovedEnvelope = typeof SlackReactionRemovedEnvelope.Type
