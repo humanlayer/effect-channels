@@ -8,10 +8,10 @@ import {
 	WebhookAuthenticationError,
 	WebhookPayloadInvalidError,
 } from '@humanlayer/channels-delivery-next'
-import { Effect, Redacted } from 'effect'
+import { Effect, Layer, Redacted } from 'effect'
 import { Headers } from 'effect/unstable/http'
 
-import { SlackReactionThreadResolver } from '../src/SlackReactionThreadResolver'
+import { SlackApi } from '../src/SlackApi'
 import { makeSlackWebhookProvider } from '../src/SlackWebhookProvider'
 import { signedSlackInput } from './fixtures'
 
@@ -22,10 +22,15 @@ const provider = makeSlackWebhookProvider({
 })
 const handle = (input: Parameters<typeof provider.handle>[0]) =>
 	provider.handle(input).pipe(
-		Effect.provideService(SlackReactionThreadResolver, {
-			resolve: () => Effect.die(new Error('This webhook must not resolve reaction threads')),
-		}),
-		Effect.provide(NodeCrypto.layer),
+		Effect.provide(
+			Layer.merge(
+				NodeCrypto.layer,
+				Layer.mock(SlackApi, {
+					resolveReactionThread: () =>
+						Effect.die(new Error('This webhook must not resolve reaction threads')),
+				}),
+			),
+		),
 	)
 
 describe('Slack webhook handling', () => {

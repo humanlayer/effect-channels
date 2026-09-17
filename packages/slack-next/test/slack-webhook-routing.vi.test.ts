@@ -39,9 +39,7 @@ describe('Slack webhook routing', () => {
 			const mailbox = yield* makeInMemoryMailboxFixture([processor])
 			const slack = yield* makeSlackEmulatorFixture({
 				mailboxDelivery: mailbox.mailboxDelivery,
-				reactionThreadResolver: {
-					resolve: (input) => Effect.succeed(input.messageTs),
-				},
+				resolveReactionThread: ({ message }) => Effect.succeed(message.messageTs),
 			})
 			const mention = SlackAppMentionEnvelope.make({
 				type: 'event_callback',
@@ -102,9 +100,7 @@ describe('Slack webhook routing', () => {
 							return DeliveryReceipt.make({ mailboxKey: admission.resourceId, accepted: true })
 						}),
 				},
-				reactionThreadResolver: {
-					resolve: (input) => Effect.succeed(input.messageTs),
-				},
+				resolveReactionThread: ({ message }) => Effect.succeed(message.messageTs),
 			})
 			const postMessage = (body: Record<string, unknown>) =>
 				Effect.promise(async () => {
@@ -196,9 +192,7 @@ describe('Slack webhook routing', () => {
 							return DeliveryReceipt.make({ mailboxKey: admission.resourceId, accepted: true })
 						}),
 				},
-				reactionThreadResolver: {
-					resolve: (input) => Effect.succeed(input.messageTs),
-				},
+				resolveReactionThread: ({ message }) => Effect.succeed(message.messageTs),
 			})
 			const eventTime = slackEmulatorEventTime
 			yield* Effect.promise(() =>

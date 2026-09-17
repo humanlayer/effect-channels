@@ -13,10 +13,10 @@ import {
 	webhookRoutes,
 	type RawWebhookInput,
 } from '@humanlayer/channels-delivery-next'
-import { Clock, Context, Effect, Queue, Redacted } from 'effect'
+import { Clock, Context, Effect, Layer, Queue, Redacted } from 'effect'
 import { Headers, HttpRouter } from 'effect/unstable/http'
 
-import { SlackReactionThreadResolver } from '../src/SlackReactionThreadResolver'
+import { SlackApi } from '../src/SlackApi'
 import { makeSlackWebhookProvider } from '../src/SlackWebhookProvider'
 
 export const slackEmulatorSigningSecret = 'slack-next-emulator-signing-secret'
@@ -26,7 +26,7 @@ export const slackEmulatorEventTime = 1_700_000_000
 
 export type SlackEmulatorFixtureOptions = {
 	readonly mailboxDelivery: typeof MailboxDelivery.Service
-	readonly reactionThreadResolver: typeof SlackReactionThreadResolver.Service
+	readonly resolveReactionThread: (typeof SlackApi.Service)['resolveReactionThread']
 }
 
 const inMemoryMailboxKey = (admission: DeliveryAdmission) =>
@@ -216,10 +216,13 @@ export const makeSlackEmulatorFixture = (options: SlackEmulatorFixtureOptions) =
 		const web = HttpRouter.toWebHandler(routes, { disableLogger: true })
 		yield* Effect.addFinalizer(() => Effect.promise(web.dispose))
 
+		const slackApiContext = yield* Layer.build(
+			Layer.mock(SlackApi, { resolveReactionThread: options.resolveReactionThread }),
+		)
 		const context = Context.empty().pipe(
 			Context.add(MailboxDelivery, options.mailboxDelivery),
-			Context.add(SlackReactionThreadResolver, options.reactionThreadResolver),
 			Context.add(Clock.Clock, clock),
+			Context.merge(slackApiContext),
 		)
 
 		const callbackServer = NodeHttp.createServer(requestListener((request) => web.handler(request, context)))

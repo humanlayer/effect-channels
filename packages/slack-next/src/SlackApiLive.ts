@@ -1,16 +1,4 @@
-import {
-	Config,
-	Duration,
-	Effect,
-	Layer,
-	Match,
-	Option,
-	Predicate,
-	type Redacted,
-	Schedule,
-	Schema,
-	Stream,
-} from 'effect'
+import { Config, Duration, Effect, Layer, Match, Option, Predicate, Schedule, Schema, Stream } from 'effect'
 import * as FetchHttpClient from 'effect/unstable/http/FetchHttpClient'
 import * as HttpClient from 'effect/unstable/http/HttpClient'
 import * as HttpClientRequest from 'effect/unstable/http/HttpClientRequest'
@@ -215,20 +203,16 @@ const nextCursor = (metadata: typeof SlackResponseMetadata.Type | undefined) => 
 const chronological = (messages: SlackMessages): SlackMessages =>
 	Array.from(messages).sort((left, right) => left.ref.messageTs.localeCompare(right.ref.messageTs))
 
-export type SlackApiLiveOptions = {
-	readonly botToken: Redacted.Redacted<string>
-	readonly botUserId?: string
-	readonly apiOrigin?: URL
-}
-
-const makeSlackApi = (options: SlackApiLiveOptions) =>
+/** Live Slack API implementation. Slack transport, decoding, pagination, and credentials stay private. */
+export const SlackApiLiveBase = Layer.effect(
+	SlackApi,
 	Effect.gen(function* () {
 		const client = yield* HttpClient.HttpClient
-		const botToken = options.botToken
-		const configuredBotUserId = Predicate.isUndefined(options.botUserId)
-			? Option.none<string>()
-			: Option.some(options.botUserId)
-		const apiOrigin = options.apiOrigin ?? new URL('https://slack.com/api/')
+		const botToken = yield* Config.redacted('SLACK_BOT_TOKEN')
+		const configuredBotUserId = yield* Config.option(Config.string('SLACK_BOT_USER_ID'))
+		const apiOrigin = yield* Config.url('SLACK_API_ORIGIN').pipe(
+			Config.withDefault(new URL('https://slack.com/api/')),
+		)
 		const rateLimitRetryPolicy = Schedule.exponential('200 millis').pipe(
 			Schedule.setInputType<SlackRateLimitedError | SlackApiError>(),
 			Schedule.jittered,
@@ -748,6 +732,25 @@ const makeSlackApi = (options: SlackApiLiveOptions) =>
 				).pipe(Effect.asVoid),
 			resolveParticipant,
 			getMessage,
+			resolveReactionThread: ({ message }) =>
+				callSlackGet(
+					'resolve_reaction_thread',
+					'conversations.replies',
+					{ channel: message.channelId, ts: message.messageTs, limit: 1 },
+					SlackMessagesResponse,
+				).pipe(
+					Effect.flatMap((response) => {
+						const snapshot = response.messages?.find(({ ts }) => ts === message.messageTs)
+						return Predicate.isUndefined(snapshot)
+							? Effect.fail(
+									SlackApiError.make({
+										operation: 'resolve_reaction_thread',
+										message: 'Slack did not return the reacted message',
+									}),
+								)
+							: Effect.succeed(snapshot.thread_ts ?? snapshot.ts)
+					}),
+				),
 			getThreadInfo: ({ thread }) =>
 				listThreadMessagesPage(thread).pipe(
 					Effect.map(([messages]) => {
@@ -794,28 +797,8 @@ const makeSlackApi = (options: SlackApiLiveOptions) =>
 					}),
 				),
 		})
-	})
-
-/** Live Slack API implementation. Slack transport, decoding, pagination, and credentials stay private. */
-export const SlackApiLiveBase = Layer.effect(
-	SlackApi,
-	Effect.gen(function* () {
-		const botToken = yield* Config.redacted('SLACK_BOT_TOKEN')
-		const botUserId = yield* Config.option(Config.string('SLACK_BOT_USER_ID'))
-		const apiOrigin = yield* Config.url('SLACK_API_ORIGIN').pipe(
-			Config.withDefault(new URL('https://slack.com/api/')),
-		)
-		return yield* makeSlackApi({
-			botToken,
-			botUserId: Option.getOrUndefined(botUserId),
-			apiOrigin,
-		})
 	}),
 )
-
-/** Slack API implementation configured by an application runtime. */
-export const SlackApiLiveWith = (options: SlackApiLiveOptions) =>
-	Layer.effect(SlackApi, makeSlackApi(options)).pipe(Layer.provide(FetchHttpClient.layer))
 
 /** Slack API implementation with the standard Fetch transport. */
 export const SlackApiLive = SlackApiLiveBase.pipe(Layer.provide(FetchHttpClient.layer))

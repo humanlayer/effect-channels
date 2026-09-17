@@ -1,9 +1,9 @@
 import { NodeCrypto } from '@effect/platform-node'
 import { describe, it } from '@effect/vitest'
 import { DeliveryAdmission, ProviderWebhookEvent } from '@humanlayer/channels-delivery-next'
-import { Effect, Redacted } from 'effect'
+import { Effect, Layer, Redacted } from 'effect'
 
-import { SlackReactionThreadResolver } from '../src/SlackReactionThreadResolver'
+import { SlackApi } from '../src/SlackApi'
 import { makeSlackWebhookProvider } from '../src/SlackWebhookProvider'
 import { signedSlackInput } from './fixtures'
 
@@ -30,10 +30,15 @@ const handleMention = (payload: unknown) =>
 	})
 		.handle(signedSlackInput(signingSecret, payload))
 		.pipe(
-			Effect.provideService(SlackReactionThreadResolver, {
-				resolve: () => Effect.die(new Error('App mentions must not resolve reaction threads')),
-			}),
-			Effect.provide(NodeCrypto.layer),
+			Effect.provide(
+				Layer.merge(
+					NodeCrypto.layer,
+					Layer.mock(SlackApi, {
+						resolveReactionThread: () =>
+							Effect.die(new Error('App mentions must not resolve reaction threads')),
+					}),
+				),
+			),
 		)
 
 describe('Slack app mention admission', () => {

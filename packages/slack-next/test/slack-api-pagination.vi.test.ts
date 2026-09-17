@@ -206,6 +206,24 @@ const makeHarness = Effect.fn('test.makeSlackApiHarness')(function* () {
 })
 
 describe('SlackApi paginated thread layer', () => {
+	it.effect('resolves a reacted reply to its root thread timestamp', ({ expect }) =>
+		Effect.gen(function* () {
+			const harness = yield* makeHarness()
+			const reply = message('1700000011.000000')
+			yield* Queue.offer(harness.threadPages, { messages: [reply] })
+
+			const resolved = yield* Effect.flatMap(SlackApi, (api) =>
+				api.resolveReactionThread({ message: reply.ref }),
+			).pipe(Effect.provide(harness.layer))
+
+			expect(resolved).toBe(threadTs)
+			expect(yield* Queue.take(harness.calls)).toEqual({
+				operation: 'listThreadMessagesPage',
+				request: { thread: threadRef, limit: 1 },
+			})
+		}),
+	)
+
 	it.effect('follows every thread cursor and returns messages oldest-first', ({ expect }) =>
 		Effect.gen(function* () {
 			const harness = yield* makeHarness()

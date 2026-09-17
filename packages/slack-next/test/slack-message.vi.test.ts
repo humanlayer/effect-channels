@@ -1,9 +1,9 @@
 import { NodeCrypto } from '@effect/platform-node'
 import { describe, it } from '@effect/vitest'
 import { DeliveryAdmission, ProviderWebhookEvent, ProviderWebhookIgnored } from '@humanlayer/channels-delivery-next'
-import { Effect, Redacted } from 'effect'
+import { Effect, Layer, Redacted } from 'effect'
 
-import { SlackReactionThreadResolver } from '../src/SlackReactionThreadResolver'
+import { SlackApi } from '../src/SlackApi'
 import { makeSlackWebhookProvider } from '../src/SlackWebhookProvider'
 import { signedSlackInput } from './fixtures'
 
@@ -28,10 +28,15 @@ const handleMessage = (payload: unknown) =>
 	makeSlackWebhookProvider({ namespace: 'message-test', signingSecret: Redacted.make(signingSecret) })
 		.handle(signedSlackInput(signingSecret, payload))
 		.pipe(
-			Effect.provideService(SlackReactionThreadResolver, {
-				resolve: () => Effect.die(new Error('Messages must not resolve reaction threads')),
-			}),
-			Effect.provide(NodeCrypto.layer),
+			Effect.provide(
+				Layer.merge(
+					NodeCrypto.layer,
+					Layer.mock(SlackApi, {
+						resolveReactionThread: () =>
+							Effect.die(new Error('Messages must not resolve reaction threads')),
+					}),
+				),
+			),
 		)
 
 const expectedEvent = (payload: ReturnType<typeof message>, resourceTs: string) =>

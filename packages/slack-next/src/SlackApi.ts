@@ -1,6 +1,6 @@
 import { Context, Effect, Schema, Stream } from 'effect'
 
-import { SlackTeamId } from './SlackIdentity'
+import { SlackMessageTs, SlackTeamId } from './SlackIdentity'
 import type {
 	SlackChannelInfo,
 	SlackMessage,
@@ -51,6 +51,9 @@ export type SlackParticipantRequest = typeof SlackParticipantRequest.Type
 export const SlackMessageRequest = Schema.Struct({ thread: SlackThreadRef, message: SlackMessageRef })
 export type SlackMessageRequest = typeof SlackMessageRequest.Type
 
+export const SlackResolveReactionThreadRequest = Schema.Struct({ message: SlackMessageRef })
+export type SlackResolveReactionThreadRequest = typeof SlackResolveReactionThreadRequest.Type
+
 export const SlackApiOperation = Schema.Literals([
 	'list_participants',
 	'list_thread_messages',
@@ -63,6 +66,7 @@ export const SlackApiOperation = Schema.Literals([
 	'remove_reaction',
 	'resolve_participant',
 	'get_message',
+	'resolve_reaction_thread',
 	'get_thread_info',
 	'get_channel_info',
 ])
@@ -95,6 +99,9 @@ export class SlackApi extends Context.Service<
 			request: SlackParticipantRequest,
 		) => Effect.Effect<SlackParticipant, SlackApiError>
 		readonly getMessage: (request: SlackMessageRequest) => Effect.Effect<SlackMessage, SlackApiError>
+		readonly resolveReactionThread: (
+			request: SlackResolveReactionThreadRequest,
+		) => Effect.Effect<SlackMessageTs, SlackApiError>
 		readonly getThreadInfo: (request: SlackThreadRequest) => Effect.Effect<SlackThreadInfo, SlackApiError>
 		readonly getChannelInfo: (request: SlackChannelRequest) => Effect.Effect<SlackChannelInfo, SlackApiError>
 	}

@@ -1,13 +1,10 @@
 import { NodeCrypto } from '@effect/platform-node'
 import { describe, it } from '@effect/vitest'
 import { DeliveryAdmission, ProviderWebhookEvent } from '@humanlayer/channels-delivery-next'
-import { Effect, Redacted } from 'effect'
+import { Effect, Layer, Redacted } from 'effect'
 
+import { SlackApi, SlackApiError } from '../src/SlackApi'
 import { SlackMessageTs } from '../src/SlackIdentity'
-import {
-	SlackReactionThreadResolutionUnavailable,
-	SlackReactionThreadResolver,
-} from '../src/SlackReactionThreadResolver'
 import { makeSlackWebhookProvider } from '../src/SlackWebhookProvider'
 import { signedSlackInput } from './fixtures'
 
@@ -26,20 +23,18 @@ const reaction = {
 	},
 }
 
-const handleReaction = (resolver: typeof SlackReactionThreadResolver.Service) =>
+const handleReaction = (resolveReactionThread: (typeof SlackApi.Service)['resolveReactionThread']) =>
 	makeSlackWebhookProvider({
 		namespace: 'reaction-test',
 		signingSecret: Redacted.make(signingSecret),
 	})
 		.handle(signedSlackInput(signingSecret, reaction))
-		.pipe(Effect.provideService(SlackReactionThreadResolver, resolver), Effect.provide(NodeCrypto.layer))
+		.pipe(Effect.provide(Layer.merge(NodeCrypto.layer, Layer.mock(SlackApi, { resolveReactionThread }))))
 
 describe('Slack reaction thread resolution', () => {
 	it.effect('uses the resolved root timestamp for reaction mailbox identity', ({ expect }) =>
 		Effect.gen(function* () {
-			const outcome = yield* handleReaction({
-				resolve: () => Effect.succeed(SlackMessageTs.make('1700000000.000001')),
-			})
+			const outcome = yield* handleReaction(() => Effect.succeed(SlackMessageTs.make('1700000000.000001')))
 
 			expect(outcome).toEqual(
 				ProviderWebhookEvent.make({
@@ -58,9 +53,11 @@ describe('Slack reaction thread resolution', () => {
 
 	it.effect('falls back to the reacted message timestamp when resolution is unavailable', ({ expect }) =>
 		Effect.gen(function* () {
-			const outcome = yield* handleReaction({
-				resolve: () => Effect.fail(new SlackReactionThreadResolutionUnavailable({ reason: 'transport' })),
-			})
+			const outcome = yield* handleReaction(() =>
+				Effect.fail(
+					SlackApiError.make({ operation: 'resolve_reaction_thread', message: 'Could not reach Slack' }),
+				),
+			)
 
 			expect(outcome).toEqual(
 				ProviderWebhookEvent.make({

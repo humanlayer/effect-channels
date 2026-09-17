@@ -4,7 +4,7 @@ import {
 } from '@humanlayer/channels-alchemy-cloudflare'
 import { MailboxProcessing, MailboxProcessingLive } from '@humanlayer/channels-delivery-next'
 import * as Cloudflare from 'alchemy/Cloudflare'
-import { Clock, Config, Effect, Layer } from 'effect'
+import { Clock, Effect, Layer } from 'effect'
 
 import { ProviderEventDispatcherAlchemyCloudflare } from './SlackProvider'
 
@@ -13,11 +13,6 @@ export class DeliveryMailbox extends Cloudflare.DurableObject<DeliveryMailbox>()
 	'DeliveryMailbox',
 	Effect.gen(function* () {
 		const state = yield* Cloudflare.DurableObjectState
-		const botToken = yield* Config.redacted('SLACK_BOT_TOKEN').pipe(
-			Effect.tapError((error) => Effect.logError('SLACK_BOT_TOKEN configuration is invalid', error)),
-			Effect.catchTag('ConfigError', Effect.die),
-		)
-
 		const recoveryAfterMs = 30_000
 
 		const MailboxProcessingAlchemyCloudflare = MailboxProcessingLive({
@@ -25,7 +20,7 @@ export class DeliveryMailbox extends Cloudflare.DurableObject<DeliveryMailbox>()
 			maxAttempts: 5,
 		}).pipe(
 			Layer.provide(MailboxProcessingBackendFromDurableObjectStorage({ recoveryAfterMs })),
-			Layer.provide(ProviderEventDispatcherAlchemyCloudflare(botToken)),
+			Layer.provide(ProviderEventDispatcherAlchemyCloudflare),
 		)
 
 		return Effect.gen(function* () {

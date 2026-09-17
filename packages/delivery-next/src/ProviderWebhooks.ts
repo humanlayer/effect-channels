@@ -98,7 +98,22 @@ export const webhookRoutes = <R>(providers: ReadonlyArray<WebhookProvider<R>>) =
 			return yield* Match.value(outcome).pipe(
 				Match.tagsExhaustive({
 					Event: ({ event }) =>
-						mailbox.deliver(event).pipe(Effect.as(HttpServerResponse.empty({ status: 200 }))),
+						mailbox.deliver(event).pipe(
+							Effect.tap((receipt) =>
+								Effect.logInfo('Mailbox admission recorded').pipe(
+									Effect.annotateLogs({
+										provider: event.provider,
+										namespace: event.namespace,
+										installation_id: event.installationId,
+										resource_id: event.resourceId,
+										event_id: event.eventId,
+										mailbox_key: receipt.mailboxKey,
+										accepted: receipt.accepted,
+									}),
+								),
+							),
+							Effect.as(HttpServerResponse.empty({ status: 200 })),
+						),
 					Ignored: () => Effect.succeed(HttpServerResponse.empty({ status: 200 })),
 					// Return the provider-indicated response to the webhook - most LIKELY a 200 but depends
 					// is provider-specific so there is not a generic case

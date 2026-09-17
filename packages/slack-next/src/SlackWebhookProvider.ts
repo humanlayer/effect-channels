@@ -12,8 +12,9 @@ import {
 } from '@humanlayer/channels-delivery-next'
 import { Crypto, Effect, Match, Redacted, Schema } from 'effect'
 
+import { SlackApi } from './SlackApi'
 import { slackThreadResourceId } from './SlackIdentity'
-import { SlackReactionThreadResolver } from './SlackReactionThreadResolver'
+import { SlackMessageRef } from './SlackModels'
 import {
 	SlackAgentSessionStoppedEnvelope,
 	SlackAppMentionEnvelope,
@@ -41,9 +42,7 @@ export type SlackWebhookProviderOptions = {
  */
 const slackWebhookHandler =
 	(options: SlackWebhookProviderOptions) =>
-	(
-		input: RawWebhookInput,
-	): Effect.Effect<ProviderWebhookOutcome, ProviderWebhookError, Crypto.Crypto | SlackReactionThreadResolver> =>
+	(input: RawWebhookInput): Effect.Effect<ProviderWebhookOutcome, ProviderWebhookError, Crypto.Crypto | SlackApi> =>
 		Effect.gen(function* () {
 			// make sure that the webhook headers include the necessary fields for signature authentication
 			const headers = yield* Schema.decodeUnknownEffect(SlackWebhookHeaders)(input.headers).pipe(
@@ -83,7 +82,7 @@ const slackWebhookHandler =
 // Slack Webhook provider constructor
 export const makeSlackWebhookProvider = (
 	options: SlackWebhookProviderOptions,
-): WebhookProvider<Crypto.Crypto | SlackReactionThreadResolver> => ({
+): WebhookProvider<Crypto.Crypto | SlackApi> => ({
 	providerName: 'slack',
 	handle: slackWebhookHandler(options),
 })
@@ -108,7 +107,7 @@ const handleUrlVerification = (
 const handleSlackEvent = (
 	options: SlackWebhookProviderOptions,
 	eventEnvelope: unknown,
-): Effect.Effect<ProviderWebhookOutcome, WebhookPayloadInvalidError, SlackReactionThreadResolver> =>
+): Effect.Effect<ProviderWebhookOutcome, WebhookPayloadInvalidError, SlackApi> =>
 	Schema.decodeUnknownEffect(SlackEventEnvelope)(eventEnvelope).pipe(
 		Effect.mapError(() => WebhookPayloadInvalidError.make({ reason: 'invalid_event_envelope' })),
 		Effect.flatMap((envelope) =>
@@ -277,14 +276,16 @@ const handleReactionRemoved = (options: SlackWebhookProviderOptions, eventEnvelo
 const admitReaction = (
 	options: SlackWebhookProviderOptions,
 	envelope: SlackReactionAddedEnvelopeType | SlackReactionRemovedEnvelopeType,
-): Effect.Effect<ProviderWebhookOutcome, never, SlackReactionThreadResolver> =>
+): Effect.Effect<ProviderWebhookOutcome, never, SlackApi> =>
 	Effect.gen(function* () {
-		const resolver = yield* SlackReactionThreadResolver
-		const threadTs = yield* resolver
-			.resolve({
-				teamId: envelope.team_id,
-				channelId: envelope.event.item.channel,
-				messageTs: envelope.event.item.ts,
+		const api = yield* SlackApi
+		const threadTs = yield* api
+			.resolveReactionThread({
+				message: SlackMessageRef.make({
+					teamId: envelope.team_id,
+					channelId: envelope.event.item.channel,
+					messageTs: envelope.event.item.ts,
+				}),
 			})
 			.pipe(
 				Effect.tapError((error) =>
@@ -299,9 +300,7 @@ const admitReaction = (
 						}),
 					),
 				),
-				Effect.catchTag('SlackReactionThreadResolutionUnavailable', () =>
-					Effect.succeed(envelope.event.item.ts),
-				),
+				Effect.catchTag('SlackApiError', () => Effect.succeed(envelope.event.item.ts)),
 			)
 
 		return makeSlackAdmissionOutcome({

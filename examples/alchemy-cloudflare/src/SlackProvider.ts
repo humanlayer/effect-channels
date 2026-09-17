@@ -5,12 +5,12 @@ import { processProviderEvent, ProviderEventDispatcher } from '@humanlayer/chann
 import {
 	makeSlackEventProcessor,
 	SlackApi,
-	SlackApiLiveWith,
+	SlackApiLive,
 	SlackContent,
 	SlackReaction,
 	SlackSubscriptions,
 } from '@humanlayer/channels-slack-next'
-import { Effect, Layer, Predicate, type Redacted } from 'effect'
+import { Effect, Layer, Predicate } from 'effect'
 
 import { applicationNamespace } from './config'
 import { SlackSubscriptionsDurableObject } from './SlackSubscriptions'
@@ -81,8 +81,12 @@ const ProviderEventDispatcherAlchemyCloudflareBase = Layer.effect(
 	}),
 )
 
-export const ProviderEventDispatcherAlchemyCloudflare = (botToken: Redacted.Redacted<string>) =>
-	ProviderEventDispatcherAlchemyCloudflareBase.pipe(
-		Layer.provide(SlackApiLiveWith({ botToken })),
-		Layer.provide(SlackSubscriptionsDurableObject),
-	)
+export const SlackApiAlchemyCloudflare = SlackApiLive.pipe(
+	Layer.tapError((error) => Effect.logError('Slack API configuration is invalid', error)),
+	Layer.orDie,
+)
+
+export const ProviderEventDispatcherAlchemyCloudflare = ProviderEventDispatcherAlchemyCloudflareBase.pipe(
+	Layer.provide(SlackApiAlchemyCloudflare),
+	Layer.provide(SlackSubscriptionsDurableObject),
+)

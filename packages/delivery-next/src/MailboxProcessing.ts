@@ -186,6 +186,16 @@ export const processClaim = Effect.fn('delivery.process_mailbox_claim')(function
 	const { claim, maxAttempts } = input
 	const mailboxProcessingBackend = yield* MailboxProcessingBackend
 	const providerEventDispatcher = yield* ProviderEventDispatcher
+	const startedAt = yield* Clock.currentTimeMillis
+	const claimAnnotations = {
+		mailbox_key: claim.mailboxKey,
+		claim_id: claim.claimId,
+		attempt: claim.attempt,
+		event_count: claim.admissions.length,
+		provider: claim.admissions[0].provider,
+	}
+
+	yield* Effect.logInfo('Mailbox processing started').pipe(Effect.annotateLogs(claimAnnotations))
 
 	const providerResult = yield* providerEventDispatcher.process(claim.admissions).pipe(
 		Effect.match({
@@ -201,11 +211,40 @@ export const processClaim = Effect.fn('delivery.process_mailbox_claim')(function
 		),
 		Match.orElse((result) => result),
 	)
+	const processingFinishedAt = yield* Clock.currentTimeMillis
 	yield* mailboxProcessingBackend.recordProcessingAttemptResult({
 		claim,
 		result: processingResult,
-		finishedAt: Timestamp.make(yield* Clock.currentTimeMillis),
+		finishedAt: Timestamp.make(processingFinishedAt),
 	})
+	const recordedAt = yield* Clock.currentTimeMillis
+	yield* Match.value(processingResult).pipe(
+		Match.tagsExhaustive({
+			Completed: ({ ignoredReason }) => {
+				const log = Effect.logInfo('Mailbox processing completed')
+				return Predicate.isUndefined(ignoredReason)
+					? log
+					: log.pipe(Effect.annotateLogs({ ignored_reason: ignoredReason }))
+			},
+			RetryableFailure: ({ retryAfterMs, safeCode }) => {
+				const log = Effect.logWarning('Mailbox processing scheduled for retry').pipe(
+					Effect.annotateLogs({ safe_code: safeCode }),
+				)
+				return Predicate.isUndefined(retryAfterMs)
+					? log
+					: log.pipe(Effect.annotateLogs({ retry_after_ms: retryAfterMs }))
+			},
+			TerminalFailure: ({ safeCode }) =>
+				Effect.logWarning('Mailbox processing permanently failed').pipe(
+					Effect.annotateLogs({ safe_code: safeCode }),
+				),
+		}),
+		Effect.annotateLogs({
+			...claimAnnotations,
+			result: processingResult._tag,
+			duration_ms: recordedAt - startedAt,
+		}),
+	)
 })
 
 /** Construct the storage-agnostic mailbox processing service. */
@@ -223,6 +262,11 @@ export const makeMailboxProcessing = (options: { concurrency: number; maxAttempt
 		return MailboxProcessing.of({
 			processReady: Effect.gen(function* () {
 				const claims = yield* processingBackend.claimReadyMailboxes
+				if (claims.length > 0) {
+					yield* Effect.logInfo('Mailbox processing claimed ready work').pipe(
+						Effect.annotateLogs({ claimed: claims.length }),
+					)
+				}
 				yield* Effect.forEach(
 					claims,
 					(claim) =>

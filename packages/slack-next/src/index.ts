@@ -1,6 +1,4 @@
 export * from './SlackWebhookProvider'
-export * from './SlackReactionThreadResolver'
-export * from './SlackReactionThreadResolverLive'
 export * from './SlackEventProcessor'
 export * from './SlackWebhookEventSchemas'
 export * from './SlackIdentity'

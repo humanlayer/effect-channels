@@ -82,6 +82,7 @@ const makeApi = (
 	removeReaction: (request) => Queue.offer(calls, { operation: 'removeReaction', request }).pipe(Effect.asVoid),
 	resolveParticipant: () => unexpected('resolveParticipant'),
 	getMessage: () => unexpected('getMessage'),
+	resolveReactionThread: () => unexpected('resolveReactionThread'),
 	getThreadInfo: (request) => Queue.offer(calls, { operation: 'getThreadInfo', request }).pipe(Effect.as(threadInfo)),
 	getChannelInfo: (request) =>
 		Queue.offer(calls, { operation: 'getChannelInfo', request }).pipe(Effect.as(channelInfo)),
