@@ -57,6 +57,10 @@ export const ProviderEventProcessingError = Schema.Union([ProviderEventProcessor
 
 export type ProviderEventProcessingError = typeof ProviderEventProcessingError.Type
 
+/** A claimed mailbox batch is ordered and always contains at least one admission. */
+export const DeliveryAdmissionBatch = Schema.NonEmptyArray(DeliveryAdmission)
+export type DeliveryAdmissionBatch = typeof DeliveryAdmissionBatch.Type
+
 /**
  * the type of a thing that processes events for a provider - it must declare a provider name like 'slack', a namespace (in case e.g. there are multiple slack bots),
  * and a function for processing a delivery to the mailbox for it
@@ -67,7 +71,7 @@ export type ProviderEventProcessor<R = never> = {
 	readonly namespace: string
 	readonly providerName: string
 	readonly process: (
-		admission: DeliveryAdmission,
+		admissions: DeliveryAdmissionBatch,
 	) => Effect.Effect<ProviderEventResult, ProviderEventProcessorError, R>
 }
 
@@ -78,7 +82,8 @@ export type ProviderEventProcessor<R = never> = {
  * @returns
  */
 export const processProviderEvent = <R = never>(processors: ReadonlyArray<ProviderEventProcessor<R>>) =>
-	Effect.fn('delivery.process_provider_event')(function* (admission: DeliveryAdmission) {
+	Effect.fn('delivery.process_provider_event')(function* (admissions: DeliveryAdmissionBatch) {
+		const admission = admissions[0]
 		const processor = processors.find(
 			(candidate) => candidate.namespace === admission.namespace && candidate.providerName === admission.provider,
 		)
@@ -90,5 +95,15 @@ export const processProviderEvent = <R = never>(processors: ReadonlyArray<Provid
 			})
 		}
 
-		return yield* processor.process(admission)
+		const mixedIdentity = admissions.some(
+			(candidate) => candidate.namespace !== admission.namespace || candidate.provider !== admission.provider,
+		)
+		if (mixedIdentity) {
+			return yield* ProviderEventInvalid.make({
+				provider: admission.provider,
+				reason: 'identity_mismatch',
+			})
+		}
+
+		return yield* processor.process(admissions)
 	})

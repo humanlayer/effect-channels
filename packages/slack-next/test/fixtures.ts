@@ -4,8 +4,16 @@ import * as NodeHttp from 'node:http'
 import { NodeCrypto } from '@effect/platform-node'
 import { createServer, serve } from '@emulators/core'
 import { getSlackStore, seedFromConfig, slackPlugin, type SlackSeedConfig } from '@emulators/slack'
-import { MailboxDelivery, webhookRoutes, type RawWebhookInput } from '@humanlayer/channels-delivery-next'
-import { Context, Effect, Redacted } from 'effect'
+import {
+	type DeliveryAdmission,
+	DeliveryReceipt,
+	MailboxDelivery,
+	processProviderEvent,
+	type ProviderEventProcessor,
+	webhookRoutes,
+	type RawWebhookInput,
+} from '@humanlayer/channels-delivery-next'
+import { Clock, Context, Effect, Queue, Redacted } from 'effect'
 import { Headers, HttpRouter } from 'effect/unstable/http'
 
 import { SlackReactionThreadResolver } from '../src/SlackReactionThreadResolver'
@@ -14,11 +22,63 @@ import { makeSlackWebhookProvider } from '../src/SlackWebhookProvider'
 export const slackEmulatorSigningSecret = 'slack-next-emulator-signing-secret'
 export const slackEmulatorBotToken = 'xoxb-slack-next-emulator'
 export const slackEmulatorAliceToken = 'xoxp-slack-next-alice'
+export const slackEmulatorEventTime = 1_700_000_000
 
 export type SlackEmulatorFixtureOptions = {
 	readonly mailboxDelivery: typeof MailboxDelivery.Service
 	readonly reactionThreadResolver: typeof SlackReactionThreadResolver.Service
 }
+
+const inMemoryMailboxKey = (admission: DeliveryAdmission) =>
+	[admission.namespace, admission.provider, admission.installationId, admission.resourceId]
+		.map((segment) => `${segment.length}:${segment}`)
+		.join('|')
+
+/** Test-only keyed mailbox that stores admissions until the test explicitly processes one. */
+export const makeInMemoryMailboxFixture = <R>(processors: ReadonlyArray<ProviderEventProcessor<R>>) =>
+	Effect.sync(() => {
+		const mailboxes = new Map<string, Queue.Queue<DeliveryAdmission>>()
+
+		const mailboxDelivery: typeof MailboxDelivery.Service = {
+			deliver: (admission) =>
+				Effect.gen(function* () {
+					const key = inMemoryMailboxKey(admission)
+					let mailbox = mailboxes.get(key)
+					if (mailbox === undefined) {
+						mailbox = yield* Queue.unbounded<DeliveryAdmission>()
+						mailboxes.set(key, mailbox)
+					}
+					yield* Queue.offer(mailbox, admission)
+					return DeliveryReceipt.make({ mailboxKey: key, accepted: true })
+				}),
+		}
+
+		return {
+			mailboxDelivery,
+			mailboxKeys: Effect.sync(() => Array.from(mailboxes.keys())),
+			processBatch: (mailboxKey: string, count?: number) => {
+				const mailbox = mailboxes.get(mailboxKey)
+				if (mailbox === undefined) return Effect.die(new Error(`In-memory mailbox not found: ${mailboxKey}`))
+				return Effect.gen(function* () {
+					const available = yield* Queue.size(mailbox)
+					const requested = count ?? available
+					const takeCount = Math.min(requested, available)
+					if (takeCount < 1) return yield* Effect.die(new Error(`In-memory mailbox is empty: ${mailboxKey}`))
+					const first = yield* Queue.take(mailbox)
+					const rest = yield* Effect.forEach(Array.from({ length: takeCount - 1 }), () => Queue.take(mailbox))
+					return yield* processProviderEvent(processors)([first, ...rest])
+				})
+			},
+			processNext: (mailboxKey: string) => {
+				const mailbox = mailboxes.get(mailboxKey)
+				return mailbox === undefined
+					? Effect.die(new Error(`In-memory mailbox not found: ${mailboxKey}`))
+					: Queue.take(mailbox).pipe(
+							Effect.flatMap((admission) => processProviderEvent(processors)([admission])),
+						)
+			},
+		}
+	})
 
 export const signedSlackInput = (signingSecret: string, payload: unknown, timestamp = '0'): RawWebhookInput => {
 	const bodyText = JSON.stringify(payload)
@@ -146,6 +206,8 @@ const requestListener =
  */
 export const makeSlackEmulatorFixture = (options: SlackEmulatorFixtureOptions) =>
 	Effect.gen(function* () {
+		const clock = yield* Clock.Clock
+		const webhookTimestamp = String(Math.floor((yield* Clock.currentTimeMillis) / 1000))
 		const provider = makeSlackWebhookProvider({
 			namespace: 'slack-emulator-test',
 			signingSecret: Redacted.make(slackEmulatorSigningSecret),
@@ -157,6 +219,7 @@ export const makeSlackEmulatorFixture = (options: SlackEmulatorFixtureOptions) =
 		const context = Context.empty().pipe(
 			Context.add(MailboxDelivery, options.mailboxDelivery),
 			Context.add(SlackReactionThreadResolver, options.reactionThreadResolver),
+			Context.add(Clock.Clock, clock),
 		)
 
 		const callbackServer = NodeHttp.createServer(requestListener((request) => web.handler(request, context)))
@@ -170,13 +233,12 @@ export const makeSlackEmulatorFixture = (options: SlackEmulatorFixtureOptions) =
 		// @emulators/core defaults to GitHub webhook headers. @emulators/slack stores signing_secret but does not
 		// install a Slack signature header factory, so the fixture must sign callbacks before exercising production ingress.
 		emulator.webhooks.setHeaderFactory(({ body }) => {
-			const timestamp = String(Math.floor(Date.now() / 1000))
 			const signature = createHmac('sha256', slackEmulatorSigningSecret)
-				.update(`v0:${timestamp}:${body}`)
+				.update(`v0:${webhookTimestamp}:${body}`)
 				.digest('hex')
 			return {
 				'content-type': 'application/json',
-				'x-slack-request-timestamp': timestamp,
+				'x-slack-request-timestamp': webhookTimestamp,
 				'x-slack-signature': `v0=${signature}`,
 			}
 		})

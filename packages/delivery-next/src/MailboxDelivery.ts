@@ -1,7 +1,7 @@
 /**
  * This file defines the mailbox delivery service.
  *
- * It is acceptable for processing parsed provider events and
+ * It is responsible for processing parsed provider events and
  * saving or routing them to the appropriate "mailbox"
  */
 
@@ -45,6 +45,12 @@ export const DeliveryAdmission = Schema.TaggedStruct('DeliveryAdmission', {
 	payload: Schema.Json,
 })
 export type DeliveryAdmission = Schema.Schema.Type<typeof DeliveryAdmission>
+
+/** A collision-free, stable key for the mailbox addressed by an admission. */
+export const deliveryMailboxKey = (admission: DeliveryAdmission) =>
+	[admission.namespace, admission.provider, admission.installationId, admission.resourceId]
+		.map((segment) => `${segment.length}:${segment}`)
+		.join('|')
 
 /**
  * Indicates that an event was delivered to a mailbox correctly

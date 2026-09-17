@@ -1,11 +1,97 @@
 import { describe, it } from '@effect/vitest'
-import { DeliveryReceipt, type DeliveryAdmission } from '@humanlayer/channels-delivery-next'
-import { Effect } from 'effect'
+import { DeliveryReceipt, type DeliveryAdmission, ProviderEventHandled } from '@humanlayer/channels-delivery-next'
+import { Effect, Layer } from 'effect'
+import { vi } from 'vitest'
 
-import { makeSlackEmulatorFixture } from './fixtures'
+import { SlackApi } from '../src/SlackApi'
+import type { SlackNewMention } from '../src/SlackCallbackEvents'
+import { makeSlackEventProcessor } from '../src/SlackEventProcessor'
+import { SlackChannelId, SlackMessageTs, SlackTeamId } from '../src/SlackIdentity'
+import { SlackParticipant, SlackUserId } from '../src/SlackModels'
+import { SlackSubscriptions } from '../src/SlackSubscriptions'
+import { SlackAppMentionEvent } from '../src/SlackWebhookEventSchemas'
+import { SlackAppMentionEnvelope } from '../src/SlackWebhookSchemas'
+import { makeInMemoryMailboxFixture, makeSlackEmulatorFixture, slackEmulatorEventTime } from './fixtures'
 
 describe('Slack webhook routing', () => {
-	it.live('delivers a signed app mention through the HttpRouter into MailboxDelivery', ({ expect }) =>
+	it.effect('processes an emulator mention through its keyed mailbox and calls onNewMention', ({ expect }) =>
+		Effect.gen(function* () {
+			const onNewMention = vi.fn((_event: SlackNewMention) => Effect.void)
+			const callbackLayer = Layer.merge(
+				Layer.mock(SlackApi, {
+					resolveParticipant: (request) =>
+						Effect.succeed(
+							SlackParticipant.make({
+								userId: SlackUserId.make(request.userId ?? 'U_ALICE'),
+								userName: 'alice',
+								fullName: 'Alice Example',
+								isBot: false,
+								isMe: false,
+							}),
+						),
+				}),
+				SlackSubscriptions.layerMemory,
+			)
+			const processor = makeSlackEventProcessor({
+				namespace: 'slack-emulator-test',
+				handlers: { onNewMention },
+			})
+			const mailbox = yield* makeInMemoryMailboxFixture([processor])
+			const slack = yield* makeSlackEmulatorFixture({
+				mailboxDelivery: mailbox.mailboxDelivery,
+				reactionThreadResolver: {
+					resolve: (input) => Effect.succeed(input.messageTs),
+				},
+			})
+			const mention = SlackAppMentionEnvelope.make({
+				type: 'event_callback',
+				team_id: SlackTeamId.make(slack.teamId),
+				event_id: 'Ev-processed-app-mention',
+				event_time: slackEmulatorEventTime,
+				event: SlackAppMentionEvent.make({
+					type: 'app_mention',
+					user: slack.aliceUserId,
+					text: '<@U_SLACK_NEXT> process this',
+					ts: SlackMessageTs.make('1700000001.000001'),
+					channel: SlackChannelId.make(slack.channelId),
+				}),
+			})
+			const secondMention = SlackAppMentionEnvelope.make({
+				...mention,
+				event_id: 'Ev-second-processed-app-mention',
+				event: SlackAppMentionEvent.make({
+					...mention.event,
+					text: '<@U_SLACK_NEXT> process this separately',
+					ts: SlackMessageTs.make('1700000002.000001'),
+				}),
+			})
+
+			yield* Effect.promise(() => slack.webhooks.dispatch('app_mention', undefined, mention, 'slack'))
+			yield* Effect.promise(() => slack.webhooks.dispatch('app_mention', undefined, secondMention, 'slack'))
+
+			expect(onNewMention).not.toHaveBeenCalled()
+			const keys = yield* mailbox.mailboxKeys
+			expect(keys).toHaveLength(2)
+			const firstMailboxKey = keys[0]
+			const secondMailboxKey = keys[1]
+			if (firstMailboxKey === undefined || secondMailboxKey === undefined)
+				return yield* Effect.die(new Error('Expected two in-memory mailboxes'))
+
+			expect(yield* mailbox.processNext(firstMailboxKey).pipe(Effect.provide(callbackLayer))).toEqual(
+				ProviderEventHandled.make({}),
+			)
+			expect(onNewMention).toHaveBeenCalledOnce()
+			expect(onNewMention.mock.calls[0]?.[0].trigger.ref.messageTs).toBe(mention.event.ts)
+
+			expect(yield* mailbox.processNext(secondMailboxKey).pipe(Effect.provide(callbackLayer))).toEqual(
+				ProviderEventHandled.make({}),
+			)
+			expect(onNewMention).toHaveBeenCalledTimes(2)
+			expect(onNewMention.mock.calls[1]?.[0].trigger.ref.messageTs).toBe(secondMention.event.ts)
+		}),
+	)
+
+	it.effect('delivers a signed app mention through the HttpRouter into MailboxDelivery', ({ expect }) =>
 		Effect.gen(function* () {
 			const admissions: Array<DeliveryAdmission> = []
 			const slack = yield* makeSlackEmulatorFixture({
@@ -45,7 +131,7 @@ describe('Slack webhook routing', () => {
 						type: 'event_callback',
 						team_id: slack.teamId,
 						event_id: 'Ev-app-mention-root',
-						event_time: Math.floor(Date.now() / 1000),
+						event_time: slackEmulatorEventTime,
 						event: {
 							type: 'app_mention',
 							user: slack.aliceUserId,
@@ -70,7 +156,7 @@ describe('Slack webhook routing', () => {
 						type: 'event_callback',
 						team_id: slack.teamId,
 						event_id: 'Ev-app-mention-thread',
-						event_time: Math.floor(Date.now() / 1000),
+						event_time: slackEmulatorEventTime,
 						event: {
 							type: 'app_mention',
 							user: slack.aliceUserId,
@@ -99,7 +185,7 @@ describe('Slack webhook routing', () => {
 		}),
 	)
 
-	it.live('routes every supported Slack event through the emulator', ({ expect }) =>
+	it.effect('routes every supported Slack event through the emulator', ({ expect }) =>
 		Effect.gen(function* () {
 			const admissions: Array<DeliveryAdmission> = []
 			const slack = yield* makeSlackEmulatorFixture({
@@ -114,7 +200,7 @@ describe('Slack webhook routing', () => {
 					resolve: (input) => Effect.succeed(input.messageTs),
 				},
 			})
-			const eventTime = Math.floor(Date.now() / 1000)
+			const eventTime = slackEmulatorEventTime
 			yield* Effect.promise(() =>
 				slack.webhooks.dispatch(
 					'url_verification',

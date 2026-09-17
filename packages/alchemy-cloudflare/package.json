@@ -1,5 +1,5 @@
 {
-	"name": "@humanlayer/channels-slack-next",
+	"name": "@humanlayer/channels-alchemy-cloudflare",
 	"version": "0.0.0",
 	"private": true,
 	"type": "module",
@@ -10,18 +10,15 @@
 		".": "./src/index.ts"
 	},
 	"scripts": {
-		"smoke:live": "bun --env-file=../../.env run scripts/slack-api-live-smoke.ts",
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},
 	"dependencies": {
 		"@humanlayer/channels-delivery-next": "workspace:*",
+		"alchemy": "catalog:",
 		"effect": "catalog:"
 	},
 	"devDependencies": {
-		"@effect/platform-node": "catalog:",
 		"@effect/vitest": "catalog:",
-		"@emulators/core": "0.11.2",
-		"@emulators/slack": "0.11.2",
 		"typescript": "catalog:"
 	}
 }

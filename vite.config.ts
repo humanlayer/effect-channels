@@ -66,7 +66,7 @@ export default defineConfig({
 			'tools/oxlint/anti-slop/**',
 		],
 		rules: {
-			'import-extensions/no-typescript-specifiers': 'error',
+			'import-extensions/no-relative-source-extensions': 'error',
 			'vite-plus/prefer-vite-plus-imports': 'error',
 			'anti-slop/no-chained-type-assertions': 'error',
 			'anti-slop/no-comments': 'error',

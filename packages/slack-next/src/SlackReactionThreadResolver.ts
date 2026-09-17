@@ -1,18 +1,20 @@
-import { Context, Data, Effect } from 'effect'
+import { Context, Effect, Schema } from 'effect'
 
-import type { SlackChannelId, SlackMessageTs, SlackTeamId } from './SlackIdentity'
+import { SlackChannelId, SlackMessageTs, SlackTeamId } from './SlackIdentity'
 
-export type ResolveSlackReactionThreadInput = {
-	readonly teamId: SlackTeamId
-	readonly channelId: SlackChannelId
-	readonly messageTs: SlackMessageTs
-}
+export const ResolveSlackReactionThreadInput = Schema.Struct({
+	teamId: SlackTeamId,
+	channelId: SlackChannelId,
+	messageTs: SlackMessageTs,
+})
+export type ResolveSlackReactionThreadInput = typeof ResolveSlackReactionThreadInput.Type
 
-export class SlackReactionThreadResolutionUnavailable extends Data.TaggedError(
+export class SlackReactionThreadResolutionUnavailable extends Schema.TaggedError<SlackReactionThreadResolutionUnavailable>()(
 	'SlackReactionThreadResolutionUnavailable',
-)<{
-	readonly reason: 'unknown_installation' | 'transport' | 'slack_api' | 'invalid_response'
-}> {}
+	{
+		reason: Schema.Literals(['unknown_installation', 'transport', 'slack_api', 'invalid_response']),
+	},
+) {}
 
 /**
  * Resolves the root thread timestamp for a message receiving a reaction.
