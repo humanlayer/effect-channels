@@ -2,11 +2,11 @@ import { assert, it } from '@effect/vitest'
 import { Effect, Layer, Logger, Queue, Schema } from 'effect'
 import * as Redis from 'effect/unstable/persistence/Redis'
 
-import { emptyMailbox, MailboxSnapshot, mailboxKey, mailboxPrefix } from '../src/Mailbox.js'
-import { MailboxReadiness, MailboxStore, MailboxStoreError } from '../src/MailboxStore.js'
-import { layer } from '../src/redis.js'
-import { readyKey, readyKeys, recordKey } from '../src/redis/keys.js'
-import { encodeKey, encodeSnapshot, mailboxCodecCases, redisCommands } from './AdapterCommands.js'
+import { emptyMailbox, MailboxSnapshot, mailboxKey, mailboxPrefix } from '../src/Mailbox'
+import { MailboxReadiness, MailboxStore, MailboxStoreError } from '../src/MailboxStore'
+import { layer } from '../src/redis'
+import { readyKey, readyKeys, recordKey } from '../src/redis/keys'
+import { encodeKey, encodeSnapshot, mailboxCodecCases, redisCommands } from './AdapterCommands'
 
 it.effect(
 	'Redis fake command contract: CAS sends one same-slot script containing snapshot and every literal-prefix index',

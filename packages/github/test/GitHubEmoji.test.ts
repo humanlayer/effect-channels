@@ -1,7 +1,7 @@
 import { assert, it } from '@effect/vitest'
 import { Effect, Schema } from 'effect'
 
-import { GitHubEmoji, GitHubReactionContent } from '../src/index.js'
+import { GitHubEmoji, GitHubReactionContent } from '../src/index'
 
 it.effect('round-trips all named GitHub emoji as native strings through both schema names', () =>
 	Effect.gen(function* () {

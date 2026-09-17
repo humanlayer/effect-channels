@@ -14,13 +14,7 @@ import {
 } from 'effect/unstable/http'
 import { createEmulator } from 'emulate'
 
-import {
-	GitHubCredentials,
-	GitHubCrypto,
-	GitHubRepository,
-	GitHubActivityEvent,
-	GitHubIssueData,
-} from '../src/index.js'
+import { GitHubCredentials, GitHubCrypto, GitHubRepository, GitHubActivityEvent, GitHubIssueData } from '../src/index'
 
 export const secret = 'github-test-webhook-secret'
 export const availablePort = Effect.promise(
@@ -146,7 +140,7 @@ export const payloadFor = (event: GitHubActivityEvent) => ({
 	comment: event.event === 'issue_comment' ? event.comment : undefined,
 })
 export const signedRequest = (event: string, body: string | Uint8Array<ArrayBuffer>, deliveryId = 'delivery-1') =>
-	new Request('http://test/api/v1/integrations/github/webhook', {
+	new Request('http://test/integrations/github/webhook', {
 		method: 'POST',
 		body,
 		headers: {
@@ -170,7 +164,7 @@ export const captureWebhooks = Effect.gen(function* () {
 			const body = yield* request.text
 			yield* Queue.offer(
 				requests,
-				new Request('http://test/api/v1/integrations/github/webhook', {
+				new Request('http://test/integrations/github/webhook', {
 					method: 'POST',
 					body,
 					headers: request.headers,

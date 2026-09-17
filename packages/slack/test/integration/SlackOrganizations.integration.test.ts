@@ -1,5 +1,5 @@
 import { assert, it } from '@effect/vitest'
-import { MailboxReadiness, MailboxStore } from '@humanlayer/channels-delivery'
+import { DeliveryLocatorStore, MailboxReadiness, MailboxStore } from '@humanlayer/channels-delivery'
 import { layer as memory } from '@humanlayer/channels-delivery/memory'
 import {
 	MarkdownContent,
@@ -22,8 +22,8 @@ import {
 	slackEmulatorBotUserId,
 	slackEmulatorBotId,
 	slackEmulatorSigningSecret,
-} from './support/SlackEmulator.js'
-import { StorageTypeId, makeSlackTestHost, slack } from './support/SlackTestHost.js'
+} from './support/SlackEmulator'
+import { StorageTypeId, makeSlackTestHost, slack } from './support/SlackTestHost'
 
 class Directory extends Context.Service<
 	Directory,
@@ -45,7 +45,9 @@ it.effect(
 			const entered = yield* Deferred.make<void>()
 			const finalized = yield* Deferred.make<void>()
 			const logs: string[] = []
-			const logger = Logger.layer([Logger.make((entry) => logs.push(JSON.stringify(entry.message)))])
+			const logger = Logger.layer([
+				Logger.make((entry) => logs.push(JSON.stringify(Logger.formatStructured.log(entry)))),
+			])
 			let synchronousThrow = false
 			const organizations = SlackOrganizations.layer((input) => {
 				if (synchronousThrow) throw new Error('private-synchronous-sentinel')
@@ -78,6 +80,7 @@ it.effect(
 			const memoryContext = yield* Layer.build(memory({ maxMailboxes: 100 }))
 			const underlying = Context.get(memoryContext, MailboxStore)
 			const storage = Layer.mergeAll(
+				Layer.succeed(DeliveryLocatorStore, Context.get(memoryContext, DeliveryLocatorStore)),
 				Layer.succeed(MailboxReadiness, Context.get(memoryContext, MailboxReadiness)),
 				SlackSubscriptions.layerMemory(),
 				Layer.succeed(

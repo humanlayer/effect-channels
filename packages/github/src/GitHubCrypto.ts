@@ -1,6 +1,6 @@
 import { Context, Effect, Encoding, Layer, Redacted, Schema } from 'effect'
 
-import { GitHubError, GitHubWebhookError } from './GitHubErrors.js'
+import { GitHubError, GitHubWebhookError } from './GitHubErrors'
 
 class GitHubCryptoFailure extends Schema.TaggedError<GitHubCryptoFailure>()('GitHubCryptoFailure', {
 	operation: Schema.Literals(['sign_app', 'verify_webhook']),

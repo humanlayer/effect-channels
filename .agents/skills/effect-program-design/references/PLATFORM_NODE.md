@@ -13,7 +13,7 @@ justify leaking Node values through a service interface.
 // main.ts — runtime edge
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Effect } from "effect";
-import { program } from "./program.js";
+import { program } from "./program";
 
 program.pipe(Effect.provide(NodeServices.layer), NodeRuntime.runMain);
 ```
@@ -56,7 +56,7 @@ Application effects yield `HttpClient.HttpClient`. Select the transport at the e
 ```ts
 import { NodeHttpClient, NodeRuntime } from "@effect/platform-node";
 import { Effect } from "effect";
-import { program } from "./program.js";
+import { program } from "./program";
 
 program.pipe(Effect.provide(NodeHttpClient.layerUndici), NodeRuntime.runMain);
 ```
@@ -124,7 +124,7 @@ Node socket layers implement the neutral `Socket`/`SocketServer` contracts:
 ```ts
 import { NodeSocket } from "@effect/platform-node";
 import { Effect } from "effect";
-import { session } from "./session.js";
+import { session } from "./session";
 
 const main = session.pipe(
   Effect.provide(

@@ -14,14 +14,14 @@ import { ConfigProvider, Deferred, Effect, Fiber, Layer, Option, Redacted, Strea
 import { TestClock } from 'effect/testing'
 import * as FetchHttpClient from 'effect/unstable/http/FetchHttpClient'
 
-import { testConnectionStoreLayer } from '../support.js'
+import { testConnectionStoreLayer } from '../support'
 import {
 	HistoryResponse,
 	PostedMessageResponse,
 	SlackEmulator,
 	slackEmulatorAliceToken,
 	slackEmulatorBotToken,
-} from './support/SlackEmulator.js'
+} from './support/SlackEmulator'
 
 layer(SlackEmulator.layer, { timeout: '30 seconds' })('Slack streaming emulator integration', (it) => {
 	it.effect('falls back through production clients and finalizes one stable Slack reply', () =>

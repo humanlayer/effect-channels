@@ -3,18 +3,18 @@ import { Config, Effect, Layer, Redacted, Schema } from 'effect'
 import { TestClock } from 'effect/testing'
 import * as SqlClient from 'effect/unstable/sql/SqlClient'
 
-import { emptyMailbox } from '../src/Mailbox.js'
-import { MailboxStore } from '../src/MailboxStore.js'
-import { layer, migrate } from '../src/postgres.js'
-import * as Client from '../src/postgres/client.js'
-import { encodeState } from '../test/AdapterCommands.js'
+import { emptyMailbox } from '../src/Mailbox'
+import { MailboxStore } from '../src/MailboxStore'
+import { layer, migrate } from '../src/postgres'
+import * as Client from '../src/postgres/client'
+import { encodeState } from '../test/AdapterCommands'
 import {
 	interruptForReconstruction,
 	policy,
 	resumeAfterReconstruction,
 	staleAttemptContract,
 	storageContract,
-} from './StoreContract.js'
+} from './StoreContract'
 
 const client = Layer.unwrap(
 	Effect.gen(function* () {

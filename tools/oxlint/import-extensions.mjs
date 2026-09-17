@@ -1,24 +1,26 @@
 import { defineRule, eslintCompatPlugin } from '@oxlint/plugins'
 
-const sourceExtension = /\.(?:tsx?|mts|cts)(?:[?#].*)?$/u
+const relativeSourceExtension = /^\.{1,2}\/.*\.(?:[cm]?[jt]sx?)(?:[?#].*)?$/u
 
 export default eslintCompatPlugin({
 	meta: { name: 'import-extensions' },
 	rules: {
-		'no-typescript-specifiers': defineRule({
+		'no-relative-source-extensions': defineRule({
 			meta: {
 				type: 'problem',
 				schema: [],
 				messages: {
-					extension:
-						'Use emitted .js/.mjs/.cjs extensions (or extensionless imports), not TypeScript source extensions.',
+					extension: 'Use an extensionless relative import instead of a TypeScript or JavaScript extension.',
 				},
 			},
 			createOnce(context) {
 				function check(node) {
 					if (!node) return
-					const value = node.type === 'TemplateLiteral' ? node.quasis.at(-1).value.cooked : node.value
-					if (value != null && sourceExtension.test(value)) {
+					const value =
+						node.type === 'TemplateLiteral'
+							? node.quasis.map((quasi) => quasi.value.cooked ?? '').join('')
+							: node.value
+					if (value != null && relativeSourceExtension.test(value)) {
 						context.report({ node, messageId: 'extension' })
 					}
 				}

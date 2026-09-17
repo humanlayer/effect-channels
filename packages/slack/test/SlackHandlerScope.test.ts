@@ -1,11 +1,15 @@
 import { assert, it } from '@effect/vitest'
-import { MailboxReadiness, MailboxStore } from '@humanlayer/channels-delivery'
+import {
+	DeliveryInterruption,
+	DeliveryQueue,
+	IngressAttributionStore,
+	MailboxStore,
+} from '@humanlayer/channels-delivery'
 import { layer as deliveryMemory } from '@humanlayer/channels-delivery/memory'
 import { Effect, Exit, Fiber, Layer, Queue } from 'effect'
 
-import { PostFailed, SlackIngress, SlackSubscriptions } from '../src/index.js'
-import { SlackAuthors } from '../src/SlackAuthors.js'
-import { nativeIngressLayer, nativeMessage, nativePolicy, nativeRunner } from './nativeSupport.js'
+import { PostFailed, SlackIngress, SlackSubscriptions } from '../src/index'
+import { nativeIngressLayer, nativeMessage, nativePolicy, nativeRunner } from './nativeSupport'
 
 for (const failure of [false, true]) {
 	it.effect(`closes the handler scope before recording ${failure ? 'failure' : 'success'}`, () =>
@@ -76,9 +80,9 @@ it.effect('rejects an invalid delivery policy during ingress Layer acquisition',
 		}).pipe(
 			Layer.provide(
 				Layer.mergeAll(
-					Layer.mock(MailboxStore, {}),
-					Layer.mock(MailboxReadiness, {}),
-					Layer.mock(SlackAuthors, {}),
+					Layer.mock(DeliveryQueue, {}),
+					Layer.mock(DeliveryInterruption, {}),
+					Layer.mock(IngressAttributionStore, {}),
 					Layer.mock(SlackSubscriptions, {}),
 				),
 			),

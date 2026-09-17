@@ -1,12 +1,12 @@
 import { DeliveryOutputError, DeliveryOutputReceipt, type FinalMessageOperation } from '@humanlayer/channels-delivery'
 import { Effect, Schema } from 'effect'
 
-import { MarkdownContent } from './Content.js'
-import { PostFailed, RetryabilityMetadata, UnknownTenant } from './DomainErrors.js'
-import { ThreadId } from './Model.js'
-import { SentRef } from './SentMessage.js'
-import { Slack } from './Slack.js'
-import { decodeSlackThreadId } from './SlackThreadId.js'
+import { MarkdownContent } from './Content'
+import { PostFailed, RetryabilityMetadata, UnknownTenant } from './DomainErrors'
+import { ThreadId } from './Model'
+import { SentRef } from './SentMessage'
+import { Slack } from './Slack'
+import { decodeSlackThreadId } from './SlackThreadId'
 
 const destinationCodec = Schema.fromJsonString(Schema.Struct({ threadId: ThreadId }))
 const receiptCodec = Schema.fromJsonString(SentRef)

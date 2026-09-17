@@ -1,6 +1,6 @@
-import type { SubscriptionInput } from '../Operations.js'
-import type { SlackConnectionLookupInput } from '../Schema.js'
-import type { ResolveSlackDirectMessageRoute } from '../SlackSubscriptions.js'
+import type { SubscriptionInput } from '../Operations'
+import type { SlackConnectionLookupInput } from '../Schema'
+import type { ResolveSlackDirectMessageRoute } from '../SlackSubscriptions'
 
 const namespace = 'humanlayer:slack:v1:{state}'
 

@@ -1,1 +1,1 @@
-export { layer } from './redis/store.js'
+export { layer } from './redis/store'

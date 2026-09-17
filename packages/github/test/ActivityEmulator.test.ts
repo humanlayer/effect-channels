@@ -10,10 +10,10 @@ import {
 	GitHubRoutes,
 	GitHubSubscriptions,
 	GitHubUser,
-} from '../src/index.js'
-import { layer as memory } from '../src/memory.js'
-import { policy } from './fixtures.js'
-import { adminCall, captureWebhooks, emulator, eventFor, host, secret } from './support.js'
+} from '../src/index'
+import { layer as memory } from '../src/memory'
+import { policy } from './fixtures'
+import { adminCall, captureWebhooks, emulator, eventFor, host, secret } from './support'
 
 it.live('native emulator creation selects subscriptions; issue and PR lifecycle state remains provider-visible', () =>
 	Effect.gen(function* () {
@@ -55,7 +55,7 @@ it.live('native emulator creation selects subscriptions; issue and PR lifecycle 
 			body: 'No mention',
 		})
 		assert.equal((yield* send(yield* capture.take)).status, 200)
-		yield* ingress.processActivity({ event: eventFor(em.repository, issue) })
+		yield* ingress.processActivity({ event: eventFor(em.repository, issue) }).pipe(Effect.provide(environment))
 		assert.equal((yield* Queue.take(seen)).action, 'opened')
 		const pr = yield* adminCall(em.resource.url, '/repos/alice/project/pulls', GitHubPullRequestData, {
 			title: 'Native PR',
@@ -72,7 +72,7 @@ it.live('native emulator creation selects subscriptions; issue and PR lifecycle 
 			sender: yield* Schema.decodeUnknownEffect(GitHubUser)(pr.user),
 		}
 		assert.equal((yield* send(yield* capture.take)).status, 200)
-		yield* ingress.processActivity({ event: prEvent })
+		yield* ingress.processActivity({ event: prEvent }).pipe(Effect.provide(environment))
 		assert.equal((yield* Queue.take(seen)).action, 'opened')
 		const client = yield* HttpClient.HttpClient
 		for (const target of [
@@ -90,7 +90,7 @@ it.live('native emulator creation selects subscriptions; issue and PR lifecycle 
 				assert.equal(response.status, 200)
 				assert.equal((yield* HttpClientResponse.schemaBodyJson(GitHubIssueData)(response)).state, state)
 				assert.equal((yield* send(yield* capture.take)).status, 200)
-				yield* ingress.processActivity({ event: target.event })
+				yield* ingress.processActivity({ event: target.event }).pipe(Effect.provide(environment))
 				assert.equal((yield* Queue.take(seen)).action, state === 'closed' ? 'closed' : 'reopened')
 			}
 		}
@@ -132,7 +132,7 @@ it.live('native emulator creation selects subscriptions; issue and PR lifecycle 
 			true,
 		)
 		assert.equal((yield* send(yield* capture.take)).status, 200)
-		yield* ingress.processActivity({ event: prEvent })
+		yield* ingress.processActivity({ event: prEvent }).pipe(Effect.provide(environment))
 		const mergeEvent = yield* Queue.take(seen)
 		assert.equal(mergeEvent.event, 'pull_request')
 		if (mergeEvent.event === 'pull_request' && mergeEvent.action === 'closed')

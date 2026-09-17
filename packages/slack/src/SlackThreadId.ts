@@ -1,14 +1,14 @@
 import { Effect, Match, Schema, SchemaIssue, SchemaTransformation } from 'effect'
 
-import { InvalidSlackThreadId } from './Errors.js'
-import { ChannelId, TenantId, ThreadId, type ChannelRef, type ThreadRef } from './Model.js'
+import { InvalidSlackThreadId } from './Errors'
+import { ChannelId, TenantId, ThreadId, type ChannelRef, type ThreadRef } from './Model'
 import {
 	SlackChannelAddress,
 	SlackThreadRef,
 	type SlackChannelAddress as SlackChannelAddressType,
 	type SlackThreadRef as SlackThreadRefType,
-} from './SlackIdentity.js'
-import { SlackChannelId, SlackMessageTs, SlackTeamId } from './SlackIdentity.js'
+} from './SlackIdentity'
+import { SlackChannelId, SlackMessageTs, SlackTeamId } from './SlackIdentity'
 
 export const encodeSlackChannelId = (teamId: SlackTeamId, channelId: SlackChannelId) =>
 	ChannelId.make(`slack:v1:${encodeURIComponent(teamId)}:${encodeURIComponent(channelId)}`)

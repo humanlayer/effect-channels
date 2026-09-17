@@ -8,13 +8,13 @@ import {
 	GitHubReviewCommentData,
 	GitHubReviewThreadData,
 	reviewRequestFields,
-} from './GitHubActivity.js'
-import { GitHubCredentials } from './GitHubCredentials.js'
-import { GitHubCrypto } from './GitHubCrypto.js'
-import { GitHubWebhookError } from './GitHubErrors.js'
-import { GitHubCommentData, GitHubIssueData, GitHubUser } from './GitHubEvents.js'
-import { GitHubIngress } from './GitHubIngress.js'
-import { GitHubDiscussionRef, GitHubId } from './GitHubResource.js'
+} from './GitHubActivity'
+import { GitHubCredentials } from './GitHubCredentials'
+import { GitHubCrypto } from './GitHubCrypto'
+import { GitHubWebhookError } from './GitHubErrors'
+import { GitHubCommentData, GitHubIssueData, GitHubUser } from './GitHubEvents'
+import { GitHubIngress } from './GitHubIngress'
+import { GitHubDiscussionRef, GitHubId } from './GitHubResource'
 
 const Payload = Schema.Struct({
 	action: Schema.String,
@@ -58,7 +58,9 @@ export interface GitHubRoutesOptions {
 	readonly botLogin?: string
 }
 
-const layer = (options: GitHubRoutesOptions) =>
+export const GitHubWebhookPath = '/integrations/github/webhook' as const
+
+const layer = (options: GitHubRoutesOptions, mountPath?: string) =>
 	Layer.unwrap(
 		Effect.gen(function* () {
 			const config = yield* optionsSchema
@@ -194,75 +196,83 @@ const layer = (options: GitHubRoutesOptions) =>
 					return yield* GitHubWebhookError.make({ reason: 'decode' })
 				return yield* acceptActivity({ event, deliveryId, payload, issue })
 			})
-			return HttpRouter.add('POST', '/api/v1/integrations/github/webhook', (request) =>
-				Effect.gen(function* () {
-					const signature = request.headers['x-hub-signature-256']
-					const deliveryId = request.headers['x-github-delivery']
-					const event = request.headers['x-github-event']
-					if (
-						signature === undefined ||
-						deliveryId === undefined ||
-						!/^[a-zA-Z0-9-]{1,128}$/.test(deliveryId) ||
-						event === undefined
-					)
-						return yield* GitHubWebhookError.make({ reason: 'signature' })
-					const bytes = yield* request.stream.pipe(
-						Stream.runFoldEffect(
-							() => {
-								const chunks: Array<Uint8Array> = []
-								return { chunks, size: 0 }
-							},
-							(body, chunk) => {
-								if (body.size + chunk.byteLength > config.maxBodyBytes)
-									return Effect.fail(GitHubWebhookError.make({ reason: 'capacity' }))
-								if (chunk.byteLength > 0) body.chunks.push(chunk)
-								body.size += chunk.byteLength
-								return Effect.succeed(body)
-							},
-						),
-						Effect.map(({ chunks, size }) => {
-							const bytes = new Uint8Array(size)
-							let offset = 0
-							for (const chunk of chunks) {
-								bytes.set(chunk, offset)
-								offset += chunk.byteLength
-							}
-							return bytes
-						}),
-						Effect.catchTag('HttpServerError', () =>
-							Effect.fail(GitHubWebhookError.make({ reason: 'decode' })),
-						),
-					)
-					yield* crypto.verifyWebhook({ secret: config.signingSecret, body: bytes, signature })
-					return yield* accept({ event, deliveryId, bytes })
-				}).pipe(
-					Effect.catchTags({
-						GitHubWebhookError: (error) =>
-							Effect.succeed(
-								HttpServerResponse.empty({
-									status: Match.value(error.reason).pipe(
-										Match.when('signature', () => 401),
-										Match.when('installation', () => 403),
-										Match.when('capacity', () => 413),
-										Match.when('decode', () => 400),
-										Match.when('crypto', () => 500),
-										Match.exhaustive,
-									),
+			return HttpRouter.addAll(
+				[
+					HttpRouter.route('POST', GitHubWebhookPath, (request) =>
+						Effect.gen(function* () {
+							const signature = request.headers['x-hub-signature-256']
+							const deliveryId = request.headers['x-github-delivery']
+							const event = request.headers['x-github-event']
+							if (
+								signature === undefined ||
+								deliveryId === undefined ||
+								!/^[a-zA-Z0-9-]{1,128}$/.test(deliveryId) ||
+								event === undefined
+							)
+								return yield* GitHubWebhookError.make({ reason: 'signature' })
+							const bytes = yield* request.stream.pipe(
+								Stream.runFoldEffect(
+									() => {
+										const chunks: Array<Uint8Array> = []
+										return { chunks, size: 0 }
+									},
+									(body, chunk) => {
+										if (body.size + chunk.byteLength > config.maxBodyBytes)
+											return Effect.fail(GitHubWebhookError.make({ reason: 'capacity' }))
+										if (chunk.byteLength > 0) body.chunks.push(chunk)
+										body.size += chunk.byteLength
+										return Effect.succeed(body)
+									},
+								),
+								Effect.map(({ chunks, size }) => {
+									const bytes = new Uint8Array(size)
+									let offset = 0
+									for (const chunk of chunks) {
+										bytes.set(chunk, offset)
+										offset += chunk.byteLength
+									}
+									return bytes
 								}),
-							),
-						GitHubIngressError: (error) =>
-							Effect.succeed(
-								HttpServerResponse.empty({ status: error.reason === 'unexpected' ? 500 : 503 }),
-							),
-					}),
-					Effect.withSpan('github.webhook'),
-				),
+								Effect.catchTag('HttpServerError', () =>
+									Effect.fail(GitHubWebhookError.make({ reason: 'decode' })),
+								),
+							)
+							yield* crypto.verifyWebhook({ secret: config.signingSecret, body: bytes, signature })
+							return yield* accept({ event, deliveryId, bytes })
+						}).pipe(
+							Effect.catchTags({
+								GitHubWebhookError: (error) =>
+									Effect.succeed(
+										HttpServerResponse.empty({
+											status: Match.value(error.reason).pipe(
+												Match.when('signature', () => 401),
+												Match.when('installation', () => 403),
+												Match.when('capacity', () => 413),
+												Match.when('decode', () => 400),
+												Match.when('crypto', () => 500),
+												Match.exhaustive,
+											),
+										}),
+									),
+								GitHubIngressError: (error) =>
+									Effect.succeed(
+										HttpServerResponse.empty({ status: error.reason === 'unexpected' ? 500 : 503 }),
+									),
+							}),
+							Effect.withSpan('github.webhook'),
+						),
+					),
+				],
+				{ prefix: mountPath },
 			)
 		}),
 	)
 
 export const GitHubRoutes = {
+	webhookPath: GitHubWebhookPath,
+	mountedWebhookPath: (mountPath: string) => HttpRouter.prefixPath(GitHubWebhookPath, mountPath),
 	layer,
+	layerMounted: (mountPath: string, options: GitHubRoutesOptions) => layer(options, mountPath),
 	layerConfig: Layer.unwrap(
 		Effect.gen(function* () {
 			const signingSecret = yield* Config.redacted('GITHUB_WEBHOOK_SECRET')
@@ -270,4 +280,12 @@ export const GitHubRoutes = {
 			return layer({ signingSecret, maxBodyBytes: 256_000, botLogin })
 		}),
 	),
+	layerConfigMounted: (mountPath: string) =>
+		Layer.unwrap(
+			Effect.gen(function* () {
+				const signingSecret = yield* Config.redacted('GITHUB_WEBHOOK_SECRET')
+				const botLogin = yield* Config.string('GITHUB_BOT_LOGIN')
+				return layer({ signingSecret, maxBodyBytes: 256_000, botLogin }, mountPath)
+			}),
+		),
 }

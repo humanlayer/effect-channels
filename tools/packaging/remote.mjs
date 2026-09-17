@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 
-import { assertBuiltEntry, assertOneEffect, resolvedModules } from './guard.mjs'
+import { assertBuiltEntry, assertOneEffect, resolvedModules } from './guard'
 
 await import('@humanlayer/channels-delivery/protocol')
 await import('@humanlayer/channels-delivery/contract')

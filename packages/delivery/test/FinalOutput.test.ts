@@ -2,22 +2,24 @@ import { assert, it } from '@effect/vitest'
 import { Context, Deferred, Effect, Fiber, Layer, Predicate, Queue, Ref, Schema } from 'effect'
 import { TestClock } from 'effect/testing'
 
-import { bind, DeliveryError, HandlerFailure } from '../src/Delivery.js'
-import { DeliveryAdmin } from '../src/DeliveryAdmin.js'
-import { DeliveryControl } from '../src/DeliveryControl.js'
+import { bind, DeliveryError, HandlerFailure } from '../src/Delivery'
+import { DeliveryAdmin } from '../src/DeliveryAdmin'
+import { DeliveryControl } from '../src/DeliveryControl'
 import {
 	DeliveryOutputError,
 	DeliveryOutputReceipt,
 	FINAL_MESSAGE_MARKDOWN_MAX_BYTES,
 	FINAL_MESSAGE_MARKDOWN_MAX_LENGTH,
 	type FinalMessageOperation,
-} from '../src/DeliveryOperation.js'
-import { DeliveryPolicy } from '../src/DeliveryPolicy.js'
-import type { EventDefinition } from '../src/EventDefinition.js'
-import { activeBatches } from '../src/Mailbox.js'
-import { MailboxStore } from '../src/MailboxStore.js'
-import { layer as memoryLayer } from '../src/memory.js'
-import { DeliveryTerminalCapacityExceeded, DeliveryTerminalRequestInvalid } from '../src/protocol.js'
+} from '../src/DeliveryOperation'
+import { DeliveryPolicy } from '../src/DeliveryPolicy'
+import { DeliveryQueue } from '../src/DeliveryQueue'
+import type { EventDefinition } from '../src/EventDefinition'
+import { activeBatches } from '../src/Mailbox'
+import { layerMailboxStoreServices } from '../src/MailboxServices'
+import { MailboxStore } from '../src/MailboxStore'
+import { layer as memoryLayer } from '../src/memory'
+import { DeliveryTerminalCapacityExceeded, DeliveryTerminalRequestInvalid } from '../src/protocol'
 
 const Event = Schema.Struct({ id: Schema.String, installation: Schema.String, resource: Schema.String })
 const definition: EventDefinition<typeof Event, typeof Schema.String> = {
@@ -58,7 +60,8 @@ const testOutputLayer = Layer.effect(
 		})
 	}),
 )
-const memory = memoryLayer({ maxMailboxes: 20 })
+const storage = memoryLayer({ maxMailboxes: 20 })
+const memory = layerMailboxStoreServices.pipe(Layer.provide(storage))
 const services = Layer.mergeAll(
 	memory,
 	DeliveryControl.layer.pipe(Layer.provide(memory)),

@@ -80,20 +80,20 @@ export const githubHandlers = (policy: DeliveryPolicy) => {
 		}],
 	})
 	type Requirements = FirstHandlerDependency | SecondHandlerDependency | MailboxStore | MailboxReadiness | GitHubSubscriptionStore | GitHubCredentials | HttpClient.HttpClient
-	const services: Layer.Layer<GitHub | GitHubIngress, GitHubIngressError, Requirements> = bot.services
+	const services: Layer.Layer<GitHub | GitHubIngress, GitHubIngressError, Requirements> = bot
 	// @ts-expect-error Required callback services must not disappear or become optional.
-	const missing: Layer.Layer<GitHub | GitHubIngress, GitHubIngressError, Exclude<Requirements, SecondHandlerDependency>> = bot.services
+	const missing: Layer.Layer<GitHub | GitHubIngress, GitHubIngressError, Exclude<Requirements, SecondHandlerDependency>> = bot
 	// @ts-expect-error Ingress configuration failures are typed, not never.
-	const noErrors: Layer.Layer<GitHub | GitHubIngress, never, Requirements> = bot.services
-	const partial = GitHubBot.make({ namespace: 'partial', policy, handlers: [], runner: { pollMs: 50 } })
-	const empty: Layer.Layer<GitHub | GitHubIngress, GitHubIngressError, Exclude<Requirements, FirstHandlerDependency | SecondHandlerDependency>> = partial.services
+	const noErrors: Layer.Layer<GitHub | GitHubIngress, never, Requirements> = bot
+	const partial = GitHubBot.make({ namespace: 'partial', policy, handlers: [] })
+	const empty: Layer.Layer<GitHub | GitHubIngress, GitHubIngressError, Exclude<Requirements, FirstHandlerDependency | SecondHandlerDependency>> = partial
 	const registration: GitHubHandlerRegistration<'first' | 42, FirstHandlerDependency | SecondHandlerDependency> = {
 		id: 'typed',
 		onCreation: () => Effect.andThen(FirstHandlerDependency, Effect.fail('first' as const)),
 		onMention: () => Effect.andThen(SecondHandlerDependency, Effect.fail(42 as const)),
 	}
 	const typed = GitHubBot.make({ namespace: 'typed', policy, handlers: [registration] })
-	const typedServices: typeof services = typed.services
+	const typedServices: typeof services = typed
 	return { services, empty, typedServices }
 }
 

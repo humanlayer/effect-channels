@@ -2,10 +2,10 @@ import { NodeCrypto } from '@effect/platform-node'
 import { assert, it } from '@effect/vitest'
 import { Effect, Queue, Schema } from 'effect'
 
-import { SlackEventCallback, SlackMessageTs } from '../src/Schema.js'
-import { SlackClient } from '../src/SlackClient.js'
-import { normalizeSlackMessageDeleted, normalizeSlackMessageUpdated } from '../src/SlackNormalize.js'
-import { makeSlackClientHarness, slackJsonResponse, testChannelId, testTeamId } from './support.js'
+import { SlackEventCallback, SlackMessageTs } from '../src/Schema'
+import { SlackClient } from '../src/SlackClient'
+import { normalizeSlackMessageDeleted, normalizeSlackMessageUpdated } from '../src/SlackNormalize'
+import { makeSlackClientHarness, slackJsonResponse, testChannelId, testTeamId } from './support'
 
 const changed = {
 	type: 'event_callback' as const,

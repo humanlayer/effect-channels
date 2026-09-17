@@ -1,8 +1,13 @@
 import {
 	bind,
 	DeliveryPolicy,
+	DeliveryQueue,
+	parseMailboxAddress,
+	type DeliveryQueueError,
 	DeliveryOutputError,
 	HandlerFailure,
+	IngressAttributionStore,
+	DeliveryInterruption,
 	MailboxStore,
 	MailboxReadiness,
 	DeliveryError,
@@ -16,21 +21,21 @@ import {
 } from '@humanlayer/channels-delivery'
 import { Context, Data, Effect, Layer, Match, Option, Schema } from 'effect'
 
-import { RetryabilityMetadata, SlackIngressError } from './DomainErrors.js'
-import { ThreadId } from './Model.js'
-import { Slack } from './Slack.js'
-import { SlackAuthors } from './SlackAuthors.js'
-import { deliverSlackFinalMessage } from './SlackDeliveryOutput.js'
+import { RetryabilityMetadata, SlackIngressError } from './DomainErrors'
+import { ThreadId } from './Model'
+import { Slack } from './Slack'
+import { SlackAuthors } from './SlackAuthors'
+import { deliverSlackFinalMessage } from './SlackDeliveryOutput'
 import {
 	ConversationStoppedEvent,
 	MessageDeletedEvent,
 	MessageEvent,
 	MessageUpdatedEvent,
 	ReactionEvent,
-} from './SlackEvents.js'
-import type { SlackHandlerRegistration, SlackIngressOptions } from './SlackIngress.js'
-import { resolveSlackIngressAttribution } from './SlackIngressAttribution.js'
-import { SlackOrganizations } from './SlackOrganizations.js'
+} from './SlackEvents'
+import type { SlackHandlerRegistration, SlackIngressOptions } from './SlackIngress'
+import { resolveSlackIngressAttribution } from './SlackIngressAttribution'
+import { SlackOrganizations } from './SlackOrganizations'
 
 export const SlackDeliveryResource = Schema.Struct({ threadId: ThreadId })
 export type SlackDeliveryResource = typeof SlackDeliveryResource.Type
@@ -160,13 +165,13 @@ const handlerFailure = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
 		),
 	)
 
-export type BindingError = DeliveryError | MailboxStoreError
+export type BindingError = DeliveryError | DeliveryQueueError | MailboxStoreError
 
 type DeliveryBinding<A> = {
 	readonly admit: (input: {
 		readonly event: A
 		readonly organizationId: string
-	}) => Effect.Effect<{ readonly key: string; readonly accepted: boolean }, BindingError, MailboxStore>
+	}) => Effect.Effect<{ readonly key: string; readonly accepted: boolean }, BindingError, DeliveryQueue>
 	readonly keyForResource: (input: {
 		readonly installation: string
 		readonly resource: SlackDeliveryResource
@@ -174,11 +179,18 @@ type DeliveryBinding<A> = {
 	readonly cancelActive: (input: {
 		readonly key: string
 		readonly controlId: string
-	}) => Effect.Effect<boolean, BindingError, MailboxStore>
+	}) => Effect.Effect<boolean, BindingError, DeliveryInterruption>
 	readonly awaitCancellation: (input: {
 		readonly key: string
 		readonly controlId: string
 	}) => Effect.Effect<void, BindingError, MailboxStore>
+	readonly processMailbox: (
+		input: { readonly key: string },
+	) => Effect.Effect<
+		boolean,
+		BindingError | DeliveryOutputError | HandlerFailure,
+		MailboxStore | SlackAuthors | SlackIngressBindings
+	>
 	readonly run: (
 		input: RunnerOptions,
 	) => Effect.Effect<void, BindingError, MailboxStore | MailboxReadiness | SlackAuthors | SlackIngressBindings>
@@ -245,14 +257,21 @@ export interface StopInput {
 
 /**
  * Configured registration topology. Ordinary execution dependencies remain ambient.
- * @effect-expect-leaking MailboxStore
+ * @effect-expect-leaking DeliveryQueue MailboxStore
  */
 export class SlackIngressBindings extends Context.Service<
 	SlackIngressBindings,
 	{
-		readonly admit: (input: AdmitInput) => Effect.Effect<void, SlackIngressError, MailboxStore>
-		readonly stopConversation: (input: StopInput) => Effect.Effect<void, SlackIngressError, MailboxStore>
+		readonly admit: (
+			input: AdmitInput,
+		) => Effect.Effect<void, SlackIngressError, DeliveryQueue | IngressAttributionStore>
+		readonly stopConversation: (
+			input: StopInput,
+		) => Effect.Effect<void, SlackIngressError, DeliveryQueue | DeliveryInterruption | IngressAttributionStore>
 		readonly awaitStoppedTargets: (input: StopInput) => Effect.Effect<void, BindingError, MailboxStore>
+		readonly processMailbox: (
+			input: { readonly key: string },
+		) => Effect.Effect<void, SlackIngressError, MailboxStore | SlackAuthors | SlackIngressBindings>
 		readonly run: (
 			input: RunnerOptions,
 		) => Effect.Effect<
@@ -400,6 +419,10 @@ const makeBindings = <E, R>(options: SlackIngressOptions<E, R>) =>
 			}),
 		)
 		const allBindings = [...messageBindings, ...updated, ...deleted, ...reactions, ...stopped]
+		const keyedBindings = registrations.map((registration, index) => ({
+			id: registration.id,
+			binding: allBindings[index],
+		}))
 
 		const admit = <A extends { readonly tenant: string; readonly idempotencyKey: string }>(
 			bindings: ReadonlyArray<DeliveryBinding<A>>,
@@ -457,6 +480,21 @@ const makeBindings = <E, R>(options: SlackIngressOptions<E, R>) =>
 					selected,
 					({ binding, key, controlId }) => binding.awaitCancellation({ key, controlId }),
 					{ discard: true },
+				)
+			}),
+			processMailbox: Effect.fn('slack.ingress.process_mailbox')(function* ({ key }) {
+				const address = parseMailboxAddress(key)
+				const entry = keyedBindings.find(({ id }) => id === address?.handlerId)
+				if (
+					address === undefined ||
+					address.namespace !== options.namespace ||
+					address.provider !== 'slack' ||
+					entry?.binding === undefined
+				)
+					return yield* SlackIngressError.make({ operation: 'configuration' })
+				yield* entry.binding.processMailbox({ key }).pipe(
+					mapIngressError('delivery_run'),
+					Effect.asVoid,
 				)
 			}),
 			run: (input) =>

@@ -11,7 +11,7 @@ import * as Cloudflare from 'alchemy/Cloudflare'
 import { RuntimeContext } from 'alchemy/RuntimeContext'
 import { Clock, Effect, Exit, Layer, Match, Predicate, Random, Schema } from 'effect'
 
-import { DurableMailboxState, mailboxStateKey } from './mailboxState'
+import { DurableMailboxState, mailboxStateKey } from './MailboxState'
 
 const makeClaimId = Effect.gen(function* () {
 	const now = yield* Clock.currentTimeMillis

@@ -1,7 +1,7 @@
 import { Clock, Crypto, Effect, Redacted } from 'effect'
 
-import { SlackWebhookError } from './Errors.js'
-import type { SlackHmacInput, SlackSignatureInput } from './Schema.js'
+import { SlackWebhookError } from './Errors'
+import type { SlackHmacInput, SlackSignatureInput } from './Schema'
 
 const hexadecimal = /^[\da-f]+$/i
 const hmacBlockSize = 64

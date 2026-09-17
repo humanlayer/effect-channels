@@ -1,11 +1,11 @@
 import { Effect, Schema } from 'effect'
 
-import type { Content } from './Content.js'
-import type { DeleteFailed, EditFailed, ReactionFailed, UnknownTenant } from './DomainErrors.js'
-import { Emoji } from './Emoji.js'
-import { Message } from './Message.js'
-import { MessageRef, ProviderName, ThreadId } from './Model.js'
-import { Slack } from './Slack.js'
+import type { Content } from './Content'
+import type { DeleteFailed, EditFailed, ReactionFailed, UnknownTenant } from './DomainErrors'
+import { Emoji } from './Emoji'
+import { Message } from './Message'
+import { MessageRef, ProviderName, ThreadId } from './Model'
+import { Slack } from './Slack'
 
 export const SentRef = Schema.Struct({
 	threadId: ThreadId,

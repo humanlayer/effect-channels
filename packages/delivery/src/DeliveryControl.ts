@@ -9,8 +9,8 @@ import {
 	type DeliveryOperation,
 	FinalMessageOperation,
 	PendingDeliveryOperation,
-} from './DeliveryOperation.js'
-import { decodeDeliveryReference, DeliveryId, DeliveryReference } from './DeliveryReference.js'
+} from './DeliveryOperation'
+import { decodeDeliveryReference, DeliveryId, DeliveryReference } from './DeliveryReference'
 import {
 	type ActiveBatch,
 	activeBatches,
@@ -20,8 +20,8 @@ import {
 	mailboxCapacityUsage,
 	parseMailboxAddress,
 	retainedOutcomes,
-} from './Mailbox.js'
-import { DeliveryLocatorStore, MailboxStore } from './MailboxStore.js'
+} from './Mailbox'
+import { DeliveryLocatorStore, MailboxStore } from './MailboxStore'
 import {
 	deliveryControlUnavailable,
 	deliveryNotFound,
@@ -36,7 +36,7 @@ import {
 	DeliveryTerminalCapacityExceeded,
 	DeliveryTerminalOutcome,
 	DeliveryTerminalReceipt,
-} from './protocol.js'
+} from './protocol'
 
 export {
 	DeliveryControlUnavailable,
@@ -47,8 +47,8 @@ export {
 	DeliveryTerminalCapacityExceeded,
 	DeliveryTerminalOutcome,
 	DeliveryTerminalReceipt,
-} from './protocol.js'
-export type { DeliveryTerminalOutcome as DeliveryTerminalOutcomeType } from './protocol.js'
+} from './protocol'
+export type { DeliveryTerminalOutcome as DeliveryTerminalOutcomeType } from './protocol'
 
 export const FinishDelivery = Schema.Struct({
 	deliveryId: DeliveryId,

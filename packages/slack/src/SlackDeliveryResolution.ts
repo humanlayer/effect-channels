@@ -1,2 +1,2 @@
-export { resolveSlackDelivery, SlackDeliveryResource, slackDeliveryDefinitions } from './SlackIngressBindings.js'
-export type { SlackResolvedDelivery } from './SlackIngressBindings.js'
+export { resolveSlackDelivery, SlackDeliveryResource, slackDeliveryDefinitions } from './SlackIngressBindings'
+export type { SlackResolvedDelivery } from './SlackIngressBindings'

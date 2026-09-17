@@ -4,12 +4,12 @@ import { Clock, ConfigProvider, Context, Effect, Layer, Logger, Queue, Schema } 
 import { TestClock } from 'effect/testing'
 import { HttpRouter } from 'effect/unstable/http'
 
-import { UnknownTenant } from '../src/DomainErrors.js'
-import { SlackApiError, SlackTransportError } from '../src/Errors.js'
-import { SlackIngress, IngressAccepted, TenantId, type NormalizedReaction } from '../src/index.js'
-import { SlackEventCallback } from '../src/Schema.js'
-import { SlackRoutes } from '../src/SlackRoutes.js'
-import { reactionAddedCallback, signSlackBody, stubSlackClientLayer, testCredentialsLayer } from './support.js'
+import { UnknownTenant } from '../src/DomainErrors'
+import { SlackApiError, SlackTransportError } from '../src/Errors'
+import { SlackIngress, IngressAccepted, TenantId, type NormalizedReaction } from '../src/index'
+import { SlackEventCallback } from '../src/Schema'
+import { SlackRoutes } from '../src/SlackRoutes'
+import { reactionAddedCallback, signSlackBody, stubSlackClientLayer, testCredentialsLayer } from './support'
 
 const failures = [
 	{
@@ -41,7 +41,7 @@ for (const failure of failures) {
 						Effect.as(IngressAccepted.make({ idempotencyKey: event.idempotencyKey })),
 					),
 			})
-			const routeLayer = SlackRoutes.layer.pipe(
+			const routeLayer = SlackRoutes.layerMounted('/agents/support').pipe(
 				HttpRouter.provideRequest(NodeCrypto.layer),
 				HttpRouter.provideRequest(ingress),
 				Layer.provide(
@@ -63,7 +63,7 @@ for (const failure of failures) {
 			const now = yield* Clock.currentTimeMillis.pipe(TestClock.withLive)
 			const timestamp = Math.floor(now / 1000).toString()
 			const signature = yield* signSlackBody(body, timestamp)
-			const request = new Request('http://channels.test/api/v1/integrations/slack/webhook', {
+			const request = new Request('http://channels.test/agents/support/integrations/slack/webhook', {
 				method: 'POST',
 				body,
 				headers: {

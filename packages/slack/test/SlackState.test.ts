@@ -14,10 +14,10 @@ import {
 	SlackTenantCredentials,
 	TenantId,
 	UserId,
-} from '../src/index.js'
-import * as Memory from '../src/memory.js'
-import { expectTaggedFailure, testAuthor } from './nativeSupport.js'
-import { makeStubSlackClient } from './support.js'
+} from '../src/index'
+import * as Memory from '../src/memory'
+import { expectTaggedFailure, testAuthor } from './nativeSupport'
+import { makeStubSlackClient } from './support'
 
 const workspaceId = SlackTeamId.make('T_STATE')
 const input = { provider: 'slack' as const, tenant: TenantId.make(workspaceId), userId: UserId.make('U_PERSON') }
@@ -253,6 +253,6 @@ it.effect('the real bot resolves changed credentials for HTTP and refuses reques
 			yield* store.remove({ workspaceId })
 			yield* slack.getUser(input).pipe(expectTaggedFailure('UnknownTenant'))
 			assert.strictEqual(yield* Queue.size(requests), 0)
-		}).pipe(Effect.provide(bot.services.pipe(Layer.provideMerge(stores), Layer.provide(http))))
+		}).pipe(Effect.provide(bot.pipe(Layer.provideMerge(stores), Layer.provide(http))))
 	}),
 )

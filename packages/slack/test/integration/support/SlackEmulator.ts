@@ -295,7 +295,7 @@ export class SlackEmulator extends Context.Service<
 				const signature = `v0=${createHmac('sha256', slackEmulatorSigningSecret)
 					.update(`v0:${timestamp}:${body}`)
 					.digest('hex')}`
-				return new Request('http://channels.test/api/v1/integrations/slack/webhook', {
+				return new Request('http://channels.test/integrations/slack/webhook', {
 					method: 'POST',
 					headers: {
 						'content-type': 'application/json',

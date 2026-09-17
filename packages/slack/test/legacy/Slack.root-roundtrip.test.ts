@@ -1,5 +1,6 @@
 import { NodeCrypto } from '@effect/platform-node'
 import { assert, it } from '@effect/vitest'
+import { layerMailboxStoreServices } from '@humanlayer/channels-delivery'
 import { layer as memory } from '@humanlayer/channels-delivery/memory'
 import {
 	Clock,
@@ -18,15 +19,15 @@ import {
 import { TestClock } from 'effect/testing'
 import { HttpClient, HttpClientRequest, HttpClientResponse, HttpRouter } from 'effect/unstable/http'
 
-import { SlackEventCallback } from '../../src/index.js'
-import { SlackClient } from '../../src/index.js'
-import { Slack } from '../../src/index.js'
-import { SlackRoutes } from '../../src/index.js'
-import { SlackTenantCredentials } from '../../src/index.js'
-import { SlackIngress, SlackSubscriptions, MarkdownContent, ThreadId } from '../../src/index.js'
-import { testConnectionStoreLayer } from '../support.js'
-import { appMentionCallback, signSlackBody } from '../support.js'
-import { policy, runnerOptions } from './support.js'
+import { SlackEventCallback } from '../../src/index'
+import { SlackClient } from '../../src/index'
+import { Slack } from '../../src/index'
+import { SlackRoutes } from '../../src/index'
+import { SlackTenantCredentials } from '../../src/index'
+import { SlackIngress, SlackSubscriptions, MarkdownContent, ThreadId } from '../../src/index'
+import { testConnectionStoreLayer } from '../support'
+import { appMentionCallback, signSlackBody } from '../support'
+import { policy, runnerOptions } from './support'
 
 const testRootThreadId = ThreadId.make('slack:v1:T_TEST:C_TEST:100.1')
 
@@ -36,7 +37,7 @@ const SlackPostBody = Schema.Struct({
 	text: Schema.String,
 })
 
-const webhookUrl = 'http://channels.test/api/v1/integrations/slack/webhook'
+const webhookUrl = 'http://channels.test/integrations/slack/webhook'
 
 it.effect('delivers one signed mention end to end, subscribes explicitly, and posts in the Slack root thread', () =>
 	Effect.gen(function* () {
@@ -74,6 +75,8 @@ it.effect('delivers one signed mention end to end, subscribes explicitly, and po
 		)
 		const slack = Slack.layer.pipe(Layer.provide(testConnectionStoreLayer), Layer.provide(slackClient))
 		const subscriptions = SlackSubscriptions.layerMemory()
+		const deliveryStorage = memory({ maxMailboxes: 100 })
+		const delivery = layerMailboxStoreServices.pipe(Layer.provide(deliveryStorage))
 		const ingressLayer = SlackIngress.layer({
 			namespace: 'legacy-root',
 			policy,
@@ -91,7 +94,7 @@ it.effect('delivers one signed mention end to end, subscribes explicitly, and po
 					},
 				],
 			},
-		}).pipe(Layer.provideMerge(Layer.mergeAll(slack, subscriptions, memory({ maxMailboxes: 100 }))))
+		}).pipe(Layer.provideMerge(Layer.mergeAll(slack, subscriptions, delivery)))
 		const testApplication = Layer.merge(ingressLayer, NodeCrypto.layer)
 		const program = Effect.gen(function* () {
 			const ingress = yield* SlackIngress

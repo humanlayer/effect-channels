@@ -2,12 +2,15 @@ import { assert, it } from '@effect/vitest'
 import { Cause, Clock, Deferred, Effect, Exit, Fiber, Layer, Logger, Queue, Schema } from 'effect'
 import { TestClock } from 'effect/testing'
 
-import { bind, DeliveryError, HandlerFailure } from '../src/Delivery.js'
-import { DeliveryPolicy } from '../src/DeliveryPolicy.js'
-import type { EventDefinition } from '../src/EventDefinition.js'
-import { emptyMailbox, mailboxKey } from '../src/Mailbox.js'
-import { MailboxReadiness, MailboxStore, MailboxStoreError } from '../src/MailboxStore.js'
-import { layer } from '../src/memory.js'
+import { bind, DeliveryError, HandlerFailure } from '../src/Delivery'
+import { DeliveryInterruption } from '../src/DeliveryInterruption'
+import { DeliveryPolicy } from '../src/DeliveryPolicy'
+import { DeliveryQueue, enqueueDelivery } from '../src/DeliveryQueue'
+import type { EventDefinition } from '../src/EventDefinition'
+import { emptyMailbox, mailboxKey } from '../src/Mailbox'
+import { layerMailboxStoreServices } from '../src/MailboxServices'
+import { MailboxReadiness, MailboxStore, MailboxStoreError } from '../src/MailboxStore'
+import { layer } from '../src/memory'
 
 const Event = Schema.Struct({
 	id: Schema.String,
@@ -39,7 +42,10 @@ const policy = DeliveryPolicy.make({
 	conflictRetries: 8,
 })
 const event = (id: string) => Event.make({ id, installation: 'T1', resource: 'C1:root', text: id })
-const memory = layer({ maxMailboxes: 100 })
+const storage = layer({ maxMailboxes: 100 })
+const memory = layerMailboxStoreServices.pipe(Layer.provide(storage))
+const smallStorage = layer({ maxMailboxes: 1 })
+const smallMemory = layerMailboxStoreServices.pipe(Layer.provide(smallStorage))
 
 it.effect('admits another mailbox while an earlier handler remains active', () =>
 	Effect.gen(function* () {
@@ -481,19 +487,19 @@ it.effect('uses atomic conditional creation and bounded conflict retries', () =>
 			policy,
 			handler: () => Effect.void,
 		})
-		const conflicting = Layer.succeed(
-			MailboxStore,
-			MailboxStore.of({
-				loadMailbox: store.loadMailbox,
-				commitMailbox: () =>
-					Effect.sync(() => {
-						attempts++
-						return 'conflict' as const
-					}),
-			}),
-		)
+		const conflictingStore = MailboxStore.of({
+			loadMailbox: store.loadMailbox,
+			commitMailbox: () =>
+				Effect.sync(() => {
+					attempts++
+					return 'conflict' as const
+				}),
+		})
+		const queue = DeliveryQueue.of({
+			enqueue: (input) => enqueueDelivery(input).pipe(Effect.provideService(MailboxStore, conflictingStore)),
+		})
 		assert.deepStrictEqual(
-			yield* delivery.admit({ event: event('A') }).pipe(Effect.provide(conflicting), Effect.flip),
+			yield* delivery.admit({ event: event('A') }).pipe(Effect.provideService(DeliveryQueue, queue), Effect.flip),
 			DeliveryError.make({ reason: 'conflict' }),
 		)
 		assert.strictEqual(attempts, policy.conflictRetries + 1)
@@ -673,7 +679,10 @@ it.effect('a Stop racing completion cannot retarget a successor on conflict', ()
 		)
 		const stop = yield* delivery
 			.cancelActive({ ...receipt, controlId: 'stop' })
-			.pipe(Effect.provide(delayedControl), Effect.forkChild)
+			.pipe(
+				Effect.provide(DeliveryInterruption.layerMailboxStore.pipe(Layer.provide(delayedControl))),
+				Effect.forkChild,
+			)
 		yield* Deferred.await(reached)
 		yield* delivery.admit({ event: event('B') })
 		yield* Deferred.succeed(releaseHandler, undefined)
@@ -729,5 +738,5 @@ it.effect('validates configuration, codec payloads, and bounded memory creation'
 				.pipe(Effect.flip),
 			MailboxStoreError.make({ operation: 'commit' }),
 		)
-	}).pipe(Effect.provide(layer({ maxMailboxes: 1 }))),
+	}).pipe(Effect.provide(smallMemory)),
 )

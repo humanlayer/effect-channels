@@ -12,7 +12,7 @@ import {
 	Thread,
 	ThreadId,
 	UserId,
-} from '../../src/index.js'
+} from '../../src/index'
 
 const channelRef = {
 	id: ChannelId.make('slack:v1:T_TEST:C_TEST'),

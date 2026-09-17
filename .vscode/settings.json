@@ -1,0 +1,7 @@
+{
+    // UI Setting:
+    // TypeScript 7 > Experimental: Use Tsgo
+    "js/ts.experimental.useTsgo": true,
+    // Optional: use a local TypeScript package directory.
+    "js/ts.tsdk.path": "./node_modules/typescript"
+}

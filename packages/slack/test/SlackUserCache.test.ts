@@ -2,9 +2,9 @@ import { assert, it } from '@effect/vitest'
 import { Deferred, Effect, Fiber, Layer, Ref } from 'effect'
 import { TestClock } from 'effect/testing'
 
-import { Slack, SlackApiError, SlackTransportError, TenantId, UserId, UserProfile } from '../src/index.js'
-import { expectTaggedFailure } from './nativeSupport.js'
-import { stubSlackClientLayer } from './support.js'
+import { Slack, SlackApiError, SlackTransportError, TenantId, UserId, UserProfile } from '../src/index'
+import { expectTaggedFailure } from './nativeSupport'
+import { stubSlackClientLayer } from './support'
 
 const input = { provider: 'slack' as const, tenant: TenantId.make('T_ONE'), userId: UserId.make('U_SHARED') }
 const profile = (workspace: string) =>

@@ -2,7 +2,7 @@ import { type Context, Effect, Layer } from 'effect'
 import type { HttpRouter, HttpServerRequest } from 'effect/unstable/http'
 import { HttpApiBuilder } from 'effect/unstable/httpapi'
 
-import { DeliveryContract, Forbidden, Unauthorized, Unavailable } from './contract.js'
+import { DeliveryContract, Forbidden, Unauthorized, Unavailable } from './contract'
 import {
 	DeliveryControl,
 	type DeliveryControlService,
@@ -11,8 +11,8 @@ import {
 	type DeliveryTerminalOutcome,
 	type DeliveryTerminalReceipt,
 	type ResolvedDelivery,
-} from './DeliveryControl.js'
-import type { DeliveryId } from './DeliveryReference.js'
+} from './DeliveryControl'
+import type { DeliveryId } from './DeliveryReference'
 
 export type DeliveryApiRejection = Unauthorized | Forbidden | Unavailable
 export type DeliveryApiContextRejection = DeliveryApiRejection | DeliveryNotFound

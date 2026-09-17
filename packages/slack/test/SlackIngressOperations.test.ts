@@ -1,13 +1,14 @@
 import { assert, it } from '@effect/vitest'
+import { layerMailboxStoreServices } from '@humanlayer/channels-delivery'
 import { layer as deliveryMemory } from '@humanlayer/channels-delivery/memory'
 import { Deferred, Effect, Fiber, Layer, Queue, Tracer } from 'effect'
 import { TestClock } from 'effect/testing'
 
-import { Author, Thread, UserProfile } from '../src/index.js'
-import { SlackAuthors } from '../src/SlackAuthors.js'
-import { ConversationStoppedEvent, MessageUpdatedEvent, NormalizedConversationStopped } from '../src/SlackEvents.js'
-import { SlackChannelId } from '../src/SlackIdentity.js'
-import { awaitStoppedTargets } from '../src/SlackIngressBindings.js'
+import { Author, Thread, UserProfile } from '../src/index'
+import { SlackAuthors } from '../src/SlackAuthors'
+import { ConversationStoppedEvent, MessageUpdatedEvent, NormalizedConversationStopped } from '../src/SlackEvents'
+import { SlackChannelId } from '../src/SlackIdentity'
+import { awaitStoppedTargets } from '../src/SlackIngressBindings'
 import {
 	acceptConversationStopped,
 	acceptMessage,
@@ -15,11 +16,16 @@ import {
 	resolveUpdated,
 	run,
 	SlackIngressBindings,
-} from '../src/SlackIngressOperations.js'
-import { SlackSubscriptions } from '../src/SlackSubscriptions.js'
-import { SlackDmConversationTs, slackThreadRef } from '../src/SlackThreadId.js'
-import { nativeMailbox, nativeMessage, nativePolicy, nativeRunner, testAuthor, testMessage } from './nativeSupport.js'
-import { stubSlackClientLayer, testRootTs, testTeamId } from './support.js'
+} from '../src/SlackIngressOperations'
+import { SlackSubscriptions } from '../src/SlackSubscriptions'
+import { SlackDmConversationTs, slackThreadRef } from '../src/SlackThreadId'
+
+const deliveryRuntime = () => {
+	const storage = deliveryMemory({ maxMailboxes: 100 })
+	return layerMailboxStoreServices.pipe(Layer.provide(storage))
+}
+import { nativeMailbox, nativeMessage, nativePolicy, nativeRunner, testAuthor, testMessage } from './nativeSupport'
+import { stubSlackClientLayer, testRootTs, testTeamId } from './support'
 
 it.effect('enriches an update and its previous message with only the author dependency graph', () =>
 	Effect.gen(function* () {
@@ -122,7 +128,7 @@ it.effect('fans out and dedupes with real bindings and only admission dependenci
 					},
 				}),
 				SlackSubscriptions.layerMemory(),
-				deliveryMemory({ maxMailboxes: 100 }),
+				deliveryRuntime(),
 			),
 		),
 	),
@@ -170,7 +176,7 @@ it.effect('pins Stop cancellation and its barrier to the same real DM targets wi
 					},
 				}),
 				SlackSubscriptions.layerMemory(),
-				deliveryMemory({ maxMailboxes: 100 }),
+				deliveryRuntime(),
 			),
 		),
 	),
@@ -250,7 +256,7 @@ it.effect('real operations wait for every fan-out finalizer before invoking the 
 				Layer.mergeAll(
 					bindings,
 					SlackSubscriptions.layerMemory(),
-					deliveryMemory({ maxMailboxes: 100 }),
+					deliveryRuntime(),
 					SlackAuthors.layer.pipe(
 						Layer.provide(
 							stubSlackClientLayer({
@@ -309,7 +315,7 @@ for (const empty of [true, false]) {
 							},
 						}),
 						SlackSubscriptions.layerMemory(),
-						deliveryMemory({ maxMailboxes: 100 }),
+						deliveryRuntime(),
 						SlackAuthors.layer.pipe(
 							Layer.provide(
 								stubSlackClientLayer({

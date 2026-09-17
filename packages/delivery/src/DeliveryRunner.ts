@@ -1,6 +1,6 @@
 import { Clock, Effect, Schema } from 'effect'
 
-import { MailboxReadiness } from './MailboxStore.js'
+import { MailboxReadiness } from './MailboxStore'
 
 export const DeliveryPassOptions = Schema.Struct({
 	scanLimit: Schema.Int.check(Schema.isGreaterThan(0)),

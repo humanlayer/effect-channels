@@ -18,9 +18,9 @@ import {
 	GitHubReactionContent,
 	type GitHubReactionTarget,
 	type GitHubError,
-} from '../src/index.js'
-import { event, user } from './fixtures.js'
-import { adminCall, emulator } from './support.js'
+} from '../src/index'
+import { event, user } from './fixtures'
+import { adminCall, emulator } from './support'
 
 const origin = 'https://api.github.test'
 const repository = event.resource.repository

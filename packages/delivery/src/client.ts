@@ -1,7 +1,7 @@
 import { HttpClient, HttpClientRequest } from 'effect/unstable/http'
 import { HttpApiClient } from 'effect/unstable/httpapi'
 
-import { DeliveryContract } from './contract.js'
+import { DeliveryContract } from './contract'
 
 export const makeDeliveryClient = (input: { readonly baseUrl: string | URL }) =>
 	HttpApiClient.make(DeliveryContract, { baseUrl: input.baseUrl })

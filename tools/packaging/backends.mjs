@@ -10,7 +10,7 @@ import * as SlackRedis from '@humanlayer/channels-slack/redis'
 import * as SlackRedisClient from '@humanlayer/channels-slack/redis/client'
 import { Layer } from 'effect'
 
-import { assertBuiltEntry, assertOneEffect } from './guard.mjs'
+import { assertBuiltEntry, assertOneEffect } from './guard'
 
 for (const name of ['@humanlayer/channels-delivery', '@humanlayer/channels-slack']) {
 	for (const entry of ['postgres', 'redis', 'postgres/client', 'redis/client']) {

@@ -1,5 +1,6 @@
 import { NodeCrypto } from '@effect/platform-node'
 import { assert, it } from '@effect/vitest'
+import { DeliveryInterruption, DeliveryQueue, IngressAttributionStore } from '@humanlayer/channels-delivery'
 import { Clock, ConfigProvider, Context, Effect, Layer, Queue, Schema } from 'effect'
 import { TestClock } from 'effect/testing'
 import { HttpRouter } from 'effect/unstable/http'
@@ -10,18 +11,20 @@ import {
 	type NormalizedConversationStopped,
 	type NormalizedMessage,
 	type NormalizedReaction,
-} from '../src/index.js'
-import { SlackEventCallback } from '../src/Schema.js'
-import { SlackRoutes } from '../src/SlackRoutes.js'
+} from '../src/index'
+import { SlackEventCallback } from '../src/Schema'
+import { SlackRoutes } from '../src/SlackRoutes'
+import { SlackSubscriptions } from '../src/SlackSubscriptions'
+import { nativePolicy } from './nativeSupport'
 import {
 	appMentionCallback,
 	signSlackBody,
 	testCredentialsLayer,
 	testRouteSlackClientLayer,
 	unimplemented,
-} from './support.js'
+} from './support'
 
-const routeLayer = SlackRoutes.layer.pipe(
+const routeLayer = SlackRoutes.layerMounted('/api/v1').pipe(
 	HttpRouter.provideRequest(NodeCrypto.layer),
 	Layer.provide(
 		ConfigProvider.layer(
@@ -33,6 +36,40 @@ const routeLayer = SlackRoutes.layer.pipe(
 	),
 	Layer.provide(testCredentialsLayer),
 	Layer.provide(testRouteSlackClientLayer),
+)
+
+it.effect('reports the exact application-mounted webhook path', () =>
+	Effect.sync(() => {
+		assert.strictEqual(SlackRoutes.webhookPath, '/integrations/slack/webhook')
+		assert.strictEqual(SlackRoutes.mountedWebhookPath('/api/v1'), '/api/v1/integrations/slack/webhook')
+	}),
+)
+
+it.effect('mounts webhook admission with addressed services and no mailbox processing services', () =>
+	Effect.acquireUseRelease(
+		Effect.sync(() => {
+			const admission = Ingress.layer({
+				namespace: 'route-contract',
+				policy: nativePolicy,
+				handlers: {},
+			}).pipe(
+				Layer.provide(
+					Layer.mergeAll(
+						Layer.mock(DeliveryQueue, {}),
+						Layer.mock(DeliveryInterruption, {}),
+						Layer.mock(IngressAttributionStore, {}),
+						Layer.mock(SlackSubscriptions, {}),
+					),
+				),
+			)
+			return HttpRouter.toWebHandler(routeLayer.pipe(Layer.provide(admission)), { disableLogger: true })
+		}),
+		({ handler }) =>
+			Effect.sync(() => {
+				assert.strictEqual(typeof handler, 'function')
+			}),
+		({ dispose }) => Effect.promise(dispose),
+	),
 )
 
 it.effect('resolves MPIM reaction identities before ingress admission', () =>

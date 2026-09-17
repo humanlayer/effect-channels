@@ -1,6 +1,6 @@
 import { Schema } from 'effect'
 
-import { GitHubDiscussionRef, GitHubId, GitHubIssueRef, GitHubPullRequestRef } from './GitHubResource.js'
+import { GitHubDiscussionRef, GitHubId, GitHubIssueRef, GitHubPullRequestRef } from './GitHubResource'
 
 export const GitHubUser = Schema.Struct({ id: GitHubId, login: Schema.NonEmptyString, type: Schema.String })
 export interface GitHubUser extends Schema.Schema.Type<typeof GitHubUser> {}

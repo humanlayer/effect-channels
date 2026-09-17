@@ -1,5 +1,11 @@
 import { assert, it } from '@effect/vitest'
-import { DeliveryLocatorStore, MailboxReadiness, MailboxStore, MailboxStoreError } from '@humanlayer/channels-delivery'
+import {
+	DeliveryLocatorStore,
+	layerMailboxStoreServices,
+	MailboxReadiness,
+	MailboxStore,
+	MailboxStoreError,
+} from '@humanlayer/channels-delivery'
 import { layer as memory } from '@humanlayer/channels-delivery/memory'
 import { Context, Deferred, Effect, Fiber, Layer, Logger, Queue, Ref, Schema } from 'effect'
 
@@ -17,8 +23,8 @@ import {
 	SlackMessageTs,
 	Thread,
 	slackThreadRef,
-} from '../src/index.js'
-import { nativeIngressLayer, nativeMailbox, nativeMessage, nativeRunner } from './nativeSupport.js'
+} from '../src/index'
+import { nativeIngressLayer, nativeMailbox, nativeMessage, nativeRunner } from './nativeSupport'
 
 const lookupBoundary: Context.Key<
 	SlackOrganizations,
@@ -46,7 +52,9 @@ it.effect('custom Slack lookup results are decoded before writes and failures lo
 			),
 		)
 		const logs: string[] = []
-		const logger = Logger.layer([Logger.make((entry) => logs.push(JSON.stringify(entry.message)))])
+		const logger = Logger.layer([
+			Logger.make((entry) => logs.push(JSON.stringify(Logger.formatStructured.log(entry)))),
+		])
 		const results: ReadonlyArray<Schema.Json | undefined> = [
 			null,
 			undefined,
@@ -78,13 +86,10 @@ it.effect('custom Slack lookup results are decoded before writes and failures lo
 				assert.strictEqual(yield* nativeMailbox('reply', nativeMessage('a')), undefined)
 			}).pipe(
 				Effect.provide(
-					Layer.merge(
-						nativeIngressLayer(
-							{ onNewMention: [{ id: 'reply', handler: () => Effect.die('Unexpected handler') }] },
-							storage,
-						).pipe(Layer.provide(lookup)),
-						logger,
-					),
+					nativeIngressLayer(
+						{ onNewMention: [{ id: 'reply', handler: () => Effect.die('Unexpected handler') }] },
+						storage,
+					).pipe(Layer.provide(lookup), Layer.provide(logger)),
 				),
 			)
 		}
@@ -277,6 +282,7 @@ it.effect('partial fan-out reconstruction uses the saved attribution, not a reas
 				}),
 			),
 		)
+		const storageWithQueue = Layer.merge(storage, layerMailboxStoreServices.pipe(Layer.provide(storage)))
 		const handlers = {
 			onNewMention: [
 				{ id: 'first', handler: () => Effect.die('admission must not execute') },
@@ -289,7 +295,7 @@ it.effect('partial fan-out reconstruction uses the saved attribution, not a reas
 			yield* ingress.acceptMessage(event).pipe(Effect.flip)
 			assert.strictEqual((yield* nativeMailbox('first', event))?.state.pending[0]?.organizationId, 'A')
 			assert.strictEqual(yield* nativeMailbox('second', event), undefined)
-		}).pipe(Effect.provide(nativeIngressLayer(handlers, storage).pipe(Layer.provide(organizations))))
+		}).pipe(Effect.provide(nativeIngressLayer(handlers, storageWithQueue).pipe(Layer.provide(organizations))))
 		yield* Ref.set(organizationId, 'B')
 		yield* Effect.gen(function* () {
 			yield* (yield* SlackIngress).acceptMessage(event)
@@ -298,7 +304,7 @@ it.effect('partial fan-out reconstruction uses the saved attribution, not a reas
 				assert.strictEqual(saved?.state.pending.length, 1)
 				assert.strictEqual(saved?.state.pending[0]?.organizationId, 'A')
 			}
-		}).pipe(Effect.provide(nativeIngressLayer(handlers, storage).pipe(Layer.provide(organizations))))
+		}).pipe(Effect.provide(nativeIngressLayer(handlers, storageWithQueue).pipe(Layer.provide(organizations))))
 		assert.strictEqual(yield* Ref.get(calls), 1)
 	}),
 )

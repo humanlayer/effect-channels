@@ -1,8 +1,8 @@
-import { loadIngressAttribution, saveIngressAttribution } from '@humanlayer/channels-delivery'
+import { IngressAttributionStore } from '@humanlayer/channels-delivery'
 import { Effect, Schema } from 'effect'
 
-import { GitHubIngressError } from './GitHubErrors.js'
-import { GitHubOrganization, GitHubOrganizationLookup, GitHubOrganizations } from './GitHubOrganizations.js'
+import { GitHubIngressError } from './GitHubErrors'
+import { GitHubOrganization, GitHubOrganizationLookup, GitHubOrganizations } from './GitHubOrganizations'
 
 const GitHubAttributionInput = Schema.Struct({
 	namespace: Schema.NonEmptyString,
@@ -15,7 +15,8 @@ const reject = (input: {
 	readonly classification: 'invalid_identity' | 'invalid_result' | 'lookup_failed' | 'storage_failed'
 	readonly errorTag?: 'GitHubOrganizationLookupError'
 }) =>
-	Effect.logError('GitHub organization attribution failed', input).pipe(
+	Effect.logError('GitHub organization attribution failed').pipe(
+		Effect.annotateLogs(input),
 		Effect.andThen(Effect.fail(GitHubIngressError.make({ operation: 'admit' }))),
 	)
 
@@ -32,7 +33,8 @@ export const resolveGitHubIngressAttribution = Effect.fn('github.ingress.organiz
 		eventId: parsed.eventId,
 	}
 	return yield* Effect.gen(function* () {
-		const saved = yield* loadIngressAttribution(identity)
+		const attribution = yield* IngressAttributionStore
+		const saved = yield* attribution.load(identity)
 		if (saved !== undefined) return saved
 		const organizations = yield* GitHubOrganizations
 		const resolved = yield* organizations
@@ -48,6 +50,6 @@ export const resolveGitHubIngressAttribution = Effect.fn('github.ingress.organiz
 			Effect.catchTag('SchemaError', () => reject({ classification: 'invalid_result' })),
 		)
 		if (organization === null) return null
-		return yield* saveIngressAttribution({ ...identity, ...organization })
+		return yield* attribution.save({ ...identity, ...organization })
 	}).pipe(Effect.catchTag('MailboxStoreError', () => reject({ classification: 'storage_failed' })))
 })

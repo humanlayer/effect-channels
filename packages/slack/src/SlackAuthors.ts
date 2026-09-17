@@ -1,11 +1,11 @@
 import { Context, Effect, Layer } from 'effect'
 
-import { Message as MessageSchema, type Message } from './Message.js'
-import type { Author, TenantId } from './Model.js'
-import type { MessagePage, ThreadPage } from './Operations.js'
-import { SlackClient } from './SlackClient.js'
-import { SlackUserDirectory } from './SlackUserDirectory.js'
-import { Thread as ThreadSchema, type Thread } from './Thread.js'
+import { Message as MessageSchema, type Message } from './Message'
+import type { Author, TenantId } from './Model'
+import type { MessagePage, ThreadPage } from './Operations'
+import { SlackClient } from './SlackClient'
+import { SlackUserDirectory } from './SlackUserDirectory'
+import { Thread as ThreadSchema, type Thread } from './Thread'
 
 const messageWithAuthor = (message: Message, author: Author) => {
 	const fields = {

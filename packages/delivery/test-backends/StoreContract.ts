@@ -1,12 +1,12 @@
 import { assert } from '@effect/vitest'
 import { Clock, Deferred, Effect, Exit, Fiber, Queue, Schema } from 'effect'
 
-import { bind, DeliveryError } from '../src/Delivery.js'
-import { finalMessageOperationId, FinalMessageOperation, PendingDeliveryOperation } from '../src/DeliveryOperation.js'
-import { DeliveryPolicy } from '../src/DeliveryPolicy.js'
-import type { EventDefinition } from '../src/EventDefinition.js'
-import { emptyMailbox, MailboxState } from '../src/Mailbox.js'
-import { DeliveryLocatorStore, MailboxReadiness, MailboxStore, MailboxStoreError } from '../src/MailboxStore.js'
+import { bind, DeliveryError } from '../src/Delivery'
+import { finalMessageOperationId, FinalMessageOperation, PendingDeliveryOperation } from '../src/DeliveryOperation'
+import { DeliveryPolicy } from '../src/DeliveryPolicy'
+import type { EventDefinition } from '../src/EventDefinition'
+import { emptyMailbox, MailboxState } from '../src/Mailbox'
+import { DeliveryLocatorStore, MailboxReadiness, MailboxStore, MailboxStoreError } from '../src/MailboxStore'
 
 export const storedState = MailboxState.make({
 	...emptyMailbox(),

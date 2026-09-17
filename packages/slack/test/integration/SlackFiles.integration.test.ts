@@ -16,7 +16,7 @@ import {
 import { ConfigProvider, Effect, Layer, Option, Redacted } from 'effect'
 import * as FetchHttpClient from 'effect/unstable/http/FetchHttpClient'
 
-import { testConnectionStoreLayer } from '../support.js'
+import { testConnectionStoreLayer } from '../support'
 import {
 	FileInfoResponse,
 	HistoryResponse,
@@ -24,7 +24,7 @@ import {
 	SlackEmulator,
 	slackEmulatorAliceToken,
 	slackEmulatorBotToken,
-} from './support/SlackEmulator.js'
+} from './support/SlackEmulator'
 
 const encoder = new TextEncoder()
 const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex')

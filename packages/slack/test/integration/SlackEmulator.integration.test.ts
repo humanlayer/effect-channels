@@ -22,8 +22,8 @@ import {
 	slackEmulatorIntegrationToken,
 	slackEmulatorIntegrationUserId,
 	slackEmulatorSigningSecret,
-} from './support/SlackEmulator.js'
-import { ChannelsStorage, makeSlackTestHost, slack } from './support/SlackTestHost.js'
+} from './support/SlackEmulator'
+import { ChannelsStorage, makeSlackTestHost, slack } from './support/SlackTestHost'
 
 interface MentionObservation {
 	readonly channelId: string

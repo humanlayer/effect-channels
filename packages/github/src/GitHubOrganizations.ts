@@ -1,6 +1,6 @@
-import { Cause, Context, Effect, Layer, Schema } from 'effect'
+import { Cause, Context, Effect, Layer, Logger, Schema } from 'effect'
 
-import { GitHubId } from './GitHubResource.js'
+import { GitHubId } from './GitHubResource'
 
 export const GitHubOrganizationLookup = Schema.Struct({ installationId: GitHubId })
 export interface GitHubOrganizationLookup extends Schema.Schema.Type<typeof GitHubOrganizationLookup> {}
@@ -32,34 +32,38 @@ export class GitHubOrganizations extends Context.Service<
 				const context = yield* Effect.context<R>()
 				return GitHubOrganizations.of({
 					resolve: Effect.fn('github.organizations.resolve')((input) =>
-						Effect.suspend(() => lookup(input)).pipe(
-							Effect.provide(context),
-							Effect.catchCause((cause) => {
-								if (Cause.hasInterrupts(cause))
-									return Effect.failCause(
-										Cause.fromReasons<never>(cause.reasons.filter(Cause.isInterruptReason)),
-									)
-								const unexpected = Cause.hasDies(cause)
-								return Effect.logError('GitHub organization lookup failed', {
-									classification: unexpected ? 'unexpected_defect' : 'lookup_failed',
-								}).pipe(
-									Effect.andThen(
-										Effect.fail(
-											GitHubOrganizationLookupError.make(
-												unexpected ? { reason: 'unexpected' } : {},
+						Effect.flatMap(Logger.CurrentLoggers, (loggers) =>
+							Effect.suspend(() => lookup(input)).pipe(
+								Effect.provide(context),
+								Effect.provideService(Logger.CurrentLoggers, loggers),
+								Effect.catchCause((cause) => {
+									if (Cause.hasInterrupts(cause))
+										return Effect.failCause(
+											Cause.fromReasons<never>(cause.reasons.filter(Cause.isInterruptReason)),
+										)
+									const unexpected = Cause.hasDies(cause)
+									return Effect.logError('GitHub organization lookup failed').pipe(
+										Effect.annotateLogs({
+											classification: unexpected ? 'unexpected_defect' : 'lookup_failed',
+										}),
+										Effect.andThen(
+											Effect.fail(
+												GitHubOrganizationLookupError.make(
+													unexpected ? { reason: 'unexpected' } : {},
+												),
 											),
 										),
+									)
+								}),
+								Effect.flatMap((result) =>
+									Schema.decodeUnknownEffect(Schema.NullOr(GitHubOrganization))(result).pipe(
+										Effect.tapError(() =>
+											Effect.logError('GitHub organization lookup failed').pipe(
+												Effect.annotateLogs({ classification: 'invalid_result' }),
+											),
+										),
+										Effect.mapError(() => GitHubOrganizationLookupError.make({})),
 									),
-								)
-							}),
-							Effect.flatMap((result) =>
-								Schema.decodeUnknownEffect(Schema.NullOr(GitHubOrganization))(result).pipe(
-									Effect.tapError(() =>
-										Effect.logError('GitHub organization lookup failed', {
-											classification: 'invalid_result',
-										}),
-									),
-									Effect.mapError(() => GitHubOrganizationLookupError.make({})),
 								),
 							),
 						),

@@ -1,6 +1,6 @@
 import { Effect, Schema, Stream } from 'effect'
 
-import type { Content } from './Content.js'
+import type { Content } from './Content'
 import type {
 	ChannelGone,
 	HistoryFailed,
@@ -8,13 +8,13 @@ import type {
 	PostFailed,
 	UnknownTenant,
 	UnsupportedContextScope,
-} from './DomainErrors.js'
-import type { Message } from './Message.js'
-import type { ChannelInfo, ChannelRef } from './Model.js'
-import { ChannelRef as ChannelRefSchema } from './Model.js'
-import type { MessageHistoryOptions, MessagePage, ThreadPage, ThreadSummary } from './Operations.js'
-import type { SentMessage } from './SentMessage.js'
-import { Slack } from './Slack.js'
+} from './DomainErrors'
+import type { Message } from './Message'
+import type { ChannelInfo, ChannelRef } from './Model'
+import { ChannelRef as ChannelRefSchema } from './Model'
+import type { MessageHistoryOptions, MessagePage, ThreadPage, ThreadSummary } from './Operations'
+import type { SentMessage } from './SentMessage'
+import { Slack } from './Slack'
 
 export class Channel extends Schema.TaggedClass<Channel>()('Channel', {
 	ref: ChannelRefSchema,

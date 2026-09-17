@@ -1,5 +1,12 @@
 import { assert, it } from '@effect/vitest'
-import { bind, MailboxStore, MailboxStoreError, mailboxKey } from '@humanlayer/channels-delivery'
+import {
+	bind,
+	DeliveryQueue,
+	enqueueDelivery,
+	MailboxStore,
+	MailboxStoreError,
+	mailboxKey,
+} from '@humanlayer/channels-delivery'
 import { layer as memory } from '@humanlayer/channels-github/memory'
 import { Context, Deferred, Effect, Fiber, Layer, Queue, Redacted, Ref, Schema } from 'effect'
 
@@ -11,10 +18,10 @@ import {
 	GitHubSubscriptions,
 	activityEventDefinition,
 	issueResourceKey,
-} from '../src/index.js'
-import { policy } from './fixtures.js'
-import { event, routeCredentials, user } from './fixtures.js'
-import { host, payloadFor, secret, signedRequest } from './support.js'
+} from '../src/index'
+import { policy } from './fixtures'
+import { event, routeCredentials, user } from './fixtures'
+import { host, payloadFor, secret, signedRequest } from './support'
 
 it.live(
 	'rejects unsigned, tampered, malformed, oversized and wrong-installation requests; ignores self/unsupported events',
@@ -112,23 +119,28 @@ it.live('partial fanout returns 503; retry fills missing admission, then each ha
 				resourceKey: issueResourceKey(event.resource),
 			})
 		const seen = yield* Queue.unbounded<string>()
-		const fault = Layer.succeed(
-			MailboxStore,
-			MailboxStore.of({
-				loadMailbox: underlying.loadMailbox,
-				commitMailbox: (input) =>
-					Effect.gen(function* () {
-						if (input.key === keyFor('two') && (yield* Ref.getAndSet(failSecond, false)))
-							return yield* MailboxStoreError.make({ operation: 'commit' })
-						return yield* underlying.commitMailbox(input)
-					}),
-			}),
-		)
+		const faultStore = MailboxStore.of({
+			loadMailbox: underlying.loadMailbox,
+			commitMailbox: (input) =>
+				Effect.gen(function* () {
+					if (input.key === keyFor('two') && (yield* Ref.getAndSet(failSecond, false)))
+						return yield* MailboxStoreError.make({ operation: 'commit' })
+					return yield* underlying.commitMailbox(input)
+				}),
+		})
+		const fault = Layer.succeed(MailboxStore, faultStore)
+		const faultQueue = DeliveryQueue.of({
+			enqueue: (input) => enqueueDelivery(input).pipe(Effect.provideService(MailboxStore, faultStore)),
+		})
 		const services = GitHubIngress.layer({
 			namespace: 'fanout',
 			policy,
 			handlers: ['one', 'two'].map((id) => ({ id, onCreation: () => Queue.offer(seen, id).pipe(Effect.asVoid) })),
-		}).pipe(Layer.provide(fault), Layer.provide(Layer.succeedContext(storage)))
+		}).pipe(
+			Layer.provide(fault),
+			Layer.provide(Layer.succeed(DeliveryQueue, faultQueue)),
+			Layer.provide(Layer.succeedContext(Context.add(storage, DeliveryQueue, faultQueue))),
+		)
 		const environment = yield* Layer.build(services)
 		const request = yield* host(
 			GitHubRoutes.layer({ signingSecret: Redacted.make(secret), maxBodyBytes: 5_000 }).pipe(
@@ -143,10 +155,10 @@ it.live('partial fanout returns 503; retry fills missing admission, then each ha
 		assert.equal(yield* underlying.loadMailbox({ key: keyFor('two') }), undefined)
 		assert.equal((yield* send()).status, 200)
 		const ingress = Context.get(environment, GitHubIngress)
-		yield* ingress.processActivity({ event })
+		yield* ingress.processActivity({ event }).pipe(Effect.provideService(MailboxStore, faultStore))
 		assert.deepEqual([yield* Queue.take(seen), yield* Queue.take(seen)], ['one', 'two'])
 		assert.equal((yield* send()).status, 200)
-		yield* ingress.processActivity({ event })
+		yield* ingress.processActivity({ event }).pipe(Effect.provideService(MailboxStore, faultStore))
 		assert.equal(yield* Queue.size(seen), 0)
 	}),
 )
@@ -190,7 +202,7 @@ it.effect(
 			})
 			const key = yield* binding.keyFor({ event })
 			yield* ingress.acceptActivity({ event, mentioned: false, own: false })
-			const fiber = yield* ingress.processActivity({ event }).pipe(Effect.forkChild)
+			const fiber = yield* ingress.processActivity({ event }).pipe(Effect.provide(retained), Effect.forkChild)
 			yield* Deferred.await(started)
 			for (const id of ['b', 'c', 'd']) {
 				const comment = GitHubActivityEvent.make({
@@ -208,7 +220,8 @@ it.effect(
 			const store = Context.get(retained, MailboxStore)
 			assert.equal((yield* store.loadMailbox({ key }))?.state.pending.length, 3)
 			const reconstructed = Context.get(yield* Layer.build(make()), GitHubIngress)
-			for (const _id of ['b', 'c', 'd']) yield* reconstructed.processActivity({ event })
+			for (const _id of ['b', 'c', 'd'])
+				yield* reconstructed.processActivity({ event }).pipe(Effect.provide(retained))
 			assert.deepEqual(yield* Queue.takeAll(seen), [['event-a'], ['b'], ['c'], ['d']])
 			assert.equal((yield* store.loadMailbox({ key }))?.state.outcomes.length, 4)
 			assert.equal((yield* store.loadMailbox({ key }))?.state.pending.length, 0)
@@ -283,7 +296,7 @@ it.effect('canonical handlers recover existing activity mailbox IDs and saved at
 				],
 			}).pipe(Layer.provide(storage)),
 		)
-		yield* Context.get(environment, GitHubIngress).processActivity({ event })
+		yield* Context.get(environment, GitHubIngress).processActivity({ event }).pipe(Effect.provide(retained))
 		assert.deepEqual(yield* Queue.takeAll(seen), ['creation:original', 'mention:original', 'subscribed:original'])
 		for (const key of keys) {
 			const saved = yield* Context.get(retained, MailboxStore).loadMailbox({ key })
@@ -327,7 +340,7 @@ it.live('without bot login, normalized PR creation and followed lifecycle work b
 		}
 		const ingress = Context.get(environment, GitHubIngress)
 		assert.equal((yield* send(signedRequest(pr.event, JSON.stringify(payloadFor(pr)), pr.deliveryId))).status, 200)
-		yield* ingress.processActivity({ event: pr })
+		yield* ingress.processActivity({ event: pr }).pipe(Effect.provide(environment))
 		assert.deepEqual(yield* Queue.takeAll(seen), ['creation:github.pull-request'])
 		yield* Context.get(environment, GitHubSubscriptions).subscribe({ namespace: 'no-login', resource: pr.resource })
 		assert.equal(
@@ -336,7 +349,7 @@ it.live('without bot login, normalized PR creation and followed lifecycle work b
 			)).status,
 			200,
 		)
-		yield* ingress.processActivity({ event: pr })
+		yield* ingress.processActivity({ event: pr }).pipe(Effect.provide(environment))
 		assert.deepEqual(yield* Queue.takeAll(seen), ['closed'])
 	}),
 )

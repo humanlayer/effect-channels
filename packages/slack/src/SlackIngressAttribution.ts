@@ -1,8 +1,8 @@
-import { loadIngressAttribution, saveIngressAttribution } from '@humanlayer/channels-delivery'
+import { IngressAttributionStore } from '@humanlayer/channels-delivery'
 import { Effect, Schema } from 'effect'
 
-import { SlackIngressError } from './DomainErrors.js'
-import { SlackOrganization, SlackOrganizationLookup, SlackOrganizations } from './SlackOrganizations.js'
+import { SlackIngressError } from './DomainErrors'
+import { SlackOrganization, SlackOrganizationLookup, SlackOrganizations } from './SlackOrganizations'
 
 const SlackAttributionInput = Schema.Struct({
 	namespace: Schema.NonEmptyString,
@@ -15,7 +15,8 @@ const reject = (input: {
 	readonly classification: 'invalid_identity' | 'invalid_result' | 'lookup_failed' | 'storage_failed'
 	readonly errorTag?: 'SlackOrganizationLookupError'
 }) =>
-	Effect.logError('Slack organization attribution failed', input).pipe(
+	Effect.logError('Slack organization attribution failed').pipe(
+		Effect.annotateLogs(input),
 		Effect.andThen(Effect.fail(SlackIngressError.make({ operation: 'organization_lookup' }))),
 	)
 
@@ -32,7 +33,8 @@ export const resolveSlackIngressAttribution = Effect.fn('slack.ingress.organizat
 		eventId: parsed.eventId,
 	}
 	return yield* Effect.gen(function* () {
-		const saved = yield* loadIngressAttribution(identity)
+		const attribution = yield* IngressAttributionStore
+		const saved = yield* attribution.load(identity)
 		if (saved !== undefined) return saved
 		const organizations = yield* SlackOrganizations
 		const resolved = yield* organizations
@@ -50,6 +52,6 @@ export const resolveSlackIngressAttribution = Effect.fn('slack.ingress.organizat
 			Effect.catchTag('SchemaError', () => reject({ classification: 'invalid_result' })),
 		)
 		if (organization === null) return null
-		return yield* saveIngressAttribution({ ...identity, ...organization })
+		return yield* attribution.save({ ...identity, ...organization })
 	}).pipe(Effect.catchTag('MailboxStoreError', () => reject({ classification: 'storage_failed' })))
 })

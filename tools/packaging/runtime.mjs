@@ -5,8 +5,8 @@ import * as GitHub from '@humanlayer/channels-github'
 import * as Slack from '@humanlayer/channels-slack'
 import { Effect, Schema } from 'effect'
 
-import { deliveryIdentity, slackIdentity, githubIdentity, githubSubscriptionRoundTrip } from './compiled/consumer.js'
-import { assertBuiltEntry, assertOneEffect } from './guard.mjs'
+import { deliveryIdentity, slackIdentity, githubIdentity, githubSubscriptionRoundTrip } from './compiled/consumer'
+import { assertBuiltEntry, assertOneEffect } from './guard'
 
 for (const name of ['@humanlayer/channels-delivery', '@humanlayer/channels-slack']) {
 	assertBuiltEntry(name, 'index')

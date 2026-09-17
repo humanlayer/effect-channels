@@ -1,7 +1,7 @@
 import { Effect, Schema } from 'effect'
 
-import type { ResolvedDelivery } from './DeliveryControl.js'
-import type { EventDefinition } from './EventDefinition.js'
+import type { ResolvedDelivery } from './DeliveryControl'
+import type { EventDefinition } from './EventDefinition'
 
 export class DeliveryDefinitionMismatch extends Schema.TaggedError<DeliveryDefinitionMismatch>()(
 	'DeliveryDefinitionMismatch',

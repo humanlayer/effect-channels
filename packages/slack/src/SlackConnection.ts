@@ -1,6 +1,6 @@
 import { Schema } from 'effect'
 
-import { SlackTeamId } from './SlackIdentity.js'
+import { SlackTeamId } from './SlackIdentity'
 
 export const SlackConnectionLookupInput = Schema.Struct({ workspaceId: SlackTeamId })
 export type SlackConnectionLookupInput = typeof SlackConnectionLookupInput.Type

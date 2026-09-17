@@ -13,14 +13,14 @@ import {
 import { ConfigProvider, Effect, Layer, Option, Redacted, Schema } from 'effect'
 import * as FetchHttpClient from 'effect/unstable/http/FetchHttpClient'
 
-import { testConnectionStoreLayer } from '../support.js'
+import { testConnectionStoreLayer } from '../support'
 import {
 	HistoryResponse,
 	PostedMessageResponse,
 	SlackEmulator,
 	slackEmulatorAliceToken,
 	slackEmulatorBotToken,
-} from './support/SlackEmulator.js'
+} from './support/SlackEmulator'
 
 const ReactionsResponse = Schema.Struct({
 	ok: Schema.Literal(true),

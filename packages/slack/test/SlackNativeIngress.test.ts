@@ -6,9 +6,9 @@ import { Clock, Context, Deferred, Effect, Fiber, Layer, Queue, Ref, Schema } fr
 import { TestClock } from 'effect/testing'
 import { HttpRouter } from 'effect/unstable/http'
 
-import { IngressAccepted, MessageEvent, SlackEventCallback, SlackIngress, SlackSubscriptions } from '../src/index.js'
-import { nativeIngressLayer, nativeMailbox, nativeMessage, nativeRunner } from './nativeSupport.js'
-import { appMentionCallback, signedSlackRequest, signSlackBody, testRouteLayer } from './support.js'
+import { IngressAccepted, MessageEvent, SlackEventCallback, SlackIngress, SlackSubscriptions } from '../src/index'
+import { nativeIngressLayer, nativeMailbox, nativeMessage, nativeRunner } from './nativeSupport'
+import { appMentionCallback, signedSlackRequest, signSlackBody, testRouteLayer } from './support'
 
 it.effect('rejects partial fan-out, repairs on retry, and keeps mention ownership after subscription changes', () =>
 	Effect.gen(function* () {
@@ -83,7 +83,7 @@ it.effect('handles verification separately and rejects body tampering without ma
 			const body = '{"type":"url_verification","challenge":"verified","token":"fixture"}'
 			const signature = yield* signSlackBody(body, timestamp)
 			const request = (text: string) =>
-				new Request('http://localhost/api/v1/integrations/slack/webhook', {
+				new Request('http://localhost/integrations/slack/webhook', {
 					method: 'POST',
 					body: text,
 					headers: {

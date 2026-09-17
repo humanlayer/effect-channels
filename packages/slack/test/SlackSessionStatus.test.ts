@@ -1,10 +1,10 @@
 import { assert, it } from '@effect/vitest'
 import { Effect, Layer, Queue, Schema } from 'effect'
 
-import { SlackSessionStatusInput } from '../src/Schema.js'
-import { Slack } from '../src/Slack.js'
-import { SlackClient } from '../src/SlackClient.js'
-import { expectTaggedFailure } from './nativeSupport.js'
+import { SlackSessionStatusInput } from '../src/Schema'
+import { Slack } from '../src/Slack'
+import { SlackClient } from '../src/SlackClient'
+import { expectTaggedFailure } from './nativeSupport'
 import {
 	makeSlackClientHarness,
 	slackJsonResponse,
@@ -13,7 +13,7 @@ import {
 	testRootThreadId,
 	testRootTs,
 	testTeamId,
-} from './support.js'
+} from './support'
 
 const SessionStatusBody = Schema.Struct({
 	channel_id: Schema.String,

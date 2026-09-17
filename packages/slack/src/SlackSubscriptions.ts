@@ -1,9 +1,9 @@
 import { Clock, Context, Effect, Layer, Schema } from 'effect'
 
-import { SubscriptionStoreError } from './DomainErrors.js'
-import { IdempotencyKey, ThreadRef, type ThreadId } from './Model.js'
-import type { SubscriptionInput } from './Operations.js'
-import { SubscriptionCreated, SubscriptionExisting, type SubscriptionTransition } from './SlackEvents.js'
+import { SubscriptionStoreError } from './DomainErrors'
+import { IdempotencyKey, ThreadRef, type ThreadId } from './Model'
+import type { SubscriptionInput } from './Operations'
+import { SubscriptionCreated, SubscriptionExisting, type SubscriptionTransition } from './SlackEvents'
 
 export const SlackSubscriptionsMemoryOptions = Schema.Struct({
 	maxSubscriptions: Schema.Int.check(Schema.isGreaterThan(0)),

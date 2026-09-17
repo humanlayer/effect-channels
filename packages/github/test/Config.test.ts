@@ -2,7 +2,7 @@ import { assert, it } from '@effect/vitest'
 import { ConfigProvider, Context, Effect, Layer, Redacted } from 'effect'
 import { FetchHttpClient } from 'effect/unstable/http'
 
-import { GitHubCredentials, GitHubCrypto } from '../src/index.js'
+import { GitHubCredentials, GitHubCrypto } from '../src/index'
 
 it.effect('config parses environment strings without HTTP or signing on acquisition', () =>
 	Effect.gen(function* () {

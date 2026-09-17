@@ -1,6 +1,6 @@
-import { Cause, Context, Effect, Layer, Schema } from 'effect'
+import { Cause, Context, Effect, Layer, Logger, Schema } from 'effect'
 
-import { SlackTeamId } from './SlackIdentity.js'
+import { SlackTeamId } from './SlackIdentity'
 
 export const SlackOrganizationLookup = Schema.Struct({ workspaceId: SlackTeamId })
 export interface SlackOrganizationLookup extends Schema.Schema.Type<typeof SlackOrganizationLookup> {}
@@ -32,34 +32,38 @@ export class SlackOrganizations extends Context.Service<
 				const context = yield* Effect.context<R>()
 				return SlackOrganizations.of({
 					resolve: Effect.fn('slack.organizations.resolve')((input) =>
-						Effect.suspend(() => lookup(input)).pipe(
-							Effect.provide(context),
-							Effect.catchCause((cause) => {
-								if (Cause.hasInterrupts(cause))
-									return Effect.failCause(
-										Cause.fromReasons<never>(cause.reasons.filter(Cause.isInterruptReason)),
-									)
-								const unexpected = Cause.hasDies(cause)
-								return Effect.logError('Slack organization lookup failed', {
-									classification: unexpected ? 'unexpected_defect' : 'lookup_failed',
-								}).pipe(
-									Effect.andThen(
-										Effect.fail(
-											SlackOrganizationLookupError.make(
-												unexpected ? { reason: 'unexpected' } : {},
+						Effect.flatMap(Logger.CurrentLoggers, (loggers) =>
+							Effect.suspend(() => lookup(input)).pipe(
+								Effect.provide(context),
+								Effect.provideService(Logger.CurrentLoggers, loggers),
+								Effect.catchCause((cause) => {
+									if (Cause.hasInterrupts(cause))
+										return Effect.failCause(
+											Cause.fromReasons<never>(cause.reasons.filter(Cause.isInterruptReason)),
+										)
+									const unexpected = Cause.hasDies(cause)
+									return Effect.logError('Slack organization lookup failed').pipe(
+										Effect.annotateLogs({
+											classification: unexpected ? 'unexpected_defect' : 'lookup_failed',
+										}),
+										Effect.andThen(
+											Effect.fail(
+												SlackOrganizationLookupError.make(
+													unexpected ? { reason: 'unexpected' } : {},
+												),
 											),
 										),
+									)
+								}),
+								Effect.flatMap((result) =>
+									Schema.decodeUnknownEffect(Schema.NullOr(SlackOrganization))(result).pipe(
+										Effect.tapError(() =>
+											Effect.logError('Slack organization lookup failed').pipe(
+												Effect.annotateLogs({ classification: 'invalid_result' }),
+											),
+										),
+										Effect.mapError(() => SlackOrganizationLookupError.make({})),
 									),
-								)
-							}),
-							Effect.flatMap((result) =>
-								Schema.decodeUnknownEffect(Schema.NullOr(SlackOrganization))(result).pipe(
-									Effect.tapError(() =>
-										Effect.logError('Slack organization lookup failed', {
-											classification: 'invalid_result',
-										}),
-									),
-									Effect.mapError(() => SlackOrganizationLookupError.make({})),
 								),
 							),
 						),

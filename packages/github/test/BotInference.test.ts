@@ -2,8 +2,8 @@ import { it } from '@effect/vitest'
 import { Context, Effect, Layer, Schema } from 'effect'
 import { expectTypeOf } from 'vite-plus/test'
 
-import { GitHubBot, GitHubError, GitHubSubscriptionStore } from '../src/index.js'
-import { policy } from './fixtures.js'
+import { GitHubBot, GitHubError, GitHubSubscriptionStore } from '../src/index'
+import { policy } from './fixtures'
 
 class First extends Context.Service<First, { readonly value: string }>()('test/First') {}
 class Second extends Context.Service<Second, { readonly value: number }>()('test/Second') {}
@@ -13,7 +13,6 @@ it('infers all heterogeneous handler requirements without caller unions or widen
 	const bot = GitHubBot.make({
 		namespace: 'inference',
 		policy,
-		runner: { scanLimit: 10, concurrency: 2, pollMs: 10 },
 		handlers: [
 			{
 				id: 'first',
@@ -22,14 +21,13 @@ it('infers all heterogeneous handler requirements without caller unions or widen
 			{ id: 'second', onMention: () => Effect.andThen(Second, Effect.fail(SecondError.make({}))) },
 		],
 	})
-	expectTypeOf<Extract<Layer.Services<typeof bot.services>, First | Second>>().toEqualTypeOf<First | Second>()
+	expectTypeOf<Extract<Layer.Services<typeof bot>, First | Second>>().toEqualTypeOf<First | Second>()
 })
 
 it('infers heterogeneous optional activity callbacks and exposes explicit storage requirements', () => {
 	const bot = GitHubBot.make({
 		namespace: 'activity-inference',
 		policy,
-		runner: { scanLimit: 10, concurrency: 2, pollMs: 10 },
 		handlers: [
 			{
 				id: 'first',
@@ -47,7 +45,7 @@ it('infers heterogeneous optional activity callbacks and exposes explicit storag
 			},
 		],
 	})
-	expectTypeOf<
-		Extract<Layer.Services<typeof bot.services>, First | Second | GitHubSubscriptionStore>
-	>().toEqualTypeOf<First | Second | GitHubSubscriptionStore>()
+	expectTypeOf<Extract<Layer.Services<typeof bot>, First | Second | GitHubSubscriptionStore>>().toEqualTypeOf<
+		First | Second | GitHubSubscriptionStore
+	>()
 })

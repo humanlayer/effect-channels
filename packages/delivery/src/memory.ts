@@ -1,13 +1,13 @@
 import { Context, Effect, Layer, Schema } from 'effect'
 
-import { deliveryIds, MailboxSnapshot } from './Mailbox.js'
-import { DeliveryLocatorStore, MailboxReadiness, MailboxStore, MailboxStoreError, ScanReady } from './MailboxStore.js'
+import { deliveryIds, MailboxSnapshot } from './Mailbox'
+import { DeliveryLocatorStore, MailboxReadiness, MailboxStore, MailboxStoreError, ScanReady } from './MailboxStore'
 
 export const MemoryOptions = Schema.Struct({ maxMailboxes: Schema.Int.check(Schema.isGreaterThan(0)) })
 export type MemoryOptions = typeof MemoryOptions.Type
 
-export const layer = (options: MemoryOptions) =>
-	Layer.effectContext(
+export const layer = (options: MemoryOptions) => {
+	return Layer.effectContext(
 		Effect.gen(function* () {
 			yield* MemoryOptions.makeEffect(options)
 			const entries = new Map<
@@ -77,3 +77,4 @@ export const layer = (options: MemoryOptions) =>
 			)
 		}),
 	)
+}

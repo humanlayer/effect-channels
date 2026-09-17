@@ -1,7 +1,7 @@
 import { assert, it } from '@effect/vitest'
 import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Logger, Ref } from 'effect'
 
-import { GitHubOrganizations, GitHubOrganizationLookupError } from '../src/index.js'
+import { GitHubOrganizations, GitHubOrganizationLookupError } from '../src/index'
 
 class LookupState extends Context.Service<LookupState, Ref.Ref<string | null>>()('test/github/LookupState') {}
 
@@ -32,7 +32,9 @@ it.effect('factory captures dependencies once but reads live state and owns the 
 it.effect('factory catches suspended throws and composite defects but never recovers cancellation', () =>
 	Effect.gen(function* () {
 		const logs: string[] = []
-		const logger = Logger.layer([Logger.make((entry) => logs.push(JSON.stringify(entry.message)))])
+		const logger = Logger.layer([
+			Logger.make((entry) => logs.push(JSON.stringify(Logger.formatStructured.log(entry)))),
+		])
 		const callbacks = [
 			() => Effect.die('private-defect-sentinel'),
 			() => {
@@ -91,7 +93,9 @@ it.effect('factory catches suspended throws and composite defects but never reco
 it.effect('factory maps application failures and invalid results without logging private data', () =>
 	Effect.gen(function* () {
 		const logs: string[] = []
-		const logger = Logger.layer([Logger.make((entry) => logs.push(JSON.stringify(entry.message)))])
+		const logger = Logger.layer([
+			Logger.make((entry) => logs.push(JSON.stringify(Logger.formatStructured.log(entry)))),
+		])
 		const callbacks = [
 			() => Effect.fail({ secret: 'private-error-sentinel' }),
 			() => Effect.succeed({ organizationId: '', secret: 'private-result-sentinel' }),

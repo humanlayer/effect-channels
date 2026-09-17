@@ -2,15 +2,16 @@ import { assert, it } from '@effect/vitest'
 import { Deferred, Effect, Exit, Fiber, Layer, Match, Queue, Schema } from 'effect'
 import { TestClock } from 'effect/testing'
 
-import { bind, DeliveryError, HandlerFailure } from '../src/Delivery.js'
-import { DeliveryControl, DeliveryNotFound, DeliveryOutcomeConflict } from '../src/DeliveryControl.js'
-import { DeliveryPolicy } from '../src/DeliveryPolicy.js'
-import { resolveDeliveryFor } from '../src/DeliveryResolution.js'
-import type { EventDefinition } from '../src/EventDefinition.js'
-import { activeBatches, MailboxState } from '../src/Mailbox.js'
-import { MailboxStore } from '../src/MailboxStore.js'
-import { layer as memoryLayer } from '../src/memory.js'
-import { DELIVERY_ID_MAX_LENGTH, DeliveryId } from '../src/protocol.js'
+import { bind, DeliveryError, HandlerFailure } from '../src/Delivery'
+import { DeliveryControl, DeliveryNotFound, DeliveryOutcomeConflict } from '../src/DeliveryControl'
+import { DeliveryPolicy } from '../src/DeliveryPolicy'
+import { DeliveryQueue } from '../src/DeliveryQueue'
+import { resolveDeliveryFor } from '../src/DeliveryResolution'
+import type { EventDefinition } from '../src/EventDefinition'
+import { activeBatches, MailboxState } from '../src/Mailbox'
+import { MailboxStore } from '../src/MailboxStore'
+import { layer as memoryLayer } from '../src/memory'
+import { DELIVERY_ID_MAX_LENGTH, DeliveryId } from '../src/protocol'
 
 const Event = Schema.Struct({ id: Schema.String, installation: Schema.String, resource: Schema.String })
 const definition: EventDefinition<typeof Event, typeof Schema.String> = {
@@ -36,7 +37,8 @@ const policy = DeliveryPolicy.make({
 	conflictRetries: 8,
 })
 const event = (id: string) => Event.make({ id, installation: 'one', resource: 'thread' })
-const memory = memoryLayer({ maxMailboxes: 20 })
+const storage = memoryLayer({ maxMailboxes: 20 })
+const memory = DeliveryQueue.layerMailboxStore.pipe(Layer.provideMerge(storage))
 const services = DeliveryControl.layer.pipe(Layer.provideMerge(memory))
 
 it.effect('keeps a handed-off delivery in flight across lease expiry and advances queued work on completion', () =>

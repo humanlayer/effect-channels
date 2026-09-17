@@ -1,7 +1,7 @@
 import { Effect } from 'effect'
 import { expectTypeOf, it } from 'vite-plus/test'
 
-import { deliveryApiServerLayer } from '../src/server.js'
+import { deliveryApiServerLayer } from '../src/server'
 
 it('supports neither request context nor endpoint middleware', () => {
 	expectTypeOf(deliveryApiServerLayer()).not.toBeNever()

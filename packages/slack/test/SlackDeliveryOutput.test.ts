@@ -2,21 +2,15 @@ import { assert, it } from '@effect/vitest'
 import { finalMessageOperationId, FinalMessageOperation, PendingDeliveryOperation } from '@humanlayer/channels-delivery'
 import { Effect, Layer, Queue, Redacted, Schema } from 'effect'
 
-import { SlackTransportError } from '../src/Errors.js'
-import { ThreadId } from '../src/Model.js'
-import { SlackMessageTs } from '../src/Schema.js'
-import { Slack } from '../src/Slack.js'
-import { SlackClient } from '../src/SlackClient.js'
-import { SlackConnectionStore } from '../src/SlackConnectionStore.js'
-import { deliverSlackFinalMessage } from '../src/SlackDeliveryOutput.js'
-import { SlackDeliveryResource } from '../src/SlackIngressBindings.js'
-import {
-	makeStubSlackClient,
-	testBotToken,
-	testChannelId,
-	testConnectionStoreLayer,
-	testRootThreadId,
-} from './support.js'
+import { SlackTransportError } from '../src/Errors'
+import { ThreadId } from '../src/Model'
+import { SlackMessageTs } from '../src/Schema'
+import { Slack } from '../src/Slack'
+import { SlackClient } from '../src/SlackClient'
+import { SlackConnectionStore } from '../src/SlackConnectionStore'
+import { deliverSlackFinalMessage } from '../src/SlackDeliveryOutput'
+import { SlackDeliveryResource } from '../src/SlackIngressBindings'
+import { makeStubSlackClient, testBotToken, testChannelId, testConnectionStoreLayer, testRootThreadId } from './support'
 
 it.effect('decodes a saved Slack destination and posts final Markdown through the native service', () =>
 	Effect.gen(function* () {

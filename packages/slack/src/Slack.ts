@@ -1,7 +1,7 @@
 import { Clock, Context, DateTime, Effect, Exit, HashSet, Layer, Match, Option, Ref, Schema, Stream } from 'effect'
 
-import { Attachment } from './Attachment.js'
-import type { Content, InlineContentNode } from './Content.js'
+import { Attachment } from './Attachment'
+import type { Content, InlineContentNode } from './Content'
 import {
 	ChannelGone,
 	DeleteFailed,
@@ -16,11 +16,11 @@ import {
 	StatusFailed,
 	ThreadGone,
 	UnknownTenant,
-} from './DomainErrors.js'
-import { Emoji } from './Emoji.js'
-import { SlackApiError, slackErrorRetryability } from './Errors.js'
-import { containerInputWithOptions, messagePageStream, threadSummaryPageStream } from './History.js'
-import { Message } from './Message.js'
+} from './DomainErrors'
+import { Emoji } from './Emoji'
+import { SlackApiError, slackErrorRetryability } from './Errors'
+import { containerInputWithOptions, messagePageStream, threadSummaryPageStream } from './History'
+import { Message } from './Message'
 import {
 	AttachmentRef,
 	Capabilities,
@@ -30,8 +30,8 @@ import {
 	ThreadInfo,
 	UserId,
 	type FileUpload,
-} from './Model.js'
-import { EphemeralFallbackToDm, EphemeralResult } from './Operations.js'
+} from './Model'
+import { EphemeralFallbackToDm, EphemeralResult } from './Operations'
 import type {
 	ChannelPostInput,
 	ChannelThreadsInput,
@@ -46,7 +46,7 @@ import type {
 	ReactInput,
 	StartThreadTypingInput,
 	StreamInput,
-} from './Operations.js'
+} from './Operations'
 import {
 	SlackChannelInfoInput,
 	SlackDeleteMessageInput,
@@ -69,13 +69,13 @@ import {
 	type SlackChannelId,
 	type SlackSentMessage as SlackSentMessageRef,
 	type SlackThreadRef as SlackThreadRefType,
-} from './Schema.js'
-import { SentMessage, SentRef } from './SentMessage.js'
-import { SlackAuthors } from './SlackAuthors.js'
-import { SlackClient } from './SlackClient.js'
-import type { SlackService } from './SlackService.js'
-import { SlackState } from './SlackState.js'
-import { SlackTenantCredentials } from './SlackTenantCredentials.js'
+} from './Schema'
+import { SentMessage, SentRef } from './SentMessage'
+import { SlackAuthors } from './SlackAuthors'
+import { SlackClient } from './SlackClient'
+import type { SlackService } from './SlackService'
+import { SlackState } from './SlackState'
+import { SlackTenantCredentials } from './SlackTenantCredentials'
 import {
 	SlackDmConversationTs,
 	decodeSlackChannelId,
@@ -83,11 +83,11 @@ import {
 	encodeSlackThreadId,
 	slackDmConversationRef,
 	slackThreadRef,
-} from './SlackThreadId.js'
-import { SlackUserDirectory } from './SlackUserDirectory.js'
-import type { StreamChunk } from './StreamChunk.js'
-import { renderStreamingMarkdown, streamEditIntervalMs } from './Streaming.js'
-import { Thread } from './Thread.js'
+} from './SlackThreadId'
+import { SlackUserDirectory } from './SlackUserDirectory'
+import type { StreamChunk } from './StreamChunk'
+import { renderStreamingMarkdown, streamEditIntervalMs } from './Streaming'
+import { Thread } from './Thread'
 
 const SlackCapabilities = Capabilities.make({
 	threadPost: true,
@@ -164,7 +164,7 @@ const nativeStreamingUnsupported = new Set([
 ])
 
 const streamErrorRetryability = Match.type<
-	import('./Errors.js').SlackApiError | import('./Errors.js').SlackTransportError | UnknownTenant
+	import('./Errors').SlackApiError | import('./Errors').SlackTransportError | UnknownTenant
 >().pipe(
 	Match.tagsExhaustive({
 		SlackApiError: slackErrorRetryability,
@@ -984,7 +984,7 @@ export class Slack extends Context.Service<Slack, SlackService>()('slack/Slack')
 							),
 						)
 						let mode: 'native' | 'post_and_edit' = options.streaming ?? 'native'
-						let nativeRef: import('./Schema.js').SlackStreamRef | undefined
+						let nativeRef: import('./Schema').SlackStreamRef | undefined
 						let fallbackRef: SlackSentMessageRef | undefined
 						let accumulated = ''
 						let lastRendered = ''

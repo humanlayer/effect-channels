@@ -3,8 +3,8 @@ import { Clock, Context, Deferred, Effect, Fiber, Layer, Logger, Redacted, Ref }
 import { TestClock } from 'effect/testing'
 import { HttpClient, HttpClientResponse } from 'effect/unstable/http'
 
-import { GitHub, GitHubCredentials, GitHubCrypto, GitHubError } from '../src/index.js'
-import { event } from './fixtures.js'
+import { GitHub, GitHubCredentials, GitHubCrypto, GitHubError } from '../src/index'
+import { event } from './fixtures'
 
 const options = {
 	appId: 42,

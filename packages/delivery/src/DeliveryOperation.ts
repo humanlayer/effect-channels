@@ -1,6 +1,6 @@
 import { Effect, Encoding, Match, Schema } from 'effect'
 
-import { DeliveryId, DeliveryOperationId, DeliveryTerminalOutcome } from './protocol.js'
+import { DeliveryId, DeliveryOperationId, DeliveryTerminalOutcome } from './protocol'
 
 /** Maximum UTF-8 size accepted for a persisted final Markdown message. */
 export const FINAL_MESSAGE_MARKDOWN_MAX_BYTES = 65_536

@@ -1,10 +1,10 @@
 import { assert } from '@effect/vitest'
 import { Context, Deferred, Effect, Fiber, Schema } from 'effect'
 
-import { IdempotencyKey } from '../src/Model.js'
-import { SlackConnectionStore } from '../src/SlackConnectionStore.js'
-import { SubscriptionCreated, SubscriptionExisting } from '../src/SlackEvents.js'
-import { SlackSubscriptions } from '../src/SlackSubscriptions.js'
+import { IdempotencyKey } from '../src/Model'
+import { SlackConnectionStore } from '../src/SlackConnectionStore'
+import { SubscriptionCreated, SubscriptionExisting } from '../src/SlackEvents'
+import { SlackSubscriptions } from '../src/SlackSubscriptions'
 import {
 	installation,
 	proactiveThread,
@@ -12,7 +12,7 @@ import {
 	rotatedInstallation,
 	routeInput,
 	workspaceId,
-} from '../test/AdapterFixtures.js'
+} from '../test/AdapterFixtures'
 
 export class OtherConnections extends Context.Service<OtherConnections, SlackConnectionStore['Service']>()(
 	'test/OtherConnections',

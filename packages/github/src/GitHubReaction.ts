@@ -1,7 +1,7 @@
 import { Schema } from 'effect'
 
-import { GitHubUser } from './GitHubEvents.js'
-import { GitHubCommentRef, GitHubDiscussionRef, GitHubId } from './GitHubResource.js'
+import { GitHubUser } from './GitHubEvents'
+import { GitHubCommentRef, GitHubDiscussionRef, GitHubId } from './GitHubResource'
 
 const emojiValues = {
 	ThumbsUp: '+1',

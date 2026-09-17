@@ -1,10 +1,16 @@
-import { MailboxStore, type RunnerOptions } from '@humanlayer/channels-delivery'
+import {
+	DeliveryQueue,
+	DeliveryInterruption,
+	IngressAttributionStore,
+	MailboxStore,
+	type RunnerOptions,
+} from '@humanlayer/channels-delivery'
 import { Effect } from 'effect'
 
-import { SlackIngressError } from './DomainErrors.js'
-import { Message } from './Message.js'
-import { type ThreadRef } from './Model.js'
-import { IngressAccepted, IngressDropped, type IngressResult } from './Operations.js'
+import { SlackIngressError } from './DomainErrors'
+import { Message } from './Message'
+import { type ThreadRef } from './Model'
+import { IngressAccepted, IngressDropped, type IngressResult } from './Operations'
 import {
 	ConversationStoppedEvent,
 	DirectMessageDelivery,
@@ -19,9 +25,9 @@ import {
 	NormalizedReaction,
 	ReactionEvent,
 	SubscribedMessageDelivery,
-} from './SlackEvents.js'
-import { SlackSubscriptions } from './SlackSubscriptions.js'
-import { Thread } from './Thread.js'
+} from './SlackEvents'
+import { SlackSubscriptions } from './SlackSubscriptions'
+import { Thread } from './Thread'
 
 export {
 	SlackIngressBindings,
@@ -29,8 +35,8 @@ export {
 	resolveUpdated,
 	resolveDeleted,
 	resolveReaction,
-} from './SlackIngressBindings.js'
-import { AdmitInput, SlackIngressBindings } from './SlackIngressBindings.js'
+} from './SlackIngressBindings'
+import { AdmitInput, SlackIngressBindings } from './SlackIngressBindings'
 const messageInThread = (message: Message, threadRef: ThreadRef) => {
 	const fields = {
 		ref: message.ref,
@@ -78,7 +84,11 @@ export const resolveDirectMessageIdentity = (input: {
 
 export const acceptMessage = Effect.fn('slack.ingress.message')(function* (
 	event: NormalizedMessage,
-): Effect.fn.Return<IngressResult, SlackIngressError, SlackSubscriptions | SlackIngressBindings | MailboxStore> {
+): Effect.fn.Return<
+	IngressResult,
+	SlackIngressError,
+	SlackSubscriptions | SlackIngressBindings | DeliveryQueue | IngressAttributionStore
+> {
 	if (event.message.author.isMe) return IngressDropped.make({ reason: 'bot' })
 	const direct = yield* resolveDirectMessageIdentity({
 		idempotencyKey: event.idempotencyKey,
@@ -118,7 +128,11 @@ export const acceptMessage = Effect.fn('slack.ingress.message')(function* (
 
 export const acceptMessageUpdated = Effect.fn('slack.ingress.message_updated')(function* (
 	event: NormalizedMessageUpdated,
-): Effect.fn.Return<IngressResult, SlackIngressError, SlackSubscriptions | SlackIngressBindings | MailboxStore> {
+): Effect.fn.Return<
+	IngressResult,
+	SlackIngressError,
+	SlackSubscriptions | SlackIngressBindings | DeliveryQueue | IngressAttributionStore
+> {
 	if (event.message.author.isMe || event.previousMessage?.author.isMe === true) {
 		return IngressDropped.make({ reason: 'bot' })
 	}
@@ -146,7 +160,11 @@ export const acceptMessageUpdated = Effect.fn('slack.ingress.message_updated')(f
 
 export const acceptMessageDeleted = Effect.fn('slack.ingress.message_deleted')(function* (
 	event: NormalizedMessageDeleted,
-): Effect.fn.Return<IngressResult, SlackIngressError, SlackSubscriptions | SlackIngressBindings | MailboxStore> {
+): Effect.fn.Return<
+	IngressResult,
+	SlackIngressError,
+	SlackSubscriptions | SlackIngressBindings | DeliveryQueue | IngressAttributionStore
+> {
 	if (event.previousMessage?.author.isMe === true) return IngressDropped.make({ reason: 'bot' })
 	const direct = yield* resolveDirectMessageIdentity({
 		idempotencyKey: event.idempotencyKey,
@@ -168,7 +186,11 @@ export const acceptMessageDeleted = Effect.fn('slack.ingress.message_deleted')(f
 
 export const acceptReaction = Effect.fn('slack.ingress.reaction')(function* (
 	event: NormalizedReaction,
-): Effect.fn.Return<IngressResult, SlackIngressError, SlackSubscriptions | SlackIngressBindings | MailboxStore> {
+): Effect.fn.Return<
+	IngressResult,
+	SlackIngressError,
+	SlackSubscriptions | SlackIngressBindings | DeliveryQueue | IngressAttributionStore
+> {
 	if (event.actor.isMe) return IngressDropped.make({ reason: 'bot' })
 	const direct = yield* resolveDirectMessageIdentity({
 		idempotencyKey: event.idempotencyKey,
@@ -191,7 +213,15 @@ export const acceptReaction = Effect.fn('slack.ingress.reaction')(function* (
 
 export const acceptConversationStopped = Effect.fn('slack.ingress.conversation_stopped')(function* (
 	event: NormalizedConversationStopped,
-): Effect.fn.Return<IngressResult, SlackIngressError, SlackSubscriptions | SlackIngressBindings | MailboxStore> {
+): Effect.fn.Return<
+	IngressResult,
+	SlackIngressError,
+	| SlackSubscriptions
+	| SlackIngressBindings
+	| DeliveryQueue
+	| DeliveryInterruption
+	| IngressAttributionStore
+> {
 	const direct = yield* resolveDirectMessageIdentity({
 		idempotencyKey: event.idempotencyKey,
 		threadRef: event.threadRef,

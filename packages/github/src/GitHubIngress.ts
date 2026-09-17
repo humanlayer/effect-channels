@@ -3,27 +3,25 @@ import {
 	type DeliveryHandoff,
 	DeliveryOutputError,
 	DeliveryPolicy,
+	DeliveryQueue,
 	HandlerFailure,
+	IngressAttributionStore,
 	MailboxReadiness,
 	MailboxStore,
+	parseMailboxAddress,
 	type HandlerContext,
 	type RunnerOptions,
 } from '@humanlayer/channels-delivery'
-import { Context, Effect, Layer, Match, Option, Schema } from 'effect'
+import { Context, Effect, Layer, Logger, Match, Option, Schema } from 'effect'
 
-import { GitHub } from './GitHub.js'
-import {
-	GitHubActivityEvent,
-	GitHubCreationEvent,
-	GitHubMentionEvent,
-	activityEventDefinition,
-} from './GitHubActivity.js'
-import { deliverGitHubFinalMessage } from './GitHubDeliveryOutput.js'
-import { GitHubError, GitHubIngressError } from './GitHubErrors.js'
-import { resolveGitHubIngressAttribution } from './GitHubIngressAttribution.js'
-import { GitHubOrganizations } from './GitHubOrganizations.js'
-import { GitHubDiscussionRef } from './GitHubResource.js'
-import { GitHubSubscriptionStore } from './GitHubSubscriptions.js'
+import { GitHub } from './GitHub'
+import { GitHubActivityEvent, GitHubCreationEvent, GitHubMentionEvent, activityEventDefinition } from './GitHubActivity'
+import { deliverGitHubFinalMessage } from './GitHubDeliveryOutput'
+import { GitHubError, GitHubIngressError } from './GitHubErrors'
+import { resolveGitHubIngressAttribution } from './GitHubIngressAttribution'
+import { GitHubOrganizations } from './GitHubOrganizations'
+import { GitHubDiscussionRef } from './GitHubResource'
+import { GitHubSubscriptionStore } from './GitHubSubscriptions'
 
 export interface GitHubHandlerRegistration<E, R> {
 	readonly id: string
@@ -56,8 +54,9 @@ export class GitHubIngress extends Context.Service<
 		}) => Effect.Effect<void, GitHubIngressError>
 		readonly processActivity: (input: {
 			readonly event: GitHubActivityEvent
-		}) => Effect.Effect<void, GitHubIngressError>
-		readonly run: (input: RunnerOptions) => Effect.Effect<void, GitHubIngressError>
+		}) => Effect.Effect<void, GitHubIngressError, MailboxStore>
+		readonly processMailbox: (input: { readonly key: string }) => Effect.Effect<void, GitHubIngressError, MailboxStore>
+		readonly run: (input: RunnerOptions) => Effect.Effect<void, GitHubIngressError, MailboxStore | MailboxReadiness>
 	}
 >()('github/GitHubIngress') {
 	static readonly layer = <E = never, R = never>(options: GitHubIngressOptions<E, R>) =>
@@ -65,7 +64,10 @@ export class GitHubIngress extends Context.Service<
 			GitHubIngress,
 			Effect.gen(function* () {
 				const subscriptions = yield* GitHubSubscriptionStore
-				const context = yield* Effect.context<R | MailboxStore | MailboxReadiness>()
+				const handlerContext = yield* Effect.context<R | DeliveryQueue | IngressAttributionStore>()
+				const queue = yield* DeliveryQueue
+				const attribution = yield* IngressAttributionStore
+				const loggers = yield* Logger.CurrentLoggers
 				const configuredGitHub = yield* Effect.serviceOption(GitHub)
 				const configuredOrganizations = yield* Effect.serviceOption(GitHubOrganizations)
 				const organizations = Option.getOrElse(configuredOrganizations, () =>
@@ -91,7 +93,9 @@ export class GitHubIngress extends Context.Service<
 				const ids = new Set<string>()
 				const bindings: Array<{
 					readonly id: string
-					readonly binding: ReturnType<typeof bind<typeof GitHubActivityEvent, typeof GitHubDiscussionRef, R>>
+					readonly binding: ReturnType<
+						typeof bind<typeof GitHubActivityEvent, typeof GitHubDiscussionRef, never>
+					>
 				}> = []
 				for (const registration of options.handlers) {
 					if (registration.id.length === 0 || ids.has(registration.id))
@@ -130,6 +134,7 @@ export class GitHubIngress extends Context.Service<
 								if (effect === undefined) return Effect.fail(HandlerFailure.make({ retryable: false }))
 								return effect.pipe(
 									Effect.scoped,
+									Effect.provide(handlerContext),
 									Effect.tapError(() =>
 										Effect.logError('GitHub activity handler failed', { handler: registration.id }),
 									),
@@ -147,7 +152,7 @@ export class GitHubIngress extends Context.Service<
 												: true,
 										}),
 									),
-								)
+								) as Effect.Effect<void, HandlerFailure, never>
 							},
 							deliverFinalMessage: (operation) =>
 								Option.match(configuredGitHub, {
@@ -167,12 +172,9 @@ export class GitHubIngress extends Context.Service<
 						bindings.push({ id, binding })
 					}
 				}
-				const provide = <A, E>(
-					operation: 'admit' | 'process' | 'run',
-					effect: Effect.Effect<A, E, R | MailboxStore | MailboxReadiness>,
-				) =>
+				const provide = <A, E, R2>(operation: 'admit' | 'process' | 'run', effect: Effect.Effect<A, E, R2>) =>
 					effect.pipe(
-						Effect.provide(context),
+						Effect.provideService(Logger.CurrentLoggers, loggers),
 						Effect.tapError(Effect.logError),
 						Effect.mapError((error) =>
 							Schema.is(GitHubIngressError)(error) ? error : GitHubIngressError.make({ operation }),
@@ -215,7 +217,10 @@ export class GitHubIngress extends Context.Service<
 										return yield* GitHubIngressError.make({ operation: 'configuration' })
 									yield* entry.binding.admit({ event, organizationId: organization.organizationId })
 								}
-							}),
+							}).pipe(
+								Effect.provideService(DeliveryQueue, queue),
+								Effect.provideService(IngressAttributionStore, attribution),
+							),
 						),
 					),
 					processActivity: Effect.fn('github.ingress.process_activity')((input) =>
@@ -229,6 +234,24 @@ export class GitHubIngress extends Context.Service<
 										.pipe(Effect.flatMap((key) => binding.processMailbox({ key }))),
 								{ discard: true },
 							),
+						),
+					),
+					processMailbox: Effect.fn('github.ingress.process_mailbox')(({ key }) =>
+						provide(
+							'process',
+							Effect.gen(function* () {
+								const address = parseMailboxAddress(key)
+								if (
+									address === undefined ||
+									address.namespace !== options.namespace ||
+									address.provider !== 'github'
+								)
+									return yield* GitHubIngressError.make({ operation: 'configuration' })
+								const entry = bindings.find(({ id }) => id === address.handlerId)
+								if (entry === undefined)
+									return yield* GitHubIngressError.make({ operation: 'configuration' })
+								yield* entry.binding.processMailbox({ key })
+							}),
 						),
 					),
 					run: Effect.fn('github.ingress.run')((input) =>
@@ -248,3 +271,7 @@ export class GitHubIngress extends Context.Service<
 			}),
 		)
 }
+
+/** Explicit long-running polling program for server hosts. Constructing GitHubBot does not start it. */
+export const runDeliveryPolling = (input: RunnerOptions) =>
+	Effect.flatMap(GitHubIngress, (ingress) => ingress.run(input)).pipe(Effect.withSpan('github.delivery.polling'))

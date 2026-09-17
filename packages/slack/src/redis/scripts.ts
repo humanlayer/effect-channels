@@ -1,8 +1,8 @@
 import * as Redis from 'effect/unstable/persistence/Redis'
 
-import type { SubscriptionInput } from '../Operations.js'
-import type { ResolveSlackDirectMessageRoute } from '../SlackSubscriptions.js'
-import { routeKey, subscriptionKey } from './keys.js'
+import type { SubscriptionInput } from '../Operations'
+import type { ResolveSlackDirectMessageRoute } from '../SlackSubscriptions'
+import { routeKey, subscriptionKey } from './keys'
 
 export const subscribe = Redis.script(
 	(input: SubscriptionInput) => [subscriptionKey(input), String(30 * 24 * 60 * 60 * 1000)],

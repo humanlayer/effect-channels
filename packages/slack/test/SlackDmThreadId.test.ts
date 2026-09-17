@@ -1,13 +1,13 @@
 import { assert, it } from '@effect/vitest'
 import { Effect } from 'effect'
 
-import { SlackChannelId, SlackMessageTs, SlackTeamId, SlackThreadRef } from '../src/Schema.js'
+import { SlackChannelId, SlackMessageTs, SlackTeamId, SlackThreadRef } from '../src/Schema'
 import {
 	SlackDmConversationTs,
 	decodeSlackThreadId,
 	encodeSlackThreadId,
 	slackDmConversationRef,
-} from '../src/SlackThreadId.js'
+} from '../src/SlackThreadId'
 
 const teamId = SlackTeamId.make('T_TEST')
 const channelId = SlackChannelId.make('D_TEST')

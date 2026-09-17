@@ -1,6 +1,6 @@
 import { Cause, Option, Schema } from 'effect'
 
-import { OrgId, ProviderName, TenantId, ThreadId, UserId } from './Model.js'
+import { OrgId, ProviderName, TenantId, ThreadId, UserId } from './Model'
 
 export const Retryability = Schema.Literals(['retryable', 'non_retryable'])
 export type Retryability = typeof Retryability.Type

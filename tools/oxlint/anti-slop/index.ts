@@ -1,21 +1,21 @@
 import { eslintCompatPlugin } from "@oxlint/plugins";
 
-import { noChainedTypeAssertionsRule } from "./rules/no-chained-type-assertions.js";
-import { noCommentsRule } from "./rules/no-comments.js";
-import { noConditionalEmptyObjectSpreadRule } from "./rules/no-conditional-empty-object-spread.js";
-import { noKnownValueWideningRule } from "./rules/no-known-value-widening.js";
-import { noModuleMockingRule } from "./rules/no-module-mocking.js";
-import { noObjectParametersRule } from "./rules/no-object-parameters.js";
-import { noReflectApplyRule } from "./rules/no-reflect-apply.js";
-import { noReflectGetRule } from "./rules/no-reflect-get.js";
-import { noRuntimeTypeofRule } from "./rules/no-runtime-typeof.js";
-import { noForbiddenTermInSymbolNamesRule } from "./rules/no-shape-in-symbol-names.js";
-import { noUnknownParametersRule } from "./rules/no-unknown-parameters.js";
-import { noUnknownReturnsRule } from "./rules/no-unknown-returns.js";
-import { noUnknownTypeAliasesRule } from "./rules/no-unknown-type-aliases.js";
-import { noUnsafeDictionaryTypeRule } from "./rules/no-unsafe-dictionary-type.js";
-import { noWidenThenAssertRule } from "./rules/no-widen-then-assert.js";
-import { requireSafetyCommentForTypeAssertionRule } from "./rules/require-safety-comment-for-type-assertion.js";
+import { noChainedTypeAssertionsRule } from "./rules/no-chained-type-assertions";
+import { noCommentsRule } from "./rules/no-comments";
+import { noConditionalEmptyObjectSpreadRule } from "./rules/no-conditional-empty-object-spread";
+import { noKnownValueWideningRule } from "./rules/no-known-value-widening";
+import { noModuleMockingRule } from "./rules/no-module-mocking";
+import { noObjectParametersRule } from "./rules/no-object-parameters";
+import { noReflectApplyRule } from "./rules/no-reflect-apply";
+import { noReflectGetRule } from "./rules/no-reflect-get";
+import { noRuntimeTypeofRule } from "./rules/no-runtime-typeof";
+import { noForbiddenTermInSymbolNamesRule } from "./rules/no-shape-in-symbol-names";
+import { noUnknownParametersRule } from "./rules/no-unknown-parameters";
+import { noUnknownReturnsRule } from "./rules/no-unknown-returns";
+import { noUnknownTypeAliasesRule } from "./rules/no-unknown-type-aliases";
+import { noUnsafeDictionaryTypeRule } from "./rules/no-unsafe-dictionary-type";
+import { noWidenThenAssertRule } from "./rules/no-widen-then-assert";
+import { requireSafetyCommentForTypeAssertionRule } from "./rules/require-safety-comment-for-type-assertion";
 
 /** Generic Oxlint rules that reject low-evidence and low-signal implementation patterns. */
 const antiSlopPlugin = eslintCompatPlugin({

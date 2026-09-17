@@ -1,10 +1,10 @@
 import { Context, Effect, Layer, Schema } from 'effect'
 import { HttpClient, HttpClientRequest } from 'effect/unstable/http'
 
-import { GitHubCredentials } from './GitHubCredentials.js'
-import { GitHubError } from './GitHubErrors.js'
-import { GitHubCommentData, GitHubIssueData } from './GitHubEvents.js'
-import { apiRequest, requestJson } from './GitHubHttp.js'
+import { GitHubCredentials } from './GitHubCredentials'
+import { GitHubError } from './GitHubErrors'
+import { GitHubCommentData, GitHubIssueData } from './GitHubEvents'
+import { apiRequest, requestJson } from './GitHubHttp'
 import {
 	AddReactionInput,
 	ListReactionsInput,
@@ -12,8 +12,8 @@ import {
 	GitHubReaction,
 	GitHubReactionData,
 	type GitHubReactionTarget,
-} from './GitHubReaction.js'
-import { GitHubCommentRef, GitHubDiscussionRef, GitHubIssueRef, GitHubRepository } from './GitHubResource.js'
+} from './GitHubReaction'
+import { GitHubCommentRef, GitHubDiscussionRef, GitHubIssueRef, GitHubRepository } from './GitHubResource'
 
 export const GitHubIssue = Schema.Struct({ ref: GitHubIssueRef, data: GitHubIssueData })
 export interface GitHubIssue extends Schema.Schema.Type<typeof GitHubIssue> {}

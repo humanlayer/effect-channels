@@ -1,14 +1,14 @@
 import { assert, it } from '@effect/vitest'
 import { Effect, Layer, Queue, Schema } from 'effect'
 
-import { SlackApiError } from '../src/Errors.js'
-import { EphemeralFallbackToDm, EphemeralNoFallback, MarkdownContent, ThreadId, UserId } from '../src/index.js'
-import { SlackChannelId, SlackMessageTs, SlackPostEphemeralInput, SlackSentMessage } from '../src/Schema.js'
-import { Slack } from '../src/Slack.js'
-import { SlackClient } from '../src/SlackClient.js'
-import { expectTaggedFailure, testAuthor, testThreadRef } from './nativeSupport.js'
-import { testConnectionStoreLayer } from './support.js'
-import { makeSlackClientHarness, makeStubSlackClient, slackJsonResponse, testChannelId, testTeamId } from './support.js'
+import { SlackApiError } from '../src/Errors'
+import { EphemeralFallbackToDm, EphemeralNoFallback, MarkdownContent, ThreadId, UserId } from '../src/index'
+import { SlackChannelId, SlackMessageTs, SlackPostEphemeralInput, SlackSentMessage } from '../src/Schema'
+import { Slack } from '../src/Slack'
+import { SlackClient } from '../src/SlackClient'
+import { expectTaggedFailure, testAuthor, testThreadRef } from './nativeSupport'
+import { testConnectionStoreLayer } from './support'
+import { makeSlackClientHarness, makeStubSlackClient, slackJsonResponse, testChannelId, testTeamId } from './support'
 
 const EphemeralBody = Schema.Struct({
 	channel: Schema.String,

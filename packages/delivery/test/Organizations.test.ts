@@ -1,13 +1,14 @@
 import { assert, it } from '@effect/vitest'
-import { Effect, Logger, Queue, Schema } from 'effect'
+import { Effect, Layer, Logger, Queue, Schema } from 'effect'
 import { TestClock } from 'effect/testing'
 
-import { bind, DeliveryError, HandlerFailure } from '../src/Delivery.js'
-import { DeliveryPolicy } from '../src/DeliveryPolicy.js'
-import { loadIngressAttribution, saveIngressAttribution } from '../src/IngressAttribution.js'
-import { emptyMailbox } from '../src/Mailbox.js'
-import { MailboxStore, MailboxStoreError } from '../src/MailboxStore.js'
-import { layer } from '../src/memory.js'
+import { bind, DeliveryError, HandlerFailure } from '../src/Delivery'
+import { DeliveryPolicy } from '../src/DeliveryPolicy'
+import { DeliveryQueue } from '../src/DeliveryQueue'
+import { loadIngressAttribution, saveIngressAttribution } from '../src/IngressAttribution'
+import { emptyMailbox } from '../src/Mailbox'
+import { MailboxStore, MailboxStoreError } from '../src/MailboxStore'
+import { layer } from '../src/memory'
 
 const Event = Schema.Struct({ id: Schema.String })
 const definition = {
@@ -33,7 +34,8 @@ const policy = DeliveryPolicy.make({
 	conflictRetries: 8,
 })
 const identity = { namespace: 'app', provider: 'slack', installation: 'T1', eventId: 'E1' }
-const memory = layer({ maxMailboxes: 100 })
+const storage = layer({ maxMailboxes: 100 })
+const memory = DeliveryQueue.layerMailboxStore.pipe(Layer.provideMerge(storage))
 
 it.effect(
 	'corrupt attribution records and invalid inputs are classified without logging stored or supplied values',

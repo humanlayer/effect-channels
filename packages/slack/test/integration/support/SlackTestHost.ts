@@ -1,6 +1,7 @@
 import { NodeCrypto, NodeHttpClient } from '@effect/platform-node'
 import {
 	DeliveryPolicy,
+	layerMailboxStoreServices,
 	type HandlerContext,
 	type MailboxReadiness,
 	type MailboxStore,
@@ -29,7 +30,7 @@ import {
 import { ConfigProvider, Effect, Layer } from 'effect'
 import { HttpClient, HttpRouter, HttpServerResponse } from 'effect/unstable/http'
 
-import { testConnectionStoreLayer } from '../../support.js'
+import { testConnectionStoreLayer } from '../../support'
 
 export type SlackProviderConfig<E = never, R = never> = {
 	readonly provider: 'slack'
@@ -143,6 +144,7 @@ export const makeSlackTestHost = <
 	options: ChannelsAppOptions<HandlerError, HttpError, StorageError, never, ConnectionError, never>,
 ) => {
 	const storage = options.storage[StorageTypeId]
+	const storageWithQueue = Layer.merge(storage, layerMailboxStoreServices.pipe(Layer.provide(storage)))
 	const connectionServices = makeConnectionServices(options.providers[0])
 	const slackClient = SlackClient.layerWith({ apiOrigin: options.advanced?.slackApiOrigin }).pipe(
 		Layer.provideMerge(connectionServices),
@@ -171,7 +173,7 @@ export const makeSlackTestHost = <
 				})),
 			],
 		},
-	}).pipe(Layer.provideMerge(Layer.merge(storage, native)))
+	}).pipe(Layer.provideMerge(Layer.merge(storageWithQueue, native)))
 	const config = options.advanced?.configProvider
 	const services = config === undefined ? ingress : ingress.pipe(Layer.provide(ConfigProvider.layer(config)))
 	const run = Effect.flatMap(SlackIngress, (ingress) => ingress.run(options.runner ?? defaultRunnerOptions)).pipe(

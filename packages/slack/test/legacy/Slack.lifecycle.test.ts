@@ -24,8 +24,8 @@ import {
 	ReactionEvent,
 	Thread,
 	ThreadId,
-} from '../../src/index.js'
-import { testConnectionStoreLayer } from '../support.js'
+} from '../../src/index'
+import { testConnectionStoreLayer } from '../support'
 import {
 	ingressLayer,
 	runnerOptions,
@@ -34,7 +34,7 @@ import {
 	testMessage,
 	testThread,
 	testThreadRef,
-} from './support.js'
+} from './support'
 
 it.effect('the memory bot dispatches updates, deletes, and declaratively filtered typed reactions', () =>
 	Effect.gen(function* () {
@@ -151,7 +151,7 @@ it.effect('the memory bot dispatches updates, deletes, and declaratively filtere
 			yield* Fiber.interrupt(worker)
 		}).pipe(
 			Effect.provide(
-				SlackBot.memory({ namespace: 'lifecycle-filters', handlers }).services.pipe(
+				SlackBot.memory({ namespace: 'lifecycle-filters', handlers }).pipe(
 					Layer.provide(
 						Layer.merge(
 							testConnectionStoreLayer,

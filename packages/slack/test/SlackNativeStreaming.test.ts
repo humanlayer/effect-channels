@@ -1,10 +1,10 @@
 import { assert, it } from '@effect/vitest'
 import { Effect, Exit, Queue, Schema } from 'effect'
 
-import { MarkdownTextChunk, PlanUpdateChunk, TaskUpdateChunk } from '../src/index.js'
-import { SlackAppendStreamInput, SlackStartStreamInput, SlackStopStreamInput } from '../src/Schema.js'
-import { SlackClient } from '../src/SlackClient.js'
-import { makeSlackClientHarness, slackJsonResponse, testChannelId, testRootTs, testTeamId } from './support.js'
+import { MarkdownTextChunk, PlanUpdateChunk, TaskUpdateChunk } from '../src/index'
+import { SlackAppendStreamInput, SlackStartStreamInput, SlackStopStreamInput } from '../src/Schema'
+import { SlackClient } from '../src/SlackClient'
+import { makeSlackClientHarness, slackJsonResponse, testChannelId, testRootTs, testTeamId } from './support'
 
 const StartBody = Schema.Struct({
 	channel: Schema.String,

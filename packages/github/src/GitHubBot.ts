@@ -1,19 +1,11 @@
-import type { RunnerOptions } from '@humanlayer/channels-delivery'
 import { Effect, Layer } from 'effect'
 
-import { GitHub } from './GitHub.js'
-import { GitHubIngress, type GitHubIngressOptions, type GitHubHandlerRegistration } from './GitHubIngress.js'
-import { GitHubRoutes } from './GitHubRoutes.js'
+import { GitHub } from './GitHub'
+import { GitHubIngress, type GitHubIngressOptions, type GitHubHandlerRegistration } from './GitHubIngress'
 
-const assemble = <E, R>(options: GitHubIngressOptions<E, R> & { readonly runner?: Partial<RunnerOptions> }) => {
+const assemble = <E, R>(options: GitHubIngressOptions<E, R>) => {
 	const services = GitHubIngress.layer(options).pipe(Layer.provideMerge(GitHub.layer))
-	const routes = GitHubRoutes.layerConfig.pipe(Layer.provide(services))
-	const worker = Layer.effectDiscard(
-		Effect.flatMap(GitHubIngress, (ingress) =>
-			ingress.run({ scanLimit: 100, concurrency: 8, pollMs: 25, ...options.runner }),
-		).pipe(Effect.forkScoped),
-	).pipe(Layer.provide(services))
-	return { services, routes, worker, layer: Layer.merge(routes, worker) }
+	return services
 }
 
 type CallbackResult<T> = T extends (...args: never[]) => infer A ? A : never
@@ -27,10 +19,9 @@ function make<const H extends ReadonlyArray<GitHubHandlerRegistration<unknown, u
 				never
 			>
 		}
-		readonly runner?: Partial<RunnerOptions>
 	},
 ): ReturnType<typeof assemble<Effect.Error<HandlerResult<H[number]>>, Effect.Services<HandlerResult<H[number]>>>>
-function make(options: GitHubIngressOptions<unknown, unknown> & { readonly runner?: Partial<RunnerOptions> }) {
+function make(options: GitHubIngressOptions<unknown, unknown>) {
 	return assemble(options)
 }
 

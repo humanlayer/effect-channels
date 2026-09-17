@@ -1,5 +1,12 @@
 import { assert, it } from '@effect/vitest'
-import { MailboxReadiness, MailboxStore, MailboxStoreError, mailboxKey } from '@humanlayer/channels-delivery'
+import {
+	DeliveryQueue,
+	enqueueDelivery,
+	MailboxReadiness,
+	MailboxStore,
+	MailboxStoreError,
+	mailboxKey,
+} from '@humanlayer/channels-delivery'
 import { Context, Deferred, Effect, Fiber, Layer, Logger, Queue, Ref, Schema } from 'effect'
 
 import {
@@ -9,9 +16,9 @@ import {
 	GitHubOrganizations,
 	issueResourceKey,
 	type GitHubOrganizationLookup,
-} from '../src/index.js'
-import { layer as memory } from '../src/memory.js'
-import { event, policy } from './fixtures.js'
+} from '../src/index'
+import { layer as memory } from '../src/memory'
+import { event, policy } from './fixtures'
 
 const lookupBoundary: Context.Key<
 	GitHubOrganizations,
@@ -39,7 +46,9 @@ it.effect('custom GitHub lookup results are decoded before writes and failures l
 			),
 		)
 		const logs: string[] = []
-		const logger = Logger.layer([Logger.make((entry) => logs.push(JSON.stringify(entry.message)))])
+		const logger = Logger.layer([
+			Logger.make((entry) => logs.push(JSON.stringify(Logger.formatStructured.log(entry)))),
+		])
 		const results: ReadonlyArray<Schema.Json | undefined> = [
 			null,
 			undefined,
@@ -74,14 +83,11 @@ it.effect('custom GitHub lookup results are decoded before writes and failures l
 				)
 			}).pipe(
 				Effect.provide(
-					Layer.merge(
-						GitHubIngress.layer({
-							namespace: 'invalid',
-							policy,
-							handlers: [{ id: 'reply', onCreation: () => Effect.die('Unexpected handler') }],
-						}).pipe(Layer.provide(storage), Layer.provide(lookup)),
-						logger,
-					),
+					GitHubIngress.layer({
+						namespace: 'invalid',
+						policy,
+						handlers: [{ id: 'reply', onCreation: () => Effect.die('Unexpected handler') }],
+					}).pipe(Layer.provide(storage), Layer.provide(lookup), Layer.provide(logger)),
 				),
 			)
 		}
@@ -119,7 +125,7 @@ for (const organizationId of ['default', 'fixed']) {
 				(yield* Context.get(environment, MailboxStore).loadMailbox({ key }))?.state.pending[0]?.organizationId,
 				organizationId,
 			)
-			yield* ingress.processActivity({ event })
+			yield* ingress.processActivity({ event }).pipe(Effect.provide(environment))
 			assert.strictEqual(yield* Queue.take(observed), organizationId)
 		}),
 	)
@@ -149,7 +155,12 @@ for (const callback of ['onCreation', 'onMention'] as const) {
 						return yield* real.commitMailbox(input)
 					}),
 			})
-			const dependencies = Layer.succeedContext(Context.add(retained, MailboxStore, store))
+			const queue = DeliveryQueue.of({
+				enqueue: (input) => enqueueDelivery(input).pipe(Effect.provideService(MailboxStore, store)),
+			})
+			const dependencies = Layer.succeedContext(
+				Context.add(Context.add(retained, MailboxStore, store), DeliveryQueue, queue),
+			)
 			const organizations = Layer.succeed(
 				GitHubOrganizations,
 				GitHubOrganizations.of({
@@ -224,11 +235,11 @@ it.effect('overlapping installations in one acquired ingress retain isolated han
 		assert.strictEqual(yield* Queue.take(entered), 200)
 		yield* Deferred.succeed(second, undefined)
 		yield* Fiber.join(b)
-		yield* ingress.processActivity({ event: other })
+		yield* ingress.processActivity({ event: other }).pipe(Effect.provide(environment))
 		assert.strictEqual(yield* Queue.take(observed), '200:B')
 		yield* Deferred.succeed(first, undefined)
 		yield* Fiber.join(a)
-		yield* ingress.processActivity({ event })
+		yield* ingress.processActivity({ event }).pipe(Effect.provide(environment))
 		assert.strictEqual(yield* Queue.take(observed), '100:A')
 		assert.deepStrictEqual(
 			yield* Context.get(environment, MailboxReadiness).scanReady({ prefix: '', now: 0, limit: 10 }),

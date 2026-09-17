@@ -1,10 +1,10 @@
 import { Cache, Clock, Config, Context, Duration, Effect, Encoding, Exit, Layer, Redacted, Schema } from 'effect'
 import { HttpClient, HttpClientRequest } from 'effect/unstable/http'
 
-import { GitHubCrypto } from './GitHubCrypto.js'
-import { GitHubError } from './GitHubErrors.js'
-import { apiRequest, requestJson } from './GitHubHttp.js'
-import { GitHubId, type GitHubRepository } from './GitHubResource.js'
+import { GitHubCrypto } from './GitHubCrypto'
+import { GitHubError } from './GitHubErrors'
+import { apiRequest, requestJson } from './GitHubHttp'
+import { GitHubId, type GitHubRepository } from './GitHubResource'
 
 export const GitHubAppOptions = Schema.Struct({
 	appId: GitHubId,

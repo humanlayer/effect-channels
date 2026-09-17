@@ -1,9 +1,9 @@
 import { assert, it } from '@effect/vitest'
 import { ConfigProvider, Effect, Layer, Option, Queue, Redacted, Schema } from 'effect'
 
-import { MarkdownContent, Slack, SlackClient, SlackTenantCredentials } from '../src/index.js'
-import { expectTaggedFailure, testThread } from './nativeSupport.js'
-import { makeSlackClientHarness, slackJsonResponse, testTeamId } from './support.js'
+import { MarkdownContent, Slack, SlackClient, SlackTenantCredentials } from '../src/index'
+import { expectTaggedFailure, testThread } from './nativeSupport'
+import { makeSlackClientHarness, slackJsonResponse, testTeamId } from './support'
 
 it.effect('posts through a native Thread with only SlackClient dependencies and no ingress runtime', () =>
 	Effect.gen(function* () {

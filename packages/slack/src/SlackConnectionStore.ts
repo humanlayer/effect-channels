@@ -1,6 +1,6 @@
 import { Config, Context, Effect, Schema } from 'effect'
 
-import { SlackConnection, SlackConnectionLookupInput } from './SlackConnection.js'
+import { SlackConnection, SlackConnectionLookupInput } from './SlackConnection'
 
 export const UpsertSlackConnection = Schema.Struct({
 	...SlackConnectionLookupInput.fields,

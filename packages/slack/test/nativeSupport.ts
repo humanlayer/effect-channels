@@ -1,4 +1,4 @@
-import { DeliveryPolicy, mailboxKey, MailboxStore } from '@humanlayer/channels-delivery'
+import { DeliveryPolicy, layerMailboxStoreServices, mailboxKey, MailboxStore } from '@humanlayer/channels-delivery'
 import { layer as deliveryMemory } from '@humanlayer/channels-delivery/memory'
 import { DateTime, Effect, Layer, Predicate } from 'effect'
 
@@ -15,10 +15,10 @@ import {
 	UserId,
 	UserProfile,
 	type SlackIngressHandlers,
-} from '../src/index.js'
-import type { SlackClient } from '../src/SlackClient.js'
-import { slackThreadRef } from '../src/SlackThreadId.js'
-import { stubSlackClientLayer, testChannelId, testRootTs, testTeamId } from './support.js'
+} from '../src/index'
+import type { SlackClient } from '../src/SlackClient'
+import { slackThreadRef } from '../src/SlackThreadId'
+import { stubSlackClientLayer, testChannelId, testRootTs, testTeamId } from './support'
 
 export const expectTaggedFailure =
 	<K extends string>(tag: K) =>
@@ -92,6 +92,7 @@ export const nativeIngressLayer = <E, R>(
 	policy: DeliveryPolicy = nativePolicy,
 	clientOverrides: Partial<SlackClient['Service']> = {},
 ) => {
+	const storageWithQueue = Layer.merge(storage, layerMailboxStoreServices.pipe(Layer.provide(storage)))
 	const slack = Slack.layer.pipe(
 		Layer.provide(
 			stubSlackClientLayer({
@@ -106,7 +107,7 @@ export const nativeIngressLayer = <E, R>(
 		),
 	)
 	return SlackIngress.layer({ namespace: 'slack-native-test', policy, handlers }).pipe(
-		Layer.provideMerge(Layer.mergeAll(storage, SlackSubscriptions.layerMemory(), slack)),
+		Layer.provideMerge(Layer.mergeAll(storageWithQueue, SlackSubscriptions.layerMemory(), slack)),
 	)
 }
 

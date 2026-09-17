@@ -1,10 +1,10 @@
 import { assert, it } from '@effect/vitest'
 import { Effect, Layer } from 'effect'
 
-import { SlackApiError, SlackTransportError, slackErrorRetryability } from '../src/Errors.js'
-import { ThreadId } from '../src/index.js'
-import { Slack } from '../src/Slack.js'
-import { stubSlackClientLayer } from './support.js'
+import { SlackApiError, SlackTransportError, slackErrorRetryability } from '../src/Errors'
+import { ThreadId } from '../src/index'
+import { Slack } from '../src/Slack'
+import { stubSlackClientLayer } from './support'
 
 it('classifies Slack transport and API errors for provider-neutral retry handling', () => {
 	assert.strictEqual(

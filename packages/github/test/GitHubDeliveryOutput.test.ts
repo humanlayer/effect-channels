@@ -2,9 +2,9 @@ import { assert, it } from '@effect/vitest'
 import { finalMessageOperationId, FinalMessageOperation, PendingDeliveryOperation } from '@humanlayer/channels-delivery'
 import { Effect, Layer, Queue, Schema } from 'effect'
 
-import { GitHub, GitHubComment } from '../src/GitHub.js'
-import { deliverGitHubFinalMessage } from '../src/GitHubDeliveryOutput.js'
-import { GitHubDiscussionRef } from '../src/GitHubResource.js'
+import { GitHub, GitHubComment } from '../src/GitHub'
+import { deliverGitHubFinalMessage } from '../src/GitHubDeliveryOutput'
+import { GitHubDiscussionRef } from '../src/GitHubResource'
 
 it.effect('decodes a saved GitHub destination and creates one final discussion comment', () =>
 	Effect.gen(function* () {

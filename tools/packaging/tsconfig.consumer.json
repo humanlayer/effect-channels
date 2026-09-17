@@ -7,7 +7,6 @@
 		"strict": true,
 		"skipLibCheck": false,
 		"types": [],
-		"customConditions": [],
 		"verbatimModuleSyntax": true,
 		"noEmitOnError": true,
 		"outDir": "compiled"

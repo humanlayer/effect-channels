@@ -11,9 +11,9 @@ import { layer as deliveryMemory } from '@humanlayer/channels-delivery/memory'
 import { Deferred, Effect, Fiber, Layer, Queue } from 'effect'
 import { TestClock } from 'effect/testing'
 
-import { NormalizedConversationStopped, NormalizedMessageUpdated, SlackIngress } from '../src/index.js'
-import { SlackMessageTs } from '../src/Schema.js'
-import { nativeIngressLayer, nativeMailbox, nativeMessage, nativePolicy, nativeRunner } from './nativeSupport.js'
+import { NormalizedConversationStopped, NormalizedMessageUpdated, SlackIngress } from '../src/index'
+import { SlackMessageTs } from '../src/Schema'
+import { nativeIngressLayer, nativeMailbox, nativeMessage, nativePolicy, nativeRunner } from './nativeSupport'
 
 const policies: ReadonlyArray<DeliveryPolicy> = [
 	{ ...nativePolicy, mode: 'concurrent', maxConcurrency: 2 },

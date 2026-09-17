@@ -1,13 +1,13 @@
 import { assert, it } from '@effect/vitest'
 import { DateTime, Effect, Layer, Queue, Schema } from 'effect'
 
-import { MarkdownContent, ThreadId, UserId } from '../src/index.js'
-import { SlackChannelId, SlackChannelInfoInput, SlackListThreadsInput } from '../src/Schema.js'
-import { Slack } from '../src/Slack.js'
-import { SlackClient } from '../src/SlackClient.js'
-import { slackChannelRef } from '../src/SlackThreadId.js'
-import { expectTaggedFailure } from './nativeSupport.js'
-import { testConnectionStoreLayer } from './support.js'
+import { MarkdownContent, ThreadId, UserId } from '../src/index'
+import { SlackChannelId, SlackChannelInfoInput, SlackListThreadsInput } from '../src/Schema'
+import { Slack } from '../src/Slack'
+import { SlackClient } from '../src/SlackClient'
+import { slackChannelRef } from '../src/SlackThreadId'
+import { expectTaggedFailure } from './nativeSupport'
+import { testConnectionStoreLayer } from './support'
 import {
 	makeSlackClientHarness,
 	slackJsonResponse,
@@ -17,7 +17,7 @@ import {
 	testTeamId,
 	unknownTenantCredentialsLayer,
 	type RecordedSlackRequest,
-} from './support.js'
+} from './support'
 
 const params = (request: RecordedSlackRequest) => Object.fromEntries(request.url.searchParams)
 

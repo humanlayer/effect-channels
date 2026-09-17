@@ -15,9 +15,9 @@ import type {
 	UnknownTenant,
 	UnsupportedContextScope,
 	UserLookupFailed,
-} from './DomainErrors.js'
-import type { Message } from './Message.js'
-import type { Capabilities, ChannelInfo, FileData, ThreadInfo, UserProfile } from './Model.js'
+} from './DomainErrors'
+import type { Message } from './Message'
+import type { Capabilities, ChannelInfo, FileData, ThreadInfo, UserProfile } from './Model'
 import type {
 	ChannelInfoInput,
 	ChannelPostInput,
@@ -40,11 +40,11 @@ import type {
 	StreamInput,
 	ThreadPage,
 	ThreadSummary,
-} from './Operations.js'
-import type { SlackSessionStatusInput } from './Schema.js'
-import type { SentMessage } from './SentMessage.js'
-import type { StreamChunk } from './StreamChunk.js'
-import type { Thread } from './Thread.js'
+} from './Operations'
+import type { SlackSessionStatusInput } from './Schema'
+import type { SentMessage } from './SentMessage'
+import type { StreamChunk } from './StreamChunk'
+import type { Thread } from './Thread'
 
 export type SlackService = {
 	readonly capabilities: Capabilities

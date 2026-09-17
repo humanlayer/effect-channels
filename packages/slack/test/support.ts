@@ -3,14 +3,14 @@ import { Clock, ConfigProvider, Effect, Layer, Option, Queue, Redacted, Schema }
 import { TestClock } from 'effect/testing'
 import { HttpClient, HttpClientRequest, HttpClientResponse, HttpRouter } from 'effect/unstable/http'
 
-import { ChannelInfo, MessagePage, SlackIngress as Ingress } from '../src/index.js'
-import { SlackChannelId, SlackEventCallback, SlackMessageTs, SlackTeamId } from '../src/Schema.js'
-import { SlackClient } from '../src/SlackClient.js'
-import { SlackConnectionStore } from '../src/SlackConnectionStore.js'
-import { SlackRoutes } from '../src/SlackRoutes.js'
-import { hmacSha256 } from '../src/SlackSignature.js'
-import { SlackTenantCredentials } from '../src/SlackTenantCredentials.js'
-import { slackChannelRef } from '../src/SlackThreadId.js'
+import { ChannelInfo, MessagePage, SlackIngress as Ingress } from '../src/index'
+import { SlackChannelId, SlackEventCallback, SlackMessageTs, SlackTeamId } from '../src/Schema'
+import { SlackClient } from '../src/SlackClient'
+import { SlackConnectionStore } from '../src/SlackConnectionStore'
+import { SlackRoutes } from '../src/SlackRoutes'
+import { hmacSha256 } from '../src/SlackSignature'
+import { SlackTenantCredentials } from '../src/SlackTenantCredentials'
+import { slackChannelRef } from '../src/SlackThreadId'
 
 export const signingSecret = Redacted.make('test-signing-secret')
 
@@ -24,7 +24,7 @@ export const testIdentityConfigLayer = ConfigProvider.layer(
 	ConfigProvider.fromUnknown({ SLACK_BOT_USER_ID: 'U_BOT', SLACK_BOT_ID: 'B_OURS' }),
 )
 
-export const webhookUrl = 'http://channels.test/api/v1/integrations/slack/webhook'
+export const webhookUrl = 'http://channels.test/integrations/slack/webhook'
 
 export const testBotToken = 'xoxb-test-token'
 

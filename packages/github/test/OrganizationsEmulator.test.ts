@@ -11,10 +11,10 @@ import {
 	GitHubOrganizations,
 	GitHubRoutes,
 	type GitHubActivityEvent,
-} from '../src/index.js'
-import { layer as memory } from '../src/memory.js'
-import { policy } from './fixtures.js'
-import { adminCall, captureWebhooks, emulator, eventFor, host, secret } from './support.js'
+} from '../src/index'
+import { layer as memory } from '../src/memory'
+import { policy } from './fixtures'
+import { adminCall, captureWebhooks, emulator, eventFor, host, secret } from './support'
 
 for (const callback of ['onCreation', 'onMention'] as const) {
 	it.live(
@@ -28,7 +28,9 @@ for (const callback of ['onCreation', 'onMention'] as const) {
 				const entered = yield* Deferred.make<void>()
 				const finalized = yield* Deferred.make<void>()
 				const logs: string[] = []
-				const logger = Logger.layer([Logger.make((entry) => logs.push(JSON.stringify(entry.message)))])
+				const logger = Logger.layer([
+					Logger.make((entry) => logs.push(JSON.stringify(Logger.formatStructured.log(entry)))),
+				])
 				let synchronousThrow = false
 				const organizations = GitHubOrganizations.layer(({ installationId }) => {
 					if (synchronousThrow) throw new Error('private-synchronous-sentinel')
@@ -98,7 +100,7 @@ for (const callback of ['onCreation', 'onMention'] as const) {
 				assert.strictEqual((yield* send(duplicate)).status, 200)
 				assert.strictEqual(yield* Ref.get(lookups), 1)
 				const event = eventFor(em.repository, issue, deliveryId)
-				yield* ingress.processActivity({ event })
+				yield* ingress.processActivity({ event }).pipe(Effect.provide(environment))
 				assert.strictEqual((yield* store.loadMailbox({ key }))?.state.outcomes.length, 1)
 				assert.deepStrictEqual(
 					(yield* Context.get(environment, GitHub).listComments({ issue: event.resource })).map(
@@ -129,7 +131,7 @@ for (const callback of ['onCreation', 'onMention'] as const) {
 						[],
 					)
 					const rejectedEvent = eventFor(em.repository, rejected)
-					yield* ingress.processActivity({ event: rejectedEvent })
+					yield* ingress.processActivity({ event: rejectedEvent }).pipe(Effect.provide(environment))
 					assert.deepStrictEqual(
 						yield* Context.get(environment, GitHub).listComments({ issue: rejectedEvent.resource }),
 						[],

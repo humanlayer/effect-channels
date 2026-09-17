@@ -2,8 +2,8 @@ import { Effect } from 'effect'
 import type { Schema } from 'effect'
 import type { SqlError } from 'effect/unstable/sql/SqlError'
 
-import { SubscriptionStoreError } from '../DomainErrors.js'
-import { SlackConnectionStoreError } from '../SlackConnectionStore.js'
+import { SubscriptionStoreError } from '../DomainErrors'
+import { SlackConnectionStoreError } from '../SlackConnectionStore'
 
 type ConnectionOperation = Pick<SlackConnectionStoreError, 'operation'>
 type SubscriptionOperation = Pick<SubscriptionStoreError, 'operation' | 'threadId'>

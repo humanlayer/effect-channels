@@ -1,10 +1,10 @@
 import { DeliveryOutputError, DeliveryOutputReceipt, type FinalMessageOperation } from '@humanlayer/channels-delivery'
 import { Effect, Schema } from 'effect'
 
-import { GitHub } from './GitHub.js'
-import { activityEventDefinition } from './GitHubActivity.js'
-import { GitHubError } from './GitHubErrors.js'
-import { GitHubCommentRef, GitHubDiscussionRef } from './GitHubResource.js'
+import { GitHub } from './GitHub'
+import { activityEventDefinition } from './GitHubActivity'
+import { GitHubError } from './GitHubErrors'
+import { GitHubCommentRef, GitHubDiscussionRef } from './GitHubResource'
 
 const destinationCodec = Schema.fromJsonString(GitHubDiscussionRef)
 const receiptCodec = Schema.fromJsonString(GitHubCommentRef)

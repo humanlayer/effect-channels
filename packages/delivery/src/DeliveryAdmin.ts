@@ -1,10 +1,10 @@
 import { Clock, Context, Effect, Layer, Predicate, Schema } from 'effect'
 
-import { deliveryIdFromOperationId, DeliveryOperation, PendingDeliveryOperation } from './DeliveryOperation.js'
-import { decodeDeliveryReference, DeliveryReference } from './DeliveryReference.js'
-import { currentMailbox } from './Mailbox.js'
-import { DeliveryLocatorStore, MailboxStore } from './MailboxStore.js'
-import { DeliveryOperationId } from './protocol.js'
+import { deliveryIdFromOperationId, DeliveryOperation, PendingDeliveryOperation } from './DeliveryOperation'
+import { decodeDeliveryReference, DeliveryReference } from './DeliveryReference'
+import { currentMailbox } from './Mailbox'
+import { DeliveryLocatorStore, MailboxStore } from './MailboxStore'
+import { DeliveryOperationId } from './protocol'
 
 export class DeliveryOperationNotFound extends Schema.TaggedError<DeliveryOperationNotFound>()(
 	'DeliveryOperationNotFound',

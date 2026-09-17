@@ -3,23 +3,24 @@ import { Context, Effect, FileSystem, Layer, Path, Schema } from 'effect'
 import { Etag, FetchHttpClient, HttpPlatform, HttpRouter } from 'effect/unstable/http'
 import { HttpApiBuilder, HttpApiTest } from 'effect/unstable/httpapi'
 
-import { makeMountedDeliveryClient } from '../src/client.js'
-import { DeliveryContract, Forbidden, Unauthorized, Unavailable } from '../src/contract.js'
-import { bind } from '../src/Delivery.js'
-import { DeliveryControl } from '../src/DeliveryControl.js'
-import { FINAL_MESSAGE_MARKDOWN_MAX_BYTES } from '../src/DeliveryOperation.js'
-import { DeliveryPolicy } from '../src/DeliveryPolicy.js'
-import { resolveDeliveryFor } from '../src/DeliveryResolution.js'
-import type { EventDefinition } from '../src/EventDefinition.js'
-import { MailboxStore } from '../src/MailboxStore.js'
-import { layer as memoryLayer } from '../src/memory.js'
+import { makeMountedDeliveryClient } from '../src/client'
+import { DeliveryContract, Forbidden, Unauthorized, Unavailable } from '../src/contract'
+import { bind } from '../src/Delivery'
+import { DeliveryControl } from '../src/DeliveryControl'
+import { FINAL_MESSAGE_MARKDOWN_MAX_BYTES } from '../src/DeliveryOperation'
+import { DeliveryPolicy } from '../src/DeliveryPolicy'
+import { DeliveryQueue } from '../src/DeliveryQueue'
+import { resolveDeliveryFor } from '../src/DeliveryResolution'
+import type { EventDefinition } from '../src/EventDefinition'
+import { MailboxStore } from '../src/MailboxStore'
+import { layer as memoryLayer } from '../src/memory'
 import {
 	deliveryNotFound,
 	DeliveryNotFound,
 	DeliveryOutcomeConflict,
 	DeliveryTerminalCapacityExceeded,
-} from '../src/protocol.js'
-import { deliveryApiServerLayer } from '../src/server.js'
+} from '../src/protocol'
+import { deliveryApiServerLayer } from '../src/server'
 
 class Calls extends Context.Service<Calls, Array<string>>()('test/Calls') {}
 
@@ -46,8 +47,10 @@ const policy = DeliveryPolicy.make({
 	heartbeatMs: 100,
 	conflictRetries: 8,
 })
+const storage = memoryLayer({ maxMailboxes: 20 })
+const delivery = DeliveryQueue.layerMailboxStore.pipe(Layer.provideMerge(storage))
 const base = Layer.merge(
-	DeliveryControl.layer.pipe(Layer.provideMerge(memoryLayer({ maxMailboxes: 20 }))),
+	DeliveryControl.layer.pipe(Layer.provideMerge(delivery)),
 	Layer.sync(Calls, () => []),
 )
 const testPlatform = Layer.mergeAll(

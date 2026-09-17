@@ -2,11 +2,14 @@ import { assert, it } from '@effect/vitest'
 import { Clock, Deferred, Effect, Fiber, Layer, Match, Queue, Schema } from 'effect'
 import { TestClock } from 'effect/testing'
 
-import { bind, DeliveryError, HandlerFailure } from '../src/Delivery.js'
-import { DeliveryPolicy } from '../src/DeliveryPolicy.js'
-import { activeBatches, currentMailbox, MailboxSnapshot } from '../src/Mailbox.js'
-import { MailboxReadiness, MailboxStore } from '../src/MailboxStore.js'
-import { layer } from '../src/memory.js'
+import { bind, DeliveryError, HandlerFailure } from '../src/Delivery'
+import { DeliveryInterruption } from '../src/DeliveryInterruption'
+import { DeliveryPolicy } from '../src/DeliveryPolicy'
+import { DeliveryQueue } from '../src/DeliveryQueue'
+import { activeBatches, currentMailbox, MailboxSnapshot } from '../src/Mailbox'
+import { layerMailboxStoreServices } from '../src/MailboxServices'
+import { MailboxReadiness, MailboxStore } from '../src/MailboxStore'
+import { layer } from '../src/memory'
 
 const Event = Schema.Struct({ id: Schema.String })
 const definition = {
@@ -35,7 +38,8 @@ const policies: ReadonlyArray<DeliveryPolicy> = [
 	{ ...limits, mode: 'burst', windowMs: 1500 },
 	{ ...limits, mode: 'debounce', quietPeriodMs: 1500 },
 ]
-const memory = layer({ maxMailboxes: 20 })
+const storage = layer({ maxMailboxes: 20 })
+const memory = layerMailboxStoreServices.pipe(Layer.provide(storage))
 const registration = { namespace: 'modes', handlerId: 'handler', definition }
 const arrival = (id: string) => ({ event: { id } })
 const load = (key: string) =>
@@ -618,7 +622,10 @@ for (const outcome of ['completed', 'retry'] as const) {
 			)
 			const stop = yield* delivery
 				.cancelActive({ ...receipt, controlId: 'race', eventId: 'A' })
-				.pipe(Effect.provide(delayed), Effect.forkChild)
+				.pipe(
+					Effect.provide(DeliveryInterruption.layerMailboxStore.pipe(Layer.provide(delayed))),
+					Effect.forkChild,
+				)
 			yield* Deferred.await(reached)
 			yield* Deferred.succeed(releaseHandler, undefined)
 			yield* Fiber.join(first)

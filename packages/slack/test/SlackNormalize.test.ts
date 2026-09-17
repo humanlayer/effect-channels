@@ -2,9 +2,9 @@ import { NodeCrypto } from '@effect/platform-node'
 import { assert, it } from '@effect/vitest'
 import { Effect, Option, Schema } from 'effect'
 
-import { SlackEventCallback } from '../src/Schema.js'
-import { normalizeSlackMessage } from '../src/SlackNormalize.js'
-import { appMentionCallback } from './support.js'
+import { SlackEventCallback } from '../src/Schema'
+import { normalizeSlackMessage } from '../src/SlackNormalize'
+import { appMentionCallback } from './support'
 
 it.effect('normalizes a root app mention into queue-safe schema classes', () =>
 	Effect.gen(function* () {

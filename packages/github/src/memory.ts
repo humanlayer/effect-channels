@@ -1,3 +1,4 @@
+import { layerMailboxStoreServices } from '@humanlayer/channels-delivery'
 import { layer as deliveryMemory } from '@humanlayer/channels-delivery/memory'
 import { Effect, Layer, Schema } from 'effect'
 
@@ -8,7 +9,7 @@ import {
 	GitHubSubscriptionStore,
 	GitHubSubscriptions,
 	subscriptionKey,
-} from './GitHubSubscriptions.js'
+} from './GitHubSubscriptions'
 
 export interface GitHubSubscriptionsMemoryOptions {
 	readonly maxSubscriptions?: number
@@ -82,5 +83,7 @@ export const subscriptionStore = (options: GitHubSubscriptionsMemoryOptions = {}
 export const subscriptions = (options: GitHubSubscriptionsMemoryOptions = {}) =>
 	GitHubSubscriptions.layer.pipe(Layer.provideMerge(subscriptionStore(options)))
 
-export const layer = (options: GitHubSubscriptionsMemoryOptions & { readonly maxMailboxes?: number } = {}) =>
-	Layer.merge(subscriptions(options), deliveryMemory({ maxMailboxes: options.maxMailboxes ?? 10_000 }))
+export const layer = (options: GitHubSubscriptionsMemoryOptions & { readonly maxMailboxes?: number } = {}) => {
+	const delivery = deliveryMemory({ maxMailboxes: options.maxMailboxes ?? 10_000 })
+	return Layer.merge(subscriptions(options), layerMailboxStoreServices.pipe(Layer.provide(delivery)))
+}

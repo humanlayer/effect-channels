@@ -2,14 +2,14 @@ import { assert, it } from '@effect/vitest'
 import { Effect, Inspectable, Layer, Logger, Queue, Redacted, Schema } from 'effect'
 import { ConnectionError, SqlError } from 'effect/unstable/sql/SqlError'
 
-import { SubscriptionStoreError } from '../src/DomainErrors.js'
-import { connections, layer } from '../src/postgres.js'
-import { migrate } from '../src/postgres/migrations.js'
-import { SlackConnection } from '../src/Schema.js'
-import { SlackConnectionStore, SlackConnectionStoreError } from '../src/SlackConnectionStore.js'
-import { SubscriptionCreated, SubscriptionExisting } from '../src/SlackEvents.js'
-import { SlackSubscriptions } from '../src/SlackSubscriptions.js'
-import { sqlCommands } from './AdapterCommands.js'
+import { SubscriptionStoreError } from '../src/DomainErrors'
+import { connections, layer } from '../src/postgres'
+import { migrate } from '../src/postgres/migrations'
+import { SlackConnection } from '../src/Schema'
+import { SlackConnectionStore, SlackConnectionStoreError } from '../src/SlackConnectionStore'
+import { SubscriptionCreated, SubscriptionExisting } from '../src/SlackEvents'
+import { SlackSubscriptions } from '../src/SlackSubscriptions'
+import { sqlCommands } from './AdapterCommands'
 import {
 	encodeRoute,
 	installation,
@@ -18,7 +18,7 @@ import {
 	rootedThread,
 	routeInput,
 	workspaceId,
-} from './AdapterFixtures.js'
+} from './AdapterFixtures'
 
 it.effect('Postgres command seam: the storage bundle migrates each owner once under its advisory lock', () =>
 	Effect.gen(function* () {

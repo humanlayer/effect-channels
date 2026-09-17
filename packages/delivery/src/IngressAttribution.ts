@@ -1,7 +1,7 @@
-import { Effect, Schema } from 'effect'
+import { Context, Effect, Layer, Schema } from 'effect'
 
-import { emptyMailbox, IngressAttribution } from './Mailbox.js'
-import { MailboxStore, MailboxStoreError } from './MailboxStore.js'
+import { emptyMailbox, IngressAttribution } from './Mailbox'
+import { MailboxStore, MailboxStoreError } from './MailboxStore'
 
 export const AttributionIdentity = Schema.Struct({
 	namespace: Schema.NonEmptyString,
@@ -27,7 +27,7 @@ const reject = (input: {
 		Effect.andThen(Effect.fail(MailboxStoreError.make({ operation: input.operation }))),
 	)
 
-const keyFor = (input: AttributionIdentity) =>
+export const ingressAttributionKey = (input: AttributionIdentity) =>
 	`delivery-attribution:v1:${JSON.stringify([input.namespace, input.provider, input.installation, input.eventId])}`
 
 export const loadIngressAttribution = Effect.fn('delivery.attribution.load')(function* (input: AttributionIdentity) {
@@ -35,7 +35,7 @@ export const loadIngressAttribution = Effect.fn('delivery.attribution.load')(fun
 		Effect.catchTag('SchemaError', () => reject({ operation: 'load', classification: 'invalid_identity' })),
 	)
 	const store = yield* MailboxStore
-	const snapshot = yield* store.loadMailbox({ key: keyFor(identity) })
+	const snapshot = yield* store.loadMailbox({ key: ingressAttributionKey(identity) })
 	if (snapshot === undefined) return undefined
 	if (snapshot.state.version !== 3 && snapshot.state.version !== 4 && snapshot.state.version !== 5)
 		return yield* reject({ operation: 'load', classification: 'incompatible_record' })
@@ -53,7 +53,7 @@ export const saveIngressAttribution = Effect.fn('delivery.attribution.save')(fun
 	)
 	const store = yield* MailboxStore
 	const committed = yield* store.commitMailbox({
-		key: keyFor(identity),
+		key: ingressAttributionKey(identity),
 		expectedRevision: null,
 		nextState: { ...emptyMailbox(), attribution },
 	})
@@ -62,3 +62,23 @@ export const saveIngressAttribution = Effect.fn('delivery.attribution.save')(fun
 	if (winner === undefined) return yield* reject({ operation: 'load', classification: 'missing_winner' })
 	return winner
 })
+
+export class IngressAttributionStore extends Context.Service<
+	IngressAttributionStore,
+	{
+		readonly load: (input: AttributionIdentity) => Effect.Effect<IngressAttribution | undefined, MailboxStoreError>
+		readonly save: (input: SaveIngressAttribution) => Effect.Effect<IngressAttribution, MailboxStoreError>
+	}
+>()('delivery/IngressAttributionStore') {
+	/** Persists attribution records through the supplied MailboxStore. */
+	static readonly layerMailboxStore = Layer.effect(
+		IngressAttributionStore,
+		Effect.gen(function* () {
+			const store = yield* MailboxStore
+			return IngressAttributionStore.of({
+				load: (input) => loadIngressAttribution(input).pipe(Effect.provideService(MailboxStore, store)),
+				save: (input) => saveIngressAttribution(input).pipe(Effect.provideService(MailboxStore, store)),
+			})
+		}),
+	)
+}

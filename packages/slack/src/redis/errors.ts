@@ -1,8 +1,8 @@
 import { Effect, Predicate, Schema } from 'effect'
 import type * as Redis from 'effect/unstable/persistence/Redis'
 
-import { SubscriptionStoreError } from '../DomainErrors.js'
-import { SlackConnectionStoreError } from '../SlackConnectionStore.js'
+import { SubscriptionStoreError } from '../DomainErrors'
+import { SlackConnectionStoreError } from '../SlackConnectionStore'
 
 type ConnectionOperation = Pick<SlackConnectionStoreError, 'operation'>
 type SubscriptionOperation = Pick<SubscriptionStoreError, 'operation' | 'threadId'>

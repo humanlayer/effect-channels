@@ -1,4 +1,5 @@
 import { DeliveryPolicy } from '@humanlayer/channels-delivery'
+import { layerMailboxStoreServices } from '@humanlayer/channels-delivery'
 import { layer as memory } from '@humanlayer/channels-delivery/memory'
 import { DateTime, Effect, Layer, Predicate } from 'effect'
 
@@ -23,8 +24,8 @@ import {
 	type Author,
 	type ThreadRef,
 	type SlackIngressHandlers,
-} from '../../src/index.js'
-import { stubSlackClientLayer } from '../support.js'
+} from '../../src/index'
+import { stubSlackClientLayer } from '../support'
 
 export const testChannelRef = {
 	id: ChannelId.make('slack:v1:T_TEST:C_TEST'),
@@ -184,7 +185,12 @@ export const ingressLayer = <E = never, R = never>(
 	client: Partial<SlackClient['Service']> = {},
 ) => {
 	const slack = nativeSlackLayer(client)
-	const dependencies = Layer.mergeAll(slack, SlackSubscriptions.layerMemory(), memory({ maxMailboxes: 100 }))
+	const storage = memory({ maxMailboxes: 100 })
+	const dependencies = Layer.mergeAll(
+		slack,
+		SlackSubscriptions.layerMemory(),
+		layerMailboxStoreServices.pipe(Layer.provide(storage)),
+	)
 	return SlackIngress.layer({ namespace: 'legacy-regression', policy, handlers }).pipe(
 		Layer.provideMerge(dependencies),
 	)

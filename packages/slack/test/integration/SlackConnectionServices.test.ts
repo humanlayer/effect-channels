@@ -8,7 +8,7 @@ import {
 import { Deferred, Effect, Fiber, Option, Redacted, Ref } from 'effect'
 import { TestClock } from 'effect/testing'
 
-import { makeConnectionServices, slack } from './support/SlackTestHost.js'
+import { makeConnectionServices, slack } from './support/SlackTestHost'
 
 it.effect('isolates workspace credentials and caches each callback result', () =>
 	Effect.gen(function* () {

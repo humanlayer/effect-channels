@@ -1,7 +1,6 @@
 {
 	"extends": "../../tsconfig.json",
 	"compilerOptions": {
-		"customConditions": [],
 		"types": ["bun"]
 	},
 	"include": ["../verify-package-exports.ts", "../test-backends.ts"]

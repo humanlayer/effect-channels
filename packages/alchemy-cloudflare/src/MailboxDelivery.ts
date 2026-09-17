@@ -10,7 +10,7 @@ import * as Cloudflare from 'alchemy/Cloudflare'
 import { RuntimeContext } from 'alchemy/RuntimeContext'
 import { Clock, Effect, Layer, Predicate, Schema } from 'effect'
 
-import { DurableMailboxState, emptyMailboxState, mailboxStateKey } from './mailboxState'
+import { DurableMailboxState, emptyMailboxState, mailboxStateKey } from './MailboxState'
 
 const unavailable = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
 	effect.pipe(
@@ -74,23 +74,20 @@ export type DeliveryMailboxNamespace = {
 
 /** Route host-level MailboxDelivery calls to the application-owned DO namespace. */
 export const MailboxDeliveryAlchemyCloudflare = (mailboxes: DeliveryMailboxNamespace) =>
-	Layer.effect(
+	Layer.succeed(
 		MailboxDelivery,
-		Effect.gen(function* () {
-			const runtimeContext = yield* RuntimeContext
-			return MailboxDelivery.of({
-				deliver: (admission: DeliveryAdmission) => {
-					const mailboxKey = deliveryMailboxKey(admission)
-					return mailboxes
-						.getByName(mailboxKey)
-						.deliver(admission)
-						.pipe(
-							Effect.map(({ accepted }) => DeliveryReceipt.make({ mailboxKey, accepted })),
-							Effect.provideService(RuntimeContext, runtimeContext),
-							unavailable,
-						)
-				},
-			})
+		MailboxDelivery.of({
+			deliver: (admission: DeliveryAdmission) => {
+				const mailboxKey = deliveryMailboxKey(admission)
+				return mailboxes
+					.getByName(mailboxKey)
+					.deliver(admission)
+					.pipe(
+						Effect.map(({ accepted }) => DeliveryReceipt.make({ mailboxKey, accepted })),
+						Effect.provide(RuntimeContext.phantom),
+						unavailable,
+					)
+			},
 		}),
 	)
 

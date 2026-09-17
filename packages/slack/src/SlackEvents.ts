@@ -1,9 +1,9 @@
 import { Schema } from 'effect'
 
-import { Emoji } from './Emoji.js'
-import { Message } from './Message.js'
-import { Author, IdempotencyKey, MessageRef, ProviderName, TenantId, ThreadRef, UserId } from './Model.js'
-import { Thread } from './Thread.js'
+import { Emoji } from './Emoji'
+import { Message } from './Message'
+import { Author, IdempotencyKey, MessageRef, ProviderName, TenantId, ThreadRef, UserId } from './Model'
+import { Thread } from './Thread'
 
 export const ReactionAdded = Schema.TaggedStruct('ReactionAdded', {})
 export type ReactionAdded = typeof ReactionAdded.Type

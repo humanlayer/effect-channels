@@ -1,7 +1,7 @@
 import { DeliveryPolicy } from '@humanlayer/channels-delivery'
 import { Layer } from 'effect'
 
-import { GitHubCredentials, GitHubActivityEvent } from '../src/index.js'
+import { GitHubCredentials, GitHubActivityEvent } from '../src/index'
 
 export const policy = DeliveryPolicy.make({
 	mode: 'queue',

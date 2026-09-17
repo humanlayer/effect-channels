@@ -2,9 +2,9 @@ import { assert, it } from '@effect/vitest'
 import { Context, Effect, Fiber, Layer, Queue, Ref } from 'effect'
 import { HttpClient, HttpClientResponse } from 'effect/unstable/http'
 
-import { Slack, SlackBot, SlackIngress, SlackSubscriptions, type MessageEvent } from '../src/index.js'
-import { nativeMessage, nativeRunner, testAuthor } from './nativeSupport.js'
-import { testConnectionStoreLayer } from './support.js'
+import { runDeliveryPolling, Slack, SlackBot, SlackIngress, SlackSubscriptions, type MessageEvent } from '../src/index'
+import { nativeMessage, nativeRunner, testAuthor } from './nativeSupport'
+import { testConnectionStoreLayer } from './support'
 
 class Replies extends Context.Service<
 	Replies,
@@ -73,11 +73,11 @@ it.effect('the memory bot captures application services and shares users between
 			yield* ingress.acceptMessage(event)
 			assert.strictEqual(yield* Queue.size(delivered), 0)
 			assert.strictEqual(yield* Ref.get(calls), 0)
-			const worker = yield* ingress.run(nativeRunner).pipe(Effect.forkChild)
+			const worker = yield* runDeliveryPolling(nativeRunner).pipe(Effect.forkChild)
 			assert.strictEqual(yield* Queue.take(delivered), testAuthor.fullName)
 			assert.strictEqual(yield* Ref.get(calls), 1)
 			assert.strictEqual(yield* (yield* SlackSubscriptions).isSubscribed({ threadId: event.thread.ref.id }), true)
 			yield* Fiber.interrupt(worker)
-		}).pipe(Effect.provide(bot.services.pipe(Layer.provide(dependencies))))
+		}).pipe(Effect.provide(bot.pipe(Layer.provide(dependencies))))
 	}),
 )

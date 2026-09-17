@@ -1,6 +1,6 @@
 import { Schema } from 'effect'
 
-import { SlackConnection, SlackConnectionCredentials } from '../SlackConnection.js'
+import { SlackConnection, SlackConnectionCredentials } from '../SlackConnection'
 
 const persistedConnection = Schema.Struct({
 	...SlackConnection.fields,

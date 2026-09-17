@@ -1,14 +1,15 @@
+import { layerMailboxStoreServices } from '@humanlayer/channels-delivery'
 import { layer as deliveryMemory } from '@humanlayer/channels-delivery/memory'
 import { Effect, Layer, Schema } from 'effect'
 
-import { SlackConnection, SlackConnectionLookupInput } from './Schema.js'
+import { SlackConnection, SlackConnectionLookupInput } from './Schema'
 import {
 	connectionFromConfig,
 	SlackConnectionStore,
 	SlackConnectionStoreError,
 	UpsertSlackConnection,
-} from './SlackConnectionStore.js'
-import { SlackSubscriptions } from './SlackSubscriptions.js'
+} from './SlackConnectionStore'
+import { SlackSubscriptions } from './SlackSubscriptions'
 
 export interface MemoryConnectionsOptions {
 	readonly connections?: ReadonlyArray<UpsertSlackConnection>
@@ -52,19 +53,22 @@ export const connections = (options: MemoryConnectionsOptions = {}) =>
 	)
 
 export const subscriptions = SlackSubscriptions.layerMemory
-export const layer = (options: MemoryConnectionsOptions & { readonly maxMailboxes?: number } = {}) =>
-	Layer.mergeAll(
+export const layer = (options: MemoryConnectionsOptions & { readonly maxMailboxes?: number } = {}) => {
+	const delivery = deliveryMemory({ maxMailboxes: options.maxMailboxes ?? 10_000 })
+	return Layer.mergeAll(
 		connections(options),
 		subscriptions(),
-		deliveryMemory({ maxMailboxes: options.maxMailboxes ?? 10_000 }),
+		layerMailboxStoreServices.pipe(Layer.provide(delivery)),
 	)
+}
 
 export const connectionsFromConfig = Layer.unwrap(
 	connectionFromConfig().pipe(Effect.map((connection) => connections({ connections: [connection] }))),
 )
 
+const deliveryFromConfig = deliveryMemory({ maxMailboxes: 10_000 })
 export const layerFromConfig = Layer.mergeAll(
 	connectionsFromConfig,
 	subscriptions(),
-	deliveryMemory({ maxMailboxes: 10_000 }),
+	layerMailboxStoreServices.pipe(Layer.provide(deliveryFromConfig)),
 )

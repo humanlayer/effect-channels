@@ -15,7 +15,7 @@ import {
 	SentRef,
 	Thread,
 	type OutboundReport,
-} from '../src/index.ts'
+} from '../src/index'
 import {
 	makeCoreDependencies,
 	makeFakeProvider,
@@ -24,7 +24,7 @@ import {
 	testAuthor,
 	testMessage,
 	testThreadRef,
-} from './support.ts'
+} from './support'
 
 const dmThread = Thread.fromRef({
 	...testThreadRef,

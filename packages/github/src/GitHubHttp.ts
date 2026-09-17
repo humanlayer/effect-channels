@@ -1,7 +1,7 @@
 import { Clock, Effect, Schema, Stream } from 'effect'
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http'
 
-import { GitHubError } from './GitHubErrors.js'
+import { GitHubError } from './GitHubErrors'
 
 class GitHubHttpFailure extends Schema.TaggedError<GitHubHttpFailure>()('GitHubHttpFailure', {
 	stage: Schema.Literals(['transport', 'status', 'decode']),

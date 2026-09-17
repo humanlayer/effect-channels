@@ -11,8 +11,8 @@ import {
 	GitHubIngress,
 	GitHubIngressError,
 	activityEventDefinition,
-} from '../src/index.js'
-import { event, policy, user } from './fixtures.js'
+} from '../src/index'
+import { event, policy, user } from './fixtures'
 
 it.effect('comment updates reject mismatched native identities before issuing a mutation', () =>
 	Effect.gen(function* () {

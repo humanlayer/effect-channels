@@ -2,10 +2,10 @@ import { assert, it } from '@effect/vitest'
 import { Effect, Layer, Option, Queue, Redacted, Schema } from 'effect'
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http'
 
-import { SlackTransportError } from '../src/Errors.js'
-import { SlackChannelId, SlackMessageTs, SlackPostMessageInput, SlackTeamId } from '../src/Schema.js'
-import { SlackClient } from '../src/SlackClient.js'
-import { SlackTenantCredentials } from '../src/SlackTenantCredentials.js'
+import { SlackTransportError } from '../src/Errors'
+import { SlackChannelId, SlackMessageTs, SlackPostMessageInput, SlackTeamId } from '../src/Schema'
+import { SlackClient } from '../src/SlackClient'
+import { SlackTenantCredentials } from '../src/SlackTenantCredentials'
 
 const SlackPostBody = Schema.Struct({
 	channel: Schema.String,

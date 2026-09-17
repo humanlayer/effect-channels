@@ -1,7 +1,7 @@
 import { Array as Arr, Schema } from 'effect'
 
-import { DeliveryOperation } from './DeliveryOperation.js'
-import { DeliveryId } from './protocol.js'
+import { DeliveryOperation } from './DeliveryOperation'
+import { DeliveryId } from './protocol'
 
 export const Envelope = Schema.Struct({
 	definition: Schema.NonEmptyString,

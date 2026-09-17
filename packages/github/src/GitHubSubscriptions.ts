@@ -1,6 +1,6 @@
 import { Context, Effect, Layer, Schema } from 'effect'
 
-import { GitHubDiscussionRef, issueResourceKey } from './GitHubResource.js'
+import { GitHubDiscussionRef, issueResourceKey } from './GitHubResource'
 
 export class GitHubSubscriptionError extends Schema.TaggedError<GitHubSubscriptionError>()('GitHubSubscriptionError', {
 	reason: Schema.Literals(['invalid_input', 'capacity', 'storage']),

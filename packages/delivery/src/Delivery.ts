@@ -21,11 +21,13 @@ import {
 	type FinalMessageOperation,
 	FailedDeliveryOperation,
 	PendingDeliveryOperation,
-} from './DeliveryOperation.js'
-import { DeliveryPolicy } from './DeliveryPolicy.js'
-import { encodeDeliveryId } from './DeliveryReference.js'
-import { runDeliveryPass } from './DeliveryRunner.js'
-import type { EventDefinition } from './EventDefinition.js'
+} from './DeliveryOperation'
+import { DeliveryInterruption, InterruptDelivery } from './DeliveryInterruption'
+import { DeliveryPolicy } from './DeliveryPolicy'
+import { DeliveryAdmission, DeliveryQueue } from './DeliveryQueue'
+import { encodeDeliveryId } from './DeliveryReference'
+import { runDeliveryPass } from './DeliveryRunner'
+import type { EventDefinition } from './EventDefinition'
 import {
 	ActiveBatch,
 	activeBatches,
@@ -45,9 +47,9 @@ import {
 	MailboxState,
 	Outcome,
 	retainedOutcomes,
-} from './Mailbox.js'
-import { MailboxStore } from './MailboxStore.js'
-import { DeliveryId } from './protocol.js'
+} from './Mailbox'
+import { MailboxStore } from './MailboxStore'
+import { DeliveryId } from './protocol'
 
 type OutputResult =
 	| { readonly _tag: 'Delivered'; readonly receipt: DeliveryOutputReceipt }
@@ -110,9 +112,6 @@ const transition = <A>(input: {
 
 const retained = retainedOutcomes
 const envelopes = mailboxEnvelopes
-const known = (state: MailboxState, identity: string) =>
-	state.outcomes.some((outcome) => outcome.identity === identity) ||
-	envelopes(state).some((event) => eventIdentity(event) === identity)
 
 export type HandlerRegistration<Event extends Schema.Constraint, Resource extends Schema.Constraint, R> = {
 	readonly namespace: string
@@ -287,48 +286,14 @@ export const bind = <Event extends Schema.Constraint, Resource extends Schema.Co
 		yield* encodeDeliveryId({ mailboxKey: key, envelope }).pipe(
 			Effect.mapError(() => DeliveryError.make({ reason: 'capacity' })),
 		)
-		const accepted = yield* transition({
-			key,
-			retries: policy.conflictRetries,
-			calculate: (current, _revision, now) => {
-				const state = {
-					...current,
-					outcomes: retained(current, now),
-					maxOutcomes: policy.maxOutcomes,
-				}
-				if (known(state, eventIdentity(envelope))) return Effect.succeed({ state, result: false })
-				if (policy.mode === 'drop' && (state.pending.length > 0 || activeBatches(state).length > 0)) {
-					if (mailboxCapacityUsage(state) >= policy.maxOutcomes)
-						return Effect.fail(DeliveryError.make({ reason: 'capacity' }))
-					return Effect.succeed({
-						state: {
-							...state,
-							outcomes: [
-								...state.outcomes,
-								Outcome.make({
-									identity: eventIdentity(envelope),
-									kind: 'dropped',
-									expiresAt: now + policy.retentionMs,
-								}),
-							],
-						},
-						result: true,
-					})
-				}
-				if (envelopes(state).length >= policy.maxEnvelopes || mailboxCapacityUsage(state) >= policy.maxOutcomes)
-					return Effect.fail(DeliveryError.make({ reason: 'capacity' }))
-				const pendingReadyAt =
-					policy.mode === 'debounce'
-						? now + policy.quietPeriodMs
-						: (state.pendingReadyAt ??
-							(policy.mode === 'burst' && !state.burstDraining ? now + policy.windowMs : now))
-				return Effect.succeed({
-					state: scheduled({ ...state, pending: [...state.pending, envelope], pendingReadyAt }),
-					result: true,
-				})
-			},
-		})
-		return { key, accepted }
+		const queue = yield* DeliveryQueue
+		return yield* queue
+			.enqueue(DeliveryAdmission.make({ key, envelope, policy }))
+			.pipe(
+				Effect.mapError((error) =>
+					error.reason === 'unavailable' ? error : DeliveryError.make({ reason: error.reason }),
+				),
+			)
 	})
 
 	const attributeEnvelopes = (
@@ -868,70 +833,20 @@ export const bind = <Event extends Schema.Constraint, Resource extends Schema.Co
 			yield* Schema.NonEmptyString.makeEffect(input.eventId).pipe(
 				Effect.mapError(() => DeliveryError.make({ reason: 'definition' })),
 			)
-		if (
-			new TextEncoder().encode(input.controlId + input.key + (input.eventId ?? '')).byteLength >
-			policy.maxPayloadBytes
-		)
-			return yield* DeliveryError.make({ reason: 'capacity' })
-		const store = yield* MailboxStore
-		const snapshot = yield* store.loadMailbox(input)
-		const target =
-			snapshot === undefined
-				? undefined
-				: activeBatches(snapshot.state).find(
-						(batch) =>
-							input.eventId === undefined ||
-							batch.envelopes.some(
-								(event) => event.definition === definition.name && event.eventId === input.eventId,
-							),
-					)
-		const identity = `control:${input.controlId}`
-		return yield* transition({
-			key: input.key,
-			retries: policy.conflictRetries,
-			calculate: (current, _revision, now) => {
-				const state = { ...current, outcomes: retained(current, now) }
-				if (state.outcomes.some((outcome) => outcome.identity === identity))
-					return Effect.succeed({ state, result: false })
-				if (mailboxCapacityUsage(state) >= policy.maxOutcomes)
-					return Effect.fail(DeliveryError.make({ reason: 'capacity' }))
-				const batches = activeBatches(state)
-				const targeted =
-					target === undefined
-						? undefined
-						: batches.find(
-								(batch) =>
-									batch.owner === target.owner &&
-									batch.attempt === target.attempt &&
-									batch.envelopes[0].acceptedAt === target.envelopes[0].acceptedAt &&
-									eventIdentity(batch.envelopes[0]) === eventIdentity(target.envelopes[0]),
-							)
-				return Effect.succeed({
-					state: {
-						...withBatches(
-							state,
-							batches.map((batch) => (batch === targeted ? { ...batch, cancelled: true } : batch)),
-						),
-						outcomes: [
-							...state.outcomes,
-							Outcome.make({
-								identity,
-								kind: 'control',
-								expiresAt: now + policy.retentionMs,
-								cancellationTarget:
-									targeted === undefined
-										? null
-										: {
-												identity: eventIdentity(targeted.envelopes[0]),
-												acceptedAt: targeted.envelopes[0].acceptedAt,
-											},
-							}),
-						],
-					},
-					result: targeted !== undefined,
-				})
-			},
-		})
+		const interruption = yield* DeliveryInterruption
+		return yield* interruption
+			.interrupt(
+				InterruptDelivery.make({
+					...input,
+					definition: definition.name,
+					policy,
+				}),
+			)
+			.pipe(
+				Effect.catchTag('DeliveryInterruptionError', (error) =>
+					Effect.fail(DeliveryError.make({ reason: error.reason })),
+				),
+			)
 	})
 
 	const processMailbox = Effect.fn('delivery.process_mailbox')(function* (input: { readonly key: string }) {

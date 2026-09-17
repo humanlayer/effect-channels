@@ -7,23 +7,15 @@
 		"README.md"
 	],
 	"type": "module",
+	"module": "./src/index.ts",
+	"types": "./src/index.ts",
 	"sideEffects": false,
 	"exports": {
-		"./memory": {
-			"@humanlayer/source": "./src/memory.ts",
-			"types": "./dist/memory.d.ts",
-			"import": "./dist/memory.js",
-			"default": "./dist/memory.js"
-		},
-		".": {
-			"@humanlayer/source": "./src/index.ts",
-			"types": "./dist/index.d.ts",
-			"import": "./dist/index.js",
-			"default": "./dist/index.js"
-		}
+		".": "./src/index.ts",
+		"./memory": "./src/memory.ts"
 	},
 	"scripts": {
-		"build": "tsc -p tsconfig.build.json",
+		"build": "tsc -p tsconfig.build.json && bun ../../tools/rewrite-emitted-imports.mjs dist",
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},
 	"dependencies": {

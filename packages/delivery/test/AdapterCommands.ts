@@ -6,7 +6,7 @@ import type { Connection } from 'effect/unstable/sql/SqlConnection'
 import type { SqlError } from 'effect/unstable/sql/SqlError'
 import * as Statement from 'effect/unstable/sql/Statement'
 
-import { finalMessageOperationId, FinalMessageOperation, PendingDeliveryOperation } from '../src/DeliveryOperation.js'
+import { finalMessageOperationId, FinalMessageOperation, PendingDeliveryOperation } from '../src/DeliveryOperation'
 import {
 	ActiveBatch,
 	currentMailbox,
@@ -15,7 +15,7 @@ import {
 	eventIdentity,
 	MailboxSnapshot,
 	MailboxState,
-} from '../src/Mailbox.js'
+} from '../src/Mailbox'
 
 export interface SqlCommand {
 	readonly sql: string

@@ -2,21 +2,21 @@ import { Config, Effect, Layer, Match, Option, Predicate, Schema } from 'effect'
 import type { Redacted } from 'effect'
 import { HttpRouter, HttpServerResponse } from 'effect/unstable/http'
 
-import { SlackWebhookError } from './Errors.js'
-import type { SlackBotIdentity, SlackChannelId, SlackEventCallback } from './Schema.js'
-import { SlackChannelInfoInput, SlackEventsRequest, SlackMessageTs } from './Schema.js'
-import { mergeSlackBotIdentity, slackBotIdentity } from './SlackBotIdentity.js'
-import { SlackClient } from './SlackClient.js'
-import { SlackIngress } from './SlackIngress.js'
+import { SlackWebhookError } from './Errors'
+import type { SlackBotIdentity, SlackChannelId, SlackEventCallback } from './Schema'
+import { SlackChannelInfoInput, SlackEventsRequest, SlackMessageTs } from './Schema'
+import { mergeSlackBotIdentity, slackBotIdentity } from './SlackBotIdentity'
+import { SlackClient } from './SlackClient'
+import { SlackIngress } from './SlackIngress'
 import {
 	normalizeSlackConversationStopped,
 	normalizeSlackMessage,
 	normalizeSlackMessageDeleted,
 	normalizeSlackMessageUpdated,
 	normalizeSlackReaction,
-} from './SlackNormalize.js'
-import { verifySlackSignature } from './SlackSignature.js'
-import { SlackTenantCredentials } from './SlackTenantCredentials.js'
+} from './SlackNormalize'
+import { verifySlackSignature } from './SlackSignature'
+import { SlackTenantCredentials } from './SlackTenantCredentials'
 
 type SlackRoutesConfig = {
 	readonly signingSecret: Redacted.Redacted<string>
@@ -168,72 +168,83 @@ const acceptConversationStopped = (callback: SlackEventCallback) =>
 		return HttpServerResponse.empty({ status: 200 })
 	})
 
-const routes = (config: SlackRoutesConfig) =>
-	HttpRouter.add('POST', '/api/v1/integrations/slack/webhook', (request) =>
-		Effect.gen(function* () {
-			const body = yield* request.text
-			const timestamp = request.headers['x-slack-request-timestamp']
-			const signature = request.headers['x-slack-signature']
-			if (timestamp === undefined || signature === undefined) {
-				return yield* SlackWebhookError.make({ reason: 'missing_headers' })
-			}
-			yield* verifySlackSignature({
-				body,
-				timestamp,
-				signature,
-				signingSecret: config.signingSecret,
-			})
-			const payload = yield* Schema.decodeEffect(Schema.fromJsonString(SlackEventsRequest))(body, {
-				onExcessProperty: 'preserve',
-			}).pipe(Effect.mapError(() => SlackWebhookError.make({ reason: 'decode' })))
-			return yield* Match.value(payload).pipe(
-				Match.discriminatorsExhaustive('type')({
-					url_verification: (verification) => Effect.succeed(HttpServerResponse.text(verification.challenge)),
-					event_callback: (callback) =>
-						Match.value(callback.event).pipe(
-							Match.discriminatorsExhaustive('type')({
-								app_mention: () => acceptMessageEvent(config, callback),
-								message: (message) =>
-									message.subtype === 'message_changed' || message.subtype === 'message_deleted'
-										? acceptLifecycleEvent(config, callback)
-										: acceptMessageEvent(config, callback),
-								reaction_added: () => acceptLifecycleEvent(config, callback),
-								reaction_removed: () => acceptLifecycleEvent(config, callback),
-								agent_session_stopped: () => acceptConversationStopped(callback),
-							}),
-						),
-				}),
-			)
-		}).pipe(
-			Effect.catchTags({
-				SlackWebhookError: webhookErrorResponse,
-				SlackIngressError: (error) =>
-					Effect.logError('Slack ingress admission failed', error).pipe(
-						Effect.as(HttpServerResponse.empty({ status: error.reason === 'unexpected' ? 500 : 503 })),
-					),
-				CredentialStoreError: (error) =>
-					Effect.logError('Slack credential lookup failed', error).pipe(
-						Effect.as(HttpServerResponse.empty({ status: 503 })),
-					),
-				UnknownTenant: (error) =>
-					Effect.logError('Slack installation became unavailable', error).pipe(
-						Effect.as(HttpServerResponse.empty({ status: 503 })),
-					),
-				SlackTransportError: (error) =>
-					Effect.logError('Slack metadata request failed', error).pipe(
-						Effect.as(HttpServerResponse.empty({ status: 503 })),
-					),
-				SlackApiError: (error) =>
-					Effect.logError('Slack metadata request failed', error).pipe(
-						Effect.as(HttpServerResponse.empty({ status: 503 })),
-					),
-			}),
-			Effect.withSpan('slack.webhook', { attributes: { provider: 'slack' } }),
-		),
+export const SlackWebhookPath = '/integrations/slack/webhook' as const
+
+const routes = (config: SlackRoutesConfig, mountPath?: string) =>
+	HttpRouter.addAll(
+		[
+			HttpRouter.route('POST', SlackWebhookPath, (request) =>
+				Effect.gen(function* () {
+					const body = yield* request.text
+					const timestamp = request.headers['x-slack-request-timestamp']
+					const signature = request.headers['x-slack-signature']
+					if (timestamp === undefined || signature === undefined) {
+						return yield* SlackWebhookError.make({ reason: 'missing_headers' })
+					}
+					yield* verifySlackSignature({
+						body,
+						timestamp,
+						signature,
+						signingSecret: config.signingSecret,
+					})
+					const payload = yield* Schema.decodeEffect(Schema.fromJsonString(SlackEventsRequest))(body, {
+						onExcessProperty: 'preserve',
+					}).pipe(Effect.mapError(() => SlackWebhookError.make({ reason: 'decode' })))
+					return yield* Match.value(payload).pipe(
+						Match.discriminatorsExhaustive('type')({
+							url_verification: (verification) =>
+								Effect.succeed(HttpServerResponse.text(verification.challenge)),
+							event_callback: (callback) =>
+								Match.value(callback.event).pipe(
+									Match.discriminatorsExhaustive('type')({
+										app_mention: () => acceptMessageEvent(config, callback),
+										message: (message) =>
+											message.subtype === 'message_changed' ||
+											message.subtype === 'message_deleted'
+												? acceptLifecycleEvent(config, callback)
+												: acceptMessageEvent(config, callback),
+										reaction_added: () => acceptLifecycleEvent(config, callback),
+										reaction_removed: () => acceptLifecycleEvent(config, callback),
+										agent_session_stopped: () => acceptConversationStopped(callback),
+									}),
+								),
+						}),
+					)
+				}).pipe(
+					Effect.catchTags({
+						SlackWebhookError: webhookErrorResponse,
+						SlackIngressError: (error) =>
+							Effect.logError('Slack ingress admission failed', error).pipe(
+								Effect.as(
+									HttpServerResponse.empty({ status: error.reason === 'unexpected' ? 500 : 503 }),
+								),
+							),
+						CredentialStoreError: (error) =>
+							Effect.logError('Slack credential lookup failed', error).pipe(
+								Effect.as(HttpServerResponse.empty({ status: 503 })),
+							),
+						UnknownTenant: (error) =>
+							Effect.logError('Slack installation became unavailable', error).pipe(
+								Effect.as(HttpServerResponse.empty({ status: 503 })),
+							),
+						SlackTransportError: (error) =>
+							Effect.logError('Slack metadata request failed', error).pipe(
+								Effect.as(HttpServerResponse.empty({ status: 503 })),
+							),
+						SlackApiError: (error) =>
+							Effect.logError('Slack metadata request failed', error).pipe(
+								Effect.as(HttpServerResponse.empty({ status: 503 })),
+							),
+					}),
+					Effect.withSpan('slack.webhook', { attributes: { provider: 'slack' } }),
+				),
+			),
+		],
+		{ prefix: mountPath },
 	)
 
-export const SlackRoutes = {
-	layer: Layer.unwrap(
+const configuredLayer = (mountPath?: string) =>
+	Layer.unwrap(
 		Effect.gen(function* () {
 			const signingSecret = yield* Config.redacted('SLACK_SIGNING_SECRET')
 			const botUserId = yield* Config.option(Config.string('SLACK_BOT_USER_ID'))
@@ -242,10 +253,16 @@ export const SlackRoutes = {
 				botUserId: Option.getOrUndefined(botUserId),
 				botId: Option.getOrUndefined(botId),
 			})
-			return routes({ signingSecret, identity }).pipe(
+			return routes({ signingSecret, identity }, mountPath).pipe(
 				HttpRouter.provideRequest(Layer.effect(SlackTenantCredentials, SlackTenantCredentials)),
 				HttpRouter.provideRequest(Layer.effect(SlackClient, SlackClient)),
 			)
 		}),
-	),
+	)
+
+export const SlackRoutes = {
+	webhookPath: SlackWebhookPath,
+	mountedWebhookPath: (mountPath: string) => HttpRouter.prefixPath(SlackWebhookPath, mountPath),
+	layer: configuredLayer(),
+	layerMounted: (mountPath: string) => configuredLayer(mountPath),
 }

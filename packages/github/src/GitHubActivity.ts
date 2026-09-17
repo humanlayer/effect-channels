@@ -1,14 +1,8 @@
 import { type EventDefinition, resolveDeliveryFor, type ResolvedDelivery } from '@humanlayer/channels-delivery'
 import { Match, Schema } from 'effect'
 
-import { GitHubCommentData, GitHubIssueData, GitHubUser } from './GitHubEvents.js'
-import {
-	GitHubDiscussionRef,
-	GitHubId,
-	GitHubIssueRef,
-	GitHubPullRequestRef,
-	issueResourceKey,
-} from './GitHubResource.js'
+import { GitHubCommentData, GitHubIssueData, GitHubUser } from './GitHubEvents'
+import { GitHubDiscussionRef, GitHubId, GitHubIssueRef, GitHubPullRequestRef, issueResourceKey } from './GitHubResource'
 
 const nativeAuthor = Schema.Struct({
 	id: GitHubId,

@@ -1,6 +1,6 @@
 import { Option } from 'effect'
 
-import { SlackBotIdentity, type SlackTenantCreds } from './Schema.js'
+import { SlackBotIdentity, type SlackTenantCreds } from './Schema'
 
 interface SlackBotIdentityFields {
 	botUserId?: string

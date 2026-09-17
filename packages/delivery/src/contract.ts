@@ -1,7 +1,7 @@
 import { Schema } from 'effect'
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from 'effect/unstable/httpapi'
 
-import { FinalMessageMarkdown } from './DeliveryOperation.js'
+import { FinalMessageMarkdown } from './DeliveryOperation'
 import {
 	DeliveryControlUnavailable,
 	DeliveryNotFound,
@@ -10,8 +10,8 @@ import {
 	DeliveryTerminalRequestInvalid,
 	DeliveryTerminalCapacityExceeded,
 	DeliveryTerminalReceipt,
-} from './protocol.js'
-import { DeliveryId } from './protocol.js'
+} from './protocol'
+import { DeliveryId } from './protocol'
 
 export class Unauthorized extends Schema.TaggedError<Unauthorized>()('Unauthorized', {
 	message: Schema.String,

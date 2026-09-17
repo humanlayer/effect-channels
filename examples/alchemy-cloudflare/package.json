@@ -1,0 +1,21 @@
+{
+	"name": "alchemy-cloudflare",
+	"private": true,
+	"type": "module",
+	"module": "index.ts",
+	"scripts": {
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"dependencies": {
+		"@effect/platform-node": "catalog:",
+		"@humanlayer/channels-alchemy-cloudflare": "workspace:*",
+		"@humanlayer/channels-delivery-next": "workspace:*",
+		"@humanlayer/channels-slack-next": "workspace:*",
+		"alchemy": "catalog:",
+		"effect": "catalog:"
+	},
+	"devDependencies": {
+		"@types/bun": "catalog:",
+		"typescript": "catalog:"
+	}
+}

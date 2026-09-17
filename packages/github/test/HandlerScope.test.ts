@@ -3,8 +3,8 @@ import { layer as memory } from '@humanlayer/channels-github/memory'
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Match, Ref } from 'effect'
 import { TestClock } from 'effect/testing'
 
-import { GitHubError, GitHubIngress, GitHubSubscriptions } from '../src/index.js'
-import { event, policy } from './fixtures.js'
+import { GitHubError, GitHubIngress, GitHubSubscriptions } from '../src/index'
+import { event, policy } from './fixtures'
 
 for (const callback of ['onCreation', 'onMention', 'onSubscribedEvent'] as const) {
 	it.effect(`releases ${callback} handler resources before the rate-limit wait`, () =>
@@ -35,7 +35,7 @@ for (const callback of ['onCreation', 'onMention', 'onSubscribedEvent'] as const
 				resource: event.resource,
 			})
 			yield* ingress.acceptActivity({ event, mentioned: true, own: false })
-			const work = yield* ingress.processActivity({ event }).pipe(Effect.forkChild)
+			const work = yield* ingress.processActivity({ event }).pipe(Effect.provide(environment), Effect.forkChild)
 			yield* Deferred.await(released)
 			yield* TestClock.adjust(60_000)
 			yield* Fiber.join(work)
@@ -69,7 +69,7 @@ for (const outcome of ['success', 'failure', 'defect', 'interruption'] as const)
 			)
 			const ingress = Context.get(environment, GitHubIngress)
 			yield* ingress.acceptActivity({ event, mentioned: false, own: false })
-			const work = yield* ingress.processActivity({ event }).pipe(Effect.forkChild)
+			const work = yield* ingress.processActivity({ event }).pipe(Effect.provide(environment), Effect.forkChild)
 			yield* Deferred.await(entered)
 			if (outcome === 'interruption') yield* Fiber.interrupt(work)
 			else if (outcome === 'defect') assert.ok(Exit.isFailure(yield* Fiber.await(work)))

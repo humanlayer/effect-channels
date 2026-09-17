@@ -1,17 +1,20 @@
 import {
 	MailboxReadiness,
 	MailboxStore,
+	DeliveryQueue,
+	DeliveryInterruption,
+	IngressAttributionStore,
 	DeliveryPolicy,
 	type DeliveryHandoff,
 	type HandlerContext,
 	type RunnerOptions,
 } from '@humanlayer/channels-delivery'
-import { Context, Effect, Layer } from 'effect'
+import { Context, Effect, Layer, Logger } from 'effect'
 
-import { SlackIngressError } from './DomainErrors.js'
-import type { Emoji } from './Emoji.js'
-import type { IngressResult } from './Operations.js'
-import { SlackAuthors } from './SlackAuthors.js'
+import { SlackIngressError } from './DomainErrors'
+import type { Emoji } from './Emoji'
+import type { IngressResult } from './Operations'
+import { SlackAuthors } from './SlackAuthors'
 import {
 	ConversationStoppedEvent,
 	MessageDeletedEvent,
@@ -23,9 +26,9 @@ import {
 	NormalizedMessageUpdated,
 	NormalizedReaction,
 	ReactionEvent,
-} from './SlackEvents.js'
-import * as Operations from './SlackIngressOperations.js'
-import { SlackSubscriptions } from './SlackSubscriptions.js'
+} from './SlackEvents'
+import * as Operations from './SlackIngressOperations'
+import { SlackSubscriptions } from './SlackSubscriptions'
 
 export type SlackHandlerRegistration<A, E, R> = {
 	readonly id: string
@@ -64,7 +67,12 @@ export class SlackIngress extends Context.Service<
 		readonly acceptConversationStopped: (
 			event: NormalizedConversationStopped,
 		) => Effect.Effect<IngressResult, SlackIngressError>
-		readonly run: (input: RunnerOptions) => Effect.Effect<void, SlackIngressError>
+		readonly processMailbox: (
+			input: { readonly key: string },
+		) => Effect.Effect<void, SlackIngressError, MailboxStore | SlackAuthors>
+		readonly run: (
+			input: RunnerOptions,
+		) => Effect.Effect<void, SlackIngressError, MailboxStore | MailboxReadiness | SlackAuthors>
 	}
 >()('slack/SlackIngress') {
 	static readonly layer = <E = never, R = never>(options: SlackIngressOptions<E, R>) =>
@@ -73,27 +81,19 @@ export class SlackIngress extends Context.Service<
 			Effect.gen(function* () {
 				const bindings = yield* Operations.SlackIngressBindings
 				const subscriptions = yield* SlackSubscriptions
-				const store = yield* MailboxStore
-				const readiness = yield* MailboxReadiness
-				const authors = yield* SlackAuthors
+				const queue = yield* DeliveryQueue
+				const interruption = yield* DeliveryInterruption
+				const attribution = yield* IngressAttributionStore
+				const loggers = yield* Logger.CurrentLoggers
 
-				const provide = <A, E>(
-					effect: Effect.Effect<
-						A,
-						E,
-						| Operations.SlackIngressBindings
-						| SlackSubscriptions
-						| MailboxStore
-						| MailboxReadiness
-						| SlackAuthors
-					>,
-				) =>
+				const provide = <A, E, R2>(effect: Effect.Effect<A, E, R2>) =>
 					effect.pipe(
 						Effect.provideService(Operations.SlackIngressBindings, bindings),
 						Effect.provideService(SlackSubscriptions, subscriptions),
-						Effect.provideService(MailboxStore, store),
-						Effect.provideService(MailboxReadiness, readiness),
-						Effect.provideService(SlackAuthors, authors),
+						Effect.provideService(DeliveryQueue, queue),
+						Effect.provideService(DeliveryInterruption, interruption),
+						Effect.provideService(IngressAttributionStore, attribution),
+						Effect.provideService(Logger.CurrentLoggers, loggers),
 					)
 				return SlackIngress.of({
 					acceptMessage: (event) => provide(Operations.acceptMessage(event)),
@@ -101,8 +101,13 @@ export class SlackIngress extends Context.Service<
 					acceptMessageDeleted: (event) => provide(Operations.acceptMessageDeleted(event)),
 					acceptReaction: (event) => provide(Operations.acceptReaction(event)),
 					acceptConversationStopped: (event) => provide(Operations.acceptConversationStopped(event)),
+					processMailbox: (input) => provide(bindings.processMailbox(input)),
 					run: (input) => provide(Operations.run(input)),
 				})
 			}),
 		).pipe(Layer.provide(Operations.SlackIngressBindings.layer(options)))
 }
+
+/** Explicit long-running polling program for server hosts. Constructing SlackBot does not start it. */
+export const runDeliveryPolling = (input: RunnerOptions) =>
+	Effect.flatMap(SlackIngress, (ingress) => ingress.run(input)).pipe(Effect.withSpan('slack.delivery.polling'))

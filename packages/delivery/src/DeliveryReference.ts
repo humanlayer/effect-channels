@@ -1,7 +1,7 @@
 import { Effect, Encoding, Schema } from 'effect'
 
-import { eventIdentity, type Envelope } from './Mailbox.js'
-import { DeliveryId } from './protocol.js'
+import { eventIdentity, type Envelope } from './Mailbox'
+import { DeliveryId } from './protocol'
 
 export { DeliveryId }
 

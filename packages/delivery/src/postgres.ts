@@ -1,2 +1,2 @@
-export { layer } from './postgres/store.js'
-export { migrate, PostgresInitializationError } from './postgres/migrations.js'
+export { layer } from './postgres/store'
+export { migrate, PostgresInitializationError } from './postgres/migrations'

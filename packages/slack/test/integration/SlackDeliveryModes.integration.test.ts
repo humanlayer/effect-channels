@@ -14,8 +14,8 @@ import {
 	slackEmulatorBotUserId,
 	slackEmulatorBotId,
 	slackEmulatorSigningSecret,
-} from './support/SlackEmulator.js'
-import { ChannelsStorage, defaultDeliveryPolicy, makeSlackTestHost, slack } from './support/SlackTestHost.js'
+} from './support/SlackEmulator'
+import { ChannelsStorage, defaultDeliveryPolicy, makeSlackTestHost, slack } from './support/SlackTestHost'
 
 const policies: ReadonlyArray<DeliveryPolicy> = [
 	{ ...defaultDeliveryPolicy, mode: 'queue' },

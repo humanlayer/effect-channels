@@ -1,11 +1,11 @@
 import { Schema } from 'effect'
 
-import { Content } from './Content.js'
-import { AttachmentRef, ChannelInfo, FileUpload, ThreadId, UserId, UserProfile, type FileData } from './Model.js'
-import type { MessagePage, ThreadPage } from './Operations.js'
-import { SlackTeamId, SlackChannelId, SlackMessageTs } from './SlackIdentity.js'
-import { StreamChunk } from './StreamChunk.js'
-export { SlackTeamId, SlackChannelId, SlackMessageTs } from './SlackIdentity.js'
+import { Content } from './Content'
+import { AttachmentRef, ChannelInfo, FileUpload, ThreadId, UserId, UserProfile, type FileData } from './Model'
+import type { MessagePage, ThreadPage } from './Operations'
+import { SlackTeamId, SlackChannelId, SlackMessageTs } from './SlackIdentity'
+import { StreamChunk } from './StreamChunk'
+export { SlackTeamId, SlackChannelId, SlackMessageTs } from './SlackIdentity'
 
 export const SlackTenantCreds = Schema.Struct({
 	botToken: Schema.Redacted(Schema.String, { disallowJsonEncode: true }),
@@ -16,7 +16,7 @@ export const SlackTenantCreds = Schema.Struct({
 })
 export type SlackTenantCreds = typeof SlackTenantCreds.Type
 
-export { SlackConnectionLookupInput, SlackConnectionCredentials, SlackConnection } from './SlackConnection.js'
+export { SlackConnectionLookupInput, SlackConnectionCredentials, SlackConnection } from './SlackConnection'
 
 export const SlackLoadCredentialsInput = Schema.Struct({ teamId: SlackTeamId })
 export type SlackLoadCredentialsInput = typeof SlackLoadCredentialsInput.Type
@@ -139,7 +139,7 @@ export type SlackUrlVerification = typeof SlackUrlVerification.Type
 export const SlackEventsRequest = Schema.Union([SlackEventCallback, SlackUrlVerification])
 export type SlackEventsRequest = typeof SlackEventsRequest.Type
 
-export { SlackThreadRef } from './SlackIdentity.js'
+export { SlackThreadRef } from './SlackIdentity'
 
 export const SlackPostMessageInput = Schema.Struct({
 	teamId: SlackTeamId,
@@ -321,7 +321,7 @@ export const SlackBotIdentity = Schema.Struct({
 })
 export type SlackBotIdentity = typeof SlackBotIdentity.Type
 
-export { SlackChannelAddress } from './SlackIdentity.js'
+export { SlackChannelAddress } from './SlackIdentity'
 
 export const SlackHistoryMessage = Schema.Struct({
 	type: Schema.optionalKey(Schema.String),

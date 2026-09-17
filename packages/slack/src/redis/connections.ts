@@ -1,11 +1,11 @@
 import { Effect, Layer, Schema } from 'effect'
 import * as Redis from 'effect/unstable/persistence/Redis'
 
-import { SlackConnectionLookupInput } from '../Schema.js'
-import { SlackConnectionStore, UpsertSlackConnection } from '../SlackConnectionStore.js'
-import { connectionJson } from '../storage/ConnectionCodec.js'
-import { connectionErrors } from './errors.js'
-import { connectionKey } from './keys.js'
+import { SlackConnectionLookupInput } from '../Schema'
+import { SlackConnectionStore, UpsertSlackConnection } from '../SlackConnectionStore'
+import { connectionJson } from '../storage/ConnectionCodec'
+import { connectionErrors } from './errors'
+import { connectionKey } from './keys'
 
 const get = Effect.fn('slack.redis.connections.get')(
 	function* (input: SlackConnectionLookupInput) {

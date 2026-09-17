@@ -1,12 +1,12 @@
 import { Effect, Layer, Schema } from 'effect'
 import * as Redis from 'effect/unstable/persistence/Redis'
 
-import { SubscriptionInput } from '../Operations.js'
-import { SubscriptionCreated, SubscriptionExisting } from '../SlackEvents.js'
-import { ResolveSlackDirectMessageRoute, SlackDirectMessageRoute, SlackSubscriptions } from '../SlackSubscriptions.js'
-import { subscriptionErrors } from './errors.js'
-import { subscriptionKey } from './keys.js'
-import * as Scripts from './scripts.js'
+import { SubscriptionInput } from '../Operations'
+import { SubscriptionCreated, SubscriptionExisting } from '../SlackEvents'
+import { ResolveSlackDirectMessageRoute, SlackDirectMessageRoute, SlackSubscriptions } from '../SlackSubscriptions'
+import { subscriptionErrors } from './errors'
+import { subscriptionKey } from './keys'
+import * as Scripts from './scripts'
 
 const routeJson = Schema.fromJsonString(SlackDirectMessageRoute)
 

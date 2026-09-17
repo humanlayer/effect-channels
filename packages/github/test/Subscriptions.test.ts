@@ -1,6 +1,13 @@
 import { assert, it } from '@effect/vitest'
-import { MailboxStore, MailboxStoreError, mailboxKey } from '@humanlayer/channels-delivery'
-import { Context, Effect, Layer, Queue, Redacted, Ref, Schema } from 'effect'
+import {
+	DeliveryQueue,
+	enqueueDelivery,
+	MailboxReadiness,
+	MailboxStore,
+	MailboxStoreError,
+	mailboxKey,
+} from '@humanlayer/channels-delivery'
+import { Clock, Context, Effect, Layer, Queue, Redacted, Ref, Schema } from 'effect'
 import { TestClock } from 'effect/testing'
 
 import {
@@ -15,10 +22,10 @@ import {
 	GitHubSubscriptionStore,
 	issueResourceKey,
 	reviewCommentRootId,
-} from '../src/index.js'
-import { layer as memory } from '../src/memory.js'
-import { event, policy, routeCredentials, user } from './fixtures.js'
-import { host, payloadFor, secret, signedRequest } from './support.js'
+} from '../src/index'
+import { layer as memory } from '../src/memory'
+import { event, policy, routeCredentials, user } from './fixtures'
+import { host, payloadFor, secret, signedRequest } from './support'
 
 const base = payloadFor(event)
 const pull_request = {
@@ -89,18 +96,20 @@ const setup = Effect.gen(function* () {
 		),
 	)
 	const drain = (pr: boolean) =>
-		ingress.processActivity({
-			event: pr
-				? {
-						event: 'pull_request',
-						action: 'opened',
-						deliveryId: 'key',
-						resource: { ...event.resource, kind: 'github.pull-request' },
-						pull_request,
-						sender: user,
-					}
-				: event,
-		})
+		ingress
+			.processActivity({
+				event: pr
+					? {
+							event: 'pull_request',
+							action: 'opened',
+							deliveryId: 'key',
+							resource: { ...event.resource, kind: 'github.pull-request' },
+							pull_request,
+							sender: user,
+						}
+					: event,
+			})
+			.pipe(Effect.provide(storage))
 	return { seen, values, subscriptions, send, drain }
 })
 
@@ -434,6 +443,7 @@ it.effect('partial fanout is frozen before admission and survives unsubscribe an
 		const storage = yield* Layer.build(memory({ maxMailboxes: 20 }))
 		const store = Context.get(storage, MailboxStore)
 		const subscriptions = Context.get(storage, GitHubSubscriptions)
+		const clock = yield* Clock.Clock
 		const failSecond = yield* Ref.make(true)
 		const keyForHandler = (id: string) =>
 			mailboxKey({
@@ -444,17 +454,24 @@ it.effect('partial fanout is frozen before admission and survives unsubscribe an
 				resourceKey: issueResourceKey(event.resource),
 			})
 		const seen = yield* Queue.unbounded<string>()
-		const fault = Layer.succeed(
-			MailboxStore,
-			MailboxStore.of({
-				loadMailbox: store.loadMailbox,
-				commitMailbox: (input) =>
-					Effect.gen(function* () {
-						if (input.key === keyForHandler('two') && (yield* Ref.getAndSet(failSecond, false)))
-							return yield* MailboxStoreError.make({ operation: 'commit' })
-						return yield* store.commitMailbox(input)
-					}),
-			}),
+		const faultStore = MailboxStore.of({
+			loadMailbox: store.loadMailbox,
+			commitMailbox: (input) =>
+				Effect.gen(function* () {
+					if (input.key === keyForHandler('two') && (yield* Ref.getAndSet(failSecond, false)))
+						return yield* MailboxStoreError.make({ operation: 'commit' })
+					return yield* store.commitMailbox(input)
+				}),
+		})
+		const faultQueue = DeliveryQueue.of({
+			enqueue: (input) =>
+				enqueueDelivery(input).pipe(
+					Effect.provideService(MailboxStore, faultStore),
+					Effect.provideService(Clock.Clock, clock),
+				),
+		})
+		const fault = Layer.succeedContext(
+			Context.make(MailboxStore, faultStore).pipe(Context.add(DeliveryQueue, faultQueue)),
 		)
 		const make = () =>
 			GitHubIngress.layer({
@@ -488,10 +505,14 @@ it.effect('partial fanout is frozen before admission and survives unsubscribe an
 		yield* subscriptions.unsubscribe(subscription)
 		assert.equal((yield* request()).status, 200)
 		const reconstructed = yield* Layer.build(make())
-		yield* Context.get(reconstructed, GitHubIngress).processActivity({ event })
+		yield* Context.get(reconstructed, GitHubIngress)
+			.processActivity({ event })
+			.pipe(Effect.provideService(MailboxStore, faultStore))
 		assert.deepEqual([yield* Queue.take(seen), yield* Queue.take(seen)], ['one', 'two'])
 		assert.equal((yield* request()).status, 200)
-		yield* Context.get(reconstructed, GitHubIngress).processActivity({ event })
+		yield* Context.get(reconstructed, GitHubIngress)
+			.processActivity({ event })
+			.pipe(Effect.provideService(MailboxStore, faultStore))
 		assert.equal(yield* Queue.size(seen), 0)
 		assert.equal(Schema.is(GitHubSubscriptionRoute)({ version: 2, targets: [] }), false)
 	}),
@@ -701,6 +722,7 @@ it.effect('a first admitted mention may subscribe without adding new consumers d
 	Effect.gen(function* () {
 		const storage = yield* Layer.build(memory({ maxMailboxes: 20 }))
 		const store = Context.get(storage, MailboxStore)
+		const clock = yield* Clock.Clock
 		const subscriptions = Context.get(storage, GitHubSubscriptions)
 		const failSecond = yield* Ref.make(true)
 		const secondKey = mailboxKey({
@@ -711,17 +733,24 @@ it.effect('a first admitted mention may subscribe without adding new consumers d
 			resourceKey: issueResourceKey(event.resource),
 		})
 		const seen = yield* Queue.unbounded<string>()
-		const fault = Layer.succeed(
-			MailboxStore,
-			MailboxStore.of({
-				loadMailbox: store.loadMailbox,
-				commitMailbox: (input) =>
-					Effect.gen(function* () {
-						if (input.key === secondKey && (yield* Ref.getAndSet(failSecond, false)))
-							return yield* MailboxStoreError.make({ operation: 'commit' })
-						return yield* store.commitMailbox(input)
-					}),
-			}),
+		const faultStore = MailboxStore.of({
+			loadMailbox: store.loadMailbox,
+			commitMailbox: (input) =>
+				Effect.gen(function* () {
+					if (input.key === secondKey && (yield* Ref.getAndSet(failSecond, false)))
+						return yield* MailboxStoreError.make({ operation: 'commit' })
+					return yield* store.commitMailbox(input)
+				}),
+		})
+		const faultQueue = DeliveryQueue.of({
+			enqueue: (input) =>
+				enqueueDelivery(input).pipe(
+					Effect.provideService(MailboxStore, faultStore),
+					Effect.provideService(Clock.Clock, clock),
+				),
+		})
+		const fault = Layer.succeedContext(
+			Context.make(MailboxStore, faultStore).pipe(Context.add(DeliveryQueue, faultQueue)),
 		)
 		const services = yield* Layer.build(
 			GitHubIngress.layer({
@@ -763,11 +792,11 @@ it.effect('a first admitted mention may subscribe without adding new consumers d
 				),
 			)
 		assert.equal((yield* request()).status, 503)
-		yield* ingress.processActivity({ event })
+		yield* ingress.processActivity({ event }).pipe(Effect.provideService(MailboxStore, faultStore))
 		assert.equal(yield* Queue.take(seen), 'one')
 		assert.equal(yield* subscriptions.isSubscribed(subscription), true)
 		assert.equal((yield* request()).status, 200)
-		yield* ingress.processActivity({ event })
+		yield* ingress.processActivity({ event }).pipe(Effect.provideService(MailboxStore, faultStore))
 		assert.equal(yield* Queue.take(seen), 'two')
 		assert.equal(yield* Queue.size(seen), 0)
 	}),
@@ -813,11 +842,15 @@ it.effect('frozen handler retry survives unsubscribe and retains its native even
 			(yield* send(signedRequest('issues', JSON.stringify({ ...base, action: 'closed' }), 'retry'))).status,
 			200,
 		)
-		yield* ingress.processActivity({ event })
+		assert.equal(
+			(yield* Context.get(storage, MailboxReadiness).scanReady({ prefix: '', now: 0, limit: 100 })).length,
+			1,
+		)
+		yield* ingress.processActivity({ event }).pipe(Effect.provide(storage))
 		assert.equal(yield* Ref.get(attempts), 1)
 		yield* subscriptions.unsubscribe(subscription)
 		yield* TestClock.adjust(policy.retryBaseMs)
-		yield* ingress.processActivity({ event })
+		yield* ingress.processActivity({ event }).pipe(Effect.provide(storage))
 		assert.equal(yield* Ref.get(attempts), 2)
 		assert.equal(yield* Queue.take(seen), 'closed')
 	}),

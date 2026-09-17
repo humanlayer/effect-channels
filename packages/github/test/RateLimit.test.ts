@@ -4,9 +4,9 @@ import { Context, Deferred, Effect, Fiber, Layer, Logger, Redacted, Ref } from '
 import { TestClock } from 'effect/testing'
 import { HttpClient, HttpClientResponse } from 'effect/unstable/http'
 
-import { GitHub, GitHubCredentials, GitHubIngress } from '../src/index.js'
-import { policy } from './fixtures.js'
-import { event } from './fixtures.js'
+import { GitHub, GitHubCredentials, GitHubIngress } from '../src/index'
+import { policy } from './fixtures'
+import { event } from './fixtures'
 
 const credentials = Layer.mock(GitHubCredentials, {
 	apiUrl: 'https://api.github.test',
@@ -111,6 +111,7 @@ for (const fixture of [cases[0], cases[1], cases[3], cases[6]]) {
 		Effect.gen(function* () {
 			const calls = yield* Ref.make(0)
 			const entered = yield* Deferred.make<void>()
+			const storage = yield* Layer.build(memory({ maxMailboxes: 10 }))
 			const http = Layer.succeed(
 				HttpClient.HttpClient,
 				HttpClient.make((request) =>
@@ -146,7 +147,7 @@ for (const fixture of [cases[0], cases[1], cases[3], cases[6]]) {
 				}).pipe(
 					Layer.provide(
 						Layer.merge(
-							memory({ maxMailboxes: 10 }),
+							Layer.succeedContext(storage),
 							GitHub.layer.pipe(Layer.provide(Layer.merge(credentials, http))),
 						),
 					),
@@ -154,22 +155,22 @@ for (const fixture of [cases[0], cases[1], cases[3], cases[6]]) {
 			)
 			const ingress = Context.get(environment, GitHubIngress)
 			yield* ingress.acceptActivity({ event, mentioned: false, own: false })
-			const first = yield* ingress.processActivity({ event }).pipe(Effect.forkChild)
+			const first = yield* ingress.processActivity({ event }).pipe(Effect.provide(storage), Effect.forkChild)
 			yield* Deferred.await(entered)
 			if (fixture.delay !== undefined) {
 				yield* TestClock.adjust(fixture.delay - 1)
-				yield* ingress.processActivity({ event })
+				yield* ingress.processActivity({ event }).pipe(Effect.provide(storage))
 				assert.equal(yield* Ref.get(calls), 1)
 				yield* TestClock.adjust(1)
 			}
 			yield* Fiber.join(first)
-			yield* ingress.processActivity({ event })
+			yield* ingress.processActivity({ event }).pipe(Effect.provide(storage))
 			assert.equal(yield* Ref.get(calls), 1)
 			yield* TestClock.adjust(policy.retryBaseMs)
-			yield* ingress.processActivity({ event })
+			yield* ingress.processActivity({ event }).pipe(Effect.provide(storage))
 			assert.equal(yield* Ref.get(calls), fixture.delay === undefined ? 1 : 2)
 			yield* TestClock.adjust(60_000)
-			yield* ingress.processActivity({ event })
+			yield* ingress.processActivity({ event }).pipe(Effect.provide(storage))
 			assert.equal(yield* Ref.get(calls), fixture.delay === undefined ? 1 : 2)
 		}),
 	)
