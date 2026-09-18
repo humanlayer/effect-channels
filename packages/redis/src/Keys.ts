@@ -12,3 +12,4 @@ export const readyMailboxesKey = `${root}:ready`
 export const mailboxStateKey = (mailboxKey: string) => `${root}:state:${encode(mailboxKey)}`
 export const mailboxPendingKey = (mailboxKey: string) => `${root}:pending:${encode(mailboxKey)}`
 export const mailboxEventsKey = (mailboxKey: string) => `${root}:events:${encode(mailboxKey)}`
+export const mailboxSubscriptionsKey = `${root}:subscriptions`

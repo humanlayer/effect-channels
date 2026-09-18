@@ -1,7 +1,9 @@
 /** Slack post-admission batch normalization and callback routing. */
 import {
+	deliveryMailboxKey,
 	type DeliveryAdmission,
 	type DeliveryAdmissionBatch,
+	MailboxSubscriptions,
 	ProviderEventExecutionFailed,
 	ProviderEventHandled,
 	ProviderEventIgnored,
@@ -26,7 +28,6 @@ import {
 } from './SlackCallbackEvents'
 import { SlackChannelId, SlackMessageTs, SlackTeamId, slackThreadResourceId } from './SlackIdentity'
 import { SlackMarkdownContent, SlackMessage, SlackMessageRef, SlackReaction, SlackThreadRef } from './SlackModels'
-import { SlackSubscriptions } from './SlackSubscriptions'
 import { SlackThread } from './SlackThread'
 import type { SlackMessageSnapshot } from './SlackWebhookEventSchemas'
 import {
@@ -458,7 +459,8 @@ const processSlackBatch = <E, R>(options: SlackEventProcessorOptions<E, R>) =>
 
 		const isDm = address.channelId.startsWith('D') || envelopes.some(isDirectMessageEnvelope)
 		const threadRef = SlackThreadRef.make({ ...address, isDm })
-		const thread = SlackThread.make({ ref: threadRef })
+		const mailboxKey = deliveryMailboxKey(first)
+		const thread = SlackThread.make({ ref: threadRef, mailboxKey })
 		const normalizedOptions = yield* Effect.forEach(envelopes, (envelope) =>
 			normalizeEnvelope(envelope, threadRef),
 		).pipe(
@@ -470,8 +472,8 @@ const processSlackBatch = <E, R>(options: SlackEventProcessorOptions<E, R>) =>
 		const normalized = normalizedOptions.flatMap(Option.toArray)
 		if (normalized.length === 0) return ProviderEventIgnored.make({ reason: 'no_relevant_event' })
 
-		const subscribed = yield* Effect.flatMap(SlackSubscriptions, (subscriptions) =>
-			subscriptions.isSubscribed({ thread: threadRef }),
+		const subscribed = yield* Effect.flatMap(MailboxSubscriptions, (subscriptions) =>
+			subscriptions.isSubscribed({ mailboxKey }),
 		).pipe(
 			Effect.tapError((error) => Effect.logError('Slack subscription lookup failed', error)),
 			Effect.mapError(() => providerFailure('subscription_lookup_failed')),
@@ -516,7 +518,7 @@ const processSlackBatch = <E, R>(options: SlackEventProcessorOptions<E, R>) =>
 
 export const makeSlackEventProcessor = <E, R>(
 	options: SlackEventProcessorOptions<E, R>,
-): ProviderEventProcessor<R | SlackApi | SlackSubscriptions> => ({
+): ProviderEventProcessor<R | SlackApi | MailboxSubscriptions> => ({
 	namespace: options.namespace,
 	providerName: 'slack',
 	process: processSlackBatch(options),

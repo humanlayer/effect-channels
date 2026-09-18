@@ -1,3 +1,8 @@
+import {
+	type MailboxSubscriptionError,
+	type MailboxSubscriptionResult,
+	MailboxSubscriptions,
+} from '@humanlayer/channels-delivery-next'
 import { Effect, Schema, Stream } from 'effect'
 
 import type { SlackApiError } from './SlackApi'
@@ -15,8 +20,6 @@ import {
 	SlackThreadRef,
 } from './SlackModels'
 import type { SlackStreamChunk } from './SlackStreamChunk'
-import type { SlackSubscriptionError, SlackSubscriptionOutcome } from './SlackSubscriptions'
-import { SlackSubscriptions } from './SlackSubscriptions'
 
 export class SlackChannelHistoryUnavailable extends Schema.TaggedError<SlackChannelHistoryUnavailable>()(
 	'SlackChannelHistoryUnavailable',
@@ -32,6 +35,7 @@ const spanAttributes = (thread: SlackThreadRef) => ({
 
 export class SlackThread extends Schema.TaggedClass<SlackThread>()('SlackThread', {
 	ref: SlackThreadRef,
+	mailboxKey: Schema.NonEmptyString,
 }) {
 	get channel(): SlackChannel {
 		return SlackChannel.make({
@@ -92,21 +96,21 @@ export class SlackThread extends Schema.TaggedClass<SlackThread>()('SlackThread'
 		)
 	}
 
-	subscribe(): Effect.Effect<SlackSubscriptionOutcome, SlackSubscriptionError, SlackSubscriptions> {
-		return Effect.flatMap(SlackSubscriptions, (subscriptions) =>
-			subscriptions.subscribe({ thread: this.ref }),
+	subscribe(): Effect.Effect<MailboxSubscriptionResult, MailboxSubscriptionError, MailboxSubscriptions> {
+		return Effect.flatMap(MailboxSubscriptions, (subscriptions) =>
+			subscriptions.subscribe({ mailboxKey: this.mailboxKey }),
 		).pipe(Effect.withSpan('slack.thread.subscribe', { attributes: spanAttributes(this.ref) }))
 	}
 
-	isSubscribed(): Effect.Effect<boolean, SlackSubscriptionError, SlackSubscriptions> {
-		return Effect.flatMap(SlackSubscriptions, (subscriptions) =>
-			subscriptions.isSubscribed({ thread: this.ref }),
+	isSubscribed(): Effect.Effect<boolean, MailboxSubscriptionError, MailboxSubscriptions> {
+		return Effect.flatMap(MailboxSubscriptions, (subscriptions) =>
+			subscriptions.isSubscribed({ mailboxKey: this.mailboxKey }),
 		).pipe(Effect.withSpan('slack.thread.is_subscribed', { attributes: spanAttributes(this.ref) }))
 	}
 
-	unsubscribe(): Effect.Effect<void, SlackSubscriptionError, SlackSubscriptions> {
-		return Effect.flatMap(SlackSubscriptions, (subscriptions) =>
-			subscriptions.unsubscribe({ thread: this.ref }),
+	unsubscribe(): Effect.Effect<void, MailboxSubscriptionError, MailboxSubscriptions> {
+		return Effect.flatMap(MailboxSubscriptions, (subscriptions) =>
+			subscriptions.unsubscribe({ mailboxKey: this.mailboxKey }),
 		).pipe(Effect.withSpan('slack.thread.unsubscribe', { attributes: spanAttributes(this.ref) }))
 	}
 

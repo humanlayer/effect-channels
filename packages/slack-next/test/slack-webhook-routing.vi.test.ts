@@ -8,10 +8,10 @@ import type { SlackNewMention } from '../src/SlackCallbackEvents'
 import { makeSlackEventProcessor } from '../src/SlackEventProcessor'
 import { SlackChannelId, SlackMessageTs, SlackTeamId } from '../src/SlackIdentity'
 import { SlackParticipant, SlackUserId } from '../src/SlackModels'
-import { SlackSubscriptions } from '../src/SlackSubscriptions'
 import { SlackAppMentionEvent } from '../src/SlackWebhookEventSchemas'
 import { SlackAppMentionEnvelope } from '../src/SlackWebhookSchemas'
 import { makeInMemoryMailboxFixture, makeSlackEmulatorFixture, slackEmulatorEventTime } from './fixtures'
+import { MailboxSubscriptionsMemory } from './MailboxSubscriptionsMemory'
 
 describe('Slack webhook routing', () => {
 	it.effect('processes an emulator mention through its keyed mailbox and calls onNewMention', ({ expect }) =>
@@ -30,7 +30,7 @@ describe('Slack webhook routing', () => {
 							}),
 						),
 				}),
-				SlackSubscriptions.layerMemory,
+				MailboxSubscriptionsMemory,
 			)
 			const processor = makeSlackEventProcessor({
 				namespace: 'slack-emulator-test',

@@ -47,7 +47,9 @@ export const DeliveryAdmission = Schema.TaggedStruct('DeliveryAdmission', {
 export type DeliveryAdmission = Schema.Schema.Type<typeof DeliveryAdmission>
 
 /** A collision-free, stable key for the mailbox addressed by an admission. */
-export const deliveryMailboxKey = (admission: DeliveryAdmission) =>
+export type DeliveryMailboxAddress = Pick<DeliveryAdmission, 'namespace' | 'provider' | 'installationId' | 'resourceId'>
+
+export const deliveryMailboxKey = (admission: DeliveryMailboxAddress) =>
 	[admission.namespace, admission.provider, admission.installationId, admission.resourceId]
 		.map((segment) => `${segment.length}:${segment}`)
 		.join('|')

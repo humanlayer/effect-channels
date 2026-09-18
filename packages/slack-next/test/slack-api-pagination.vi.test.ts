@@ -301,7 +301,7 @@ describe('SlackApi paginated thread layer', () => {
 			const harness = yield* makeHarness()
 			const prior = message('1700000009.000000')
 			yield* Queue.offer(harness.channelPages, { messages: [prior] })
-			const thread = SlackThread.make({ ref: threadRef })
+			const thread = SlackThread.make({ ref: threadRef, mailboxKey: 'mailbox:pagination' })
 
 			expect(thread.channel.ref).toEqual(channelRef)
 			expect(

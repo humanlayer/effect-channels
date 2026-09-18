@@ -1,4 +1,8 @@
 import { describe, it } from '@effect/vitest'
+import {
+	MailboxSubscriptionAlreadyExistsResult,
+	MailboxSubscriptionCreatedResult,
+} from '@humanlayer/channels-delivery-next'
 import { Effect, Layer, Option, Queue, Stream } from 'effect'
 
 import { SlackApi } from '../src/SlackApi'
@@ -18,14 +22,14 @@ import {
 	SlackUserId,
 } from '../src/SlackModels'
 import { MarkdownTextChunk, PlanUpdateChunk, TaskUpdateChunk } from '../src/SlackStreamChunk'
-import { SlackSubscriptionCreated, SlackSubscriptionExisting, SlackSubscriptions } from '../src/SlackSubscriptions'
 import { SlackChannelHistoryUnavailable, SlackThread } from '../src/SlackThread'
+import { MailboxSubscriptionsMemory } from './MailboxSubscriptionsMemory'
 
 const teamId = SlackTeamId.make('T_CONTEXT')
 const channelId = SlackChannelId.make('C_CONTEXT')
 const threadTs = SlackMessageTs.make('1700000000.000001')
 const threadRef = SlackThreadRef.make({ teamId, channelId, threadTs, isDm: false })
-const thread = SlackThread.make({ ref: threadRef })
+const thread = SlackThread.make({ ref: threadRef, mailboxKey: 'mailbox:context' })
 const count = SlackMessageCount.make(3)
 const content = SlackMarkdownContent.make({ markdown: '**hello**' })
 const participant = SlackParticipant.make({
@@ -134,7 +138,7 @@ describe('SlackThread context API', () => {
 		Effect.gen(function* () {
 			const calls = yield* Queue.unbounded<unknown>()
 			const dmRef = SlackThreadRef.make({ ...threadRef, channelId: SlackChannelId.make('D_CONTEXT'), isDm: true })
-			const dmThread = SlackThread.make({ ref: dmRef })
+			const dmThread = SlackThread.make({ ref: dmRef, mailboxKey: 'mailbox:dm-context' })
 			const api = makeApi(calls, {
 				listChannelMessagesBeforeThread: () => unexpected('listChannelMessagesBeforeThread'),
 			})
@@ -200,12 +204,12 @@ describe('SlackThread context API', () => {
 	it.effect('tracks deterministic subscription transitions', ({ expect }) =>
 		Effect.gen(function* () {
 			expect(yield* thread.isSubscribed()).toBe(false)
-			expect(yield* thread.subscribe()).toEqual(SlackSubscriptionCreated.make({}))
-			expect(yield* thread.subscribe()).toEqual(SlackSubscriptionExisting.make({}))
+			expect(yield* thread.subscribe()).toEqual(MailboxSubscriptionCreatedResult.make({}))
+			expect(yield* thread.subscribe()).toEqual(MailboxSubscriptionAlreadyExistsResult.make({}))
 			expect(yield* thread.isSubscribed()).toBe(true)
 			expect(yield* thread.unsubscribe()).toBeUndefined()
 			expect(yield* thread.unsubscribe()).toBeUndefined()
 			expect(yield* thread.isSubscribed()).toBe(false)
-		}).pipe(Effect.provide(SlackSubscriptions.layerMemory)),
+		}).pipe(Effect.provide(MailboxSubscriptionsMemory)),
 	)
 })

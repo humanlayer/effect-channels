@@ -10,7 +10,7 @@ import {
 import { Clock, Effect, Layer, Match, Predicate, Random, Schema } from 'effect'
 import * as Redis from 'effect/unstable/persistence/Redis'
 
-import { readyMailboxesKey } from './keys'
+import { readyMailboxesKey } from './Keys'
 import * as Scripts from './scripts'
 
 const claimed = Schema.fromJsonString(

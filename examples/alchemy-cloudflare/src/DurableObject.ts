@@ -1,12 +1,13 @@
 import {
 	MailboxProcessingBackendFromDurableObjectStorage,
+	MailboxSubscriptionsFromDurableObjectStorage,
 	makeDeliverFromDurableObjectStorage,
 } from '@humanlayer/channels-alchemy-cloudflare'
 import { MailboxProcessing, MailboxProcessingLive } from '@humanlayer/channels-delivery-next'
 import * as Cloudflare from 'alchemy/Cloudflare'
 import { Clock, Effect, Layer } from 'effect'
 
-import { ProviderEventDispatcherAlchemyCloudflare } from './SlackProvider'
+import { ProviderEventDispatcherSlack } from './SlackProvider'
 
 /** The application-owned mailbox Durable Object and its alarm handler. */
 export class DeliveryMailbox extends Cloudflare.DurableObject<DeliveryMailbox>()(
@@ -20,7 +21,9 @@ export class DeliveryMailbox extends Cloudflare.DurableObject<DeliveryMailbox>()
 			maxAttempts: 5,
 		}).pipe(
 			Layer.provide(MailboxProcessingBackendFromDurableObjectStorage({ recoveryAfterMs })),
-			Layer.provide(ProviderEventDispatcherAlchemyCloudflare),
+			Layer.provide(
+				ProviderEventDispatcherSlack.pipe(Layer.provide(MailboxSubscriptionsFromDurableObjectStorage)),
+			),
 		)
 
 		return Effect.gen(function* () {

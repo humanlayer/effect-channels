@@ -2,6 +2,7 @@ import { describe, it } from '@effect/vitest'
 import {
 	DeliveryAdmission,
 	DeliveryAdmissionBatch,
+	MailboxSubscriptions,
 	processProviderEvent,
 	ProviderEventExecutionFailed,
 	ProviderEventHandled,
@@ -21,7 +22,6 @@ import {
 import { makeSlackEventProcessor } from '../src/SlackEventProcessor'
 import { SlackChannelId, SlackMessageTs, SlackTeamId, slackThreadResourceId } from '../src/SlackIdentity'
 import { SlackMarkdownContent, SlackMessage, SlackParticipant, SlackUserId } from '../src/SlackModels'
-import { SlackSubscriptions } from '../src/SlackSubscriptions'
 import {
 	SlackAgentSessionStoppedEnvelope,
 	SlackAppMentionEnvelope,
@@ -32,6 +32,7 @@ import {
 	SlackReactionRemovedEnvelope,
 } from '../src/SlackWebhookSchemas'
 import { makeInMemoryMailboxFixture } from './fixtures'
+import { MailboxSubscriptionsMemory } from './MailboxSubscriptionsMemory'
 
 const teamId = SlackTeamId.make('T_TEST')
 const channelId = SlackChannelId.make('C_TEST')
@@ -124,10 +125,10 @@ const apiLayer = Layer.mock(SlackApi, {
 		),
 })
 
-const runtimeLayer = Layer.merge(apiLayer, SlackSubscriptions.layerMemory)
+const runtimeLayer = Layer.merge(apiLayer, MailboxSubscriptionsMemory)
 const subscribedRuntimeLayer = Layer.merge(
 	apiLayer,
-	Layer.mock(SlackSubscriptions, { isSubscribed: () => Effect.succeed(true) }),
+	Layer.mock(MailboxSubscriptions, { isSubscribed: () => Effect.succeed(true) }),
 )
 
 const process = <E, R>(

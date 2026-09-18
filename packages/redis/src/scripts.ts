@@ -1,7 +1,7 @@
 import { Predicate } from 'effect'
 import * as Redis from 'effect/unstable/persistence/Redis'
 
-import { mailboxEventsKey, mailboxPendingKey, mailboxStateKey, readyMailboxesKey } from './keys'
+import { mailboxEventsKey, mailboxPendingKey, mailboxStateKey, readyMailboxesKey } from './Keys'
 
 export const admit = Redis.script(
 	(input: {
