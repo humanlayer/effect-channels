@@ -42,7 +42,7 @@ export const makeDeliverFromDurableObjectStorage = Effect.gen(function* () {
 				if (Predicate.isNotUndefined(yield* transaction.get<number>(eventKey))) return { accepted: false }
 				const stored = yield* transaction.get(mailboxStateKey)
 				const current = Predicate.isUndefined(stored)
-					? emptyMailboxState(deliveryMailboxKey(admission))
+					? emptyMailboxState({ mailboxKey: deliveryMailboxKey(admission), provider: admission.provider })
 					: yield* Schema.decodeUnknownEffect(DurableMailboxState)(stored).pipe(
 							Effect.catchTag('SchemaError', (error) =>
 								Effect.logError('Cloudflare mailbox state decode failed', error).pipe(
@@ -50,14 +50,15 @@ export const makeDeliverFromDurableObjectStorage = Effect.gen(function* () {
 								),
 							),
 						)
+				const wakesMailbox = current.status === 'idle'
 				const next = DurableMailboxState.make({
 					...current,
 					nextSequence: current.nextSequence + 1,
-					pending: [...current.pending, admission],
-					readyAt: current.status === 'idle' ? now : current.readyAt,
+					waiting: [...current.waiting, { sequence: current.nextSequence, arrivedAt: now, admission }],
+					readyAt: wakesMailbox ? now : current.readyAt,
 				})
 				yield* transaction.put({ [eventKey]: current.nextSequence, [mailboxStateKey]: next })
-				if (Predicate.isNotNull(next.readyAt)) yield* transaction.setAlarm(next.readyAt)
+				if (wakesMailbox) yield* transaction.setAlarm(now)
 				return { accepted: true }
 			}),
 		)

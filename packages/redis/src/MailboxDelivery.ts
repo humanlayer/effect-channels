@@ -26,7 +26,13 @@ const deliver = Effect.fn('delivery.redis.deliver')(function* (admission: Delive
 	const admissionJson = yield* Schema.encodeEffect(admissionCodec)(admission)
 	const redis = yield* Redis.Redis
 	const now = yield* Clock.currentTimeMillis
-	const result = yield* redis.eval(Scripts.admit)({ mailboxKey, eventId: admission.eventId, admissionJson, now })
+	const result = yield* redis.eval(Scripts.admit)({
+		mailboxKey,
+		provider: admission.provider,
+		eventId: admission.eventId,
+		admissionJson,
+		now,
+	})
 	const accepted = yield* Schema.decodeUnknownEffect(Schema.Literals([0, 1]))(result)
 	return DeliveryReceipt.make({ mailboxKey, accepted: accepted === 1 })
 }, unavailable)

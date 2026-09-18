@@ -1,3 +1,13 @@
+/**
+ * The SQL store behind delivery-next's MailboxProcessingBackend.
+ *
+ * Every write that reads waiting admissions first takes the mailbox row `FOR UPDATE` in its own statement.
+ * `deliver` takes the same lock, so under READ COMMITTED the statements that follow see every admission
+ * committed before the lock was granted. Folding the lock and the read into one statement would not:
+ * a subquery keeps the snapshot from before the lock wait.
+ *
+ * All times come from Effect's Clock and reach SQL as parameters.
+ */
 import {
 	ClaimedMailboxBatch,
 	DeliveryAdmission,
@@ -6,25 +16,58 @@ import {
 	MailboxProcessingBackend,
 	MailboxProcessingClaimLost,
 	MailboxProcessingUnavailable,
+	MailboxSequence,
+	RecoverableMailbox,
+	Timestamp,
+	WaitingMailbox,
+	type ClaimMailbox,
+	type DeferMailbox,
 	type RecordProcessingAttemptResult,
+	type RenewMailboxClaim,
 } from '@humanlayer/channels-delivery-next'
-import { Clock, Effect, Layer, Match, Predicate, Random, Schema } from 'effect'
+import { Clock, Effect, Layer, Match, Option, Predicate, Random, Schema } from 'effect'
 import * as SqlClient from 'effect/unstable/sql/SqlClient'
 import * as SqlError from 'effect/unstable/sql/SqlError'
 
 import { migrate } from './MailboxDelivery'
 
-const batchCodec = Schema.fromJsonString(DeliveryAdmissionBatch)
 const resultCodec = Schema.fromJsonString(MailboxProcessingAttemptResult)
+
+const PositiveInt = Schema.Int.check(Schema.isGreaterThan(0))
+
 const readyMailboxRows = Schema.Array(
-	Schema.Struct({
-		mailbox_key: Schema.NonEmptyString,
-		status: Schema.Literals(['idle', 'active', 'retry']),
-		attempt: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
-		active_batch_json: Schema.NullOr(batchCodec),
-	}),
+	Schema.Union([
+		Schema.Struct({
+			status: Schema.Literal('idle'),
+			mailbox_key: Schema.NonEmptyString,
+			provider: Schema.NonEmptyString,
+			waiting_count: PositiveInt,
+			first_sequence: MailboxSequence,
+			first_arrived_at: Timestamp,
+			last_sequence: MailboxSequence,
+			last_arrived_at: Timestamp,
+		}),
+		Schema.Struct({
+			status: Schema.Literals(['active', 'retry']),
+			mailbox_key: Schema.NonEmptyString,
+		}),
+	]),
 )
-const pendingRows = Schema.Array(Schema.Struct({ admission_json: Schema.fromJsonString(DeliveryAdmission) }))
+
+const lockedMailboxRows = Schema.Array(Schema.Struct({ status: Schema.Literals(['idle', 'active', 'retry']) })).check(
+	Schema.isMaxLength(1),
+)
+
+/** The one claim of a mailbox that is running or waiting for its retry. The claims table allows at most one. */
+const liveClaimRows = Schema.Array(Schema.Struct({ claim_id: Schema.NonEmptyString, attempt: PositiveInt })).check(
+	Schema.isMaxLength(1),
+)
+
+const admissionRows = Schema.Array(Schema.Struct({ admission_json: Schema.fromJsonString(DeliveryAdmission) }))
+
+const mailboxKeyRows = Schema.Array(Schema.Struct({ mailbox_key: Schema.NonEmptyString })).check(Schema.isMaxLength(1))
+
+const claimIdRows = Schema.Array(Schema.Struct({ claim_id: Schema.NonEmptyString })).check(Schema.isMaxLength(1))
 
 const unavailable = <A, R>(
 	effect: Effect.Effect<A, MailboxProcessingUnavailable | Schema.SchemaError | SqlError.SqlError, R>,
@@ -43,102 +86,309 @@ const makeClaimId = Effect.gen(function* () {
 	return `${now}-${random}`
 })
 
-const claimReadyMailboxes = (claimLimit: number, recoveryAfterMs: number) =>
+const toBatch = (rows: typeof admissionRows.Type) => {
+	const [first, ...rest] = rows.map(({ admission_json }) => admission_json)
+	return Predicate.isUndefined(first) ? Option.none() : Option.some(DeliveryAdmissionBatch.make([first, ...rest]))
+}
+
+const findReadyMailboxes = Effect.fn('delivery.sql.find_ready_mailboxes')(function* (claimLimit: number) {
+	const now = yield* Clock.currentTimeMillis
+	const sql = (yield* SqlClient.SqlClient).withoutTransforms()
+	const rows = yield* Schema.decodeUnknownEffect(readyMailboxRows)(
+		yield* sql`SELECT mailbox.status, mailbox.mailbox_key, mailbox.provider,
+				waiting.waiting_count, waiting.first_sequence, waiting.first_arrived_at,
+				waiting.last_sequence, waiting.last_arrived_at
+			FROM delivery_next_mailboxes mailbox
+			LEFT JOIN LATERAL (
+				SELECT count(*)::double precision AS waiting_count,
+					min(sequence_id)::double precision AS first_sequence,
+					(array_agg(arrived_at ORDER BY sequence_id ASC))[1] AS first_arrived_at,
+					max(sequence_id)::double precision AS last_sequence,
+					(array_agg(arrived_at ORDER BY sequence_id DESC))[1] AS last_arrived_at
+				FROM delivery_next_admissions admission
+				WHERE mailbox.status = 'idle' AND admission.mailbox_key = mailbox.mailbox_key
+					AND admission.claim_id IS NULL
+			) waiting ON true
+			WHERE mailbox.ready_at <= ${now} AND (mailbox.status IN ('active', 'retry') OR waiting.waiting_count > 0)
+			ORDER BY mailbox.ready_at, mailbox.mailbox_key LIMIT ${claimLimit}`,
+	)
+	return rows.map((row) =>
+		Match.value(row).pipe(
+			Match.discriminatorsExhaustive('status')({
+				idle: (idle) =>
+					WaitingMailbox.make({
+						mailboxKey: idle.mailbox_key,
+						provider: idle.provider,
+						waiting: {
+							count: idle.waiting_count,
+							firstSequence: idle.first_sequence,
+							firstArrivedAt: idle.first_arrived_at,
+							lastSequence: idle.last_sequence,
+							lastArrivedAt: idle.last_arrived_at,
+						},
+					}),
+				active: ({ mailbox_key }) => RecoverableMailbox.make({ mailboxKey: mailbox_key }),
+				retry: ({ mailbox_key }) => RecoverableMailbox.make({ mailboxKey: mailbox_key }),
+			}),
+		),
+	)
+}, unavailable)
+
+type StartClaim = {
+	readonly mailboxKey: string
+	readonly claimId: string
+	readonly attempt: number
+	readonly now: number
+	readonly leaseExpiresAt: number
+}
+
+/** Insert the claim row. Admissions point at it, so it must exist before they are moved onto it. */
+const insertClaim = (input: StartClaim) =>
+	Effect.gen(function* () {
+		const sql = (yield* SqlClient.SqlClient).withoutTransforms()
+		yield* sql`INSERT INTO delivery_next_claims (claim_id, mailbox_key, attempt, status, lease_expires_at, claimed_at)
+			VALUES (${input.claimId}, ${input.mailboxKey}, ${input.attempt}, 'active', ${input.leaseExpiresAt}, ${input.now})`
+	})
+
+const activateMailbox = (input: StartClaim) =>
+	Effect.gen(function* () {
+		const sql = (yield* SqlClient.SqlClient).withoutTransforms()
+		yield* sql`UPDATE delivery_next_mailboxes
+			SET status = 'active', ready_at = ${input.leaseExpiresAt}
+			WHERE mailbox_key = ${input.mailboxKey}`
+	})
+
+/** Freeze the waiting admissions at or below `upToSequence` as attempt 1 of a new claim. Runs under the mailbox lock. */
+const claimWaitingEvents = (input: StartClaim & { readonly upToSequence: number }) =>
+	Effect.gen(function* () {
+		const sql = (yield* SqlClient.SqlClient).withoutTransforms()
+		const admissions = toBatch(
+			yield* Schema.decodeUnknownEffect(admissionRows)(
+				yield* sql`SELECT admission_json FROM delivery_next_admissions
+					WHERE mailbox_key = ${input.mailboxKey} AND claim_id IS NULL AND sequence_id <= ${input.upToSequence}
+					ORDER BY sequence_id`,
+			),
+		)
+		if (Option.isNone(admissions)) return Option.none()
+		yield* insertClaim(input)
+		yield* sql`UPDATE delivery_next_admissions SET claim_id = ${input.claimId}
+			WHERE mailbox_key = ${input.mailboxKey} AND claim_id IS NULL AND sequence_id <= ${input.upToSequence}`
+		yield* activateMailbox(input)
+		return Option.some(
+			ClaimedMailboxBatch.make({
+				mailboxKey: input.mailboxKey,
+				claimId: input.claimId,
+				attempt: input.attempt,
+				admissions: admissions.value,
+			}),
+		)
+	})
+
+/**
+ * Open a new claim for the batch frozen on `previousClaimId` and close the old claim.
+ * A claim that was waiting for its retry becomes 'retried'; one whose lease ran out becomes 'abandoned'.
+ * The old claim is closed first, because a mailbox may have only one live claim.
+ * Runs under the mailbox lock.
+ */
+const claimFrozenBatch = (input: StartClaim & { readonly previousClaimId: string }) =>
+	Effect.gen(function* () {
+		const sql = (yield* SqlClient.SqlClient).withoutTransforms()
+		yield* sql`UPDATE delivery_next_claims
+			SET status = CASE status WHEN 'active' THEN 'abandoned' ELSE 'retried' END,
+				finished_at = COALESCE(finished_at, ${input.now}::double precision)
+			WHERE claim_id = ${input.previousClaimId}`
+		yield* insertClaim(input)
+		yield* sql`UPDATE delivery_next_admissions SET claim_id = ${input.claimId}
+			WHERE claim_id = ${input.previousClaimId}`
+		const admissions = toBatch(
+			yield* Schema.decodeUnknownEffect(admissionRows)(
+				yield* sql`SELECT admission_json FROM delivery_next_admissions
+					WHERE claim_id = ${input.claimId} ORDER BY sequence_id`,
+			),
+		)
+		if (Option.isNone(admissions)) {
+			return yield* new MailboxProcessingUnavailable({ reason: 'sql_frozen_batch_missing' })
+		}
+		yield* activateMailbox(input)
+		return Option.some(
+			ClaimedMailboxBatch.make({
+				mailboxKey: input.mailboxKey,
+				claimId: input.claimId,
+				attempt: input.attempt,
+				admissions: admissions.value,
+			}),
+		)
+	})
+
+const claimMailbox = (input: ClaimMailbox) =>
 	Effect.gen(function* () {
 		const now = yield* Clock.currentTimeMillis
+		const claimId = yield* makeClaimId
 		const sql = (yield* SqlClient.SqlClient).withoutTransforms()
+		const { mailboxKey } = input
+		const leaseExpiresAt = now + input.leaseMs
 		return yield* sql.withTransaction(
 			Effect.gen(function* () {
-				const rows = yield* Schema.decodeUnknownEffect(readyMailboxRows)(
-					yield* sql`SELECT mailbox_key, status, attempt::double precision AS attempt, active_batch_json
-					FROM delivery_next_mailboxes
-					WHERE ready_at <= ${now} AND status IN ('idle', 'active', 'retry') AND (
-						status IN ('active', 'retry') OR EXISTS (
-							SELECT 1 FROM delivery_next_admissions admission
-							WHERE admission.mailbox_key = delivery_next_mailboxes.mailbox_key AND admission.consumed = false
-						)
-					)
-					ORDER BY ready_at, mailbox_key LIMIT ${claimLimit} FOR UPDATE SKIP LOCKED`,
+				const [mailbox] = yield* Schema.decodeUnknownEffect(lockedMailboxRows)(
+					yield* sql`SELECT status FROM delivery_next_mailboxes
+					WHERE mailbox_key = ${mailboxKey} AND ready_at <= ${now} FOR UPDATE`,
 				)
-				return yield* Effect.forEach(rows, (row) =>
-					Effect.gen(function* () {
-						const claimId = yield* makeClaimId
-						const pending =
-							row.status !== 'idle'
-								? null
-								: yield* Schema.decodeUnknownEffect(pendingRows)(
-										yield* sql`SELECT admission_json FROM delivery_next_admissions
-											WHERE mailbox_key = ${row.mailbox_key} AND consumed = false ORDER BY sequence_id`,
-									)
-						const pendingFirst = pending?.[0]
-						const admissions =
-							row.status !== 'idle'
-								? row.active_batch_json
-								: Predicate.isUndefined(pendingFirst)
-									? null
-									: DeliveryAdmissionBatch.make([
-											pendingFirst.admission_json,
-											...(pending ?? []).slice(1).map(({ admission_json }) => admission_json),
-										])
-						if (Predicate.isNull(admissions)) {
-							return yield* new MailboxProcessingUnavailable({ reason: 'sql_retry_batch_missing' })
-						}
-						if (row.status === 'idle') {
-							yield* sql`UPDATE delivery_next_admissions SET consumed = true
-							WHERE mailbox_key = ${row.mailbox_key} AND consumed = false`
-						}
-						const batchJson = yield* Schema.encodeEffect(batchCodec)(admissions)
-						const attempt = row.status !== 'idle' ? row.attempt + 1 : 1
-						yield* sql`UPDATE delivery_next_mailboxes SET status = 'active', claim_id = ${claimId},
-							attempt = ${attempt}, active_batch_json = ${batchJson}, ready_at = ${now + recoveryAfterMs}
-						WHERE mailbox_key = ${row.mailbox_key}`
-						return ClaimedMailboxBatch.make({ mailboxKey: row.mailbox_key, claimId, attempt, admissions })
+				if (Predicate.isUndefined(mailbox)) return Option.none()
+				const [liveClaim] = yield* Schema.decodeUnknownEffect(liveClaimRows)(
+					yield* sql`SELECT claim_id, attempt::double precision AS attempt FROM delivery_next_claims
+					WHERE mailbox_key = ${mailboxKey} AND status IN ('active', 'retry')`,
+				)
+				return yield* Match.value(input).pipe(
+					Match.tagsExhaustive({
+						ClaimWaitingEvents: ({ upToSequence }) =>
+							mailbox.status === 'idle'
+								? claimWaitingEvents({
+										mailboxKey,
+										claimId,
+										attempt: 1,
+										now,
+										leaseExpiresAt,
+										upToSequence,
+									})
+								: Effect.succeedNone,
+						ClaimFrozenBatch: () =>
+							mailbox.status === 'idle' || Predicate.isUndefined(liveClaim)
+								? Effect.succeedNone
+								: claimFrozenBatch({
+										mailboxKey,
+										claimId,
+										attempt: liveClaim.attempt + 1,
+										now,
+										leaseExpiresAt,
+										previousClaimId: liveClaim.claim_id,
+									}),
 					}),
 				)
 			}),
 		)
-	}).pipe(unavailable, Effect.withSpan('delivery.sql.claim_ready_mailboxes'))
+	}).pipe(
+		unavailable,
+		Effect.withSpan('delivery.sql.claim_mailbox', {
+			attributes: { mailbox_key: input.mailboxKey, claim_kind: input._tag },
+		}),
+	)
 
-const recordProcessingAttemptResult = (input: RecordProcessingAttemptResult) =>
+/** Put an idle mailbox off until later. A newer waiting event means delivery already woke it, so the deferral is dropped. */
+const deferMailbox = (input: DeferMailbox) =>
 	Effect.gen(function* () {
 		const sql = (yield* SqlClient.SqlClient).withoutTransforms()
-		const decoded = yield* Effect.gen(function* () {
-			const resultJson = yield* Schema.encodeEffect(resultCodec)(input.result)
-			const changed = yield* sql.withTransaction(
-				Match.value(input.result).pipe(
-					Match.tag('RetryableFailure', (result) => {
-						const readyAt = input.finishedAt + (result.retryAfterMs ?? 1_000)
-						return sql`UPDATE delivery_next_mailboxes SET status = 'retry', claim_id = NULL,
-						last_result_json = ${resultJson}, ready_at = ${readyAt}
-						WHERE mailbox_key = ${input.claim.mailboxKey} AND status = 'active'
-						AND claim_id = ${input.claim.claimId} RETURNING mailbox_key`
-					}),
-					Match.orElse(
-						() => sql`UPDATE delivery_next_mailboxes SET status = 'idle', claim_id = NULL,
-					attempt = 0, active_batch_json = NULL, last_result_json = ${resultJson},
-					ready_at = CASE WHEN EXISTS (
-						SELECT 1 FROM delivery_next_admissions WHERE mailbox_key = ${input.claim.mailboxKey} AND consumed = false
-					) THEN ${input.finishedAt} ELSE NULL END
-					WHERE mailbox_key = ${input.claim.mailboxKey} AND status = 'active'
-					AND claim_id = ${input.claim.claimId} RETURNING mailbox_key`,
-					),
-				),
+		yield* sql.withTransaction(
+			Effect.gen(function* () {
+				const locked = yield* Schema.decodeUnknownEffect(mailboxKeyRows)(
+					yield* sql`SELECT mailbox_key FROM delivery_next_mailboxes
+						WHERE mailbox_key = ${input.mailboxKey} AND status = 'idle' FOR UPDATE`,
+				)
+				if (locked.length === 0) return
+				yield* sql`UPDATE delivery_next_mailboxes SET ready_at = ${input.until}
+					WHERE mailbox_key = ${input.mailboxKey} AND (
+						SELECT max(sequence_id) FROM delivery_next_admissions
+						WHERE mailbox_key = ${input.mailboxKey} AND claim_id IS NULL
+					) = ${input.lastSequenceSeen}`
+			}),
+		)
+	}).pipe(
+		unavailable,
+		Effect.withSpan('delivery.sql.defer_mailbox', { attributes: { mailbox_key: input.mailboxKey } }),
+	)
+
+const claimLostUnless = (owned: boolean, claim: { readonly mailboxKey: string; readonly claimId: string }) =>
+	owned
+		? Effect.void
+		: Effect.fail(new MailboxProcessingClaimLost({ mailboxKey: claim.mailboxKey, claimId: claim.claimId }))
+
+const renewClaim = (input: RenewMailboxClaim) =>
+	Effect.gen(function* () {
+		const owned = yield* Effect.gen(function* () {
+			const now = yield* Clock.currentTimeMillis
+			const sql = (yield* SqlClient.SqlClient).withoutTransforms()
+			const leaseExpiresAt = now + input.leaseMs
+			return yield* sql.withTransaction(
+				Effect.gen(function* () {
+					yield* sql`SELECT mailbox_key FROM delivery_next_mailboxes
+						WHERE mailbox_key = ${input.mailboxKey} FOR UPDATE`
+					const renewed = yield* Schema.decodeUnknownEffect(claimIdRows)(
+						yield* sql`UPDATE delivery_next_claims SET lease_expires_at = ${leaseExpiresAt}
+							WHERE claim_id = ${input.claimId} AND mailbox_key = ${input.mailboxKey} AND status = 'active'
+							RETURNING claim_id`,
+					)
+					if (renewed.length === 0) return false
+					yield* sql`UPDATE delivery_next_mailboxes SET ready_at = ${leaseExpiresAt}
+						WHERE mailbox_key = ${input.mailboxKey}`
+					return true
+				}),
 			)
-			return yield* Schema.decodeUnknownEffect(
-				Schema.Array(Schema.Struct({ mailbox_key: Schema.NonEmptyString })).check(Schema.isMaxLength(1)),
-			)(changed)
 		}).pipe(unavailable)
-		if (decoded.length === 0) {
-			return yield* new MailboxProcessingClaimLost({
-				mailboxKey: input.claim.mailboxKey,
-				claimId: input.claim.claimId,
-			})
-		}
-	}).pipe(Effect.withSpan('delivery.sql.record_processing_attempt_result'))
+		yield* claimLostUnless(owned, input)
+	}).pipe(
+		Effect.withSpan('delivery.sql.renew_claim', {
+			attributes: { mailbox_key: input.mailboxKey, claim_id: input.claimId },
+		}),
+	)
+
+/**
+ * Close the claim with its result.
+ * A retryable failure leaves the claim live as 'retry', so the retry finds the frozen batch through it.
+ * Any other result releases the mailbox, and wakes it at once if events arrived while the batch ran.
+ */
+const recordProcessingAttemptResult = (input: RecordProcessingAttemptResult) =>
+	Effect.gen(function* () {
+		const { mailboxKey, claimId } = input.claim
+		const owned = yield* Effect.gen(function* () {
+			const sql = (yield* SqlClient.SqlClient).withoutTransforms()
+			const resultJson = yield* Schema.encodeEffect(resultCodec)(input.result)
+			const closeClaim = (status: 'retry' | 'completed' | 'failed') =>
+				sql`UPDATE delivery_next_claims
+					SET status = ${status}, result_json = ${resultJson}, finished_at = ${input.finishedAt}
+					WHERE claim_id = ${claimId}`
+			const ownedClaim = sql`SELECT claim_id FROM delivery_next_claims
+				WHERE claim_id = ${claimId} AND mailbox_key = ${mailboxKey} AND status = 'active'`
+			const releaseMailbox = sql`UPDATE delivery_next_mailboxes SET status = 'idle',
+				ready_at = CASE WHEN EXISTS (
+					SELECT 1 FROM delivery_next_admissions WHERE mailbox_key = ${mailboxKey} AND claim_id IS NULL
+				) THEN ${input.finishedAt}::double precision ELSE NULL END
+				WHERE mailbox_key = ${mailboxKey}`
+			return yield* sql.withTransaction(
+				Effect.gen(function* () {
+					yield* sql`SELECT mailbox_key FROM delivery_next_mailboxes WHERE mailbox_key = ${mailboxKey} FOR UPDATE`
+					const owned = yield* Schema.decodeUnknownEffect(claimIdRows)(yield* ownedClaim)
+					if (owned.length === 0) return false
+					yield* Match.value(input.result).pipe(
+						Match.tagsExhaustive({
+							RetryableFailure: ({ retryAfterMs }) =>
+								closeClaim('retry').pipe(
+									Effect.andThen(
+										sql`UPDATE delivery_next_mailboxes
+											SET status = 'retry', ready_at = ${input.finishedAt + (retryAfterMs ?? 1_000)}
+											WHERE mailbox_key = ${mailboxKey}`,
+									),
+								),
+							Completed: () => closeClaim('completed').pipe(Effect.andThen(releaseMailbox)),
+							TerminalFailure: () => closeClaim('failed').pipe(Effect.andThen(releaseMailbox)),
+						}),
+					)
+					return true
+				}),
+			)
+		}).pipe(unavailable)
+		yield* claimLostUnless(owned, input.claim)
+	}).pipe(
+		Effect.withSpan('delivery.sql.record_processing_attempt_result', {
+			attributes: {
+				mailbox_key: input.claim.mailboxKey,
+				claim_id: input.claim.claimId,
+				result: input.result._tag,
+			},
+		}),
+	)
 
 export type MailboxProcessingBackendSqlOptions = {
+	/** The most mailboxes one `findReadyMailboxes` reports. */
 	readonly claimLimit: number
-	readonly recoveryAfterMs: number
 	readonly runMigrations: boolean
 }
 
@@ -149,9 +399,12 @@ export const MailboxProcessingBackendSql = (options: MailboxProcessingBackendSql
 			const sql = yield* SqlClient.SqlClient
 			if (options.runMigrations) yield* migrate
 			return MailboxProcessingBackend.of({
-				claimReadyMailboxes: claimReadyMailboxes(options.claimLimit, options.recoveryAfterMs).pipe(
+				findReadyMailboxes: findReadyMailboxes(options.claimLimit).pipe(
 					Effect.provideService(SqlClient.SqlClient, sql),
 				),
+				claimMailbox: (input) => claimMailbox(input).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
+				deferMailbox: (input) => deferMailbox(input).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
+				renewClaim: (input) => renewClaim(input).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
 				recordProcessingAttemptResult: (input) =>
 					recordProcessingAttemptResult(input).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
 			})

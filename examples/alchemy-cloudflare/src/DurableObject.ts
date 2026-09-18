@@ -2,10 +2,11 @@ import {
 	MailboxProcessingBackendFromDurableObjectStorage,
 	MailboxSubscriptionsFromDurableObjectStorage,
 	makeDeliverFromDurableObjectStorage,
+	makeMailboxAlarmHandler,
 } from '@humanlayer/channels-alchemy-cloudflare'
-import { MailboxProcessing, MailboxProcessingLive } from '@humanlayer/channels-delivery-next'
+import { DebounceDeliveryMode, MailboxProcessingLive, QueueDeliveryMode } from '@humanlayer/channels-delivery-next'
 import * as Cloudflare from 'alchemy/Cloudflare'
-import { Clock, Effect, Layer } from 'effect'
+import { Effect, Layer } from 'effect'
 
 import { ProviderEventDispatcherSlack } from './SlackProvider'
 
@@ -13,14 +14,19 @@ import { ProviderEventDispatcherSlack } from './SlackProvider'
 export class DeliveryMailbox extends Cloudflare.DurableObject<DeliveryMailbox>()(
 	'DeliveryMailbox',
 	Effect.gen(function* () {
-		const state = yield* Cloudflare.DurableObjectState
-		const recoveryAfterMs = 30_000
+		const leaseMs = 30_000
 
 		const MailboxProcessingAlchemyCloudflare = MailboxProcessingLive({
 			concurrency: 1,
 			maxAttempts: 5,
+			leaseMs,
+			polling: 'disabled',
+			deliveryModeFor: (provider) =>
+				provider === 'slack'
+					? DebounceDeliveryMode.make({ quietPeriodMs: 2_000, maxWaitMs: 10_000 })
+					: QueueDeliveryMode.make({}),
 		}).pipe(
-			Layer.provide(MailboxProcessingBackendFromDurableObjectStorage({ recoveryAfterMs })),
+			Layer.provide(MailboxProcessingBackendFromDurableObjectStorage),
 			Layer.provide(
 				ProviderEventDispatcherSlack.pipe(Layer.provide(MailboxSubscriptionsFromDurableObjectStorage)),
 			),
@@ -28,21 +34,9 @@ export class DeliveryMailbox extends Cloudflare.DurableObject<DeliveryMailbox>()
 
 		return Effect.gen(function* () {
 			const deliver = yield* makeDeliverFromDurableObjectStorage
-			const processing = yield* MailboxProcessing
+			const runMailboxAlarm = yield* makeMailboxAlarmHandler({ rearmAfterMs: 1_000 })
 
-			return {
-				deliver,
-				alarm: () =>
-					processing.processReady.pipe(
-						Effect.asVoid,
-						Effect.catch((error) =>
-							Effect.logError('Mailbox alarm could not claim ready work', error).pipe(
-								Effect.andThen(Clock.currentTimeMillis),
-								Effect.flatMap((now) => state.storage.setAlarm(now + recoveryAfterMs)),
-							),
-						),
-					),
-			}
+			return { deliver, alarm: () => runMailboxAlarm }
 		}).pipe(Effect.provide(MailboxProcessingAlchemyCloudflare))
 	}),
 ) {}

@@ -1,4 +1,5 @@
 export * from './MailboxDelivery'
+export * from './MailboxPolicy'
 export * from './MailboxProcessing'
 export * from './ProviderWebhooks'
 export * from './ProviderEventProcessing'

@@ -17,6 +17,7 @@
 		"effect": "catalog:"
 	},
 	"devDependencies": {
+		"@effect/sql-pg": "catalog:",
 		"@effect/vitest": "catalog:",
 		"typescript": "catalog:"
 	}

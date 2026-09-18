@@ -1,11 +1,31 @@
+/**
+ * The Lua scripts behind the Redis mailbox store.
+ *
+ * The scripts know nothing about delivery modes. They report what is waiting and take exactly
+ * what they are told to take. Every time they see arrives as an argument; none reads the Redis clock.
+ *
+ * A waiting event is one pending-list entry: `<sequence>|<arrivedAt>|<admission JSON>`.
+ * The scripts cut entries apart and join admissions as plain text, so an admission never passes
+ * through cjson, which would turn `[]` into `{}` and round large numbers.
+ */
 import { Predicate } from 'effect'
 import * as Redis from 'effect/unstable/persistence/Redis'
 
 import { mailboxEventsKey, mailboxPendingKey, mailboxStateKey, readyMailboxesKey } from './Keys'
 
+/** Splits one pending entry into its sequence, arrival time and admission JSON. */
+const parseEntry = `
+local function parse_entry(entry)
+  local first = string.find(entry, '|', 1, true)
+  local second = string.find(entry, '|', first + 1, true)
+  return string.sub(entry, 1, first - 1), string.sub(entry, first + 1, second - 1), string.sub(entry, second + 1)
+end
+`
+
 export const admit = Redis.script(
 	(input: {
 		readonly mailboxKey: string
+		readonly provider: string
 		readonly eventId: string
 		readonly admissionJson: string
 		readonly now: number
@@ -15,6 +35,7 @@ export const admit = Redis.script(
 		mailboxPendingKey(input.mailboxKey),
 		mailboxEventsKey(input.mailboxKey),
 		input.mailboxKey,
+		input.provider,
 		input.eventId,
 		input.admissionJson,
 		input.now,
@@ -22,65 +43,161 @@ export const admit = Redis.script(
 	{
 		numberOfKeys: 4,
 		lua: `
-if redis.call('SISMEMBER', KEYS[4], ARGV[2]) == 1 then return 0 end
-redis.call('SADD', KEYS[4], ARGV[2])
-redis.call('RPUSH', KEYS[3], ARGV[3])
-local status = redis.call('HGET', KEYS[2], 'status') or 'idle'
+if redis.call('SADD', KEYS[4], ARGV[3]) == 0 then return 0 end
+local sequence = redis.call('HINCRBY', KEYS[2], 'next_sequence', 1) - 1
+redis.call('RPUSH', KEYS[3], string.format('%.0f', sequence) .. '|' .. ARGV[5] .. '|' .. ARGV[4])
+local status = redis.call('HGET', KEYS[2], 'status')
+if not status then
+  redis.call('HSET', KEYS[2], 'status', 'idle', 'attempt', '0', 'provider', ARGV[2])
+  status = 'idle'
+end
 if status == 'idle' then
-  redis.call('HSET', KEYS[2], 'status', 'idle', 'attempt', '0')
-  redis.call('ZADD', KEYS[1], ARGV[4], ARGV[1])
+  redis.call('HSET', KEYS[2], 'ready_at', ARGV[5])
+  redis.call('ZADD', KEYS[1], ARGV[5], ARGV[1])
 end
 return 1
 `,
 	},
 ).withReturnType<unknown>()
 
+/**
+ * Reports one due mailbox: `{ status, provider, count, firstSequence, firstArrivedAt, lastSequence, lastArrivedAt }`.
+ * The waiting fields are empty strings unless the mailbox is idle.
+ * Returns false when the mailbox is not due. An idle mailbox with nothing waiting leaves the ready set.
+ */
+export const look = Redis.script(
+	(input: { readonly mailboxKey: string; readonly now: number }) => [
+		readyMailboxesKey,
+		mailboxStateKey(input.mailboxKey),
+		mailboxPendingKey(input.mailboxKey),
+		input.mailboxKey,
+		input.now,
+	],
+	{
+		numberOfKeys: 3,
+		lua: `${parseEntry}
+local score = redis.call('ZSCORE', KEYS[1], ARGV[1])
+if not score or tonumber(score) > tonumber(ARGV[2]) then return false end
+local status = redis.call('HGET', KEYS[2], 'status') or 'idle'
+local provider = redis.call('HGET', KEYS[2], 'provider') or ''
+if status ~= 'idle' then return { status, provider, '0', '', '', '', '' } end
+local count = redis.call('LLEN', KEYS[3])
+if count == 0 then
+  redis.call('HDEL', KEYS[2], 'ready_at')
+  redis.call('ZREM', KEYS[1], ARGV[1])
+  return false
+end
+local first_sequence, first_arrived_at = parse_entry(redis.call('LINDEX', KEYS[3], 0))
+local last_sequence, last_arrived_at = parse_entry(redis.call('LINDEX', KEYS[3], -1))
+return { status, provider, tostring(count), first_sequence, first_arrived_at, last_sequence, last_arrived_at }
+`,
+	},
+).withReturnType<unknown>()
+
+/**
+ * Freezes a batch and starts its lease. Returns `{ claimId, attempt, batch JSON }`, or false when the mailbox
+ * is not due or not in the state the caller named.
+ *
+ * With `upToSequence` it takes waiting events from an idle mailbox, oldest first, up to that sequence.
+ * Without it, it takes the frozen batch of an active or retry mailbox again.
+ */
 export const claim = Redis.script(
 	(input: {
 		readonly mailboxKey: string
-		readonly claimId: string
+		readonly claimNonce: string
 		readonly now: number
-		readonly recoveryAt: number
+		readonly leaseUntil: number
+		readonly upToSequence: number | null
 	}) => [
 		readyMailboxesKey,
 		mailboxStateKey(input.mailboxKey),
 		mailboxPendingKey(input.mailboxKey),
 		input.mailboxKey,
-		input.claimId,
+		input.claimNonce,
 		input.now,
-		input.recoveryAt,
+		input.leaseUntil,
+		Predicate.isNull(input.upToSequence) ? '' : input.upToSequence,
 	],
 	{
 		numberOfKeys: 3,
-		lua: `
+		lua: `${parseEntry}
 local score = redis.call('ZSCORE', KEYS[1], ARGV[1])
 if not score or tonumber(score) > tonumber(ARGV[3]) then return false end
 local status = redis.call('HGET', KEYS[2], 'status') or 'idle'
-if status ~= 'idle' and status ~= 'retry' and status ~= 'active' then return false end
 local batch_json
-local admissions
 local attempt
-if status == 'retry' or status == 'active' then
-  batch_json = redis.call('HGET', KEYS[2], 'batch')
-  if not batch_json then return redis.error_reply('DELIVERY_RETRY_BATCH_MISSING') end
-  admissions = cjson.decode(batch_json)
-  attempt = tonumber(redis.call('HGET', KEYS[2], 'attempt') or '0') + 1
-else
-  local pending = redis.call('LRANGE', KEYS[3], 0, -1)
-  if #pending == 0 then
-    redis.call('ZREM', KEYS[1], ARGV[1])
-    return false
+if ARGV[5] ~= '' then
+  if status ~= 'idle' then return false end
+  local up_to = tonumber(ARGV[5])
+  local admissions = {}
+  while true do
+    local entry = redis.call('LINDEX', KEYS[3], 0)
+    if not entry then break end
+    local sequence, _, admission = parse_entry(entry)
+    if tonumber(sequence) > up_to then break end
+    redis.call('LPOP', KEYS[3])
+    admissions[#admissions + 1] = admission
   end
-  admissions = {}
-  for index, encoded in ipairs(pending) do admissions[index] = cjson.decode(encoded) end
-  batch_json = cjson.encode(admissions)
-  redis.call('DEL', KEYS[3])
+  if #admissions == 0 then return false end
+  batch_json = '[' .. table.concat(admissions, ',') .. ']'
   attempt = 1
+else
+  if status ~= 'active' and status ~= 'retry' then return false end
+  batch_json = redis.call('HGET', KEYS[2], 'batch')
+  if not batch_json then return false end
+  attempt = tonumber(redis.call('HGET', KEYS[2], 'attempt') or '0') + 1
 end
-redis.call('HSET', KEYS[2], 'status', 'active', 'claim_id', ARGV[2], 'attempt', attempt,
+local claim_id = ARGV[2] .. '-' .. string.format('%.0f', redis.call('HINCRBY', KEYS[2], 'claims_made', 1))
+redis.call('HSET', KEYS[2], 'status', 'active', 'claim_id', claim_id, 'attempt', attempt,
   'batch', batch_json, 'ready_at', ARGV[4])
 redis.call('ZADD', KEYS[1], ARGV[4], ARGV[1])
-return cjson.encode({ attempt = attempt, admissions = admissions })
+return { claim_id, attempt, batch_json }
+`,
+	},
+).withReturnType<unknown>()
+
+/** Moves an idle mailbox's wake-up time, unless an event newer than `lastSequenceSeen` has arrived. */
+export const defer = Redis.script(
+	(input: { readonly mailboxKey: string; readonly until: number; readonly lastSequenceSeen: number }) => [
+		readyMailboxesKey,
+		mailboxStateKey(input.mailboxKey),
+		mailboxPendingKey(input.mailboxKey),
+		input.mailboxKey,
+		input.until,
+		input.lastSequenceSeen,
+	],
+	{
+		numberOfKeys: 3,
+		lua: `${parseEntry}
+if (redis.call('HGET', KEYS[2], 'status') or 'idle') ~= 'idle' then return 0 end
+local last = redis.call('LINDEX', KEYS[3], -1)
+if not last then return 0 end
+local last_sequence = parse_entry(last)
+if tonumber(last_sequence) ~= tonumber(ARGV[3]) then return 0 end
+redis.call('HSET', KEYS[2], 'ready_at', ARGV[2])
+redis.call('ZADD', KEYS[1], ARGV[2], ARGV[1])
+return 1
+`,
+	},
+).withReturnType<unknown>()
+
+/** Moves the lease of a live claim forward. Returns 0 when the claim is no longer the caller's. */
+export const renew = Redis.script(
+	(input: { readonly mailboxKey: string; readonly claimId: string; readonly leaseUntil: number }) => [
+		readyMailboxesKey,
+		mailboxStateKey(input.mailboxKey),
+		input.mailboxKey,
+		input.claimId,
+		input.leaseUntil,
+	],
+	{
+		numberOfKeys: 2,
+		lua: `
+if redis.call('HGET', KEYS[2], 'status') ~= 'active' or
+   redis.call('HGET', KEYS[2], 'claim_id') ~= ARGV[2] then return 0 end
+redis.call('HSET', KEYS[2], 'ready_at', ARGV[3])
+redis.call('ZADD', KEYS[1], ARGV[3], ARGV[1])
+return 1
 `,
 	},
 ).withReturnType<unknown>()
@@ -108,17 +225,20 @@ export const recordResult = Redis.script(
 if redis.call('HGET', KEYS[2], 'status') ~= 'active' or
    redis.call('HGET', KEYS[2], 'claim_id') ~= ARGV[2] then return 0 end
 redis.call('HSET', KEYS[2], 'last_result', ARGV[3])
+redis.call('HDEL', KEYS[2], 'claim_id')
 if ARGV[4] ~= '' then
-  redis.call('HSET', KEYS[2], 'status', 'retry', 'claim_id', '', 'ready_at', ARGV[4])
+  redis.call('HSET', KEYS[2], 'status', 'retry', 'ready_at', ARGV[4])
   redis.call('ZADD', KEYS[1], ARGV[4], ARGV[1])
+  return 1
+end
+redis.call('HSET', KEYS[2], 'status', 'idle', 'attempt', '0')
+redis.call('HDEL', KEYS[2], 'batch')
+if redis.call('LLEN', KEYS[3]) > 0 then
+  redis.call('HSET', KEYS[2], 'ready_at', ARGV[5])
+  redis.call('ZADD', KEYS[1], ARGV[5], ARGV[1])
 else
-  redis.call('HSET', KEYS[2], 'status', 'idle', 'claim_id', '', 'attempt', '0', 'batch', '', 'ready_at', '')
-  if redis.call('LLEN', KEYS[3]) > 0 then
-    redis.call('HSET', KEYS[2], 'ready_at', ARGV[5])
-    redis.call('ZADD', KEYS[1], ARGV[5], ARGV[1])
-  else
-    redis.call('ZREM', KEYS[1], ARGV[1])
-  end
+  redis.call('HDEL', KEYS[2], 'ready_at')
+  redis.call('ZREM', KEYS[1], ARGV[1])
 end
 return 1
 `,

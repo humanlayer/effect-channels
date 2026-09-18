@@ -17,7 +17,10 @@
 		"effect": "catalog:"
 	},
 	"devDependencies": {
+		"@effect/platform-node": "catalog:",
 		"@effect/vitest": "catalog:",
-		"typescript": "catalog:"
+		"redis": "^5.11.0",
+		"typescript": "catalog:",
+		"vitest": "catalog:"
 	}
 }
