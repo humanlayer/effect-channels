@@ -1,12 +1,13 @@
+import { Effect, Layer, Ref } from 'effect'
+
 import {
 	MailboxSubscriptionAlreadyExistsResult,
 	MailboxSubscriptionCreatedResult,
 	type MailboxSubscriptionResult,
 	MailboxSubscriptions,
-} from '@humanlayer/channels-delivery-next'
-import { Effect, Layer, Ref } from 'effect'
+} from './MailboxSubscriptions'
 
-/** In-memory subscription storage for Slack tests only. */
+/** In-memory subscription storage, for tests and local development. */
 export const MailboxSubscriptionsMemory = Layer.effect(
 	MailboxSubscriptions,
 	Effect.gen(function* () {

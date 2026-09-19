@@ -1,17 +1,16 @@
 /**
- * Application-owned Slack processor with placeholder callbacks.
+ * The bot: its providers, callbacks and event processing settings.
+ * The Worker and the Durable Object both build their half from this one value.
  */
-import { ProviderEventDispatcherLive } from '@humanlayer/channels-delivery-next'
-import { makeSlackEventProcessor, SlackApiLive, SlackContent, SlackReaction } from '@humanlayer/channels-slack-next'
-import { Effect, Layer, Predicate } from 'effect'
+import { ChannelsCloudflare } from '@humanlayer/channels-alchemy-cloudflare'
+import { DebounceDeliveryMode } from '@humanlayer/channels-delivery-next'
+import { SlackBot, SlackContent, SlackReaction } from '@humanlayer/channels-slack-next'
+import { Config, Effect, Predicate } from 'effect'
 
-import { applicationNamespace } from './config'
-
-/**
- * Application-owned Slack processor with placeholder callbacks.
- */
-const slackProcessor = makeSlackEventProcessor({
-	namespace: applicationNamespace,
+/** Slack with placeholder callbacks. `SlackApiLive`, the default, reads `SLACK_BOT_TOKEN`. */
+const slack = SlackBot.make({
+	signingSecret: Config.redacted('SLACK_SIGNING_SECRET'),
+	deliveryMode: DebounceDeliveryMode.make({ quietPeriodMs: 2_000, maxWaitMs: 10_000 }),
 	handlers: {
 		onNewMention: (event) =>
 			Effect.gen(function* () {
@@ -49,11 +48,8 @@ const slackProcessor = makeSlackEventProcessor({
 	},
 })
 
-export const SlackApiAlchemyCloudflare = SlackApiLive.pipe(
-	Layer.tapError((error) => Effect.logError('Slack API configuration is invalid', error)),
-	Layer.orDie,
-)
-
-export const ProviderEventDispatcherSlack = ProviderEventDispatcherLive([slackProcessor]).pipe(
-	Layer.provide(SlackApiAlchemyCloudflare),
-)
+export const bot = ChannelsCloudflare.make({
+	namespace: 'alchemy-cloudflare-example',
+	providers: [slack],
+	eventProcessing: { concurrency: 1, maxAttempts: 5, leaseMs: 30_000 },
+})

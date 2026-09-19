@@ -45,6 +45,7 @@
         "effect": "catalog:",
       },
       "devDependencies": {
+        "@effect/platform-node": "catalog:",
         "@effect/vitest": "catalog:",
         "typescript": "catalog:",
       },
@@ -84,6 +85,7 @@
         "emulate": "^0.11.2",
       },
       "devDependencies": {
+        "@effect/platform-node": "catalog:",
         "@effect/vitest": "catalog:",
         "typescript": "catalog:",
       },

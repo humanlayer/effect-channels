@@ -251,14 +251,19 @@ export class ProviderEventDispatcher extends Context.Service<
  * Constructor for ProviderEventDispatcher live layer which accepts a set of processors
  * BUT this lets the MailboxProcessing layer stub/mock this out and not have to worry about the providers
  */
-export const ProviderEventDispatcherLive = <R>(processors: ReadonlyArray<ProviderEventProcessor<R>>) =>
+export const ProviderEventDispatcherLive = <const Requirements extends ReadonlyArray<unknown>>(processors: {
+	// One type per processor, so processors that need different services can share a list.
+	readonly [Index in keyof Requirements]: ProviderEventProcessor<Requirements[Index]>
+}) =>
 	Layer.effect(
 		ProviderEventDispatcher,
 		Effect.gen(function* () {
-			const processorContext = yield* Effect.context<R>()
+			const processorContext = yield* Effect.context<Requirements[number]>()
 			return ProviderEventDispatcher.of({
 				process: (admissions) =>
-					processProviderEvent(processors)(admissions).pipe(Effect.provide(processorContext)),
+					processProviderEvent<Requirements[number]>(processors)(admissions).pipe(
+						Effect.provide(processorContext),
+					),
 			})
 		}),
 	)

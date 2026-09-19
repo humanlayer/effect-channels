@@ -8,6 +8,7 @@ import {
 	ProviderEventHandled,
 	ProviderEventIgnored,
 	ProviderEventInvalid,
+	MailboxSubscriptionsMemory,
 } from '@humanlayer/channels-delivery-next'
 import { Effect, Layer } from 'effect'
 import { vi } from 'vitest'
@@ -32,7 +33,6 @@ import {
 	SlackReactionRemovedEnvelope,
 } from '../src/SlackWebhookSchemas'
 import { makeInMemoryMailboxFixture } from './fixtures'
-import { MailboxSubscriptionsMemory } from './MailboxSubscriptionsMemory'
 
 const teamId = SlackTeamId.make('T_TEST')
 const channelId = SlackChannelId.make('C_TEST')

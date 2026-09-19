@@ -1,27 +1,24 @@
 /**
- * Test-only in-memory mailbox store.
+ * In-memory mailbox store, for tests and local development. Everything is lost when the process stops.
  *
  * It implements the same two services a real store implements (MailboxDelivery and
- * MailboxProcessingBackend) and must pass the same backend contract, so tests of the
- * shared processing code can run against realistic mailbox behaviour without a database.
+ * MailboxProcessingBackend) and must pass the same backend contract, so the shared processing
+ * code can run against realistic mailbox behaviour without a database.
  */
 import { Clock, Context, Effect, Layer, Match, Option, Ref } from 'effect'
 
+import { DeliveryReceipt, MailboxDelivery, deliveryMailboxKey, type DeliveryAdmission } from './MailboxDelivery'
+import { Timestamp } from './MailboxPolicy'
 import {
 	ClaimedMailboxBatch,
-	DeliveryAdmissionBatch,
-	DeliveryReceipt,
-	MailboxDelivery,
 	MailboxProcessingBackend,
 	MailboxProcessingClaimLost,
 	RecoverableMailbox,
-	Timestamp,
 	WaitingMailbox,
-	deliveryMailboxKey,
 	type ClaimMailbox,
-	type DeliveryAdmission,
 	type ReadyMailbox,
-} from '../src'
+} from './MailboxProcessing'
+import { DeliveryAdmissionBatch } from './ProviderEventProcessing'
 
 type WaitingEvent = { readonly sequence: number; readonly arrivedAt: number; readonly admission: DeliveryAdmission }
 

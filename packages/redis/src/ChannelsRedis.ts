@@ -1,0 +1,29 @@
+/**
+ * This file defines `ChannelsRedis.make`: Redis mailbox storage as `Channels.make` takes it.
+ */
+import type { ChannelsStorage } from '@humanlayer/channels-delivery-next'
+import { Layer } from 'effect'
+
+import { MailboxDeliveryRedis } from './MailboxDelivery'
+import { MailboxProcessingBackendRedis } from './MailboxProcessingBackend'
+import { MailboxSubscriptionsRedis } from './MailboxSubscriptions'
+
+/**
+ * @property claimLimit - the most due mailboxes one look reports
+ * @property polling - how often to look for due mailboxes; Redis has nothing else to wake processing
+ */
+export type MakeOptions = {
+	readonly claimLimit: number
+	readonly polling: { readonly intervalMs: number }
+}
+
+/** The application provides the `Redis` client. */
+export const make = (options: MakeOptions) =>
+	({
+		polling: options.polling,
+		layer: Layer.mergeAll(
+			MailboxDeliveryRedis,
+			MailboxProcessingBackendRedis({ claimLimit: options.claimLimit }),
+			MailboxSubscriptionsRedis,
+		),
+	}) satisfies ChannelsStorage<unknown, unknown>

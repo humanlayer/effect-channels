@@ -22,7 +22,7 @@ import {
 	type ProviderEventProcessingError,
 	type ProviderEventResult,
 } from '../src'
-import { MailboxBackendMemory } from './MailboxBackendMemory'
+import { MailboxBackendMemory } from '../src/MailboxBackendMemory'
 
 const admission = (eventId: string, resourceId = 'thread-1') =>
 	DeliveryAdmission.make({

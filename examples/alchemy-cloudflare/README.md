@@ -1,6 +1,6 @@
 # Alchemy Cloudflare Slack mailbox example
 
-This example receives Slack webhooks in a Cloudflare Worker, stores each event in a mailbox Durable Object, and processes the mailbox from the object's alarm. The placeholder callbacks log normalized Slack events.
+This example receives Slack webhooks in a Cloudflare Worker, stores each event in a mailbox Durable Object, and processes the mailbox from the object's alarm. The sample callbacks subscribe to a thread when the bot is mentioned, then react to each later message.
 
 ## Configure secrets
 
@@ -43,9 +43,11 @@ bun alchemy deploy
 - The Worker verifies Slack signatures and handles Slack URL verification.
 - Valid events are admitted through the typed Durable Object RPC.
 - Admissions and processing state use the object's persistent SQLite-backed storage.
-- The alarm claims ordered batches and invokes the Slack processor.
-- New-mention and subscribed-thread callbacks log normalized event metadata.
+- The alarm claims ordered batches and invokes the Slack processor. If a mailbox is still due and has no alarm afterwards, the handler sets one.
+- Slack mailboxes use debounce delivery: a batch runs after 2 seconds of quiet, and no later than 10 seconds after its first event.
+- On a new mention, the callback subscribes to the thread, shows typing, and posts a confirmation.
+- In a subscribed thread, the callback adds an `eyes` reaction to each new message.
 - Slack thread subscriptions are stored in Durable Object storage.
 - Reaction events resolve the reacted message's thread root through `conversations.history`.
 
-The placeholder callbacks do not post replies. Replace them in `src/providerDispatcher.ts` with the application behavior.
+Replace the sample callbacks in `src/Bot.ts` with the application behavior. The delivery mode, lease length and attempt limit are set there too. `src/Worker.ts` and `src/DurableObject.ts` each build their half from that one `bot`.

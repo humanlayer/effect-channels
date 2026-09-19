@@ -85,14 +85,31 @@ export type WebhookProvider<R = never> = {
 	readonly handle: (input: RawWebhookInput) => Effect.Effect<ProviderWebhookOutcome, ProviderWebhookError, R>
 }
 
+export type WebhookRoutesOptions = {
+	/**
+	 * Where the routes are mounted inside a larger API, such as `/api/channels`.
+	 * The webhook path becomes `<basePath>/integrations/:integration/webhook`.
+	 */
+	readonly basePath?: `/${string}`
+}
+
+/** The webhook path under an optional base path. Slashes around the base path are ignored. */
+export const webhookRoutePath = (options?: WebhookRoutesOptions): `/${string}` => {
+	const prefix = (options?.basePath ?? '').replace(/^\/+|\/+$/g, '')
+	return prefix === '' ? '/integrations/:integration/webhook' : `/${prefix}/integrations/:integration/webhook`
+}
+
 /**
  * Http Router
  */
-export const webhookRoutes = <const Requirements extends ReadonlyArray<unknown>>(webhookProviders: {
-	// One type per provider, so providers that need different services can share a list.
-	readonly [Index in keyof Requirements]: WebhookProvider<Requirements[Index]>
-}) =>
-	HttpRouter.add('POST', '/integrations/:integration/webhook', (request) =>
+export const webhookRoutes = <const Requirements extends ReadonlyArray<unknown>>(
+	webhookProviders: {
+		// One type per provider, so providers that need different services can share a list.
+		readonly [Index in keyof Requirements]: WebhookProvider<Requirements[Index]>
+	},
+	options?: WebhookRoutesOptions,
+) =>
+	HttpRouter.add('POST', webhookRoutePath(options), (request) =>
 		Effect.gen(function* () {
 			const providers: ReadonlyArray<WebhookProvider<Requirements[number]>> = webhookProviders
 			// Get the mailbox delivery service.

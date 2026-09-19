@@ -2,6 +2,7 @@ import { describe, it } from '@effect/vitest'
 import {
 	MailboxSubscriptionAlreadyExistsResult,
 	MailboxSubscriptionCreatedResult,
+	MailboxSubscriptionsMemory,
 } from '@humanlayer/channels-delivery-next'
 import { Effect, Layer, Option, Queue, Stream } from 'effect'
 
@@ -23,7 +24,6 @@ import {
 } from '../src/SlackModels'
 import { MarkdownTextChunk, PlanUpdateChunk, TaskUpdateChunk } from '../src/SlackStreamChunk'
 import { SlackChannelHistoryUnavailable, SlackThread } from '../src/SlackThread'
-import { MailboxSubscriptionsMemory } from './MailboxSubscriptionsMemory'
 
 const teamId = SlackTeamId.make('T_CONTEXT')
 const channelId = SlackChannelId.make('C_CONTEXT')

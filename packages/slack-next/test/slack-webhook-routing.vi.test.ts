@@ -1,5 +1,5 @@
 import { describe, it } from '@effect/vitest'
-import { DeliveryReceipt, type DeliveryAdmission, ProviderEventHandled } from '@humanlayer/channels-delivery-next'
+import { DeliveryReceipt, type DeliveryAdmission, ProviderEventHandled, MailboxSubscriptionsMemory } from '@humanlayer/channels-delivery-next'
 import { Effect, Layer } from 'effect'
 import { vi } from 'vitest'
 
@@ -11,7 +11,6 @@ import { SlackParticipant, SlackUserId } from '../src/SlackModels'
 import { SlackAppMentionEvent } from '../src/SlackWebhookEventSchemas'
 import { SlackAppMentionEnvelope } from '../src/SlackWebhookSchemas'
 import { makeInMemoryMailboxFixture, makeSlackEmulatorFixture, slackEmulatorEventTime } from './fixtures'
-import { MailboxSubscriptionsMemory } from './MailboxSubscriptionsMemory'
 
 describe('Slack webhook routing', () => {
 	it.effect('processes an emulator mention through its keyed mailbox and calls onNewMention', ({ expect }) =>
