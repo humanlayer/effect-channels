@@ -90,11 +90,11 @@ GITHUB_APP_ID=123456
 GITHUB_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----
 paste-the-complete-downloaded-key-here
 -----END RSA PRIVATE KEY-----"
-GITHUB_BOT_MENTION_NAME=your-app-slug[bot]
+GITHUB_BOT_MENTION_NAME=your-app-slug
 GITHUB_BOT_USER_ID=123456789
 ```
 
-`GITHUB_BOT_MENTION_NAME` is the bot's complete login without the leading `@`. For example, the login `my-reviewer[bot]` uses `my-reviewer[bot]`. Using the complete login avoids confusing an app with a user or organization that has the same base name.
+GitHub App bot identities such as `my-reviewer[bot]` are not native mentionable accounts: GitHub does not autocomplete or link `@my-reviewer[bot]`. `GITHUB_BOT_MENTION_NAME` is instead the text invocation name recognized by this provider, without the leading `@`. Use the app slug for a natural command such as `@my-reviewer`. This can still render as plain text; use `[@my-reviewer](https://github.com/apps/my-reviewer)` when a clickable link is important. If the app slug matches a real user or organization, choose a distinct invocation name to avoid notifying that account.
 
 The GitHub provider reads these values while the Worker is constructed, so Alchemy binds them as Cloudflare secrets during deployment and its Durable Objects share the same bindings. The webhook secret verifies incoming requests. The App ID and private key create short-lived installation tokens for API calls. The bot user ID prevents the app from responding to its own events. Secrets are not stored in mailbox admissions or Durable Object storage.
 
@@ -106,7 +106,7 @@ bun alchemy deploy
 
 ### 7. Test with a repository
 
-Open an issue or pull request in an installed repository. The sample callback reads the discussion and its existing comments (and PR reviews), subscribes the discussion, posts a confirmation comment, and adds an `eyes` reaction to that comment. You can also mention `@<app-slug>[bot]` in an issue body, PR body, issue comment, PR comment, or inline review comment. Later subscribed comments and inline review comments receive an `eyes` reaction; all subscribed events are logged by the Durable Object.
+Open an issue or pull request in an installed repository. The sample callback reads the discussion and its existing comments (and PR reviews), subscribes the discussion, posts a confirmation comment, and adds an `eyes` reaction to that comment. You can also invoke `@<app-slug>` in an issue body, PR body, issue comment, PR comment, or inline review comment. Later subscribed comments and inline review comments receive an `eyes` reaction; all subscribed events are logged by the Durable Object.
 
 In the GitHub App settings, **Advanced → Recent Deliveries** shows each webhook request, response status, and redelivery control. A successful admission returns HTTP 200. If GitHub reports 401, check the webhook secret. If callbacks fail with 403, check the app permissions and make sure the installation includes the repository.
 

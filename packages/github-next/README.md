@@ -66,7 +66,7 @@ curl --fail --silent \
   jq .id
 ```
 
-An app owned by an organization can use the same base name. For example, organization `acme` and app `acme` are separate from the app's bot, `acme[bot]`. Configure the complete bot login as the mention name so `@acme` does not accidentally activate the bot.
+GitHub App bot identities are not native mentionable accounts. For example, GitHub does not autocomplete or link `@acme[bot]`; the `[bot]` login is still needed to resolve the numeric bot user ID and suppress self-authored events. Mention activation in this package is text matching, so configure a human-friendly invocation name such as the app slug and ask users to type `@acme`. The text may remain unlinked. A user can write `[@acme](https://github.com/apps/acme)` when a clickable link is important, and the provider will still recognize it. If the slug matches a real user or organization, choose a distinct invocation name to avoid notifying that account.
 
 Set these environment variables:
 
@@ -76,13 +76,13 @@ GITHUB_APP_ID=123456
 GITHUB_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----
 paste-the-complete-downloaded-key-here
 -----END RSA PRIVATE KEY-----"
-GITHUB_BOT_MENTION_NAME=your-app-slug[bot]
+GITHUB_BOT_MENTION_NAME=your-app-slug
 GITHUB_BOT_USER_ID=123456789
 ```
 
 - `GITHUB_WEBHOOK_SECRET` verifies incoming webhooks.
 - `GITHUB_APP_ID` and `GITHUB_PRIVATE_KEY` create short-lived installation tokens for API calls.
-- `GITHUB_BOT_MENTION_NAME` controls textual mention activation and does not include a leading `@`.
+- `GITHUB_BOT_MENTION_NAME` controls textual invocation and does not include a leading `@`; it is not the bot's `[bot]` login.
 - `GITHUB_BOT_USER_ID` suppresses self-authored events. `GitHubApiLive` can resolve this identity for reaction removal, but event processing still requires it explicitly.
 
 Never commit the webhook secret or private key.
@@ -127,7 +127,7 @@ Add `github` to the providers passed to `Channels.make` or the host-specific wra
 1. Start or deploy the application at a public HTTPS URL.
 2. Put its exact webhook URL in the GitHub App settings.
 3. Install the app on the test repository.
-4. Open an issue or pull request, or write `@<app-slug>[bot]` in a supported body or comment.
+4. Open an issue or pull request, or write `@<app-slug>` in a supported body or comment.
 5. Open the GitHub App settings and use **Advanced → Recent Deliveries** to inspect the request, response, and payload or request a redelivery.
 
 A successful admission returns HTTP 200. For common failures:
