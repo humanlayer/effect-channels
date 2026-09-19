@@ -33,7 +33,7 @@ One mailbox runs one batch at a time, so events in a thread are handled in order
 | [`packages/sql`](./packages/sql/)                               | Mailbox storage on Postgres.                                                                                                                                               |
 | [`packages/redis`](./packages/redis/)                           | Mailbox storage on Redis.                                                                                                                                                  |
 | [`packages/alchemy-cloudflare`](./packages/alchemy-cloudflare/) | Mailbox storage on Cloudflare Durable Objects, one object per mailbox, woken by its alarm.                                                                                 |
-| [`examples/alchemy-cloudflare`](./examples/alchemy-cloudflare/) | A Slack app on a Cloudflare Worker and Durable Objects.                                                                                                                    |
+| [`examples/alchemy-cloudflare`](./examples/alchemy-cloudflare/) | Slack and GitHub Apps on a Cloudflare Worker and Durable Objects.                                                                                                          |
 
 `packages/delivery`, `packages/slack` and `packages/github` are the earlier versions. They still build and their tests still run, but new work goes in the `-next` packages, and the rest of this file describes only those.
 
@@ -97,7 +97,9 @@ const github = GitHubBot.make({
 })
 ```
 
-By default the bot talks to GitHub through `GitHubApiLive`, which reads `GITHUB_APP_ID` and `GITHUB_PRIVATE_KEY`; pass `gitHubApi` to use your own layer.
+By default the bot talks to GitHub through `GitHubApiLive`, which reads `GITHUB_APP_ID` and `GITHUB_PRIVATE_KEY`; pass `gitHubApi` to use your own layer. Creation and text-invocation callbacks can subscribe an issue or pull request so later comments, reviews, lifecycle changes, and completed checks reach its subscribed callback. A completed check associated with several pull requests is delivered to each pull request mailbox.
+
+GitHub App bot accounts are not native mentionable users. `mentionNames` controls provider-side text matching, so an app configured with `mentionNames: ['my-bot']` recognizes `@my-bot` even when GitHub renders it as plain text. See the [`github-next` setup guide](./packages/github-next/) for the required permissions and webhook events, or the [Alchemy example](./examples/alchemy-cloudflare/) for a complete app.
 
 ## Delivery modes
 
@@ -174,7 +176,7 @@ Memory is for tests and local development: everything is lost when the process s
 On Cloudflare the two halves run in different places, and your application declares both classes. `ChannelsCloudflare.make` takes the same options without `storage`, and gives you one piece for each class.
 
 ```ts
-const bot = ChannelsCloudflare.make({ namespace, providers: [slack], eventProcessing })
+const bot = ChannelsCloudflare.make({ namespace, providers: [slack, github], eventProcessing })
 
 // Your Durable Object class: one per mailbox, woken by its alarm.
 export class DeliveryMailbox extends Cloudflare.DurableObject<DeliveryMailbox>()(

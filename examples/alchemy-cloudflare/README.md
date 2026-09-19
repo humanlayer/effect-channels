@@ -134,3 +134,13 @@ https://<your-worker-hostname>/integrations/slack/webhook
 - GitHub App installation tokens and resolved bot identity are cached by the live GitHub API layer.
 
 Replace the sample callbacks in `src/Bot.ts` with application behavior. Delivery timing, lease length, and attempt limits are configured there as well.
+
+## Logs
+
+Read recent Worker and Durable Object logs with:
+
+```bash
+bun alchemy logs --filter IngressWorker --since 10m
+```
+
+Alchemy currently uses Effect's readable multiline logger and `bun alchemy logs` does not have a JSON output option. Effect also provides single-line JSON logging through `Logger.layer([Logger.consoleJson])`, but applying that inside this example does not replace all of Alchemy's own logs or make the command return complete JSON. A consistent JSON view requires logger and JSON-output support in Alchemy itself.
