@@ -41,7 +41,7 @@ const reviewCommentJson = (id: number, body: string) => ({
 	side: 'RIGHT',
 })
 
-const makeLayer = (httpClient: HttpClient.HttpClient) =>
+const makeLayer = (httpClient: HttpClient.HttpClient, botUserId: number | null = 999) =>
 	GitHubApiLiveBase.pipe(
 		Layer.provide(
 			Layer.mergeAll(
@@ -52,7 +52,7 @@ const makeLayer = (httpClient: HttpClient.HttpClient) =>
 						GITHUB_APP_ID: 1,
 						GITHUB_PRIVATE_KEY: 'private-key-never-log',
 						GITHUB_API_ORIGIN: 'https://api.github.test',
-						GITHUB_BOT_USER_ID: 999,
+						...(botUserId === null ? {} : { GITHUB_BOT_USER_ID: botUserId }),
 					}),
 				),
 			),
@@ -248,6 +248,52 @@ describe('GitHubApiLive', () => {
 				path: '/repos/humanlayer/channels/issues/comments/400/reactions/700',
 				body: '',
 			})
+		}),
+	)
+
+	it.effect('resolves and caches the bot identity before removing its reaction', ({ expect }) =>
+		Effect.gen(function* () {
+			const calls = yield* Queue.unbounded<{ readonly method: string; readonly path: string }>()
+			const httpClient = HttpClient.make((request) =>
+				Effect.gen(function* () {
+					const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie)
+					const url = new URL(web.url)
+					yield* Queue.offer(calls, { method: web.method, path: url.pathname })
+					if (url.pathname === '/app') {
+						expect(web.headers.get('authorization')).toContain('test-signature')
+						return HttpClientResponse.fromWeb(request, Response.json({ slug: 'agent' }))
+					}
+					if (url.pathname === '/users/agent%5Bbot%5D') {
+						return HttpClientResponse.fromWeb(request, Response.json(participant))
+					}
+					if (url.pathname.startsWith('/app/installations/')) {
+						return HttpClientResponse.fromWeb(request, tokenResponse())
+					}
+					if (web.method === 'GET') {
+						return HttpClientResponse.fromWeb(
+							request,
+							Response.json([{ id: 700, content: 'eyes', user: participant }]),
+						)
+					}
+					return HttpClientResponse.fromWeb(request, new Response(null, { status: 204 }))
+				}),
+			)
+			const comment = GitHubIssueCommentRef.make({
+				discussion: { _tag: 'Issue', ref: issue },
+				id: GitHubId.make(400),
+			})
+
+			yield* Effect.gen(function* () {
+				const api = yield* GitHubApi
+				yield* api.removeReaction({ comment, reaction: 'eyes' })
+				yield* api.removeReaction({ comment, reaction: 'eyes' })
+			}).pipe(Effect.provide(makeLayer(httpClient, null)))
+
+			const observed = yield* Queue.takeAll(calls)
+			expect(observed.filter(({ path }) => path === '/app')).toHaveLength(1)
+			expect(observed.filter(({ path }) => path === '/users/agent%5Bbot%5D')).toHaveLength(1)
+			expect(observed.some(({ method, path }) => method === 'POST' && path.endsWith('/reactions'))).toBe(false)
+			expect(observed.filter(({ method }) => method === 'DELETE')).toHaveLength(2)
 		}),
 	)
 

@@ -61,6 +61,10 @@ const GitHubInstallationTokenResponse = Schema.Struct({
 	expires_at: Schema.String,
 })
 
+const GitHubAppResponse = Schema.Struct({
+	slug: Schema.NonEmptyString,
+})
+
 const GitHubApiParticipant = Schema.Struct({
 	id: GitHubId,
 	login: Schema.NonEmptyString,
@@ -344,6 +348,24 @@ export const GitHubApiLiveBase = Layer.effect(
 				HttpClientRequest.setHeader('user-agent', 'humanlayer-channels-github-next'),
 			)
 
+		const appJwt = Effect.fn('github.api.app_jwt')(function* () {
+			const now = yield* Clock.currentTimeMillis
+			const header = Encoding.encodeBase64Url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }))
+			const payload = Encoding.encodeBase64Url(
+				JSON.stringify({
+					iss: String(config.appId),
+					iat: Math.floor(now / 1_000) - 60,
+					exp: Math.floor(now / 1_000) + 540,
+				}),
+			)
+			const unsigned = `${header}.${payload}`
+			const signature = yield* signer.sign({ privateKey: config.privateKey, data: unsigned }).pipe(
+				Effect.tapError((error) => Effect.logError('GitHub App JWT signing failed', error)),
+				Effect.mapError(() => GitHubTransportError.make({ stage: 'signing' })),
+			)
+			return `${unsigned}.${signature}`
+		})
+
 		const classifyTransport = (operation: GitHubApiOperation, error: GitHubTransportError): GitHubApiError => {
 			if (error.rateLimited === true) {
 				return GitHubApiError.make({
@@ -436,33 +458,50 @@ export const GitHubApiLiveBase = Layer.effect(
 				}),
 			)
 
+		const botUserId = yield* Effect.cached(
+			Option.match(config.botUserId, {
+				onSome: Effect.succeed,
+				onNone: () =>
+					Effect.gen(function* () {
+						const jwt = yield* appJwt().pipe(
+							Effect.catchTag('GitHubTransportError', (error) =>
+								Effect.fail(classifyTransport('remove_reaction', error)),
+							),
+						)
+						const app = yield* execute({
+							operation: 'remove_reaction',
+							request: baseRequest('GET', new URL('app', apiOrigin).toString()).pipe(
+								HttpClientRequest.bearerToken(jwt),
+							),
+							schema: GitHubAppResponse,
+						})
+						const bot = yield* execute({
+							operation: 'remove_reaction',
+							request: baseRequest(
+								'GET',
+								new URL(`users/${encodeURIComponent(`${app.slug}[bot]`)}`, apiOrigin).toString(),
+							),
+							schema: GitHubApiParticipant,
+						})
+						return bot.id
+					}),
+			}),
+		)
+
 		const tokenCache = yield* Cache.makeWith(
 			(key: string) =>
 				Effect.gen(function* () {
 					const [installationId, repositoryId] = yield* Schema.decodeEffect(
 						Schema.fromJsonString(Schema.Tuple([GitHubId, GitHubId])),
 					)(key).pipe(Effect.mapError(() => GitHubTransportError.make({ stage: 'decode' })))
-					const now = yield* Clock.currentTimeMillis
-					const header = Encoding.encodeBase64Url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }))
-					const payload = Encoding.encodeBase64Url(
-						JSON.stringify({
-							iss: String(config.appId),
-							iat: Math.floor(now / 1_000) - 60,
-							exp: Math.floor(now / 1_000) + 540,
-						}),
-					)
-					const unsigned = `${header}.${payload}`
-					const signature = yield* signer.sign({ privateKey: config.privateKey, data: unsigned }).pipe(
-						Effect.tapError((error) => Effect.logError('GitHub App JWT signing failed', error)),
-						Effect.mapError(() => GitHubTransportError.make({ stage: 'signing' })),
-					)
+					const jwt = yield* appJwt()
 					const request = yield* HttpClientRequest.post(
 						new URL(`app/installations/${installationId}/access_tokens`, apiOrigin).toString(),
 					).pipe(
 						HttpClientRequest.setHeader('accept', 'application/vnd.github+json'),
 						HttpClientRequest.setHeader('x-github-api-version', '2022-11-28'),
 						HttpClientRequest.setHeader('user-agent', 'humanlayer-channels-github-next'),
-						HttpClientRequest.bearerToken(`${unsigned}.${signature}`),
+						HttpClientRequest.bearerToken(jwt),
 						HttpClientRequest.schemaBodyJson(Schema.Json)({ repository_ids: [repositoryId] }),
 						Effect.mapError(() => GitHubTransportError.make({ stage: 'decode' })),
 					)
@@ -820,31 +859,21 @@ export const GitHubApiLiveBase = Layer.effect(
 
 		const removeReaction = Effect.fn('github.api.remove_reaction')(function* (input: GitHubReactionRequest) {
 			const ref = commentRepository(input.comment)
-			const reactionId = yield* Option.match(config.botUserId, {
-				onNone: () =>
-					call({
-						operation: 'remove_reaction',
-						ref,
-						method: 'POST',
-						path: reactionPath(input.comment),
-						schema: GitHubApiReaction,
-						body: { content: input.reaction },
-					}).pipe(Effect.map((reaction) => Option.some(reaction.id))),
-				onSome: (botUserId) =>
-					list({
-						operation: 'remove_reaction',
-						ref,
-						path: reactionPath(input.comment),
-						schema: GitHubApiReaction,
-					}).pipe(
-						Effect.flatMap((reactions) => {
-							const own = reactions.find(
-								(reaction) => reaction.content === input.reaction && reaction.user?.id === botUserId,
-							)
-							return Predicate.isUndefined(own) ? Effect.succeedNone : Effect.succeedSome(own.id)
-						}),
+			const ownUserId = yield* botUserId
+			const reactionId = yield* list({
+				operation: 'remove_reaction',
+				ref,
+				path: reactionPath(input.comment),
+				schema: GitHubApiReaction,
+			}).pipe(
+				Effect.map((reactions) =>
+					Option.fromUndefinedOr(
+						reactions.find(
+							(reaction) => reaction.content === input.reaction && reaction.user?.id === ownUserId,
+						)?.id,
 					),
-			})
+				),
+			)
 			if (Option.isNone(reactionId)) return
 			yield* callVoid({
 				operation: 'remove_reaction',
