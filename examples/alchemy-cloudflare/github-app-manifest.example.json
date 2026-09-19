@@ -1,0 +1,24 @@
+{
+	"name": "replace-with-a-globally-unique-app-name",
+	"url": "https://replace-with-your-worker-hostname.example",
+	"hook_attributes": {
+		"url": "https://replace-with-your-worker-hostname.example/integrations/github/webhook",
+		"active": true
+	},
+	"public": false,
+	"default_permissions": {
+		"metadata": "read",
+		"issues": "write",
+		"pull_requests": "write",
+		"checks": "read"
+	},
+	"default_events": [
+		"issues",
+		"issue_comment",
+		"pull_request",
+		"pull_request_review",
+		"pull_request_review_comment",
+		"pull_request_review_thread",
+		"check_run"
+	]
+}

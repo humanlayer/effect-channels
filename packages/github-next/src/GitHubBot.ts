@@ -7,13 +7,13 @@ import {
 	type DeliveryMode,
 	type DeliveryAdmissionBatch,
 } from '@humanlayer/channels-delivery-next'
-import { Effect, Layer, Predicate } from 'effect'
+import { Effect, Layer, Predicate, Schema } from 'effect'
 import type { Config, Redacted } from 'effect'
 
 import { GitHubApi } from './GitHubApi'
 import { GitHubApiLive } from './GitHubApiLive'
 import { GitHubCallbacks, type GitHubCallbackHandlers } from './GitHubCallbacks'
-import { makeGitHubEventProcessor, type GitHubBotConfiguration } from './GitHubEventProcessor'
+import { GitHubBotConfiguration, makeGitHubEventProcessor } from './GitHubEventProcessor'
 import { makeGitHubWebhookProvider } from './GitHubWebhookProvider'
 
 /**
@@ -28,7 +28,7 @@ import { makeGitHubWebhookProvider } from './GitHubWebhookProvider'
 export type MakeOptions<E, R, ApiError, ApiRequirements> = {
 	readonly webhookSecret: Config.Config<Redacted.Redacted<string>>
 	readonly deliveryMode: DeliveryMode
-	readonly bot: GitHubBotConfiguration
+	readonly bot: GitHubBotConfiguration | Config.Config<GitHubBotConfiguration>
 	readonly handlers: GitHubCallbackHandlers<E, R>
 	readonly gitHubApi?: Layer.Layer<GitHubApi, ApiError, ApiRequirements>
 }
@@ -56,10 +56,13 @@ export const make = <E, R, ApiError = never, ApiRequirements = never>(
 			),
 		eventProcessor: ({ namespace }) =>
 			Effect.gen(function* () {
+				const bot = Schema.is(GitHubBotConfiguration)(options.bot)
+					? options.bot
+					: yield* unavailable('read_bot_configuration', options.bot)
 				const gitHubApi = yield* Predicate.isUndefined(options.gitHubApi)
 					? unavailable('build_github_api', Layer.build(GitHubApiLive))
 					: unavailable('build_github_api', Layer.build(options.gitHubApi))
-				const eventProcessor = makeGitHubEventProcessor({ namespace, bot: options.bot })
+				const eventProcessor = makeGitHubEventProcessor({ namespace, bot })
 				return {
 					namespace: eventProcessor.namespace,
 					providerName: eventProcessor.providerName,

@@ -10,6 +10,7 @@
 		"@effect/platform-node": "catalog:",
 		"@humanlayer/channels-alchemy-cloudflare": "workspace:*",
 		"@humanlayer/channels-delivery-next": "workspace:*",
+		"@humanlayer/channels-github-next": "workspace:*",
 		"@humanlayer/channels-slack-next": "workspace:*",
 		"alchemy": "catalog:",
 		"effect": "catalog:"
