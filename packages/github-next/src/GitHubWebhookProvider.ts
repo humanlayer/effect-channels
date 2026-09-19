@@ -1,13 +1,14 @@
 import {
 	DeliveryAdmission,
 	ProviderWebhookEvent,
+	ProviderWebhookEvents,
 	ProviderWebhookIgnored,
 	WebhookAuthenticationError,
 	WebhookPayloadInvalidError,
 	type ProviderWebhookOutcome,
 	type WebhookProvider,
 } from '@humanlayer/channels-delivery-next'
-import { Crypto, Effect, Redacted, Schema } from 'effect'
+import { Crypto, Effect, Match, Redacted, Schema } from 'effect'
 
 import { githubDiscussionResourceId } from './GitHubIdentity'
 import {
@@ -30,6 +31,7 @@ const SupportedGitHubEvent = Schema.Literals([
 	'pull_request_review',
 	'pull_request_review_comment',
 	'pull_request_review_thread',
+	'check_run',
 ])
 type SupportedGitHubEvent = typeof SupportedGitHubEvent.Type
 
@@ -54,6 +56,7 @@ const actionsByEvent: Record<SupportedGitHubEvent, ReadonlyArray<string>> = {
 	pull_request_review: ['submitted', 'edited', 'dismissed'],
 	pull_request_review_comment: ['created', 'edited', 'deleted'],
 	pull_request_review_thread: ['resolved', 'unresolved'],
+	check_run: ['completed'],
 }
 
 const isSupportedEvent = Schema.is(SupportedGitHubEvent)
@@ -62,25 +65,51 @@ const makeGitHubWebhookEvent = (
 	options: GitHubWebhookProviderOptions,
 	deliveryId: string,
 	webhook: GitHubSupportedWebhookType,
-): ProviderWebhookOutcome => {
-	const payload = webhook.payload
-	const discussion = 'pull_request' in payload ? payload.pull_request : payload.issue
-	const kind = 'pull_request' in payload || discussion.pull_request !== undefined ? 'pull-request' : 'issue'
-	return ProviderWebhookEvent.make({
-		event: DeliveryAdmission.make({
-			namespace: options.namespace,
-			provider: 'github',
-			installationId: String(payload.installation.id),
-			resourceId: githubDiscussionResourceId({
-				repositoryId: payload.repository.id,
-				kind,
-				number: discussion.number,
-			}),
-			eventId: deliveryId,
-			payload: webhook,
+) =>
+	Match.value(webhook).pipe(
+		Match.when({ event: 'check_run' }, ({ payload }): ProviderWebhookOutcome => {
+			const pullRequest = payload.check_run.pull_requests[0]
+			if (pullRequest === undefined) {
+				return ProviderWebhookIgnored.make({})
+			}
+			const makeAdmission = (association: (typeof payload.check_run.pull_requests)[number]) =>
+				DeliveryAdmission.make({
+					namespace: options.namespace,
+					provider: 'github',
+					installationId: String(payload.installation.id),
+					resourceId: githubDiscussionResourceId({
+						repositoryId: payload.repository.id,
+						kind: 'pull-request',
+						number: association.number,
+					}),
+					eventId: `${deliveryId}:pull-request:${payload.repository.id}:${association.number}`,
+					payload: webhook,
+				})
+			const first = makeAdmission(pullRequest)
+			const rest = payload.check_run.pull_requests.slice(1).map(makeAdmission)
+			return rest.length === 0
+				? ProviderWebhookEvent.make({ event: first })
+				: ProviderWebhookEvents.make({ events: [first, ...rest] })
 		}),
-	})
-}
+		Match.orElse(({ payload }): ProviderWebhookOutcome => {
+			const discussion = 'pull_request' in payload ? payload.pull_request : payload.issue
+			const kind = 'pull_request' in payload || discussion.pull_request !== undefined ? 'pull-request' : 'issue'
+			return ProviderWebhookEvent.make({
+				event: DeliveryAdmission.make({
+					namespace: options.namespace,
+					provider: 'github',
+					installationId: String(payload.installation.id),
+					resourceId: githubDiscussionResourceId({
+						repositoryId: payload.repository.id,
+						kind,
+						number: discussion.number,
+					}),
+					eventId: deliveryId,
+					payload: webhook,
+				}),
+			})
+		}),
+	)
 
 export const makeGitHubWebhookProvider = (options: GitHubWebhookProviderOptions): WebhookProvider<Crypto.Crypto> => ({
 	providerName: 'github',
@@ -103,7 +132,7 @@ export const makeGitHubWebhookProvider = (options: GitHubWebhookProviderOptions)
 			const action = yield* Schema.decodeUnknownEffect(GitHubWebhookEnvelope)(unknownPayload).pipe(
 				Effect.mapError(() => WebhookPayloadInvalidError.make({ reason: 'invalid_event_envelope' })),
 			)
-			if (!(actionsByEvent[event] as ReadonlyArray<string>).includes(action.action)) {
+			if (!actionsByEvent[event].includes(action.action)) {
 				return ProviderWebhookIgnored.make({})
 			}
 			const decoded = yield* Schema.decodeUnknownEffect(GitHubSupportedWebhook)(
@@ -113,6 +142,14 @@ export const makeGitHubWebhookProvider = (options: GitHubWebhookProviderOptions)
 				},
 				{ onExcessProperty: 'preserve' },
 			).pipe(Effect.mapError(() => WebhookPayloadInvalidError.make({ reason: `invalid_${event}` })))
+			if (decoded.event === 'check_run' && decoded.payload.check_run.pull_requests.length === 0) {
+				yield* Effect.logInfo('GitHub check run has no pull request association').pipe(
+					Effect.annotateLogs({
+						reason: 'no_pull_request_association',
+						association_count: decoded.payload.check_run.pull_requests.length,
+					}),
+				)
+			}
 			return makeGitHubWebhookEvent(options, headers['x-github-delivery'], decoded)
 		}),
 })

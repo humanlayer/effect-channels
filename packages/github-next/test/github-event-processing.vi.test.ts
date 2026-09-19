@@ -1,129 +1,215 @@
 import { describe, it } from '@effect/vitest'
 import {
 	DeliveryAdmission,
-	processProviderEvent,
+	MailboxSubscriptions,
 	ProviderEventExecutionFailed,
 	ProviderEventHandled,
 	ProviderEventIgnored,
 	ProviderEventInvalid,
 } from '@humanlayer/channels-delivery-next'
-import { Effect } from 'effect'
+import { Cause, Effect, Exit, Layer } from 'effect'
 import { vi } from 'vitest'
 
-import { makeGitHubEventProcessor } from '../src/GitHubEventProcessor'
+import { GitHubApi } from '../src/GitHubApi'
+import type { GitHubIssueCreated, GitHubMentioned, GitHubSubscribedPrEvents } from '../src/GitHubCallbackEvents'
+import { GitHubCallbacks, type GitHubCallbackHandlers } from '../src/GitHubCallbacks'
+import { GitHubBotConfiguration, makeGitHubEventProcessor } from '../src/GitHubEventProcessor'
+import { GitHubId } from '../src/GitHubIdentity'
 import {
+	checkRunPayload,
 	issueCommentPayload,
 	issuePayload,
-	admitStoredGitHubWebhook,
+	pullRequestIssueCommentPayload,
 	pullRequestPayload,
-	pullRequestReviewCommentPayload,
-	pullRequestReviewPayload,
-	pullRequestReviewThreadPayload,
 } from './fixtures'
 
-const admission = (event: string, payload: unknown) =>
+const namespace = 'github-processing-test'
+const bot = GitHubBotConfiguration.make({ mentionNames: ['agent'], botUserId: GitHubId.make(999) })
+
+const admission = (
+	event: string,
+	payload: ReturnType<typeof issuePayload> | ReturnType<typeof issueCommentPayload>,
+	eventId: string,
+): DeliveryAdmission =>
 	DeliveryAdmission.make({
-		namespace: 'github-processing-test',
+		namespace,
 		provider: 'github',
 		installationId: '100',
-		resourceId: 'github:v1:200:pull-request:42',
-		eventId: 'delivery-1',
+		resourceId: `github:v1:200:${'pull_request' in payload.issue ? 'pull-request' : 'issue'}:${payload.issue.number}`,
+		eventId,
 		payload: { event, payload },
 	})
 
-describe('GitHub event processing', () => {
-	it.effect('uses the callback configuration active when processing begins', ({ expect }) =>
-		Effect.gen(function* () {
-			const payload = issuePayload('opened')
-			const queued = yield* admitStoredGitHubWebhook('github-processing-test', 'issues', payload)
-			const callbackA = vi.fn(() => Effect.void)
-			const callbackB = vi.fn(() => Effect.void)
-			let activeProcessors = [
-				makeGitHubEventProcessor({
-					namespace: 'github-processing-test',
-					handlers: { onIssue: callbackA },
-				}),
-			]
-			activeProcessors = [
-				makeGitHubEventProcessor({
-					namespace: 'github-processing-test',
-					handlers: { onIssue: callbackB },
-				}),
-			]
+const pullRequestAdmission = (
+	event: string,
+	payload:
+		| ReturnType<typeof pullRequestPayload>
+		| ReturnType<typeof pullRequestIssueCommentPayload>
+		| ReturnType<typeof checkRunPayload>,
+	eventId: string,
+	number = 42,
+): DeliveryAdmission =>
+	DeliveryAdmission.make({
+		namespace,
+		provider: 'github',
+		installationId: '100',
+		resourceId: `github:v1:200:pull-request:${number}`,
+		eventId,
+		payload: { event, payload },
+	})
 
-			expect(yield* processProviderEvent(activeProcessors)(queued)).toEqual(ProviderEventHandled.make({}))
-			expect(callbackA).not.toHaveBeenCalled()
-			expect(callbackB).toHaveBeenCalledOnce()
-			expect(callbackB).toHaveBeenCalledWith(payload)
+const layer = <E, R>(handlers: GitHubCallbackHandlers<E, R>, subscribed: boolean) =>
+	Layer.mergeAll(
+		GitHubCallbacks.layer(handlers),
+		Layer.mock(GitHubApi, {}),
+		Layer.mock(MailboxSubscriptions, { isSubscribed: () => Effect.succeed(subscribed) }),
+	)
+
+const process = <E, R>(
+	handlers: GitHubCallbackHandlers<E, R>,
+	admissions: readonly [DeliveryAdmission, ...Array<DeliveryAdmission>],
+	subscribed = false,
+) =>
+	makeGitHubEventProcessor({ namespace, bot })
+		.process(admissions)
+		.pipe(Effect.provide(layer(handlers, subscribed)))
+
+describe('GitHub event batch processing', () => {
+	it.effect('routes an opened issue to onIssueCreated', ({ expect }) =>
+		Effect.gen(function* () {
+			const onIssueCreated = vi.fn((_event: GitHubIssueCreated) => Effect.void)
+			expect(yield* process({ onIssueCreated }, [admission('issues', issuePayload('opened'), 'opened')])).toEqual(
+				ProviderEventHandled.make({}),
+			)
+			expect(onIssueCreated).toHaveBeenCalledOnce()
+			expect(onIssueCreated.mock.calls[0]?.[0].trigger._tag).toBe('GitHubIssueOpened')
 		}),
 	)
 
-	it.effect('routes every GitHub event family to its configured callback', ({ expect }) =>
+	it.effect('lets a later mention beat opened and includes opened as a trailing event', ({ expect }) =>
 		Effect.gen(function* () {
-			const onIssue = vi.fn(() => Effect.void)
-			const onIssueComment = vi.fn(() => Effect.void)
-			const onPullRequest = vi.fn(() => Effect.void)
-			const onPullRequestReview = vi.fn(() => Effect.void)
-			const onPullRequestReviewComment = vi.fn(() => Effect.void)
-			const onPullRequestReviewThread = vi.fn(() => Effect.void)
-			const processor = makeGitHubEventProcessor({
-				namespace: 'github-processing-test',
-				handlers: {
-					onIssue,
-					onIssueComment,
-					onPullRequest,
-					onPullRequestReview,
-					onPullRequestReviewComment,
-					onPullRequestReviewThread,
-				},
-			})
-			const cases = [
-				['issues', issuePayload('opened')],
-				['issue_comment', issueCommentPayload()],
-				['pull_request', pullRequestPayload()],
-				['pull_request_review', pullRequestReviewPayload()],
-				['pull_request_review_comment', pullRequestReviewCommentPayload()],
-				['pull_request_review_thread', pullRequestReviewThreadPayload()],
-			] as const
-
-			for (const [event, payload] of cases) {
-				expect(yield* processor.process(admission(event, payload))).toEqual(ProviderEventHandled.make({}))
-			}
-			expect(onIssue).toHaveBeenCalledOnce()
-			expect(onIssueComment).toHaveBeenCalledOnce()
-			expect(onPullRequest).toHaveBeenCalledOnce()
-			expect(onPullRequestReview).toHaveBeenCalledOnce()
-			expect(onPullRequestReviewComment).toHaveBeenCalledOnce()
-			expect(onPullRequestReviewThread).toHaveBeenCalledOnce()
+			const onIssueCreated = vi.fn(() => Effect.void)
+			const onMentioned = vi.fn((_event: GitHubMentioned) => Effect.void)
+			const mention = issueCommentPayload()
+			expect(
+				yield* process({ onIssueCreated, onMentioned }, [
+					admission('issues', issuePayload('opened'), 'opened'),
+					admission('issue_comment', mention, 'mention'),
+				]),
+			).toEqual(ProviderEventHandled.make({}))
+			expect(onIssueCreated).not.toHaveBeenCalled()
+			expect(onMentioned).toHaveBeenCalledOnce()
+			expect(onMentioned.mock.calls[0]?.[0].trigger._tag).toBe('GitHubIssueCommentCreated')
+			expect(onMentioned.mock.calls[0]?.[0].events.map((event) => event._tag)).toEqual(['GitHubIssueOpened'])
 		}),
 	)
 
-	it.effect('ignores an event when its callback is not configured', ({ expect }) =>
+	it.effect('delivers subscribed pull request events once and in mailbox order', ({ expect }) =>
 		Effect.gen(function* () {
-			const processor = makeGitHubEventProcessor({ namespace: 'github-processing-test', handlers: {} })
-			expect(yield* processor.process(admission('issues', issuePayload('opened')))).toEqual(
-				ProviderEventIgnored.make({ reason: 'callback_not_configured' }),
+			const onSubscribedPrEvents = vi.fn((_event: GitHubSubscribedPrEvents) => Effect.void)
+			expect(
+				yield* process(
+					{ onSubscribedPrEvents },
+					[
+						pullRequestAdmission('pull_request', pullRequestPayload('edited'), 'edited'),
+						pullRequestAdmission('issue_comment', pullRequestIssueCommentPayload(), 'comment'),
+						pullRequestAdmission('pull_request', pullRequestPayload('closed'), 'closed'),
+					],
+					true,
+				),
+			).toEqual(ProviderEventHandled.make({}))
+			expect(onSubscribedPrEvents).toHaveBeenCalledOnce()
+			expect(onSubscribedPrEvents.mock.calls[0]?.[0].events.map((event) => event._tag)).toEqual([
+				'GitHubPrEdited',
+				'GitHubPrCommentCreated',
+				'GitHubPrClosed',
+			])
+		}),
+	)
+
+	it.effect('normalizes completed checks into subscribed pull request events', ({ expect }) =>
+		Effect.gen(function* () {
+			const onSubscribedPrEvents = vi.fn((_event: GitHubSubscribedPrEvents) => Effect.void)
+			expect(
+				yield* process(
+					{ onSubscribedPrEvents },
+					[pullRequestAdmission('check_run', checkRunPayload([42]), 'check:pull-request:200:42')],
+					true,
+				),
+			).toEqual(ProviderEventHandled.make({}))
+			expect(onSubscribedPrEvents.mock.calls[0]?.[0].events[0]).toEqual(
+				expect.objectContaining({
+					_tag: 'GitHubPrCheckCompleted',
+					name: 'build',
+					conclusion: 'success',
+					headSha: 'abc123',
+				}),
 			)
 		}),
 	)
 
-	it.effect('rejects an invalid stored payload', ({ expect }) =>
+	it.effect('normalizes a fanned-out check for the admission mailbox association', ({ expect }) =>
 		Effect.gen(function* () {
-			const processor = makeGitHubEventProcessor({ namespace: 'github-processing-test', handlers: {} })
-			const error = yield* Effect.flip(processor.process(admission('issues', { action: 'opened' })))
-			expect(error).toEqual(ProviderEventInvalid.make({ provider: 'github', reason: 'invalid_payload' }))
+			const onSubscribedPrEvents = vi.fn((_event: GitHubSubscribedPrEvents) => Effect.void)
+			yield* process(
+				{ onSubscribedPrEvents },
+				[pullRequestAdmission('check_run', checkRunPayload([42, 57]), 'check:pull-request:200:57', 57)],
+				true,
+			)
+			const event = onSubscribedPrEvents.mock.calls[0]?.[0]
+			expect(event?.pullRequest.ref.number).toBe(57)
+			expect(event?.events[0]?._tag).toBe('GitHubPrCheckCompleted')
 		}),
 	)
 
-	it.effect('narrows callback failures and preserves non-retryable metadata', ({ expect }) =>
+	it.effect('does not suppress completed checks sent by the configured bot identity', ({ expect }) =>
 		Effect.gen(function* () {
-			const processor = makeGitHubEventProcessor({
-				namespace: 'github-processing-test',
-				handlers: {
-					onIssue: () => Effect.fail({ retryability: 'non_retryable' as const }),
-				},
+			const onSubscribedPrEvents = vi.fn((_event: GitHubSubscribedPrEvents) => Effect.void)
+			const payload = checkRunPayload([42])
+			payload.sender.id = 999
+			expect(
+				yield* process(
+					{ onSubscribedPrEvents },
+					[pullRequestAdmission('check_run', payload, 'bot-check')],
+					true,
+				),
+			).toEqual(ProviderEventHandled.make({}))
+			expect(onSubscribedPrEvents).toHaveBeenCalledOnce()
+		}),
+	)
+
+	it.effect('suppresses bot-authored events before routing', ({ expect }) =>
+		Effect.gen(function* () {
+			const onMentioned = vi.fn(() => Effect.void)
+			const payload = issueCommentPayload()
+			payload.sender.id = 999
+			payload.comment.user.id = 999
+			expect(yield* process({ onMentioned }, [admission('issue_comment', payload, 'self')])).toEqual(
+				ProviderEventIgnored.make({ reason: 'no_relevant_event' }),
+			)
+			expect(onMentioned).not.toHaveBeenCalled()
+		}),
+	)
+
+	it.effect('rejects a payload whose repository identity disagrees with its mailbox', ({ expect }) =>
+		Effect.gen(function* () {
+			const payload = issuePayload('opened')
+			const mismatched = DeliveryAdmission.make({
+				...admission('issues', payload, 'opened'),
+				resourceId: 'github:v1:201:issue:42',
 			})
-			const error = yield* Effect.flip(processor.process(admission('issues', issuePayload('opened'))))
+			const error = yield* Effect.flip(process<never, never>({}, [mismatched]))
+			expect(error).toEqual(ProviderEventInvalid.make({ provider: 'github', reason: 'identity_mismatch' }))
+		}),
+	)
+
+	it.effect('narrows callback retryability after the callback layer observes the failure', ({ expect }) =>
+		Effect.gen(function* () {
+			const error = yield* Effect.flip(
+				process({ onIssueCreated: () => Effect.fail({ retryability: 'non_retryable' as const }) }, [
+					admission('issues', issuePayload('opened'), 'opened'),
+				]),
+			)
 			expect(error).toEqual(
 				ProviderEventExecutionFailed.make({
 					provider: 'github',
@@ -134,20 +220,12 @@ describe('GitHub event processing', () => {
 		}),
 	)
 
-	it.effect('treats callback failures without metadata as retryable', ({ expect }) =>
+	it.effect('preserves callback interruption', ({ expect }) =>
 		Effect.gen(function* () {
-			const processor = makeGitHubEventProcessor({
-				namespace: 'github-processing-test',
-				handlers: { onIssue: () => Effect.fail('callback failed') },
-			})
-			const error = yield* Effect.flip(processor.process(admission('issues', issuePayload('opened'))))
-			expect(error).toEqual(
-				ProviderEventExecutionFailed.make({
-					provider: 'github',
-					retryable: true,
-					safeCode: 'callback_failed',
-				}),
-			)
+			const exit = yield* process({ onIssueCreated: () => Effect.interrupt }, [
+				admission('issues', issuePayload('opened'), 'opened'),
+			]).pipe(Effect.exit)
+			expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true)
 		}),
 	)
 })

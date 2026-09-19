@@ -1,11 +1,13 @@
 import { describe, it } from '@effect/vitest'
-import { Effect } from 'effect'
+import { Effect, Ref } from 'effect'
 
 import {
 	DeliveryAdmission,
+	DeliveryReceipt,
 	MailboxDeliveryRejected,
 	MailboxDeliveryUnavailable,
 	ProviderWebhookEvent,
+	ProviderWebhookEvents,
 	ProviderWebhookIgnored,
 	ProviderWebhookResponse,
 	WebhookAuthenticationError,
@@ -59,6 +61,27 @@ describe('ProviderWebhook routing tests', () => {
 			const response = yield* app.post()
 
 			expect(response.status).toBe(200)
+		}),
+	)
+
+	it.effect('Plural admissions are delivered in order before returning 200', ({ expect }) =>
+		Effect.gen(function* () {
+			const delivered = yield* Ref.make<ReadonlyArray<string>>([])
+			const second = DeliveryAdmission.make({ ...admission, resourceId: 'resource-2', eventId: 'event-2' })
+			const app = yield* makeWebhookTestApp(
+				() => Effect.succeed(ProviderWebhookEvents.make({ events: [admission, second] })),
+				{
+					deliver: (event) =>
+						Ref.update(delivered, (eventIds) => [...eventIds, event.eventId]).pipe(
+							Effect.as(DeliveryReceipt.make({ mailboxKey: event.resourceId, accepted: true })),
+						),
+				},
+			)
+
+			const response = yield* app.post()
+
+			expect(response.status).toBe(200)
+			expect(yield* Ref.get(delivered)).toEqual(['event', 'event-2'])
 		}),
 	)
 

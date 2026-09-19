@@ -46,6 +46,14 @@ export const ProviderWebhookEvent = Schema.TaggedStruct('Event', {
 })
 
 /**
+ * One provider webhook produced admissions for several independent mailboxes.
+ * Delivery remains singular so a retry can safely deduplicate an already accepted prefix.
+ */
+export const ProviderWebhookEvents = Schema.TaggedStruct('Events', {
+	events: Schema.NonEmptyArray(DeliveryAdmission),
+})
+
+/**
  * The webhook is valid provider traffic, but there is nothing for the delivery system to process.
  */
 export const ProviderWebhookIgnored = Schema.TaggedStruct('Ignored', {})
@@ -63,6 +71,7 @@ export type ProviderWebhookResponse = typeof ProviderWebhookResponse.Type
 
 export const ProviderWebhookOutcome = Schema.Union([
 	ProviderWebhookEvent,
+	ProviderWebhookEvents,
 	ProviderWebhookIgnored,
 	ProviderWebhookResponse,
 ])
@@ -79,9 +88,13 @@ export type WebhookProvider<R = never> = {
 /**
  * Http Router
  */
-export const webhookRoutes = <R>(providers: ReadonlyArray<WebhookProvider<R>>) =>
+export const webhookRoutes = <const Requirements extends ReadonlyArray<unknown>>(webhookProviders: {
+	// One type per provider, so providers that need different services can share a list.
+	readonly [Index in keyof Requirements]: WebhookProvider<Requirements[Index]>
+}) =>
 	HttpRouter.add('POST', '/integrations/:integration/webhook', (request) =>
 		Effect.gen(function* () {
+			const providers: ReadonlyArray<WebhookProvider<Requirements[number]>> = webhookProviders
 			// Get the mailbox delivery service.
 			const mailbox = yield* MailboxDelivery
 			const { integration } = yield* HttpRouter.schemaPathParams(
@@ -94,24 +107,29 @@ export const webhookRoutes = <R>(providers: ReadonlyArray<WebhookProvider<R>>) =
 				headers: request.headers,
 				body: new Uint8Array(yield* request.arrayBuffer),
 			})
+			const deliverAdmission = (event: typeof DeliveryAdmission.Type) =>
+				mailbox.deliver(event).pipe(
+					Effect.tap((receipt) =>
+						Effect.logInfo('Mailbox admission recorded').pipe(
+							Effect.annotateLogs({
+								provider: event.provider,
+								namespace: event.namespace,
+								installation_id: event.installationId,
+								resource_id: event.resourceId,
+								event_id: event.eventId,
+								mailbox_key: receipt.mailboxKey,
+								accepted: receipt.accepted,
+							}),
+						),
+					),
+				)
 
 			return yield* Match.value(outcome).pipe(
 				Match.tagsExhaustive({
 					Event: ({ event }) =>
-						mailbox.deliver(event).pipe(
-							Effect.tap((receipt) =>
-								Effect.logInfo('Mailbox admission recorded').pipe(
-									Effect.annotateLogs({
-										provider: event.provider,
-										namespace: event.namespace,
-										installation_id: event.installationId,
-										resource_id: event.resourceId,
-										event_id: event.eventId,
-										mailbox_key: receipt.mailboxKey,
-										accepted: receipt.accepted,
-									}),
-								),
-							),
+						deliverAdmission(event).pipe(Effect.as(HttpServerResponse.empty({ status: 200 }))),
+					Events: ({ events }) =>
+						Effect.forEach(events, deliverAdmission, { discard: true }).pipe(
 							Effect.as(HttpServerResponse.empty({ status: 200 })),
 						),
 					Ignored: () => Effect.succeed(HttpServerResponse.empty({ status: 200 })),

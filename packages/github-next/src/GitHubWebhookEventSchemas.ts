@@ -23,7 +23,7 @@ export const GitHubIssueComment = Schema.Struct({
 	id: GitHubId,
 	body: Schema.String,
 	html_url: Schema.String,
-	user: GitHubUser,
+	user: Schema.NullOr(GitHubUser),
 })
 
 export const GitHubRepository = Schema.Struct({
@@ -33,6 +33,19 @@ export const GitHubRepository = Schema.Struct({
 })
 
 export const GitHubInstallation = Schema.Struct({ id: GitHubId })
+
+export const GitHubLabel = Schema.Struct({
+	id: Schema.optionalKey(GitHubId),
+	name: Schema.NonEmptyString,
+	color: Schema.String,
+	description: Schema.optionalKey(Schema.NullOr(Schema.String)),
+})
+
+export const GitHubTeam = Schema.Struct({
+	id: GitHubId,
+	name: Schema.NonEmptyString,
+	slug: Schema.NonEmptyString,
+})
 
 export const GitHubPullRequest = Schema.Struct({
 	...GitHubIssue.fields,

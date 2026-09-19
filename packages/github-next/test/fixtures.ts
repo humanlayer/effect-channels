@@ -55,7 +55,9 @@ export const makeInMemoryMailboxFixture = <R>(processors: ReadonlyArray<Provider
 				const mailbox = mailboxes.get(mailboxKey)
 				return mailbox === undefined
 					? Effect.die(new Error(`In-memory mailbox not found: ${mailboxKey}`))
-					: Queue.take(mailbox).pipe(Effect.flatMap(processProviderEvent(processors)))
+					: Queue.take(mailbox).pipe(
+							Effect.flatMap((admission) => processProviderEvent(processors)([admission])),
+						)
 			},
 		}
 	})
@@ -164,6 +166,25 @@ export const pullRequestReviewThreadPayload = (action = 'resolved') => ({
 	...pullRequestPayload(),
 	action,
 	thread: { node_id: 'PRRT_800', comments: [pullRequestReviewCommentPayload().comment] },
+})
+
+export const checkRunPayload = (pullRequestNumbers: ReadonlyArray<number> = [42]) => ({
+	action: 'completed',
+	installation: { id: 100 },
+	repository: { id: 200, name: 'project', owner: { login: 'alice' } },
+	sender: githubUser,
+	check_run: {
+		id: 900,
+		name: 'build',
+		status: 'completed',
+		conclusion: 'success',
+		details_url: 'https://github.com/alice/project/actions/runs/900',
+		head_sha: 'abc123',
+		check_suite: { id: 901 },
+		started_at: '2025-01-01T00:00:00Z',
+		completed_at: '2025-01-01T00:01:00Z',
+		pull_requests: pullRequestNumbers.map((number) => ({ number })),
+	},
 })
 
 export const pullRequestIssueCommentPayload = () => {
@@ -375,6 +396,8 @@ export const admitStoredGitHubWebhook = (namespace: string, event: string, paylo
 		const admission = yield* Match.value(outcome).pipe(
 			Match.tagsExhaustive({
 				Event: ({ event }) => Effect.succeed(event),
+				Events: () =>
+					Effect.die(new Error(`Expected GitHub ${event} webhook to produce exactly one admission`)),
 				Ignored: () =>
 					Effect.die(new Error(`Expected GitHub ${event} webhook to be admitted, but it was ignored`)),
 				Response: () =>

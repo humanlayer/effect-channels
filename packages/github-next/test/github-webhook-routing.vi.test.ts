@@ -1,9 +1,17 @@
 import { describe, it } from '@effect/vitest'
-import { DeliveryReceipt, type DeliveryAdmission, ProviderEventHandled } from '@humanlayer/channels-delivery-next'
-import { Deferred, Effect } from 'effect'
+import {
+	DeliveryReceipt,
+	type DeliveryAdmission,
+	MailboxSubscriptions,
+	ProviderEventHandled,
+} from '@humanlayer/channels-delivery-next'
+import { Deferred, Effect, Layer } from 'effect'
 import { vi } from 'vitest'
 
-import { makeGitHubEventProcessor } from '../src/GitHubEventProcessor'
+import { GitHubApi } from '../src/GitHubApi'
+import { GitHubCallbacks } from '../src/GitHubCallbacks'
+import { GitHubBotConfiguration, makeGitHubEventProcessor } from '../src/GitHubEventProcessor'
+import { GitHubId } from '../src/GitHubIdentity'
 import {
 	decodeGitHubIdentifiedResponse,
 	decodeGitHubNumberedResponse,
@@ -13,12 +21,12 @@ import {
 } from './fixtures'
 
 describe('GitHub webhook routing', () => {
-	it.effect('processes an emulator issue through its keyed mailbox and calls onIssue', ({ expect }) =>
+	it.effect('processes an emulator issue through its keyed mailbox and calls onIssueCreated', ({ expect }) =>
 		Effect.gen(function* () {
-			const onIssue = vi.fn(() => Effect.void)
+			const onIssueCreated = vi.fn(() => Effect.void)
 			const processor = makeGitHubEventProcessor({
 				namespace: 'github-emulator-test',
-				handlers: { onIssue },
+				bot: GitHubBotConfiguration.make({ mentionNames: ['agent'], botUserId: GitHubId.make(999) }),
 			})
 			const mailbox = yield* makeInMemoryMailboxFixture([processor])
 			const github = yield* makeGitHubEmulatorFixture({ mailboxDelivery: mailbox.mailboxDelivery })
@@ -29,13 +37,21 @@ describe('GitHub webhook routing', () => {
 			const issueNumber = (yield* decodeGitHubNumberedResponse(issueResponse)).number
 			const mailboxKey = yield* mailbox.awaitMailboxKey
 
-			expect(onIssue).not.toHaveBeenCalled()
-			expect(yield* mailbox.processNext(mailboxKey)).toEqual(ProviderEventHandled.make({}))
-			expect(onIssue).toHaveBeenCalledOnce()
-			expect(onIssue).toHaveBeenCalledWith(
+			expect(onIssueCreated).not.toHaveBeenCalled()
+			const processingLayer = Layer.mergeAll(
+				GitHubCallbacks.layer({ onIssueCreated }),
+				Layer.mock(GitHubApi, {}),
+				Layer.mock(MailboxSubscriptions, { isSubscribed: () => Effect.succeed(false) }),
+			)
+			expect(yield* mailbox.processNext(mailboxKey).pipe(Effect.provide(processingLayer))).toEqual(
+				ProviderEventHandled.make({}),
+			)
+			expect(onIssueCreated).toHaveBeenCalledOnce()
+			expect(onIssueCreated).toHaveBeenCalledWith(
 				expect.objectContaining({
-					action: 'opened',
-					issue: expect.objectContaining({ number: issueNumber, title: 'Process this issue' }),
+					_tag: 'GitHubIssueCreated',
+					trigger: expect.objectContaining({ _tag: 'GitHubIssueOpened', title: 'Process this issue' }),
+					issue: expect.objectContaining({ ref: expect.objectContaining({ number: issueNumber }) }),
 				}),
 			)
 		}),

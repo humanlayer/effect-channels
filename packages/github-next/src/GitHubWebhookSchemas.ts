@@ -1,13 +1,16 @@
 import { Schema } from 'effect'
 
+import { GitHubId } from './GitHubIdentity'
 import {
 	GitHubInstallation,
 	GitHubIssue,
 	GitHubIssueComment,
+	GitHubLabel,
 	GitHubPullRequest,
 	GitHubRepository,
 	GitHubReview,
 	GitHubReviewComment,
+	GitHubTeam,
 	GitHubUser,
 } from './GitHubWebhookEventSchemas'
 
@@ -40,6 +43,8 @@ export const GitHubIssuesWebhook = Schema.Struct({
 	repository: GitHubRepository,
 	issue: GitHubIssue,
 	sender: GitHubUser,
+	assignee: Schema.optionalKey(Schema.NullOr(GitHubUser)),
+	label: Schema.optionalKey(Schema.NullOr(GitHubLabel)),
 })
 export type GitHubIssuesWebhook = typeof GitHubIssuesWebhook.Type
 
@@ -71,6 +76,10 @@ export const GitHubPullRequestWebhook = Schema.Struct({
 	]),
 	...pullRequestEnvelope,
 	sender: GitHubUser,
+	assignee: Schema.optionalKey(Schema.NullOr(GitHubUser)),
+	label: Schema.optionalKey(Schema.NullOr(GitHubLabel)),
+	requested_reviewer: Schema.optionalKey(Schema.NullOr(GitHubUser)),
+	requested_team: Schema.optionalKey(Schema.NullOr(GitHubTeam)),
 })
 export type GitHubPullRequestWebhook = typeof GitHubPullRequestWebhook.Type
 
@@ -98,6 +107,35 @@ export const GitHubPullRequestReviewThreadWebhook = Schema.Struct({
 })
 export type GitHubPullRequestReviewThreadWebhook = typeof GitHubPullRequestReviewThreadWebhook.Type
 
+export const GitHubCheckRunWebhook = Schema.Struct({
+	action: Schema.Literal('completed'),
+	installation: GitHubInstallation,
+	repository: GitHubRepository,
+	sender: GitHubUser,
+	check_run: Schema.Struct({
+		id: GitHubId,
+		name: Schema.String,
+		status: Schema.Literal('completed'),
+		conclusion: Schema.Literals([
+			'success',
+			'failure',
+			'timed_out',
+			'cancelled',
+			'action_required',
+			'neutral',
+			'skipped',
+			'stale',
+		]),
+		details_url: Schema.NullOr(Schema.String),
+		head_sha: Schema.NonEmptyString,
+		check_suite: Schema.NullOr(Schema.Struct({ id: GitHubId })),
+		started_at: Schema.NullOr(Schema.String),
+		completed_at: Schema.NullOr(Schema.String),
+		pull_requests: Schema.Array(Schema.Struct({ number: GitHubId })),
+	}),
+})
+export type GitHubCheckRunWebhook = typeof GitHubCheckRunWebhook.Type
+
 export const GitHubSupportedWebhook = Schema.Union([
 	Schema.Struct({ event: Schema.Literal('issues'), payload: GitHubIssuesWebhook }),
 	Schema.Struct({ event: Schema.Literal('issue_comment'), payload: GitHubIssueCommentWebhook }),
@@ -111,5 +149,6 @@ export const GitHubSupportedWebhook = Schema.Union([
 		event: Schema.Literal('pull_request_review_thread'),
 		payload: GitHubPullRequestReviewThreadWebhook,
 	}),
+	Schema.Struct({ event: Schema.Literal('check_run'), payload: GitHubCheckRunWebhook }),
 ])
 export type GitHubSupportedWebhook = typeof GitHubSupportedWebhook.Type
