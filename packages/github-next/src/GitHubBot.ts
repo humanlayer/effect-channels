@@ -45,23 +45,31 @@ export const make = <E, R, ApiError = never, ApiRequirements = never>(
 	options: MakeOptions<E, R, ApiError, ApiRequirements>,
 ): ChannelsProvider<{ readonly build: ApiRequirements; readonly process: Exclude<R, GitHubApi> }> => {
 	const callbacks = GitHubCallbacks.layer(options.handlers)
+	const readBotConfiguration = Schema.is(GitHubBotConfiguration)(options.bot)
+		? Effect.succeed(options.bot)
+		: unavailable('read_bot_configuration', options.bot)
+	const buildGitHubApi = Predicate.isUndefined(options.gitHubApi)
+		? unavailable('build_github_api', Layer.build(GitHubApiLive))
+		: unavailable('build_github_api', Layer.build(options.gitHubApi))
 
 	return {
 		providerName: 'github',
 		deliveryMode: options.deliveryMode,
 		webhookProvider: ({ namespace }) =>
-			unavailable('read_webhook_secret', options.webhookSecret).pipe(
-				Effect.map((webhookSecret) => makeGitHubWebhookProvider({ namespace, webhookSecret })),
-				Effect.withSpan('github.bot.build_webhook_provider'),
-			),
+			Effect.gen(function* () {
+				const webhookSecret = yield* unavailable('read_webhook_secret', options.webhookSecret)
+				/**
+				 * Split hosts build only this half in the Worker construction phase. Resolve the callback half's
+				 * configuration here too, so Alchemy can discover and bind it for the Durable Object runtime.
+				 */
+				yield* readBotConfiguration
+				yield* buildGitHubApi
+				return makeGitHubWebhookProvider({ namespace, webhookSecret })
+			}).pipe(Effect.withSpan('github.bot.build_webhook_provider')),
 		eventProcessor: ({ namespace }) =>
 			Effect.gen(function* () {
-				const bot = Schema.is(GitHubBotConfiguration)(options.bot)
-					? options.bot
-					: yield* unavailable('read_bot_configuration', options.bot)
-				const gitHubApi = yield* Predicate.isUndefined(options.gitHubApi)
-					? unavailable('build_github_api', Layer.build(GitHubApiLive))
-					: unavailable('build_github_api', Layer.build(options.gitHubApi))
+				const bot = yield* readBotConfiguration
+				const gitHubApi = yield* buildGitHubApi
 				const eventProcessor = makeGitHubEventProcessor({ namespace, bot })
 				return {
 					namespace: eventProcessor.namespace,

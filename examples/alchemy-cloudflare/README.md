@@ -96,7 +96,7 @@ GITHUB_BOT_USER_ID=123456789
 
 `GITHUB_BOT_MENTION_NAME` is the bot's complete login without the leading `@`. For example, the login `my-reviewer[bot]` uses `my-reviewer[bot]`. Using the complete login avoids confusing an app with a user or organization that has the same base name.
 
-The Worker reads these values during initialization, so Alchemy binds them as Cloudflare secrets during deployment and its Durable Objects share the same bindings. The webhook secret verifies incoming requests. The App ID and private key create short-lived installation tokens for API calls. The bot user ID prevents the app from responding to its own events. Secrets are not stored in mailbox admissions or Durable Object storage.
+The GitHub provider reads these values while the Worker is constructed, so Alchemy binds them as Cloudflare secrets during deployment and its Durable Objects share the same bindings. The webhook secret verifies incoming requests. The App ID and private key create short-lived installation tokens for API calls. The bot user ID prevents the app from responding to its own events. Secrets are not stored in mailbox admissions or Durable Object storage.
 
 Restart `bun alchemy dev` after changing `.env`. For a deployed stack, deploy the updated secrets with:
 
