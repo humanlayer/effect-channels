@@ -3,16 +3,31 @@ import {
 	type MailboxSubscriptionResult,
 	MailboxSubscriptions,
 } from '@humanlayer/channels-delivery-next'
-import { Effect, Schema } from 'effect'
+import { Effect, Predicate, Schema } from 'effect'
 
-import type { GitHubApiError } from './GitHubApi'
+import type {
+	GitHubApiError,
+	GitHubIssueCloseReason,
+	GitHubLabels,
+	GitHubMergeOptions,
+	GitHubPostReviewCommentOptions,
+} from './GitHubApi'
 import { GitHubApi } from './GitHubApi'
 import { GitHubId } from './GitHubIdentity'
 import {
+	GitHubActionsJobRef,
+	type GitHubActionsJobInfo,
+	GitHubCheckAnnotation,
+	GitHubCheckRunRef,
+	type GitHubCheckRunInfo,
+	GitHubCommit,
 	type GitHubContent,
 	GitHubIssueCommentRef,
 	type GitHubIssueInfo,
 	GitHubIssueRef,
+	GitHubLabel,
+	type GitHubMergeResult,
+	GitHubPullRequestFile,
 	type GitHubPullRequestInfo,
 	GitHubPullRequestRef,
 	type GitHubReaction,
@@ -31,6 +46,18 @@ const pullRequestSpanAttributes = (ref: GitHubPullRequestRef) => ({
 	'github.installation_id': ref.installationId,
 	'github.repository_id': ref.repositoryId,
 	'github.pull_request_number': ref.number,
+})
+
+const checkRunSpanAttributes = (ref: GitHubCheckRunRef) => ({
+	'github.installation_id': ref.installationId,
+	'github.repository_id': ref.repositoryId,
+	'github.check_run_id': ref.id,
+})
+
+const actionsJobSpanAttributes = (ref: GitHubActionsJobRef) => ({
+	'github.installation_id': ref.installationId,
+	'github.repository_id': ref.repositoryId,
+	'github.actions_job_id': ref.id,
 })
 
 export class GitHubIssue extends Schema.TaggedClass<GitHubIssue>()('GitHubIssue', {
@@ -70,6 +97,48 @@ export class GitHubIssue extends Schema.TaggedClass<GitHubIssue>()('GitHubIssue'
 	postComment(content: GitHubContent): Effect.Effect<GitHubIssueComment, GitHubApiError, GitHubApi> {
 		return Effect.flatMap(GitHubApi, (api) => api.postIssueComment({ issue: this.ref, content })).pipe(
 			Effect.withSpan('github.issue.post_comment', { attributes: issueSpanAttributes(this.ref) }),
+		)
+	}
+
+	close(reason: GitHubIssueCloseReason): Effect.Effect<GitHubIssueInfo, GitHubApiError, GitHubApi> {
+		return Effect.flatMap(GitHubApi, (api) => api.closeIssue({ issue: this.ref, reason })).pipe(
+			Effect.withSpan('github.issue.close', { attributes: issueSpanAttributes(this.ref) }),
+		)
+	}
+
+	reopen(): Effect.Effect<GitHubIssueInfo, GitHubApiError, GitHubApi> {
+		return Effect.flatMap(GitHubApi, (api) => api.reopenIssue({ issue: this.ref })).pipe(
+			Effect.withSpan('github.issue.reopen', { attributes: issueSpanAttributes(this.ref) }),
+		)
+	}
+
+	listLabels(): Effect.Effect<GitHubLabelsResult, GitHubApiError, GitHubApi> {
+		return Effect.flatMap(GitHubApi, (api) => api.listIssueLabels({ issue: this.ref })).pipe(
+			Effect.withSpan('github.issue.list_labels', { attributes: issueSpanAttributes(this.ref) }),
+		)
+	}
+
+	addLabels(labels: GitHubLabels): Effect.Effect<GitHubLabelsResult, GitHubApiError, GitHubApi> {
+		return Effect.flatMap(GitHubApi, (api) => api.addIssueLabels({ issue: this.ref, labels })).pipe(
+			Effect.withSpan('github.issue.add_labels', { attributes: issueSpanAttributes(this.ref) }),
+		)
+	}
+
+	setLabels(labels: GitHubLabels): Effect.Effect<GitHubLabelsResult, GitHubApiError, GitHubApi> {
+		return Effect.flatMap(GitHubApi, (api) => api.setIssueLabels({ issue: this.ref, labels })).pipe(
+			Effect.withSpan('github.issue.set_labels', { attributes: issueSpanAttributes(this.ref) }),
+		)
+	}
+
+	removeLabel(label: string): Effect.Effect<GitHubLabelsResult, GitHubApiError, GitHubApi> {
+		return Effect.flatMap(GitHubApi, (api) => api.removeIssueLabel({ issue: this.ref, label })).pipe(
+			Effect.withSpan('github.issue.remove_label', { attributes: issueSpanAttributes(this.ref) }),
+		)
+	}
+
+	removeAllLabels(): Effect.Effect<void, GitHubApiError, GitHubApi> {
+		return Effect.flatMap(GitHubApi, (api) => api.removeAllIssueLabels({ issue: this.ref })).pipe(
+			Effect.withSpan('github.issue.remove_all_labels', { attributes: issueSpanAttributes(this.ref) }),
 		)
 	}
 }
@@ -127,6 +196,157 @@ export class GitHubPullRequest extends Schema.TaggedClass<GitHubPullRequest>()('
 	postComment(content: GitHubContent): Effect.Effect<GitHubIssueComment, GitHubApiError, GitHubApi> {
 		return Effect.flatMap(GitHubApi, (api) => api.postPullRequestComment({ pullRequest: this.ref, content })).pipe(
 			Effect.withSpan('github.pull_request.post_comment', { attributes: pullRequestSpanAttributes(this.ref) }),
+		)
+	}
+
+	postReviewComment(
+		input: GitHubPostReviewCommentOptions,
+	): Effect.Effect<GitHubReviewComment, GitHubApiError, GitHubApi> {
+		return Effect.flatMap(GitHubApi, (api) =>
+			api.postPullRequestReviewComment({
+				pullRequest: this.ref,
+				content: input.content,
+				commitId: input.commitId,
+				path: input.path,
+				location: input.location,
+			}),
+		).pipe(
+			Effect.withSpan('github.pull_request.post_review_comment', {
+				attributes: pullRequestSpanAttributes(this.ref),
+			}),
+		)
+	}
+
+	listFiles(): Effect.Effect<GitHubPullRequestFiles, GitHubApiError, GitHubApi> {
+		return Effect.flatMap(GitHubApi, (api) => api.listPullRequestFiles({ pullRequest: this.ref })).pipe(
+			Effect.withSpan('github.pull_request.list_files', { attributes: pullRequestSpanAttributes(this.ref) }),
+		)
+	}
+
+	fetchDiff(): Effect.Effect<string, GitHubApiError, GitHubApi> {
+		return Effect.flatMap(GitHubApi, (api) => api.fetchPullRequestDiff({ pullRequest: this.ref })).pipe(
+			Effect.withSpan('github.pull_request.fetch_diff', { attributes: pullRequestSpanAttributes(this.ref) }),
+		)
+	}
+
+	listCommits(): Effect.Effect<GitHubCommits, GitHubApiError, GitHubApi> {
+		return Effect.flatMap(GitHubApi, (api) => api.listPullRequestCommits({ pullRequest: this.ref })).pipe(
+			Effect.withSpan('github.pull_request.list_commits', { attributes: pullRequestSpanAttributes(this.ref) }),
+		)
+	}
+
+	listLabels(): Effect.Effect<GitHubLabelsResult, GitHubApiError, GitHubApi> {
+		return Effect.flatMap(GitHubApi, (api) => api.listPullRequestLabels({ pullRequest: this.ref })).pipe(
+			Effect.withSpan('github.pull_request.list_labels', { attributes: pullRequestSpanAttributes(this.ref) }),
+		)
+	}
+
+	addLabels(labels: GitHubLabels): Effect.Effect<GitHubLabelsResult, GitHubApiError, GitHubApi> {
+		return Effect.flatMap(GitHubApi, (api) => api.addPullRequestLabels({ pullRequest: this.ref, labels })).pipe(
+			Effect.withSpan('github.pull_request.add_labels', { attributes: pullRequestSpanAttributes(this.ref) }),
+		)
+	}
+
+	setLabels(labels: GitHubLabels): Effect.Effect<GitHubLabelsResult, GitHubApiError, GitHubApi> {
+		return Effect.flatMap(GitHubApi, (api) => api.setPullRequestLabels({ pullRequest: this.ref, labels })).pipe(
+			Effect.withSpan('github.pull_request.set_labels', { attributes: pullRequestSpanAttributes(this.ref) }),
+		)
+	}
+
+	removeLabel(label: string): Effect.Effect<GitHubLabelsResult, GitHubApiError, GitHubApi> {
+		return Effect.flatMap(GitHubApi, (api) => api.removePullRequestLabel({ pullRequest: this.ref, label })).pipe(
+			Effect.withSpan('github.pull_request.remove_label', { attributes: pullRequestSpanAttributes(this.ref) }),
+		)
+	}
+
+	removeAllLabels(): Effect.Effect<void, GitHubApiError, GitHubApi> {
+		return Effect.flatMap(GitHubApi, (api) => api.removeAllPullRequestLabels({ pullRequest: this.ref })).pipe(
+			Effect.withSpan('github.pull_request.remove_all_labels', {
+				attributes: pullRequestSpanAttributes(this.ref),
+			}),
+		)
+	}
+
+	listCheckRuns(): Effect.Effect<GitHubCheckRuns, GitHubApiError, GitHubApi> {
+		const ref = this.ref
+		return Effect.gen(function* () {
+			const api = yield* GitHubApi
+			const pullRequest = yield* api.fetchPullRequest({ pullRequest: ref })
+			return yield* api.listCheckRunsForRef({ pullRequest: ref, sha: pullRequest.headSha })
+		}).pipe(
+			Effect.withSpan('github.pull_request.list_check_runs', {
+				attributes: pullRequestSpanAttributes(this.ref),
+			}),
+		)
+	}
+
+	listCheckRunsForRef(sha: string): Effect.Effect<GitHubCheckRuns, GitHubApiError, GitHubApi> {
+		return Effect.flatMap(GitHubApi, (api) => api.listCheckRunsForRef({ pullRequest: this.ref, sha })).pipe(
+			Effect.withSpan('github.pull_request.list_check_runs_for_ref', {
+				attributes: pullRequestSpanAttributes(this.ref),
+			}),
+		)
+	}
+
+	close(): Effect.Effect<GitHubPullRequestInfo, GitHubApiError, GitHubApi> {
+		return Effect.flatMap(GitHubApi, (api) => api.closePullRequest({ pullRequest: this.ref })).pipe(
+			Effect.withSpan('github.pull_request.close', { attributes: pullRequestSpanAttributes(this.ref) }),
+		)
+	}
+
+	reopen(): Effect.Effect<GitHubPullRequestInfo, GitHubApiError, GitHubApi> {
+		return Effect.flatMap(GitHubApi, (api) => api.reopenPullRequest({ pullRequest: this.ref })).pipe(
+			Effect.withSpan('github.pull_request.reopen', { attributes: pullRequestSpanAttributes(this.ref) }),
+		)
+	}
+
+	merge(options: GitHubMergeOptions): Effect.Effect<GitHubMergeResult, GitHubApiError, GitHubApi> {
+		return Effect.flatMap(GitHubApi, (api) =>
+			api.mergePullRequest({
+				pullRequest: this.ref,
+				method: options.method,
+				expectedHeadSha: options.expectedHeadSha,
+				...(Predicate.isUndefined(options.commitTitle) ? {} : { commitTitle: options.commitTitle }),
+				...(Predicate.isUndefined(options.commitMessage) ? {} : { commitMessage: options.commitMessage }),
+			}),
+		).pipe(Effect.withSpan('github.pull_request.merge', { attributes: pullRequestSpanAttributes(this.ref) }))
+	}
+}
+
+export class GitHubCheckRun extends Schema.TaggedClass<GitHubCheckRun>()('GitHubCheckRun', {
+	ref: GitHubCheckRunRef,
+}) {
+	fetchInfo(): Effect.Effect<GitHubCheckRunInfo, GitHubApiError, GitHubApi> {
+		return Effect.flatMap(GitHubApi, (api) => api.fetchCheckRun({ checkRun: this.ref })).pipe(
+			Effect.withSpan('github.check_run.fetch_info', { attributes: checkRunSpanAttributes(this.ref) }),
+		)
+	}
+
+	listAnnotations(): Effect.Effect<GitHubCheckAnnotations, GitHubApiError, GitHubApi> {
+		return Effect.flatMap(GitHubApi, (api) => api.listCheckRunAnnotations({ checkRun: this.ref })).pipe(
+			Effect.withSpan('github.check_run.list_annotations', { attributes: checkRunSpanAttributes(this.ref) }),
+		)
+	}
+
+	resolveActionsJob(): Effect.Effect<GitHubActionsJob | null, GitHubApiError, GitHubApi> {
+		return Effect.flatMap(GitHubApi, (api) => api.resolveActionsJob({ checkRun: this.ref })).pipe(
+			Effect.withSpan('github.check_run.resolve_actions_job', { attributes: checkRunSpanAttributes(this.ref) }),
+		)
+	}
+}
+
+export class GitHubActionsJob extends Schema.TaggedClass<GitHubActionsJob>()('GitHubActionsJob', {
+	ref: GitHubActionsJobRef,
+}) {
+	fetchInfo(): Effect.Effect<GitHubActionsJobInfo, GitHubApiError, GitHubApi> {
+		return Effect.flatMap(GitHubApi, (api) => api.fetchActionsJob({ job: this.ref })).pipe(
+			Effect.withSpan('github.actions_job.fetch_info', { attributes: actionsJobSpanAttributes(this.ref) }),
+		)
+	}
+
+	downloadLog(): Effect.Effect<string, GitHubApiError, GitHubApi> {
+		return Effect.flatMap(GitHubApi, (api) => api.downloadActionsJobLog({ job: this.ref })).pipe(
+			Effect.withSpan('github.actions_job.download_log', { attributes: actionsJobSpanAttributes(this.ref) }),
 		)
 	}
 }
@@ -220,3 +440,18 @@ export type GitHubReviews = typeof GitHubReviews.Type
 
 export const GitHubReviewComments = Schema.Array(GitHubReviewComment)
 export type GitHubReviewComments = typeof GitHubReviewComments.Type
+
+export const GitHubLabelsResult = Schema.Array(GitHubLabel)
+export type GitHubLabelsResult = typeof GitHubLabelsResult.Type
+
+export const GitHubPullRequestFiles = Schema.Array(GitHubPullRequestFile)
+export type GitHubPullRequestFiles = typeof GitHubPullRequestFiles.Type
+
+export const GitHubCommits = Schema.Array(GitHubCommit)
+export type GitHubCommits = typeof GitHubCommits.Type
+
+export const GitHubCheckRuns = Schema.Array(GitHubCheckRun)
+export type GitHubCheckRuns = typeof GitHubCheckRuns.Type
+
+export const GitHubCheckAnnotations = Schema.Array(GitHubCheckAnnotation)
+export type GitHubCheckAnnotations = typeof GitHubCheckAnnotations.Type

@@ -140,6 +140,7 @@ describe('GitHub event batch processing', () => {
 			expect(onSubscribedPrEvents.mock.calls[0]?.[0].events[0]).toEqual(
 				expect.objectContaining({
 					_tag: 'GitHubPrCheckCompleted',
+					checkRunId: 900,
 					name: 'build',
 					conclusion: 'success',
 					headSha: 'abc123',

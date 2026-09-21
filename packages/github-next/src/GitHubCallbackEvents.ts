@@ -2,6 +2,8 @@ import { Schema } from 'effect'
 
 import { GitHubId } from './GitHubIdentity'
 import {
+	GitHubCheckConclusion,
+	GitHubCheckStatus,
 	GitHubEventId,
 	GitHubLabel,
 	GitHubParticipant,
@@ -10,6 +12,8 @@ import {
 	GitHubTeam,
 } from './GitHubModels'
 import { GitHubIssue, GitHubIssueComment, GitHubPullRequest, GitHubReviewComment } from './GitHubResources'
+
+export { GitHubCheckConclusion, GitHubCheckStatus }
 
 const issueEventFields = {
 	eventId: GitHubEventId,
@@ -176,22 +180,9 @@ export type GitHubPrReviewThreadResolved = typeof GitHubPrReviewThreadResolved.T
 export const GitHubPrReviewThreadUnresolved = Schema.TaggedStruct('GitHubPrReviewThreadUnresolved', reviewThreadFields)
 export type GitHubPrReviewThreadUnresolved = typeof GitHubPrReviewThreadUnresolved.Type
 
-export const GitHubCheckStatus = Schema.Literals(['queued', 'in_progress', 'completed'])
-export type GitHubCheckStatus = typeof GitHubCheckStatus.Type
-export const GitHubCheckConclusion = Schema.Literals([
-	'success',
-	'failure',
-	'timed_out',
-	'cancelled',
-	'action_required',
-	'neutral',
-	'skipped',
-	'stale',
-])
-export type GitHubCheckConclusion = typeof GitHubCheckConclusion.Type
-
 export const GitHubPrCheckCompleted = Schema.TaggedStruct('GitHubPrCheckCompleted', {
 	...pullRequestEventFields,
+	checkRunId: GitHubId,
 	name: Schema.String,
 	status: Schema.Literal('completed'),
 	conclusion: GitHubCheckConclusion,

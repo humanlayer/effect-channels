@@ -139,11 +139,17 @@ const github = GitHubBot.make({
 			}),
 		onSubscribedPrEvents: (event) =>
 			Effect.gen(function* () {
+				const [comments, reviewComments] = yield* Effect.all([
+					event.pullRequest.listComments(),
+					event.pullRequest.listReviewComments(),
+				])
 				yield* Effect.logInfo('GitHub subscribed pull request events received').pipe(
 					Effect.annotateLogs({
 						repository_id: event.pullRequest.ref.repositoryId,
 						pull_request_number: event.pullRequest.ref.number,
 						event_count: event.events.length,
+						comment_count: comments.length,
+						review_comment_count: reviewComments.length,
 					}),
 				)
 				for (const pullRequestEvent of event.events) {

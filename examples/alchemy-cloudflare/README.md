@@ -37,18 +37,20 @@ OAuth callback URLs, user authorization, device flow, and post-installation setu
 
 Configure these permissions under **Repository permissions**:
 
-| Permission    | Access         | Why                                                                              |
-| ------------- | -------------- | -------------------------------------------------------------------------------- |
-| Metadata      | Read-only      | Repository identity; GitHub grants this mandatory permission to installed apps.  |
-| Issues        | Read and write | Read issues and issue comments; post, edit, delete, and react to issue comments. |
-| Pull requests | Read and write | Read PRs, reviews, and review comments; post, edit, delete, reply, and react.    |
-| Checks        | Read-only      | Receive completed check-run events associated with pull requests.                |
+| Permission    | Access         | Why                                                                                         |
+| ------------- | -------------- | ------------------------------------------------------------------------------------------- |
+| Metadata      | Read-only      | Repository identity; GitHub grants this mandatory permission to installed apps.             |
+| Issues        | Read and write | Read and change issues, issue comments, and labels shared by issues and PRs.                |
+| Pull requests | Read and write | Read and change PRs, files, commits, conversation and review comments, reviews, and labels. |
+| Checks        | Read-only      | Receive completed check-run events; list check runs; read check output and annotations.     |
+| Contents      | Read and write | Merge pull requests. GitHub's merge endpoint specifically requires write access.            |
+| Actions       | Read-only      | Resolve GitHub Actions-backed checks to jobs, read job details, and download job logs.      |
 
-No Contents, Actions, Administration, organization, or account permissions are required by the current implementation.
+No Administration, organization, or account permissions are required.
 
 If you change permissions after installing the app, approve the new permission request for the installation or reinstall the app before testing again.
 
-If you only consume callbacks and never use the resource methods that write comments or reactions, Issues and Pull requests can be read-only. The included sample posts comments, so it needs write access.
+The example manifest grants every permission needed by the package's resource methods. If you only consume callbacks and call read methods, Issues and Pull requests can be read-only. Omit Contents when the application cannot merge and Actions when it cannot inspect GitHub Actions jobs or logs. The included sample posts comments and reactions, so it needs Issues and Pull requests write access; it does not itself merge PRs or download logs.
 
 ### 4. Subscribe to events
 
@@ -106,7 +108,7 @@ bun alchemy deploy
 
 ### 7. Test with a repository
 
-Open an issue or pull request in an installed repository. The sample callback reads the discussion and its existing comments (and PR reviews), subscribes the discussion, posts a confirmation comment, and adds an `eyes` reaction to that comment. You can also invoke `@<app-slug>` in an issue body, PR body, issue comment, PR comment, or inline review comment. Later subscribed comments and inline review comments receive an `eyes` reaction; all subscribed events are logged by the Durable Object.
+Open an issue or pull request in an installed repository. The sample callback reads the discussion and its existing comments (and PR reviews), subscribes the discussion, posts a confirmation comment, and adds an `eyes` reaction to that comment. You can also invoke `@<app-slug>` in an issue body, PR body, issue comment, PR comment, or inline review comment. On every subscribed PR event batch, the example calls `pullRequest.listComments()` and `pullRequest.listReviewComments()`, then logs both current comment counts. Later subscribed comments and inline review comments receive an `eyes` reaction; all subscribed events are logged by the Durable Object. Completed-check callback events include both `headSha` and `checkRunId`, which can be passed to the check-run resource methods without accidentally inspecting a newer push.
 
 In the GitHub App settings, **Advanced → Recent Deliveries** shows each webhook request, response status, and redelivery control. A successful admission returns HTTP 200. If GitHub reports 401, check the webhook secret. If callbacks fail with 403, check the app permissions and make sure the installation includes the repository.
 

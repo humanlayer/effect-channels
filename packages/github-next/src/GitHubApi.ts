@@ -1,20 +1,33 @@
 import { Context, Effect, Schema } from 'effect'
 
 import {
+	GitHubActionsJobRef,
+	type GitHubActionsJobInfo,
+	GitHubCheckRunRef,
+	type GitHubCheckRunInfo,
 	GitHubCommentRef,
 	GitHubContent,
 	GitHubIssueCommentRef,
 	type GitHubIssueInfo,
 	GitHubIssueRef,
+	GitHubMergeMethod,
+	type GitHubMergeResult,
 	type GitHubPullRequestInfo,
 	GitHubPullRequestRef,
 	GitHubReaction,
+	GitHubReviewCommentLocation,
 	GitHubReviewCommentRef,
 } from './GitHubModels'
 import type {
+	GitHubActionsJob,
+	GitHubCheckAnnotations,
+	GitHubCheckRuns,
 	GitHubComment,
+	GitHubCommits,
 	GitHubIssueComment,
 	GitHubIssueComments,
+	GitHubLabelsResult,
+	GitHubPullRequestFiles,
 	GitHubReviewComment,
 	GitHubReviewComments,
 	GitHubReviews,
@@ -25,6 +38,12 @@ export interface GitHubIssueRequest extends Schema.Schema.Type<typeof GitHubIssu
 
 export const GitHubPullRequestRequest = Schema.Struct({ pullRequest: GitHubPullRequestRef })
 export interface GitHubPullRequestRequest extends Schema.Schema.Type<typeof GitHubPullRequestRequest> {}
+
+export const GitHubCheckRunRequest = Schema.Struct({ checkRun: GitHubCheckRunRef })
+export interface GitHubCheckRunRequest extends Schema.Schema.Type<typeof GitHubCheckRunRequest> {}
+
+export const GitHubActionsJobRequest = Schema.Struct({ job: GitHubActionsJobRef })
+export interface GitHubActionsJobRequest extends Schema.Schema.Type<typeof GitHubActionsJobRequest> {}
 
 export const GitHubPostIssueComment = Schema.Struct({
 	issue: GitHubIssueRef,
@@ -44,6 +63,22 @@ export const GitHubReplyToReviewComment = Schema.Struct({
 	content: GitHubContent,
 })
 export interface GitHubReplyToReviewComment extends Schema.Schema.Type<typeof GitHubReplyToReviewComment> {}
+
+export const GitHubPostReviewCommentOptions = Schema.Struct({
+	content: GitHubContent,
+	commitId: Schema.NonEmptyString,
+	path: Schema.NonEmptyString,
+	location: GitHubReviewCommentLocation,
+})
+export interface GitHubPostReviewCommentOptions extends Schema.Schema.Type<typeof GitHubPostReviewCommentOptions> {}
+
+export const GitHubPostPullRequestReviewComment = Schema.Struct({
+	pullRequest: GitHubPullRequestRef,
+	...GitHubPostReviewCommentOptions.fields,
+})
+export interface GitHubPostPullRequestReviewComment extends Schema.Schema.Type<
+	typeof GitHubPostPullRequestReviewComment
+> {}
 
 export const GitHubUpdateIssueComment = Schema.Struct({
 	comment: GitHubIssueCommentRef,
@@ -69,6 +104,62 @@ export const GitHubReactionRequest = Schema.Struct({
 })
 export interface GitHubReactionRequest extends Schema.Schema.Type<typeof GitHubReactionRequest> {}
 
+export const GitHubLabels = Schema.Array(Schema.NonEmptyString)
+export type GitHubLabels = typeof GitHubLabels.Type
+
+export const GitHubIssueLabelsRequest = Schema.Struct({
+	issue: GitHubIssueRef,
+	labels: GitHubLabels,
+})
+export interface GitHubIssueLabelsRequest extends Schema.Schema.Type<typeof GitHubIssueLabelsRequest> {}
+
+export const GitHubPullRequestLabelsRequest = Schema.Struct({
+	pullRequest: GitHubPullRequestRef,
+	labels: GitHubLabels,
+})
+export interface GitHubPullRequestLabelsRequest extends Schema.Schema.Type<typeof GitHubPullRequestLabelsRequest> {}
+
+export const GitHubRemoveIssueLabel = Schema.Struct({
+	issue: GitHubIssueRef,
+	label: Schema.NonEmptyString,
+})
+export interface GitHubRemoveIssueLabel extends Schema.Schema.Type<typeof GitHubRemoveIssueLabel> {}
+
+export const GitHubRemovePullRequestLabel = Schema.Struct({
+	pullRequest: GitHubPullRequestRef,
+	label: Schema.NonEmptyString,
+})
+export interface GitHubRemovePullRequestLabel extends Schema.Schema.Type<typeof GitHubRemovePullRequestLabel> {}
+
+export const GitHubIssueCloseReason = Schema.Literals(['completed', 'not_planned'])
+export type GitHubIssueCloseReason = typeof GitHubIssueCloseReason.Type
+
+export const GitHubCloseIssue = Schema.Struct({
+	issue: GitHubIssueRef,
+	reason: GitHubIssueCloseReason,
+})
+export interface GitHubCloseIssue extends Schema.Schema.Type<typeof GitHubCloseIssue> {}
+
+export const GitHubMergeOptions = Schema.Struct({
+	method: GitHubMergeMethod,
+	expectedHeadSha: Schema.NonEmptyString,
+	commitTitle: Schema.optionalKey(Schema.String),
+	commitMessage: Schema.optionalKey(Schema.String),
+})
+export interface GitHubMergeOptions extends Schema.Schema.Type<typeof GitHubMergeOptions> {}
+
+export const GitHubMergePullRequest = Schema.Struct({
+	pullRequest: GitHubPullRequestRef,
+	...GitHubMergeOptions.fields,
+})
+export interface GitHubMergePullRequest extends Schema.Schema.Type<typeof GitHubMergePullRequest> {}
+
+export const GitHubListCheckRunsForRef = Schema.Struct({
+	pullRequest: GitHubPullRequestRef,
+	sha: Schema.NonEmptyString,
+})
+export interface GitHubListCheckRunsForRef extends Schema.Schema.Type<typeof GitHubListCheckRunsForRef> {}
+
 export const GitHubApiOperation = Schema.Literals([
 	'fetch_issue',
 	'fetch_pull_request',
@@ -76,13 +167,38 @@ export const GitHubApiOperation = Schema.Literals([
 	'list_pull_request_comments',
 	'list_pull_request_reviews',
 	'list_pull_request_review_comments',
+	'list_pull_request_files',
+	'fetch_pull_request_diff',
+	'list_pull_request_commits',
+	'list_issue_labels',
+	'list_pull_request_labels',
+	'add_issue_labels',
+	'add_pull_request_labels',
+	'set_issue_labels',
+	'set_pull_request_labels',
+	'remove_issue_label',
+	'remove_pull_request_label',
+	'remove_all_issue_labels',
+	'remove_all_pull_request_labels',
 	'post_issue_comment',
 	'post_pull_request_comment',
+	'post_pull_request_review_comment',
 	'reply_to_review_comment',
 	'update_comment',
 	'delete_comment',
 	'add_reaction',
 	'remove_reaction',
+	'close_issue',
+	'reopen_issue',
+	'close_pull_request',
+	'reopen_pull_request',
+	'merge_pull_request',
+	'list_check_runs_for_ref',
+	'fetch_check_run',
+	'list_check_run_annotations',
+	'resolve_check_run_actions_job',
+	'fetch_actions_job',
+	'download_actions_job_log',
 ])
 export type GitHubApiOperation = typeof GitHubApiOperation.Type
 
@@ -91,6 +207,10 @@ export const GitHubApiErrorReason = Schema.Literals([
 	'forbidden',
 	'not_found',
 	'rate_limited',
+	'validation',
+	'stale_head',
+	'not_mergeable',
+	'rules_rejected',
 	'unavailable',
 	'invalid_response',
 ])
@@ -100,6 +220,8 @@ export class GitHubApiError extends Schema.TaggedError<GitHubApiError>()('GitHub
 	operation: GitHubApiOperation,
 	reason: GitHubApiErrorReason,
 	retryable: Schema.Boolean,
+	status: Schema.optionalKey(Schema.Int),
+	message: Schema.optionalKey(Schema.String),
 	retryAfterMs: Schema.optionalKey(
 		Schema.Int.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER)),
 	),
@@ -123,10 +245,38 @@ export class GitHubApi extends Context.Service<
 		readonly listPullRequestReviewComments: (
 			input: GitHubPullRequestRequest,
 		) => Effect.Effect<GitHubReviewComments, GitHubApiError>
+		readonly listPullRequestFiles: (
+			input: GitHubPullRequestRequest,
+		) => Effect.Effect<GitHubPullRequestFiles, GitHubApiError>
+		readonly fetchPullRequestDiff: (input: GitHubPullRequestRequest) => Effect.Effect<string, GitHubApiError>
+		readonly listPullRequestCommits: (
+			input: GitHubPullRequestRequest,
+		) => Effect.Effect<GitHubCommits, GitHubApiError>
+		readonly listIssueLabels: (input: GitHubIssueRequest) => Effect.Effect<GitHubLabelsResult, GitHubApiError>
+		readonly listPullRequestLabels: (
+			input: GitHubPullRequestRequest,
+		) => Effect.Effect<GitHubLabelsResult, GitHubApiError>
+		readonly addIssueLabels: (input: GitHubIssueLabelsRequest) => Effect.Effect<GitHubLabelsResult, GitHubApiError>
+		readonly addPullRequestLabels: (
+			input: GitHubPullRequestLabelsRequest,
+		) => Effect.Effect<GitHubLabelsResult, GitHubApiError>
+		readonly setIssueLabels: (input: GitHubIssueLabelsRequest) => Effect.Effect<GitHubLabelsResult, GitHubApiError>
+		readonly setPullRequestLabels: (
+			input: GitHubPullRequestLabelsRequest,
+		) => Effect.Effect<GitHubLabelsResult, GitHubApiError>
+		readonly removeIssueLabel: (input: GitHubRemoveIssueLabel) => Effect.Effect<GitHubLabelsResult, GitHubApiError>
+		readonly removePullRequestLabel: (
+			input: GitHubRemovePullRequestLabel,
+		) => Effect.Effect<GitHubLabelsResult, GitHubApiError>
+		readonly removeAllIssueLabels: (input: GitHubIssueRequest) => Effect.Effect<void, GitHubApiError>
+		readonly removeAllPullRequestLabels: (input: GitHubPullRequestRequest) => Effect.Effect<void, GitHubApiError>
 		readonly postIssueComment: (input: GitHubPostIssueComment) => Effect.Effect<GitHubIssueComment, GitHubApiError>
 		readonly postPullRequestComment: (
 			input: GitHubPostPullRequestComment,
 		) => Effect.Effect<GitHubIssueComment, GitHubApiError>
+		readonly postPullRequestReviewComment: (
+			input: GitHubPostPullRequestReviewComment,
+		) => Effect.Effect<GitHubReviewComment, GitHubApiError>
 		readonly replyToReviewComment: (
 			input: GitHubReplyToReviewComment,
 		) => Effect.Effect<GitHubReviewComment, GitHubApiError>
@@ -134,5 +284,28 @@ export class GitHubApi extends Context.Service<
 		readonly deleteComment: (input: GitHubDeleteComment) => Effect.Effect<void, GitHubApiError>
 		readonly addReaction: (input: GitHubReactionRequest) => Effect.Effect<void, GitHubApiError>
 		readonly removeReaction: (input: GitHubReactionRequest) => Effect.Effect<void, GitHubApiError>
+		readonly closeIssue: (input: GitHubCloseIssue) => Effect.Effect<GitHubIssueInfo, GitHubApiError>
+		readonly reopenIssue: (input: GitHubIssueRequest) => Effect.Effect<GitHubIssueInfo, GitHubApiError>
+		readonly closePullRequest: (
+			input: GitHubPullRequestRequest,
+		) => Effect.Effect<GitHubPullRequestInfo, GitHubApiError>
+		readonly reopenPullRequest: (
+			input: GitHubPullRequestRequest,
+		) => Effect.Effect<GitHubPullRequestInfo, GitHubApiError>
+		readonly mergePullRequest: (input: GitHubMergePullRequest) => Effect.Effect<GitHubMergeResult, GitHubApiError>
+		readonly listCheckRunsForRef: (
+			input: GitHubListCheckRunsForRef,
+		) => Effect.Effect<GitHubCheckRuns, GitHubApiError>
+		readonly fetchCheckRun: (input: GitHubCheckRunRequest) => Effect.Effect<GitHubCheckRunInfo, GitHubApiError>
+		readonly listCheckRunAnnotations: (
+			input: GitHubCheckRunRequest,
+		) => Effect.Effect<GitHubCheckAnnotations, GitHubApiError>
+		readonly resolveActionsJob: (
+			input: GitHubCheckRunRequest,
+		) => Effect.Effect<GitHubActionsJob | null, GitHubApiError>
+		readonly fetchActionsJob: (
+			input: GitHubActionsJobRequest,
+		) => Effect.Effect<GitHubActionsJobInfo, GitHubApiError>
+		readonly downloadActionsJobLog: (input: GitHubActionsJobRequest) => Effect.Effect<string, GitHubApiError>
 	}
 >()('@humanlayer/channels-github-next/GitHubApi') {}

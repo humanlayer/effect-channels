@@ -10,7 +10,9 @@
 		"metadata": "read",
 		"issues": "write",
 		"pull_requests": "write",
-		"checks": "read"
+		"checks": "read",
+		"contents": "write",
+		"actions": "read"
 	},
 	"default_events": [
 		"issues",

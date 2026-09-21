@@ -1,5 +1,6 @@
 import { describe, it } from '@effect/vitest'
-import { ConfigProvider, Effect, Layer, Queue, Ref } from 'effect'
+import { Clock, ConfigProvider, Effect, Layer, Queue, Ref } from 'effect'
+import { TestClock } from 'effect/testing'
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http'
 
 import { GitHubApi } from '../src/GitHubApi'
@@ -348,6 +349,51 @@ describe('GitHubApiLive', () => {
 				operation: 'fetch_issue',
 				retryable: false,
 			})
+		}),
+	)
+
+	it.effect('uses the rate-limit reset epoch when Retry-After is absent and clamps elapsed resets', ({ expect }) =>
+		Effect.gen(function* () {
+			yield* TestClock.adjust(10_000)
+			const now = yield* Clock.currentTimeMillis
+			const futureResetSeconds = Math.ceil(now / 1_000) + 5
+			const reset = yield* Ref.make(String(futureResetSeconds))
+			const httpClient = HttpClient.make((request) =>
+				Effect.gen(function* () {
+					const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie)
+					if (new URL(web.url).pathname.startsWith('/app/installations/')) {
+						return HttpClientResponse.fromWeb(request, tokenResponse())
+					}
+					return HttpClientResponse.fromWeb(
+						request,
+						Response.json(
+							{ message: 'API rate limit exceeded' },
+							{
+								status: 403,
+								headers: {
+									'x-ratelimit-remaining': '0',
+									'x-ratelimit-reset': yield* Ref.get(reset),
+								},
+							},
+						),
+					)
+				}),
+			)
+			const layer = makeLayer(httpClient)
+			const fetchError = Effect.flatMap(GitHubApi, (api) => api.fetchIssue({ issue })).pipe(
+				Effect.provide(layer),
+				Effect.flip,
+			)
+
+			const future = yield* fetchError
+			expect(future).toMatchObject({
+				reason: 'rate_limited',
+				retryAfterMs: futureResetSeconds * 1_000 - now,
+			})
+
+			yield* Ref.set(reset, '0')
+			const elapsed = yield* fetchError
+			expect(elapsed).toMatchObject({ reason: 'rate_limited', retryAfterMs: 0 })
 		}),
 	)
 })

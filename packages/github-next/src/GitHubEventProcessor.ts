@@ -560,6 +560,7 @@ const normalizeWebhook = (
 					eventId,
 					pullRequest,
 					actor: participant(payload.sender),
+					checkRunId: payload.check_run.id,
 					name: payload.check_run.name,
 					status: payload.check_run.status,
 					conclusion: payload.check_run.conclusion,

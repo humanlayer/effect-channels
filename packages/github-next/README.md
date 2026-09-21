@@ -1,6 +1,6 @@
 # GitHub Next
 
-`@humanlayer/channels-github-next` turns GitHub App webhooks into durable issue and pull-request callbacks. It verifies webhook signatures, stores accepted events in provider-neutral mailboxes, normalizes GitHub payloads, and exposes issue, pull-request, comment, review, and reaction operations through `GitHubApi`.
+`@humanlayer/channels-github-next` turns GitHub App webhooks into durable issue and pull-request callbacks. It verifies webhook signatures, stores accepted events in provider-neutral mailboxes, normalizes GitHub payloads, and exposes issue, pull-request, comment, review, label, check-run, GitHub Actions job, and merge operations through typed resource classes and `GitHubApi`.
 
 ## Create a GitHub App
 
@@ -21,18 +21,20 @@ OAuth callbacks, user authorization, device flow, and setup URLs are not require
 
 GitHub Apps use repository permissions rather than OAuth scopes. Configure these permissions:
 
-| Permission    | Access         | Required for                                                                                    |
-| ------------- | -------------- | ----------------------------------------------------------------------------------------------- |
-| Metadata      | Read-only      | Repository identity. GitHub grants this mandatory permission to installed apps.                 |
-| Issues        | Read and write | Reading issues and issue comments; creating, editing, deleting, and reacting to issue comments. |
-| Pull requests | Read and write | Reading PRs, reviews, and review comments; creating, editing, deleting, replying, and reacting. |
-| Checks        | Read-only      | Receiving completed check-run events associated with pull requests.                             |
+| Permission    | Access         | Required for                                                                                                      |
+| ------------- | -------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Metadata      | Read-only      | Repository identity. GitHub grants this mandatory permission to installed apps.                                   |
+| Issues        | Read and write | Reading and changing issues, issue comments, and labels shared by issues and PRs.                                 |
+| Pull requests | Read and write | Reading and changing PRs, files, commits, conversation and review comments, reviews, and labels.                  |
+| Checks        | Read-only      | Receiving completed check-run events; listing check runs; reading check output and annotations.                   |
+| Contents      | Read and write | Merging pull requests. GitHub's merge endpoint specifically requires write access.                                |
+| Actions       | Read-only      | Resolving a GitHub Actions-backed check to its workflow job, reading job details, and downloading that job's log. |
 
-No Contents, Actions, Administration, organization, or account permissions are required by the current implementation.
+No Administration, organization, or account permissions are required.
 
 If you change permissions after installing the app, approve the new permission request for the installation or reinstall the app before testing again.
 
-Applications that only consume callback data and never call write methods can reduce Issues and Pull requests to read-only. `postComment`, `reply`, `update`, `delete`, `addReaction`, and `removeReaction` require the corresponding write permission.
+Applications that only consume callback data and call read methods can reduce Issues and Pull requests to read-only. Comment and reaction mutations, labels, issue state changes, PR state changes, and review-comment creation require the corresponding write permission. Omit Contents if the application cannot merge and Actions if it cannot inspect GitHub Actions jobs or logs.
 
 ## Webhook subscriptions
 
@@ -121,6 +123,128 @@ const github = GitHubBot.make({
 ```
 
 Add `github` to the providers passed to `Channels.make` or the host-specific wrapper such as `ChannelsCloudflare.make`.
+
+## Resource API
+
+Callbacks provide `GitHubIssue` and `GitHubPullRequest` resources. Their methods require `GitHubApi`, which `GitHubBot.make` provides with `GitHubApiLive` by default. List methods follow GitHub pagination automatically with 100 items per request.
+
+### Issues
+
+In addition to `fetchInfo()`, comment operations, and subscription operations, an issue supports:
+
+| Resource method      | `GitHubApi` operation  | Result and behavior                                                              |
+| -------------------- | ---------------------- | -------------------------------------------------------------------------------- |
+| `close(reason)`      | `closeIssue`           | Closes with reason `"completed"` or `"not_planned"`; returns updated issue info. |
+| `reopen()`           | `reopenIssue`          | Reopens the issue and returns updated issue info.                                |
+| `listLabels()`       | `listIssueLabels`      | Returns complete `GitHubLabel` records.                                          |
+| `addLabels(labels)`  | `addIssueLabels`       | Adds labels without removing existing labels; returns the resulting set.         |
+| `setLabels(labels)`  | `setIssueLabels`       | Replaces the complete label set; returns the resulting set.                      |
+| `removeLabel(label)` | `removeIssueLabel`     | Removes one label by name; returns the resulting set.                            |
+| `removeAllLabels()`  | `removeAllIssueLabels` | Removes every label.                                                             |
+
+```ts
+const updateIssue = Effect.gen(function* () {
+	yield* issue.addLabels(['triage', 'agent-reviewed'])
+	yield* issue.close('completed')
+})
+```
+
+Label inputs are arrays of non-empty names. Duplicate is not a supported close reason. GitHub's duplicate-closing API requires the canonical issue's internal database ID and a newer API contract; this package pins GitHub API version `2022-11-28`.
+
+### Pull requests
+
+In addition to `fetchInfo()`, conversation comments, reviews, review-comment listing, and subscription operations, a pull request supports:
+
+| Resource method            | `GitHubApi` operation                      | Result and behavior                                                                               |
+| -------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| `listFiles()`              | `listPullRequestFiles`                     | Returns structured added, deleted, modified, renamed, copied, changed, or unchanged file records. |
+| `fetchDiff()`              | `fetchPullRequestDiff`                     | Returns the unified diff as text.                                                                 |
+| `listCommits()`            | `listPullRequestCommits`                   | Returns the commits belonging to the PR.                                                          |
+| `postReviewComment(input)` | `postPullRequestReviewComment`             | Creates one line, range, or whole-file review comment without managing a pending review.          |
+| `listLabels()`             | `listPullRequestLabels`                    | Returns complete `GitHubLabel` records through GitHub's Issues API.                               |
+| `addLabels(labels)`        | `addPullRequestLabels`                     | Adds labels without removing existing labels; returns the resulting set.                          |
+| `setLabels(labels)`        | `setPullRequestLabels`                     | Replaces the complete label set; returns the resulting set.                                       |
+| `removeLabel(label)`       | `removePullRequestLabel`                   | Removes one label by name; returns the resulting set.                                             |
+| `removeAllLabels()`        | `removeAllPullRequestLabels`               | Removes every label.                                                                              |
+| `listCheckRuns()`          | `fetchPullRequest` + `listCheckRunsForRef` | Reads the current head SHA and returns checks for that commit.                                    |
+| `listCheckRunsForRef(sha)` | `listCheckRunsForRef`                      | Returns checks for an explicit commit SHA.                                                        |
+| `close()`                  | `closePullRequest`                         | Closes the PR and returns updated PR info.                                                        |
+| `reopen()`                 | `reopenPullRequest`                        | Reopens the PR and returns updated PR info.                                                       |
+| `merge(options)`           | `mergePullRequest`                         | Attempts `"merge"`, `"squash"`, or `"rebase"`; returns `{ merged, sha, message }`.                |
+
+Prefer `listFiles()` when an agent only needs selected changes. GitHub's wire status `removed` is exposed as `deleted`; `copied`, `changed`, and `unchanged` remain distinct statuses rather than being collapsed into `modified`. A file's `sha`, `blobUrl`, and `rawUrl` can be `null`, including for some submodule entries. GitHub limits that endpoint to 3,000 files, may omit `patch` for binary or unusually large files, and limits `listCommits()` to 250 PR commits. `fetchDiff()` loads the complete unified diff into one string.
+
+Review-comment locations are tagged values. `Line` and `Range` line numbers must be positive integers that refer to the pull-request diff; `LEFT` means the old side and `RIGHT` the new side. Use `File` for a whole-file comment. The commit SHA and path must be non-empty.
+
+```ts
+const reviewPullRequest = Effect.gen(function* () {
+	const info = yield* pullRequest.fetchInfo()
+	yield* pullRequest.postReviewComment({
+		content: { markdown: 'This can fail when the input is empty.' },
+		commitId: info.headSha,
+		path: 'src/example.ts',
+		location: { _tag: 'Line', line: 42, side: 'RIGHT' },
+	})
+})
+```
+
+A PR has no close-reason field. Post a conversation comment or add a label before `close()` when the reason must be visible.
+
+Merging requires an explicit method and the head SHA the agent actually reviewed. This prevents a later push from being merged accidentally:
+
+```ts
+const mergePullRequest = Effect.gen(function* () {
+	const info = yield* pullRequest.fetchInfo()
+	return yield* pullRequest.merge({
+		method: 'squash',
+		expectedHeadSha: info.headSha,
+		commitTitle: 'Fix the login race',
+		commitMessage: 'Prevent overlapping refresh requests.',
+	})
+})
+```
+
+GitHub can reject a merge for a stale head, merge conflict, disabled merge method, required checks or reviews, unresolved conversations, branch protection, repository rules, or a merge queue. Inspect the returned result's `merged` field; rejected HTTP responses fail with `GitHubApiError` as described below.
+
+### Checks and GitHub Actions jobs
+
+`listCheckRuns()` returns lightweight `GitHubCheckRun` resources. Call their methods only when details are needed:
+
+| Resource method                      | `GitHubApi` operation     | Result and behavior                                                                               |
+| ------------------------------------ | ------------------------- | ------------------------------------------------------------------------------------------------- |
+| `GitHubCheckRun.fetchInfo()`         | `fetchCheckRun`           | Returns status, conclusion, timestamps, output, URLs, suite ID, head SHA, and annotation count.   |
+| `GitHubCheckRun.listAnnotations()`   | `listCheckRunAnnotations` | Returns paginated file, line/column, level, message, raw-detail, and blob-URL records.            |
+| `GitHubCheckRun.resolveActionsJob()` | `resolveActionsJob`       | Resolves the matching GitHub Actions job, or `null` when no matching Actions job exists.          |
+| `GitHubActionsJob.fetchInfo()`       | `fetchActionsJob`         | Returns run ID, status, conclusion, head SHA, workflow metadata, timestamps, URLs, and job steps. |
+| `GitHubActionsJob.downloadLog()`     | `downloadActionsJobLog`   | Follows GitHub's short-lived redirect and returns the job log as text.                            |
+
+`detailsUrl` is an opaque provider URL, not a log endpoint. Checks from CircleCI, Buildkite, or another third-party provider can expose output and annotations, but `resolveActionsJob()` returns `null` unless a GitHub Actions job can be matched. Third-party logs require that provider's API and credentials. `GitHubApiLive` follows at most three job-log redirects and does not forward the GitHub authorization header to the signed log host.
+
+`listCheckRuns()` queries the PR head at call time. In a completed-check callback, use the event's `headSha` and `checkRunId` so a newer push cannot change which check you inspect:
+
+```ts
+import { Effect } from 'effect'
+
+const inspectCompletedCheck = Effect.gen(function* () {
+	const checks = yield* event.pullRequest.listCheckRunsForRef(event.headSha)
+	const check = checks.find((candidate) => candidate.ref.id === event.checkRunId)
+	if (check === undefined) return
+
+	const info = yield* check.fetchInfo()
+	const annotations = yield* check.listAnnotations()
+	const job = yield* check.resolveActionsJob()
+
+	if (job !== null) {
+		const log = yield* job.downloadLog()
+	}
+})
+```
+
+Listing check runs requests `filter=all`, so rerun attempts are not hidden by GitHub's default latest-only filter. It shows observed statuses, but it does not identify which checks are required by branch protection or repository rules.
+
+### API errors
+
+Every API operation fails with `GitHubApiError`. It includes `operation`, `reason`, and `retryable`, plus `status`, a safe GitHub `message`, and `retryAfterMs` when available. Reasons are `authentication`, `forbidden`, `not_found`, `rate_limited`, `validation`, `stale_head`, `not_mergeable`, `rules_rejected`, `unavailable`, and `invalid_response`. For merge requests, `GitHubApiLive` classifies stable statuses only: `409` is `stale_head`, `405` is `not_mergeable`, non-rate-limited `403` is `forbidden`, and `422` is `validation`. Provider messages are preserved for explanation but are not parsed to infer a reason; `rules_rejected` is reserved for implementations with a stable machine-readable rule signal. `GitHubApiLive` retries once with a fresh installation token after an authentication failure; callers can use `retryable` and `retryAfterMs` for any further retry policy.
 
 ## Test and troubleshoot
 
