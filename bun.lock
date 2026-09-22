@@ -28,6 +28,7 @@
         "@humanlayer/channels-alchemy-cloudflare": "workspace:*",
         "@humanlayer/channels-delivery-next": "workspace:*",
         "@humanlayer/channels-github-next": "workspace:*",
+        "@humanlayer/channels-linear-next": "workspace:*",
         "@humanlayer/channels-slack-next": "workspace:*",
         "alchemy": "catalog:",
         "effect": "catalog:",
@@ -122,6 +123,19 @@
         "@effect/vitest": "catalog:",
         "@emulators/core": "0.11.2",
         "@emulators/github": "0.11.2",
+        "typescript": "catalog:",
+      },
+    },
+    "packages/linear-next": {
+      "name": "@humanlayer/channels-linear-next",
+      "version": "0.0.0",
+      "dependencies": {
+        "@humanlayer/channels-delivery-next": "workspace:*",
+        "effect": "catalog:",
+      },
+      "devDependencies": {
+        "@effect/platform-node": "catalog:",
+        "@effect/vitest": "catalog:",
         "typescript": "catalog:",
       },
     },
@@ -383,6 +397,8 @@
     "@humanlayer/channels-github": ["@humanlayer/channels-github@workspace:packages/github"],
 
     "@humanlayer/channels-github-next": ["@humanlayer/channels-github-next@workspace:packages/github-next"],
+
+    "@humanlayer/channels-linear-next": ["@humanlayer/channels-linear-next@workspace:packages/linear-next"],
 
     "@humanlayer/channels-redis": ["@humanlayer/channels-redis@workspace:packages/redis"],
 

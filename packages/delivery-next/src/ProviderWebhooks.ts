@@ -4,7 +4,7 @@
  * It receives a list of providers at construction time, and then at execution time when it receives a webhook
  * it looks up the provider, processes the event through the provider, and then hands it off for Delivery
  */
-import { Match, Schema } from 'effect'
+import { Match, Schema, Stream } from 'effect'
 import * as Effect from 'effect/Effect'
 import { HttpRouter, HttpServerResponse } from 'effect/unstable/http'
 import type { HttpIncomingMessage } from 'effect/unstable/http/HttpIncomingMessage'
@@ -82,7 +82,37 @@ export type ProviderWebhookOutcome = typeof ProviderWebhookOutcome.Type
  */
 export type WebhookProvider<R = never> = {
 	readonly providerName: string
+	/** Optional provider-specific limit, enforced while streaming the body. */
+	readonly maxBodyBytes?: number
 	readonly handle: (input: RawWebhookInput) => Effect.Effect<ProviderWebhookOutcome, ProviderWebhookError, R>
+}
+
+class WebhookBodyTooLarge extends Schema.TaggedError<WebhookBodyTooLarge>()('WebhookBodyTooLarge', {}) {}
+
+const readBoundedBody = <E>(request: HttpIncomingMessage<E>, maxBodyBytes?: number) => {
+	if (maxBodyBytes === undefined) return Effect.map(request.arrayBuffer, (body) => new Uint8Array(body))
+	const declaredLength = Number(request.headers['content-length'])
+	if (Number.isFinite(declaredLength) && declaredLength > maxBodyBytes) return Effect.fail(WebhookBodyTooLarge.make({}))
+	return request.stream.pipe(
+		Stream.runFoldEffect(
+			() => ({ chunks: [] as Array<Uint8Array>, size: 0 }),
+			(state, chunk) => {
+				const size = state.size + chunk.byteLength
+				return size > maxBodyBytes
+					? Effect.fail(WebhookBodyTooLarge.make({}))
+					: Effect.succeed({ chunks: [...state.chunks, chunk], size })
+			},
+		),
+		Effect.map(({ chunks, size }) => {
+			const body = new Uint8Array(size)
+			let offset = 0
+			for (const chunk of chunks) {
+				body.set(chunk, offset)
+				offset += chunk.byteLength
+			}
+			return body
+		}),
+	)
 }
 
 export type WebhookRoutesOptions = {
@@ -122,7 +152,7 @@ export const webhookRoutes = <const Requirements extends ReadonlyArray<unknown>>
 
 			const outcome = yield* provider.handle({
 				headers: request.headers,
-				body: new Uint8Array(yield* request.arrayBuffer),
+				body: yield* readBoundedBody(request, provider.maxBodyBytes),
 			})
 			const deliverAdmission = (event: typeof DeliveryAdmission.Type) =>
 				mailbox.deliver(event).pipe(
@@ -158,6 +188,7 @@ export const webhookRoutes = <const Requirements extends ReadonlyArray<unknown>>
 			)
 		}).pipe(
 			Effect.catchTags({
+				WebhookBodyTooLarge: () => Effect.succeed(HttpServerResponse.empty({ status: 413 })),
 				SchemaError: (error) =>
 					Effect.logError('Webhook route parameters were invalid', error).pipe(
 						Effect.as(HttpServerResponse.text('Invalid webhook route', { status: 400 })),

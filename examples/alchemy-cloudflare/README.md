@@ -1,6 +1,26 @@
-# Alchemy Cloudflare Slack and GitHub mailbox example
+# Alchemy Cloudflare Slack, GitHub, and Linear mailbox example
 
-This example receives Slack and GitHub webhooks in a Cloudflare Worker, stores each event in a mailbox Durable Object, and processes mailboxes from Durable Object alarms. Both providers are declared in `src/Bot.ts`; `src/Worker.ts` builds webhook ingress and `src/DurableObject.ts` builds persistent processing from that same declaration.
+This example receives Slack, GitHub, and Linear webhooks in a Cloudflare Worker, stores each event in a mailbox Durable Object, and processes mailboxes from Durable Object alarms. All providers are declared in `src/Bot.ts`; `src/Worker.ts` builds webhook ingress and `src/DurableObject.ts` builds persistent processing from that same declaration.
+
+## Linear Application setup
+
+Create a Linear Application for the workspace, enable the **Issues** webhook category, and set its webhook URL to:
+
+```text
+https://<your-worker-hostname>/integrations/linear/webhook
+```
+
+Use the app actor and client-credentials flow for this one-workspace example. Put the following values in `.env`:
+
+```dotenv
+LINEAR_WEBHOOK_SECRET=...
+LINEAR_CLIENT_ID=...
+LINEAR_CLIENT_SECRET=...
+LINEAR_ORGANIZATION_ID=...
+LINEAR_APP_USER_ID=...
+```
+
+The configured organization and app-user IDs are explicit identity expectations. Phase 1 admits `Issue.create`, logs safe issue identifiers, and subscribes the issue. Token acquisition remains lazy and no generated bearer token is stored in environment variables, webhook admissions, or Durable Object mailbox state. Agent Session events and Inbox Notifications are not enabled by this slice.
 
 ## GitHub App setup
 
@@ -132,7 +152,7 @@ https://<your-worker-hostname>/integrations/slack/webhook
 - The Worker verifies provider signatures before admitting events through typed Durable Object RPC.
 - Admissions, processing state, and subscriptions use persistent SQLite-backed Durable Object storage.
 - Mailboxes use debounce delivery: a batch runs after 2 seconds of quiet and no later than 10 seconds after its first event.
-- The alarm claims ordered batches and dispatches them to the matching Slack or GitHub processor.
+- The alarm claims ordered batches and dispatches them to the matching Slack, GitHub, or Linear processor.
 - GitHub App installation tokens and resolved bot identity are cached by the live GitHub API layer.
 
 Replace the sample callbacks in `src/Bot.ts` with application behavior. Delivery timing, lease length, and attempt limits are configured there as well.

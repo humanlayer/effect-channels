@@ -148,4 +148,18 @@ describe('ProviderWebhook routing tests', () => {
 			expect(response.status).toBe(404)
 		}),
 	)
+
+	it.effect('Provider body limits return 413 before invoking the provider', ({ expect }) =>
+		Effect.gen(function* () {
+			const called = yield* Ref.make(false)
+			const app = yield* makeWebhookTestApp(
+				() => Ref.set(called, true).pipe(Effect.as(ProviderWebhookIgnored.make({}))),
+				undefined,
+				4,
+			)
+			const response = yield* app.post('example', '12345')
+			expect(response.status).toBe(413)
+			expect(yield* Ref.get(called)).toBe(false)
+		}),
+	)
 })

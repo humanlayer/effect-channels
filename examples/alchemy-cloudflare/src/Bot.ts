@@ -5,6 +5,12 @@
 import { ChannelsCloudflare } from '@humanlayer/channels-alchemy-cloudflare'
 import { DebounceDeliveryMode } from '@humanlayer/channels-delivery-next'
 import { GitHubBot, GitHubContent, GitHubId, GitHubReaction } from '@humanlayer/channels-github-next'
+import {
+	LinearAuth,
+	LinearBot,
+	LinearOrganizationId,
+	LinearUserId,
+} from '@humanlayer/channels-linear-next'
 import { SlackBot, SlackContent, SlackReaction } from '@humanlayer/channels-slack-next'
 import { Config, Effect, Predicate } from 'effect'
 
@@ -164,8 +170,36 @@ const github = GitHubBot.make({
 	},
 })
 
+/** Linear Application callbacks for one explicitly configured workspace. */
+const linear = LinearBot.make({
+	webhookSecret: Config.redacted('LINEAR_WEBHOOK_SECRET'),
+	deliveryMode: DebounceDeliveryMode.make({ quietPeriodMs: 2_000, maxWaitMs: 10_000 }),
+	bot: Config.all({
+		organizationId: Config.schema(LinearOrganizationId, 'LINEAR_ORGANIZATION_ID'),
+		appUserId: Config.schema(LinearUserId, 'LINEAR_APP_USER_ID'),
+	}),
+	auth: LinearAuth.clientCredentials({
+		clientId: Config.string('LINEAR_CLIENT_ID'),
+		clientSecret: Config.redacted('LINEAR_CLIENT_SECRET'),
+	}),
+	handlers: {
+		onIssueCreated: (event) =>
+			Effect.gen(function* () {
+				yield* Effect.logInfo('Linear issue created').pipe(
+					Effect.annotateLogs({
+						organization_id: event.issue.ref.organizationId,
+						issue_id: event.issue.ref.issueId,
+						issue_identifier: event.issue.identifier,
+						event_id: event.trigger.eventId,
+					}),
+				)
+				yield* event.issue.subscribe()
+			}),
+	},
+})
+
 export const bot = ChannelsCloudflare.make({
 	namespace: 'alchemy-cloudflare-example',
-	providers: [slack, github],
+	providers: [slack, github, linear],
 	eventProcessing: { concurrency: 1, maxAttempts: 5, leaseMs: 30_000 },
 })

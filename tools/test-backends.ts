@@ -62,7 +62,19 @@ const program = Effect.gen(function* () {
 			operation: 'A local Unix-socket Docker daemon is required; remote contexts are refused',
 		})
 	}
-	for (const owner of ['delivery', 'slack']) {
+	const suites =
+		backend === 'postgres'
+			? [
+					{ config: 'packages/delivery/test-backends/vite.postgres.config.ts', port: 55432 },
+					{ config: 'packages/slack/test-backends/vite.postgres.config.ts', port: 55432 },
+					{ config: 'packages/sql/test-backends/vite.postgres.config.ts', port: 55432 },
+				]
+			: [
+					{ config: 'packages/delivery/test-backends/vite.redis.config.ts', port: 56379 },
+					{ config: 'packages/slack/test-backends/vite.redis.config.ts', port: 56379 },
+					{ config: 'packages/redis/test-backends/vite.redis.config.ts', port: 56379 },
+				]
+	for (const suite of suites) {
 		yield* Effect.scoped(
 			Effect.gen(function* () {
 				const name = `channels-test-${yield* crypto.randomUUIDv4}`
@@ -71,7 +83,7 @@ const program = Effect.gen(function* () {
 					backend === 'postgres'
 						? [
 								'-p',
-								'127.0.0.1:55432:5432',
+								`127.0.0.1:${suite.port}:5432`,
 								'-e',
 								'POSTGRES_USER=delivery_test',
 								'-e',
@@ -82,7 +94,7 @@ const program = Effect.gen(function* () {
 							]
 						: [
 								'-p',
-								'127.0.0.1:56379:6379',
+								`127.0.0.1:${suite.port}:6379`,
 								'redis:7-alpine',
 								'redis-server',
 								'--appendonly',
@@ -108,12 +120,19 @@ const program = Effect.gen(function* () {
 						? ['pg_isready', '-h', '127.0.0.1', '-U', 'delivery_test', '-d', 'delivery_adapter_test']
 						: ['redis-cli', 'ping']),
 				]).pipe(Effect.retry({ times: 20, schedule: Schedule.spaced('250 millis') }))
-				yield* Effect.logInfo(`Testing ${owner} with a fresh ${backend} container`)
+				yield* Effect.logInfo(`Testing ${suite.config} with a fresh ${backend} container`)
 				const result = yield* command({
 					executable: path.join(root, 'node_modules/.bin/vp'),
-					args: ['test', '--config', `packages/${owner}/test-backends/vite.${backend}.config.ts`],
+					args: ['test', '--config', suite.config],
 					cwd: root,
-					env: { DELIVERY_BACKEND_TEST_CONFIRM: 'disposable' },
+					env: {
+						DELIVERY_BACKEND_TEST_CONFIRM: 'disposable',
+						...(backend === 'postgres'
+							? {
+									SQL_BACKEND_TEST_DATABASE_URL: `postgres://delivery_test:delivery_test@127.0.0.1:${suite.port}/delivery_adapter_test`,
+								}
+							: { REDIS_CONTRACT_TEST_PORT: String(suite.port) }),
+					},
 				})
 				yield* Effect.logInfo(result)
 			}),
