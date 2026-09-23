@@ -26,6 +26,7 @@ import {
 	SlackSubscribedThreadEvents,
 	type SlackThreadEvent,
 } from './SlackCallbackEvents'
+import { SlackCallbacks } from './SlackCallbacks'
 import { SlackChannelId, SlackMessageTs, SlackTeamId, slackThreadResourceId } from './SlackIdentity'
 import { SlackMarkdownContent, SlackMessage, SlackMessageRef, SlackReaction, SlackThreadRef } from './SlackModels'
 import { SlackThread } from './SlackThread'
@@ -41,19 +42,8 @@ import {
 	SlackReactionRemovedEnvelope,
 } from './SlackWebhookSchemas'
 
-type SlackEventHandler<A, E, R> = (event: A) => Effect.Effect<void, E, R>
-
-export const RetryabilityMetadata = Schema.Struct({
-	retryability: Schema.Literals(['retryable', 'non_retryable']),
-})
-export type RetryabilityMetadata = typeof RetryabilityMetadata.Type
-
-export type SlackEventProcessorOptions<E, R> = {
+export type SlackEventProcessorOptions = {
 	readonly namespace: string
-	readonly handlers: {
-		readonly onNewMention?: SlackEventHandler<SlackNewMention, E, R>
-		readonly onSubscribedThreadEvents?: SlackEventHandler<SlackSubscribedThreadEvents, E, R>
-	}
 }
 
 const SlackResourceAddress = Schema.Struct({
@@ -419,21 +409,21 @@ const normalizeEnvelope = (envelope: SlackEnvelope, thread: SlackThreadRef) =>
 		)
 	})
 
-const runHandler = <A, E, R>(name: string, handler: SlackEventHandler<A, E, R>, event: A) =>
-	handler(event).pipe(
-		Effect.tapError((error) => Effect.logError(`Slack ${name} callback failed`, error)),
+const runCallback = (effect: Effect.Effect<void, { readonly retryable: boolean }>) =>
+	effect.pipe(
 		Effect.mapError((error) =>
 			ProviderEventExecutionFailed.make({
 				provider: 'slack',
-				retryable: !Schema.is(RetryabilityMetadata)(error) || error.retryability === 'retryable',
+				retryable: error.retryable,
 				safeCode: 'callback_failed',
 			}),
 		),
 		Effect.as(ProviderEventHandled.make({})),
 	)
 
-const processSlackBatch = <E, R>(options: SlackEventProcessorOptions<E, R>) =>
+const processSlackBatch = (options: SlackEventProcessorOptions) =>
 	Effect.fn('slack.process_event_batch')(function* (admissions: DeliveryAdmissionBatch) {
+		const callbacks = yield* SlackCallbacks
 		const first = admissions[0]
 		const envelopes = yield* Effect.forEach(admissions, decodeEnvelope)
 		const address = yield* parseResourceAddress(first.resourceId)
@@ -480,7 +470,7 @@ const processSlackBatch = <E, R>(options: SlackEventProcessorOptions<E, R>) =>
 		)
 
 		if (subscribed) {
-			if (Predicate.isUndefined(options.handlers.onSubscribedThreadEvents)) {
+			if (Predicate.isUndefined(callbacks.onSubscribedThreadEvents)) {
 				return ProviderEventIgnored.make({ reason: 'callback_not_configured' })
 			}
 			const firstNormalized = normalized[0]
@@ -489,10 +479,8 @@ const processSlackBatch = <E, R>(options: SlackEventProcessorOptions<E, R>) =>
 				firstNormalized.event,
 				...normalized.slice(1).map(({ event }) => event),
 			])
-			return yield* runHandler(
-				'onSubscribedThreadEvents',
-				options.handlers.onSubscribedThreadEvents,
-				SlackSubscribedThreadEvents.make({ thread, events }),
+			return yield* runCallback(
+				callbacks.onSubscribedThreadEvents(SlackSubscribedThreadEvents.make({ thread, events })),
 			)
 		}
 
@@ -502,23 +490,23 @@ const processSlackBatch = <E, R>(options: SlackEventProcessorOptions<E, R>) =>
 		if (activating === undefined || Option.isNone(activating.activation)) {
 			return ProviderEventIgnored.make({ reason: 'no_activation_event' })
 		}
-		if (Predicate.isUndefined(options.handlers.onNewMention)) {
+		if (Predicate.isUndefined(callbacks.onNewMention)) {
 			return ProviderEventIgnored.make({ reason: 'callback_not_configured' })
 		}
-		return yield* runHandler(
-			'onNewMention',
-			options.handlers.onNewMention,
-			SlackNewMention.make({
-				thread,
-				trigger: activating.activation.value,
-				events: normalized.slice(activationIndex + 1).map(({ event }) => event),
-			}),
+		return yield* runCallback(
+			callbacks.onNewMention(
+				SlackNewMention.make({
+					thread,
+					trigger: activating.activation.value,
+					events: normalized.slice(activationIndex + 1).map(({ event }) => event),
+				}),
+			),
 		)
 	})
 
-export const makeSlackEventProcessor = <E, R>(
-	options: SlackEventProcessorOptions<E, R>,
-): ProviderEventProcessor<R | SlackApi | MailboxSubscriptions> => ({
+export const makeSlackEventProcessor = (
+	options: SlackEventProcessorOptions,
+): ProviderEventProcessor<SlackCallbacks | SlackApi | MailboxSubscriptions> => ({
 	namespace: options.namespace,
 	providerName: 'slack',
 	process: processSlackBatch(options),

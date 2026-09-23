@@ -1,10 +1,16 @@
 import { describe, it } from '@effect/vitest'
-import { DeliveryReceipt, type DeliveryAdmission, ProviderEventHandled, MailboxSubscriptionsMemory } from '@humanlayer/channels-delivery-next'
+import {
+	DeliveryReceipt,
+	type DeliveryAdmission,
+	ProviderEventHandled,
+	MailboxSubscriptionsMemory,
+} from '@humanlayer/channels-delivery-next'
 import { Effect, Layer } from 'effect'
 import { vi } from 'vitest'
 
 import { SlackApi } from '../src/SlackApi'
 import type { SlackNewMention } from '../src/SlackCallbackEvents'
+import { SlackCallbacks } from '../src/SlackCallbacks'
 import { makeSlackEventProcessor } from '../src/SlackEventProcessor'
 import { SlackChannelId, SlackMessageTs, SlackTeamId } from '../src/SlackIdentity'
 import { SlackParticipant, SlackUserId } from '../src/SlackModels'
@@ -17,23 +23,25 @@ describe('Slack webhook routing', () => {
 		Effect.gen(function* () {
 			const onNewMention = vi.fn((_event: SlackNewMention) => Effect.void)
 			const callbackLayer = Layer.merge(
-				Layer.mock(SlackApi, {
-					resolveParticipant: (request) =>
-						Effect.succeed(
-							SlackParticipant.make({
-								userId: SlackUserId.make(request.userId ?? 'U_ALICE'),
-								userName: 'alice',
-								fullName: 'Alice Example',
-								isBot: false,
-								isMe: false,
-							}),
-						),
-				}),
+				Layer.merge(
+					Layer.mock(SlackApi, {
+						resolveParticipant: (request) =>
+							Effect.succeed(
+								SlackParticipant.make({
+									userId: SlackUserId.make(request.userId ?? 'U_ALICE'),
+									userName: 'alice',
+									fullName: 'Alice Example',
+									isBot: false,
+									isMe: false,
+								}),
+							),
+					}),
+					SlackCallbacks.layer({ onNewMention }),
+				),
 				MailboxSubscriptionsMemory,
 			)
 			const processor = makeSlackEventProcessor({
 				namespace: 'slack-emulator-test',
-				handlers: { onNewMention },
 			})
 			const mailbox = yield* makeInMemoryMailboxFixture([processor])
 			const slack = yield* makeSlackEmulatorFixture({

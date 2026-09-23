@@ -10,16 +10,21 @@ import {
 	ProviderEventInvalid,
 	MailboxSubscriptionsMemory,
 } from '@humanlayer/channels-delivery-next'
-import { Effect, Layer } from 'effect'
+import { Cause, Effect, Exit, Layer } from 'effect'
 import { vi } from 'vitest'
 
 import { SlackApi } from '../src/SlackApi'
 import {
+	SlackConversationStopped,
+	SlackMessageDeleted,
 	SlackMessageReceived,
+	SlackMessageUpdated,
 	SlackReactionAdded,
+	SlackReactionRemoved,
 	type SlackNewMention,
 	type SlackSubscribedThreadEvents,
 } from '../src/SlackCallbackEvents'
+import { SlackCallbacks, type SlackCallbackHandlers } from '../src/SlackCallbacks'
 import { makeSlackEventProcessor } from '../src/SlackEventProcessor'
 import { SlackChannelId, SlackMessageTs, SlackTeamId, slackThreadResourceId } from '../src/SlackIdentity'
 import { SlackMarkdownContent, SlackMessage, SlackParticipant, SlackUserId } from '../src/SlackModels'
@@ -131,12 +136,9 @@ const subscribedRuntimeLayer = Layer.merge(
 	Layer.mock(MailboxSubscriptions, { isSubscribed: () => Effect.succeed(true) }),
 )
 
-const process = <E, R>(
-	handlers: Parameters<typeof makeSlackEventProcessor<E, R>>[0]['handlers'],
-	batch: DeliveryAdmissionBatch,
-	layer = runtimeLayer,
-) =>
-	processProviderEvent([makeSlackEventProcessor({ namespace: 'mention-test', handlers })])(batch).pipe(
+const process = <E, R>(handlers: SlackCallbackHandlers<E, R>, batch: DeliveryAdmissionBatch, layer = runtimeLayer) =>
+	processProviderEvent([makeSlackEventProcessor({ namespace: 'mention-test' })])(batch).pipe(
+		Effect.provide(SlackCallbacks.layer(handlers)),
 		Effect.provide(layer),
 	)
 
@@ -149,19 +151,21 @@ describe('Slack event batch processing', () => {
 				admission('Ev_REPLY', reply()),
 				admission('Ev_REACTION', reaction()),
 			])
-			const processor = makeSlackEventProcessor({ namespace: 'mention-test', handlers: { onNewMention } })
+			const processor = makeSlackEventProcessor({ namespace: 'mention-test' })
 			const mailbox = yield* makeInMemoryMailboxFixture([processor])
 			for (const item of admissions) yield* mailbox.mailboxDelivery.deliver(item)
 			const mailboxKey = (yield* mailbox.mailboxKeys)[0]
 			if (mailboxKey === undefined) return yield* Effect.die(new Error('Expected one in-memory mailbox'))
 
-			expect(yield* mailbox.processBatch(mailboxKey).pipe(Effect.provide(runtimeLayer))).toEqual(
-				ProviderEventHandled.make({}),
-			)
+			expect(
+				yield* mailbox
+					.processBatch(mailboxKey)
+					.pipe(Effect.provide(SlackCallbacks.layer({ onNewMention })), Effect.provide(runtimeLayer)),
+			).toEqual(ProviderEventHandled.make({}))
 			expect(onNewMention).toHaveBeenCalledOnce()
 			const callback = onNewMention.mock.calls[0]?.[0]
 			expect(callback?.trigger.ref.messageTs).toBe(rootTs)
-			expect(callback?.events.map((event) => event._tag)).toEqual(['SlackMessageReceived', 'SlackReactionAdded'])
+			expect(callback?.events).toHaveLength(2)
 			expect(callback?.events[0]).toBeInstanceOf(SlackMessageReceived)
 			expect(callback?.events[1]).toBeInstanceOf(SlackReactionAdded)
 		}),
@@ -182,11 +186,11 @@ describe('Slack event batch processing', () => {
 			)
 			expect(onNewMention).not.toHaveBeenCalled()
 			expect(onSubscribedThreadEvents).toHaveBeenCalledOnce()
-			expect(onSubscribedThreadEvents.mock.calls[0]?.[0].events.map((event) => event._tag)).toEqual([
-				'SlackMessageReceived',
-				'SlackMessageReceived',
-				'SlackReactionAdded',
-			])
+			const events = onSubscribedThreadEvents.mock.calls[0]?.[0].events
+			expect(events).toHaveLength(3)
+			expect(events?.[0]).toBeInstanceOf(SlackMessageReceived)
+			expect(events?.[1]).toBeInstanceOf(SlackMessageReceived)
+			expect(events?.[2]).toBeInstanceOf(SlackReactionAdded)
 		}),
 	)
 
@@ -260,12 +264,12 @@ describe('Slack event batch processing', () => {
 			])
 
 			yield* process({ onSubscribedThreadEvents }, batch, subscribedRuntimeLayer)
-			expect(onSubscribedThreadEvents.mock.calls[0]?.[0].events.map((event) => event._tag)).toEqual([
-				'SlackMessageUpdated',
-				'SlackMessageDeleted',
-				'SlackReactionRemoved',
-				'SlackConversationStopped',
-			])
+			const events = onSubscribedThreadEvents.mock.calls[0]?.[0].events
+			expect(events).toHaveLength(4)
+			expect(events?.[0]).toBeInstanceOf(SlackMessageUpdated)
+			expect(events?.[1]).toBeInstanceOf(SlackMessageDeleted)
+			expect(events?.[2]).toBeInstanceOf(SlackReactionRemoved)
+			expect(events?.[3]).toBeInstanceOf(SlackConversationStopped)
 		}),
 	)
 
@@ -283,7 +287,7 @@ describe('Slack event batch processing', () => {
 			const callback = onNewMention.mock.calls[0]?.[0]
 			expect(callback?.trigger.ref.messageTs).toBe(rootTs)
 			expect(callback?.events).toHaveLength(1)
-			expect(callback?.events[0]?._tag).toBe('SlackMessageReceived')
+			expect(callback?.events[0]).toBeInstanceOf(SlackMessageReceived)
 		}),
 	)
 
@@ -368,6 +372,16 @@ describe('Slack event batch processing', () => {
 			expect(yield* process<never, never>({}, mismatch).pipe(Effect.flip)).toEqual(
 				ProviderEventInvalid.make({ provider: 'slack', reason: 'identity_mismatch' }),
 			)
+		}),
+	)
+
+	it.effect('preserves callback interruption through event processing', ({ expect }) =>
+		Effect.gen(function* () {
+			const exit = yield* process(
+				{ onNewMention: () => Effect.interrupt },
+				DeliveryAdmissionBatch.make([admission('Ev_MENTION', mention())]),
+			).pipe(Effect.exit)
+			expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true)
 		}),
 	)
 })

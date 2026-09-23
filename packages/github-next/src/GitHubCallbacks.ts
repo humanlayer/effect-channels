@@ -38,14 +38,6 @@ export type GitHubCallbackHandlers<E, R> = {
 	readonly onSubscribedPrEvents?: (event: GitHubSubscribedPrEvents) => Effect.Effect<void, E, R>
 }
 
-export type GitHubCallbacksShape = {
-	readonly onIssueCreated?: (event: GitHubIssueCreated) => Effect.Effect<void, GitHubCallbackError>
-	readonly onPrCreated?: (event: GitHubPrCreated) => Effect.Effect<void, GitHubCallbackError>
-	readonly onMentioned?: (event: GitHubMentioned) => Effect.Effect<void, GitHubCallbackError>
-	readonly onSubscribedIssueEvents?: (event: GitHubSubscribedIssueEvents) => Effect.Effect<void, GitHubCallbackError>
-	readonly onSubscribedPrEvents?: (event: GitHubSubscribedPrEvents) => Effect.Effect<void, GitHubCallbackError>
-}
-
 const retryableFromCause = (cause: Cause.Cause<unknown>): boolean =>
 	Option.match(Cause.findErrorOption(cause), {
 		onNone: () => true,
@@ -101,9 +93,10 @@ const wrapCallback = <A, E, R>(
 		),
 	)
 
-export class GitHubCallbacks extends Context.Service<GitHubCallbacks, GitHubCallbacksShape>()(
-	'@humanlayer/channels-github-next/GitHubCallbacks',
-) {
+export class GitHubCallbacks extends Context.Service<
+	GitHubCallbacks,
+	GitHubCallbackHandlers<GitHubCallbackError, never>
+>()('@humanlayer/channels-github-next/GitHubCallbacks') {
 	static readonly layer = <E, R>(handlers: GitHubCallbackHandlers<E, R>): Layer.Layer<GitHubCallbacks, never, R> =>
 		Layer.effect(
 			GitHubCallbacks,
