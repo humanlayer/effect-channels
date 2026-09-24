@@ -14,6 +14,8 @@ import {
 	LinearCommentSnapshot,
 	LinearCreateAgentActivityRequest,
 	LinearIssueSnapshot,
+	LinearIssueAttachmentSnapshot,
+	LinearReactionSnapshot,
 } from './LinearModels'
 
 export class LinearIssue extends Schema.TaggedClass<LinearIssue>()('LinearIssue', {
@@ -41,6 +43,14 @@ export class LinearIssue extends Schema.TaggedClass<LinearIssue>()('LinearIssue'
 
 export class LinearComment extends Schema.TaggedClass<LinearComment>()('LinearComment', {
 	...LinearCommentSnapshot.fields,
+}) {}
+
+export class LinearReaction extends Schema.TaggedClass<LinearReaction>()('LinearReaction', {
+	...LinearReactionSnapshot.fields,
+}) {}
+
+export class LinearIssueAttachment extends Schema.TaggedClass<LinearIssueAttachment>()('LinearIssueAttachment', {
+	...LinearIssueAttachmentSnapshot.fields,
 }) {}
 
 export class LinearAgentSession extends Schema.TaggedClass<LinearAgentSession>()('LinearAgentSession', {

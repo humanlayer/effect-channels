@@ -11,6 +11,8 @@ import { Crypto, Effect, Predicate, Redacted, Schema } from 'effect'
 
 import {
 	linearAgentSessionResourceId,
+	linearInstallationResourceId,
+	LinearIssueId,
 	linearIssueResourceId,
 	type LinearOrganizationId,
 	type LinearUserId,
@@ -36,6 +38,26 @@ export type LinearWebhookProviderOptions = {
 
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
 	Predicate.isObject(value) && !Array.isArray(value)
+
+const resourceIssueId = (webhook: {
+	readonly type: 'Issue' | 'Comment' | 'Reaction' | 'Attachment'
+	readonly data: unknown
+}): LinearIssueId | undefined => {
+	if (!isRecord(webhook.data)) return undefined
+	if (webhook.type === 'Issue')
+		return Predicate.isString(webhook.data.id) ? LinearIssueId.make(webhook.data.id) : undefined
+	if (webhook.type === 'Attachment')
+		return Predicate.isString(webhook.data.issueId) ? LinearIssueId.make(webhook.data.issueId) : undefined
+	if (webhook.type === 'Comment') {
+		const issue = isRecord(webhook.data.issue) ? webhook.data.issue : undefined
+		const issueId = webhook.data.issueId ?? issue?.id
+		return Predicate.isString(issueId) ? LinearIssueId.make(issueId) : undefined
+	}
+	const issue = isRecord(webhook.data.issue) ? webhook.data.issue : undefined
+	const comment = isRecord(webhook.data.comment) ? webhook.data.comment : undefined
+	const issueId = webhook.data.issueId ?? issue?.id ?? comment?.issueId
+	return Predicate.isString(issueId) ? LinearIssueId.make(issueId) : undefined
+}
 
 const logInvalidHeaders = (input: Parameters<WebhookProvider<Crypto.Crypto>['handle']>[0]) =>
 	Effect.logWarning('Linear webhook headers did not match the required structure').pipe(
@@ -89,6 +111,7 @@ const logInvalidSupportedShape = (input: {
 	const agentActivity = isRecord(root.agentActivity) ? root.agentActivity : {}
 	const issue = isRecord(notification.issue) ? notification.issue : {}
 	const comment = isRecord(notification.comment) ? notification.comment : {}
+	const data = isRecord(root.data) ? root.data : {}
 	return Effect.logWarning('Linear supported webhook payload did not match its schema').pipe(
 		Effect.annotateLogs({
 			provider: 'linear',
@@ -102,6 +125,9 @@ const logInvalidSupportedShape = (input: {
 			notification_has_comment: isRecord(notification.comment),
 			issue_has_team: isRecord(issue.team),
 			comment_has_issue_id: Predicate.isString(comment.issueId),
+			data_has_id: Predicate.isString(data.id),
+			data_has_issue_id: Predicate.isString(data.issueId),
+			has_data: isRecord(root.data),
 			has_agent_session: isRecord(root.agentSession),
 			agent_session_has_issue: isRecord(agentSession.issue),
 			has_agent_activity: isRecord(root.agentActivity),
@@ -145,7 +171,12 @@ export const makeLinearWebhookProvider = (options: LinearWebhookProviderOptions)
 			if (envelope.organizationId !== options.organizationId)
 				return ProviderWebhookResponse.make({ status: 403, body: null, headers: {} })
 			const supported =
-				(envelope.type === 'Issue' && envelope.action === 'create') ||
+				(envelope.type === 'Issue' && ['create', 'update', 'remove'].includes(envelope.action)) ||
+				(envelope.type === 'Comment' && ['create', 'update', 'remove'].includes(envelope.action)) ||
+				(envelope.type === 'Reaction' && ['create', 'remove'].includes(envelope.action)) ||
+				(envelope.type === 'Attachment' && ['create', 'update', 'remove'].includes(envelope.action)) ||
+				(envelope.type === 'PermissionChange' && envelope.action === 'teamAccessChanged') ||
+				(envelope.type === 'OAuthApp' && envelope.action === 'revoked') ||
 				(envelope.type === 'AppUserNotification' &&
 					[
 						'issueMention',
@@ -177,6 +208,19 @@ export const makeLinearWebhookProvider = (options: LinearWebhookProviderOptions)
 				(webhook.appUserId !== options.appUserId ||
 					(Predicate.isNotUndefined(options.oauthClientId) &&
 						webhook.oauthClientId !== options.oauthClientId))
+			)
+				return ProviderWebhookResponse.make({ status: 403, body: null, headers: {} })
+			if (
+				webhook.type === 'PermissionChange' &&
+				(webhook.appUserId !== options.appUserId ||
+					(Predicate.isNotUndefined(options.oauthClientId) &&
+						webhook.oauthClientId !== options.oauthClientId))
+			)
+				return ProviderWebhookResponse.make({ status: 403, body: null, headers: {} })
+			if (
+				webhook.type === 'OAuthApp' &&
+				Predicate.isNotUndefined(options.oauthClientId) &&
+				webhook.oauthClientId !== options.oauthClientId
 			)
 				return ProviderWebhookResponse.make({ status: 403, body: null, headers: {} })
 			if (webhook.type === 'AgentSessionEvent') {
@@ -219,12 +263,26 @@ export const makeLinearWebhookProvider = (options: LinearWebhookProviderOptions)
 					}),
 				})
 			}
+			if (webhook.type === 'OAuthApp' || webhook.type === 'PermissionChange')
+				return ProviderWebhookEvent.make({
+					event: DeliveryAdmission.make({
+						namespace: options.namespace,
+						provider: 'linear',
+						installationId: webhook.organizationId,
+						resourceId: linearInstallationResourceId(),
+						eventId: headers['linear-delivery'],
+						payload: webhook,
+					}),
+				})
+			const issueId = resourceIssueId(webhook)
+			if (Predicate.isUndefined(issueId))
+				return yield* WebhookPayloadInvalidError.make({ reason: 'resource_issue_identity_missing' })
 			return ProviderWebhookEvent.make({
 				event: DeliveryAdmission.make({
 					namespace: options.namespace,
 					provider: 'linear',
 					installationId: webhook.organizationId,
-					resourceId: linearIssueResourceId(webhook.data.id),
+					resourceId: linearIssueResourceId(issueId),
 					eventId: headers['linear-delivery'],
 					payload: webhook,
 				}),

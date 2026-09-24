@@ -4,7 +4,8 @@ import { LinearWebhookDeliveryId } from './LinearIdentity'
 import {
 	LinearAgentSessionEventWebhook,
 	LinearAppUserNotificationWebhook,
-	LinearIssueCreateWebhook,
+	LinearLifecycleWebhookEvent,
+	LinearResourceWebhookEvent,
 } from './LinearWebhookEventSchemas'
 
 export const LinearWebhookHeaders = Schema.Struct({
@@ -21,7 +22,8 @@ export const LinearWebhookEnvelope = Schema.Struct({
 })
 
 export const LinearSupportedWebhook = Schema.Union([
-	LinearIssueCreateWebhook,
+	LinearResourceWebhookEvent,
+	LinearLifecycleWebhookEvent,
 	LinearAppUserNotificationWebhook,
 	LinearAgentSessionEventWebhook,
 ])
@@ -35,7 +37,8 @@ export const LinearStoredAgentSessionWebhook = Schema.TaggedStruct('LinearStored
 export type LinearStoredAgentSessionWebhook = typeof LinearStoredAgentSessionWebhook.Type
 
 export const LinearStoredWebhook = Schema.Union([
-	LinearIssueCreateWebhook,
+	LinearResourceWebhookEvent,
+	LinearLifecycleWebhookEvent,
 	LinearAppUserNotificationWebhook,
 	LinearStoredAgentSessionWebhook,
 ])

@@ -222,6 +222,30 @@ const linear = LinearBot.make({
 				)
 				yield* event.issue.subscribe()
 			}),
+		onSubscribedEvent: (event) =>
+			Effect.logInfo('Linear subscribed issue events received').pipe(
+				Effect.annotateLogs({
+					organization_id: event.issue.ref.organizationId,
+					issue_id: event.issue.ref.issueId,
+					issue_identifier: event.issue.identifier,
+					event_count: event.events.length,
+					event_tags: event.events.map((issueEvent) => issueEvent._tag).join(','),
+					issue_change_count: event.events.reduce(
+						(count, issueEvent) =>
+							Predicate.isTagged(issueEvent, 'LinearIssueUpdated')
+								? count + issueEvent.changes.length
+								: count,
+						0,
+					),
+					issue_change_tags: event.events
+						.flatMap((issueEvent) =>
+							Predicate.isTagged(issueEvent, 'LinearIssueUpdated')
+								? issueEvent.changes.map((change) => change._tag)
+								: [],
+						)
+						.join(','),
+				}),
+			),
 	},
 })
 

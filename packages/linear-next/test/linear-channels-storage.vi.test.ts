@@ -12,7 +12,10 @@ import { linearAppUserId, linearOrganizationId, linearWebhookSecret, signedLinea
 describe('Linear Channels storage composition', () => {
 	it.effect('runs the same provider through ChannelsMemory and persists subscription state', ({ expect }) =>
 		Effect.gen(function* () {
-			const created = yield* Deferred.make<{ readonly identifier: string; readonly subscribed: boolean }>()
+			const created = yield* Deferred.make<{
+				readonly identifier: string | null
+				readonly subscribed: boolean
+			}>()
 			const channels = Channels.make({
 				namespace: 'linear-storage-test',
 				providers: [

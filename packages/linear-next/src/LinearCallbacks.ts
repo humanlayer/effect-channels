@@ -8,6 +8,7 @@ export const LinearCallbackName = Schema.Literals([
 	'onIssueCreated',
 	'onMentioned',
 	'onAssigned',
+	'onSubscribedEvent',
 ])
 export type LinearCallbackName = typeof LinearCallbackName.Type
 
@@ -111,6 +112,15 @@ export class LinearCallbacks extends Context.Service<
 					...(Predicate.isUndefined(handlers.onAssigned)
 						? {}
 						: { onAssigned: wrapCallback(context, 'onAssigned', handlers.onAssigned) }),
+					...(Predicate.isUndefined(handlers.onSubscribedEvent)
+						? {}
+						: {
+								onSubscribedEvent: wrapCallback(
+									context,
+									'onSubscribedEvent',
+									handlers.onSubscribedEvent,
+								),
+							}),
 				})
 			}),
 		)

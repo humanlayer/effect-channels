@@ -31,7 +31,15 @@ describe('Linear webhook handling', () => {
 
 	it.effect('acknowledges authenticated unsupported actions', ({ expect }) =>
 		Effect.gen(function* () {
-			const payload = { ...(issueCreatePayload as Record<string, unknown>), action: 'update' }
+			const payload = { ...(issueCreatePayload as Record<string, unknown>), action: 'unsupported' }
+			const outcome = yield* makeLinearTestProvider().handle(signedLinearInput(payload))
+			expect(outcome).toEqual(ProviderWebhookIgnored.make({}))
+		}),
+	)
+
+	it.effect('keeps Document callbacks as authenticated unsupported ignores', ({ expect }) =>
+		Effect.gen(function* () {
+			const payload = { ...(issueCreatePayload as Record<string, unknown>), type: 'Document' }
 			const outcome = yield* makeLinearTestProvider().handle(signedLinearInput(payload))
 			expect(outcome).toEqual(ProviderWebhookIgnored.make({}))
 		}),

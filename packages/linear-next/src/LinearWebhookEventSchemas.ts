@@ -3,22 +3,64 @@ import { Schema } from 'effect'
 import {
 	LinearAgentActivityId,
 	LinearAgentSessionId,
+	LinearAttachmentId,
 	LinearCommentId,
 	LinearIssueId,
 	LinearNotificationId,
 	LinearOrganizationId,
+	LinearReactionId,
 	LinearTeamId,
 	LinearUserId,
 } from './LinearIdentity'
+
+const optionalNullableString = Schema.optionalKey(Schema.NullOr(Schema.String))
+const optionalNullableJson = Schema.optionalKey(Schema.NullOr(Schema.Json))
+const WebhookUpdatedFrom = Schema.Record(Schema.String, Schema.Json)
 
 export const LinearWebhookActor = Schema.Struct({
 	__typename: Schema.optionalKey(Schema.Literal('UserChildWebhookPayload')),
 	id: LinearUserId,
 	name: Schema.String,
+	type: Schema.optionalKey(Schema.String),
 	email: Schema.optionalKey(Schema.NullOr(Schema.String)),
 	url: Schema.optionalKey(Schema.NullOr(Schema.String)),
 	avatarUrl: Schema.optionalKey(Schema.NullOr(Schema.String)),
 })
+
+const LinearUserEntityWebhookActor = Schema.Struct({
+	...LinearWebhookActor.fields,
+	__typename: Schema.optionalKey(Schema.Literal('UserActorWebhookPayload')),
+	type: Schema.String,
+})
+
+const LinearExternalUserWebhookActor = Schema.Struct({
+	__typename: Schema.optionalKey(Schema.Literal('ExternalUserActorWebhookPayload')),
+	id: LinearUserId,
+	name: Schema.String,
+	type: Schema.String,
+	email: Schema.String,
+})
+
+const LinearOauthClientWebhookActor = Schema.Struct({
+	__typename: Schema.optionalKey(Schema.Literal('OauthClientActorWebhookPayload')),
+	id: LinearUserId,
+	name: Schema.String,
+	type: Schema.String,
+})
+
+const LinearIntegrationWebhookActor = Schema.Struct({
+	__typename: Schema.optionalKey(Schema.Literal('IntegrationActorWebhookPayload')),
+	id: LinearUserId,
+	service: Schema.String,
+	type: Schema.String,
+})
+
+export const LinearEntityWebhookActor = Schema.Union([
+	LinearUserEntityWebhookActor,
+	LinearExternalUserWebhookActor,
+	LinearOauthClientWebhookActor,
+	LinearIntegrationWebhookActor,
+])
 
 export const LinearWebhookTeam = Schema.Struct({
 	__typename: Schema.optionalKey(Schema.Literal('TeamChildWebhookPayload')),
@@ -35,8 +77,48 @@ export const LinearWebhookIssue = Schema.Struct({
 	description: Schema.optionalKey(Schema.NullOr(Schema.String)),
 	priority: Schema.optionalKey(Schema.Int),
 	url: Schema.String,
-	team: LinearWebhookTeam,
+	teamId: LinearTeamId,
+	team: Schema.NullOr(LinearWebhookTeam),
 	creator: Schema.optionalKey(Schema.NullOr(LinearWebhookActor)),
+	state: Schema.optionalKey(Schema.Json),
+	stateId: optionalNullableString,
+	labels: Schema.optionalKey(Schema.Json),
+	labelIds: Schema.optionalKey(Schema.Array(Schema.String)),
+	assignee: Schema.optionalKey(Schema.Json),
+	assigneeId: optionalNullableString,
+	delegate: Schema.optionalKey(Schema.Json),
+	delegateId: optionalNullableString,
+	project: Schema.optionalKey(Schema.Json),
+	projectId: optionalNullableString,
+	projectMilestone: Schema.optionalKey(Schema.Json),
+	projectMilestoneId: optionalNullableString,
+	cycle: Schema.optionalKey(Schema.Json),
+	cycleId: optionalNullableString,
+	parentId: optionalNullableString,
+	estimate: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+	dueDate: optionalNullableString,
+	subscriberIds: Schema.optionalKey(Schema.Array(Schema.String)),
+	archivedAt: optionalNullableString,
+	triagedAt: optionalNullableString,
+	startedTriageAt: optionalNullableString,
+	snoozedUntilAt: optionalNullableString,
+	startedAt: optionalNullableString,
+	completedAt: optionalNullableString,
+	canceledAt: optionalNullableString,
+	releases: Schema.optionalKey(Schema.Json),
+	slaStartedAt: optionalNullableString,
+	slaBreachesAt: optionalNullableString,
+	slaType: optionalNullableString,
+	attachments: Schema.optionalKey(Schema.Json),
+})
+
+export const LinearWebhookIssueChild = Schema.Struct({
+	id: LinearIssueId,
+	identifier: Schema.NonEmptyString,
+	team: LinearWebhookTeam,
+	teamId: LinearTeamId,
+	title: Schema.String,
+	url: Schema.String,
 })
 
 export const LinearNotificationIssue = Schema.Struct({
@@ -207,10 +289,12 @@ export const LinearIssueCreateWebhook = Schema.Struct({
 	type: Schema.Literal('Issue'),
 	organizationId: LinearOrganizationId,
 	data: LinearWebhookIssue,
-	actor: Schema.optionalKey(Schema.NullOr(LinearWebhookActor)),
-	webhookId: Schema.optionalKey(Schema.NonEmptyString),
-	webhookTimestamp: Schema.optionalKey(Schema.Number),
-	createdAt: Schema.optionalKey(Schema.String),
+	actor: Schema.optionalKey(Schema.NullOr(LinearEntityWebhookActor)),
+	url: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	updatedFrom: Schema.optionalKey(Schema.NullOr(WebhookUpdatedFrom)),
+	webhookId: Schema.NonEmptyString,
+	webhookTimestamp: Schema.Number,
+	createdAt: Schema.String,
 })
 export type LinearIssueCreateWebhook = typeof LinearIssueCreateWebhook.Type
 
@@ -294,3 +378,172 @@ export const LinearAgentSessionEventWebhook = Schema.Union([
 	LinearAgentSessionPromptedWebhook,
 ])
 export type LinearAgentSessionEventWebhook = typeof LinearAgentSessionEventWebhook.Type
+
+// Linear sends only changed keys and uses null when the previous value was unset.
+// Keep this open so new provider fields survive into bounded `otherChanges`.
+const IssueUpdatedFrom = WebhookUpdatedFrom
+
+const relatedWebhookFields = {
+	organizationId: LinearOrganizationId,
+	actor: Schema.optionalKey(Schema.NullOr(LinearEntityWebhookActor)),
+	createdAt: Schema.String,
+	url: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	updatedFrom: Schema.optionalKey(Schema.NullOr(WebhookUpdatedFrom)),
+	webhookId: Schema.NonEmptyString,
+	webhookTimestamp: Schema.Number,
+}
+
+export const LinearIssueUpdateWebhook = Schema.Struct({
+	...relatedWebhookFields,
+	type: Schema.Literal('Issue'),
+	action: Schema.Literal('update'),
+	data: LinearWebhookIssue,
+	updatedFrom: IssueUpdatedFrom,
+})
+export const LinearIssueRemoveWebhook = Schema.Struct({
+	...relatedWebhookFields,
+	type: Schema.Literal('Issue'),
+	action: Schema.Literal('remove'),
+	data: LinearWebhookIssue,
+})
+
+export const LinearWebhookComment = Schema.Struct({
+	id: LinearCommentId,
+	body: Schema.String,
+	issueId: Schema.optionalKey(Schema.NullOr(LinearIssueId)),
+	issue: Schema.optionalKey(Schema.NullOr(LinearWebhookIssueChild)),
+	parentId: Schema.optionalKey(Schema.NullOr(LinearCommentId)),
+	user: Schema.optionalKey(Schema.NullOr(LinearWebhookActor)),
+	userId: Schema.optionalKey(Schema.NullOr(LinearUserId)),
+	createdAt: Schema.String,
+	updatedAt: Schema.String,
+	reactionData: Schema.Json,
+})
+export const LinearWebhookCommentChild = Schema.Struct({
+	id: LinearCommentId,
+	body: Schema.String,
+	issueId: Schema.optionalKey(Schema.NullOr(LinearIssueId)),
+	userId: Schema.optionalKey(Schema.NullOr(LinearUserId)),
+})
+const CommentUpdatedFrom = WebhookUpdatedFrom
+const commentWebhook = <Action extends 'create' | 'remove'>(action: Action) =>
+	Schema.Struct({
+		...relatedWebhookFields,
+		type: Schema.Literal('Comment'),
+		action: Schema.Literal(action),
+		data: LinearWebhookComment,
+	})
+export const LinearCommentCreateWebhook = commentWebhook('create')
+export const LinearCommentUpdateWebhook = Schema.Struct({
+	...relatedWebhookFields,
+	type: Schema.Literal('Comment'),
+	action: Schema.Literal('update'),
+	data: LinearWebhookComment,
+	updatedFrom: CommentUpdatedFrom,
+})
+export const LinearCommentRemoveWebhook = commentWebhook('remove')
+
+export const LinearWebhookReaction = Schema.Struct({
+	id: LinearReactionId,
+	emoji: Schema.String,
+	user: Schema.optionalKey(Schema.NullOr(LinearWebhookActor)),
+	userId: Schema.optionalKey(Schema.NullOr(LinearUserId)),
+	issue: Schema.optionalKey(Schema.NullOr(LinearWebhookIssueChild)),
+	issueId: Schema.optionalKey(Schema.NullOr(LinearIssueId)),
+	comment: Schema.optionalKey(Schema.NullOr(LinearWebhookCommentChild)),
+	commentId: Schema.optionalKey(Schema.NullOr(LinearCommentId)),
+	createdAt: Schema.String,
+	updatedAt: Schema.String,
+})
+const reactionWebhook = <Action extends 'create' | 'remove'>(action: Action) =>
+	Schema.Struct({
+		...relatedWebhookFields,
+		type: Schema.Literal('Reaction'),
+		action: Schema.Literal(action),
+		data: LinearWebhookReaction,
+	})
+export const LinearReactionCreateWebhook = reactionWebhook('create')
+export const LinearReactionRemoveWebhook = reactionWebhook('remove')
+
+export const LinearWebhookAttachment = Schema.Struct({
+	id: LinearAttachmentId,
+	issueId: LinearIssueId,
+	title: Schema.String,
+	subtitle: optionalNullableString,
+	url: Schema.String,
+	metadata: Schema.Json,
+	groupBySource: Schema.Boolean,
+	createdAt: Schema.String,
+	updatedAt: Schema.String,
+	archivedAt: optionalNullableString,
+	creatorId: optionalNullableString,
+	externalUserCreatorId: optionalNullableString,
+	originalIssueId: optionalNullableString,
+	source: optionalNullableJson,
+	sourceType: optionalNullableString,
+})
+const AttachmentUpdatedFrom = Schema.Struct({
+	title: optionalNullableString,
+	subtitle: optionalNullableString,
+	url: optionalNullableString,
+	metadata: Schema.optionalKey(Schema.Json),
+})
+const attachmentWebhook = <Action extends 'create' | 'remove'>(action: Action) =>
+	Schema.Struct({
+		...relatedWebhookFields,
+		type: Schema.Literal('Attachment'),
+		action: Schema.Literal(action),
+		data: LinearWebhookAttachment,
+	})
+export const LinearAttachmentCreateWebhook = attachmentWebhook('create')
+export const LinearAttachmentUpdateWebhook = Schema.Struct({
+	...relatedWebhookFields,
+	type: Schema.Literal('Attachment'),
+	action: Schema.Literal('update'),
+	data: LinearWebhookAttachment,
+	updatedFrom: AttachmentUpdatedFrom,
+})
+export const LinearAttachmentRemoveWebhook = attachmentWebhook('remove')
+
+export const LinearResourceWebhookEvent = Schema.Union([
+	LinearIssueCreateWebhook,
+	LinearIssueUpdateWebhook,
+	LinearIssueRemoveWebhook,
+	LinearCommentCreateWebhook,
+	LinearCommentUpdateWebhook,
+	LinearCommentRemoveWebhook,
+	LinearReactionCreateWebhook,
+	LinearReactionRemoveWebhook,
+	LinearAttachmentCreateWebhook,
+	LinearAttachmentUpdateWebhook,
+	LinearAttachmentRemoveWebhook,
+])
+export type LinearResourceWebhookEvent = typeof LinearResourceWebhookEvent.Type
+
+export const LinearTeamAccessChangedWebhook = Schema.Struct({
+	type: Schema.Literal('PermissionChange'),
+	action: Schema.Literal('teamAccessChanged'),
+	organizationId: LinearOrganizationId,
+	appUserId: LinearUserId,
+	oauthClientId: Schema.NonEmptyString,
+	canAccessAllPublicTeams: Schema.Boolean,
+	createdAt: Schema.String,
+	addedTeamIds: Schema.Array(LinearTeamId),
+	removedTeamIds: Schema.Array(LinearTeamId),
+	webhookId: Schema.NonEmptyString,
+	webhookTimestamp: Schema.Number,
+})
+export const LinearInstallationRevokedWebhook = Schema.Struct({
+	type: Schema.Literal('OAuthApp'),
+	action: Schema.Literal('revoked'),
+	organizationId: LinearOrganizationId,
+	oauthClientId: Schema.NonEmptyString,
+	createdAt: Schema.String,
+	webhookId: Schema.NonEmptyString,
+	webhookTimestamp: Schema.Number,
+})
+export const LinearLifecycleWebhookEvent = Schema.Union([
+	LinearTeamAccessChangedWebhook,
+	LinearInstallationRevokedWebhook,
+])
+export type LinearLifecycleWebhookEvent = typeof LinearLifecycleWebhookEvent.Type
