@@ -1,18 +1,13 @@
 import { NodeCrypto } from '@effect/platform-node'
 import { describe, it } from '@effect/vitest'
-import { Channels, ChannelsMemory, QueueDeliveryMode } from '@humanlayer/channels-delivery-next'
+import { Channels, ChannelsMemory } from '@humanlayer/channels-delivery-next'
 import { Config, Deferred, Effect, Layer, Redacted } from 'effect'
 import { TestClock } from 'effect/testing'
 import { HttpRouter, HttpServerRequest } from 'effect/unstable/http'
 
-import { LinearApi } from '../src/LinearApi'
 import { LinearAuth, LinearBot } from '../src/index'
-import {
-	linearAppUserId,
-	linearOrganizationId,
-	linearWebhookSecret,
-	signedLinearInput,
-} from './fixtures'
+import { LinearApi } from '../src/LinearApi'
+import { linearAppUserId, linearOrganizationId, linearWebhookSecret, signedLinearInput } from './fixtures'
 
 describe('Linear Channels storage composition', () => {
 	it.effect('runs the same provider through ChannelsMemory and persists subscription state', ({ expect }) =>
@@ -23,7 +18,6 @@ describe('Linear Channels storage composition', () => {
 				providers: [
 					LinearBot.make({
 						webhookSecret: Config.succeed(Redacted.make(linearWebhookSecret)),
-						deliveryMode: QueueDeliveryMode.make({}),
 						bot: { organizationId: linearOrganizationId, appUserId: linearAppUserId },
 						auth: LinearAuth.clientCredentials({
 							clientId: Config.succeed('test-client'),

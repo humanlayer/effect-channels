@@ -7,6 +7,8 @@ import { HttpRouter } from 'effect/unstable/http'
 import { makeLinearWebhookProvider } from '../src/LinearWebhookProvider'
 import {
 	issueCreatePayload,
+	linearAppUserId,
+	linearOauthClientId,
 	linearOrganizationId,
 	linearWebhookSecret,
 	signedLinearInput,
@@ -17,12 +19,13 @@ const makeApp = Effect.gen(function* () {
 		namespace: 'linear-routing-test',
 		webhookSecret: Redacted.make(linearWebhookSecret),
 		organizationId: linearOrganizationId,
+		appUserId: linearAppUserId,
+		oauthClientId: linearOauthClientId,
 		maxBodyBytes: 4096,
 	})
-	const web = HttpRouter.toWebHandler(
-		webhookRoutes([provider]).pipe(HttpRouter.provideRequest(NodeCrypto.layer)),
-		{ disableLogger: true },
-	)
+	const web = HttpRouter.toWebHandler(webhookRoutes([provider]).pipe(HttpRouter.provideRequest(NodeCrypto.layer)), {
+		disableLogger: true,
+	})
 	yield* Effect.addFinalizer(() => Effect.promise(web.dispose))
 	const context = Context.make(
 		MailboxDelivery,

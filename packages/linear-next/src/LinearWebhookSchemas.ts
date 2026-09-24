@@ -1,7 +1,11 @@
 import { Schema } from 'effect'
 
 import { LinearWebhookDeliveryId } from './LinearIdentity'
-import { LinearIssueCreateWebhook } from './LinearWebhookEventSchemas'
+import {
+	LinearAgentSessionEventWebhook,
+	LinearAppUserNotificationWebhook,
+	LinearIssueCreateWebhook,
+} from './LinearWebhookEventSchemas'
 
 export const LinearWebhookHeaders = Schema.Struct({
 	'linear-delivery': LinearWebhookDeliveryId,
@@ -16,5 +20,23 @@ export const LinearWebhookEnvelope = Schema.Struct({
 	organizationId: Schema.NonEmptyString,
 })
 
-export const LinearSupportedWebhook = LinearIssueCreateWebhook
+export const LinearSupportedWebhook = Schema.Union([
+	LinearIssueCreateWebhook,
+	LinearAppUserNotificationWebhook,
+	LinearAgentSessionEventWebhook,
+])
 export type LinearSupportedWebhook = typeof LinearSupportedWebhook.Type
+
+/** Durable Agent Session payload with authenticated ingress metadata kept separate from provider JSON. */
+export const LinearStoredAgentSessionWebhook = Schema.TaggedStruct('LinearStoredAgentSessionWebhook', {
+	deliveryId: LinearWebhookDeliveryId,
+	webhook: LinearAgentSessionEventWebhook,
+})
+export type LinearStoredAgentSessionWebhook = typeof LinearStoredAgentSessionWebhook.Type
+
+export const LinearStoredWebhook = Schema.Union([
+	LinearIssueCreateWebhook,
+	LinearAppUserNotificationWebhook,
+	LinearStoredAgentSessionWebhook,
+])
+export type LinearStoredWebhook = typeof LinearStoredWebhook.Type

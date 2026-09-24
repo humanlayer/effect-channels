@@ -1,0 +1,43 @@
+{
+	"type": "AppUserNotification",
+	"action": "issueMention",
+	"organizationId": "6c5940f1-4f77-4f0b-8517-45b58f3c7d21",
+	"oauthClientId": "linear-test-client",
+	"appUserId": "a75b41db-2746-4c05-a792-31535319f512",
+	"createdAt": "2026-09-20T12:00:00.000Z",
+	"notification": {
+		"__typename": "IssueMentionNotificationWebhookPayload",
+		"type": "issueMention",
+		"actorId": "2d2dd943-3333-4444-8555-fedcbafedcba",
+		"id": "90000000-0000-4000-8000-000000000001",
+		"externalUserActorId": null,
+		"issueId": "b33fb278-fbe0-45e4-b4eb-94b0839f51b9",
+		"userId": "a75b41db-2746-4c05-a792-31535319f512",
+		"actor": {
+			"__typename": "UserChildWebhookPayload",
+			"id": "2d2dd943-3333-4444-8555-fedcbafedcba",
+			"url": "https://linear.app/acme/profile/test-user",
+			"avatarUrl": null,
+			"email": "test-user@example.invalid",
+			"name": "Test User"
+		},
+		"issue": {
+			"__typename": "IssueWithDescriptionChildWebhookPayload",
+			"id": "b33fb278-fbe0-45e4-b4eb-94b0839f51b9",
+			"teamId": "5a9912aa-2222-4333-8444-abcdefabcdef",
+			"url": "https://linear.app/acme/issue/ENG-123/phase-2-notification",
+			"description": "Sanitized Phase 2 notification fixture",
+			"identifier": "ENG-123",
+			"title": "Phase 2 notification fixture",
+			"team": {
+				"__typename": "TeamChildWebhookPayload",
+				"id": "5a9912aa-2222-4333-8444-abcdefabcdef",
+				"key": "ENG",
+				"name": "Engineering"
+			}
+		},
+		"archivedAt": null,
+		"createdAt": "2026-09-20T12:00:00.000Z",
+		"updatedAt": "2026-09-20T12:00:00.000Z"
+	}
+}

@@ -5,14 +5,9 @@
 import { ChannelsCloudflare } from '@humanlayer/channels-alchemy-cloudflare'
 import { DebounceDeliveryMode } from '@humanlayer/channels-delivery-next'
 import { GitHubBot, GitHubContent, GitHubId, GitHubReaction } from '@humanlayer/channels-github-next'
-import {
-	LinearAuth,
-	LinearBot,
-	LinearOrganizationId,
-	LinearUserId,
-} from '@humanlayer/channels-linear-next'
+import { LinearAuth, LinearBot, LinearOrganizationId, LinearUserId } from '@humanlayer/channels-linear-next'
 import { SlackBot, SlackContent, SlackReaction } from '@humanlayer/channels-slack-next'
-import { Config, Effect, Predicate } from 'effect'
+import { Config, Effect, Predicate, Duration } from 'effect'
 
 /** Slack with placeholder callbacks. `SlackApiLive`, the default, reads `SLACK_BOT_TOKEN`. */
 const slack = SlackBot.make({
@@ -173,16 +168,48 @@ const github = GitHubBot.make({
 /** Linear Application callbacks for one explicitly configured workspace. */
 const linear = LinearBot.make({
 	webhookSecret: Config.redacted('LINEAR_WEBHOOK_SECRET'),
-	deliveryMode: DebounceDeliveryMode.make({ quietPeriodMs: 2_000, maxWaitMs: 10_000 }),
 	bot: Config.all({
 		organizationId: Config.schema(LinearOrganizationId, 'LINEAR_ORGANIZATION_ID'),
 		appUserId: Config.schema(LinearUserId, 'LINEAR_APP_USER_ID'),
 	}),
-	auth: LinearAuth.clientCredentials({
-		clientId: Config.string('LINEAR_CLIENT_ID'),
-		clientSecret: Config.redacted('LINEAR_CLIENT_SECRET'),
-	}),
+	auth: LinearAuth.fromEnvironment,
 	handlers: {
+		onAgentSessionCreated: (event) =>
+			Effect.gen(function* () {
+				yield* Effect.logInfo('Linear agent session created').pipe(
+					Effect.annotateLogs({
+						organization_id: event.session.ref.organizationId,
+						agent_session_id: event.session.ref.sessionId,
+						issue_id: event.issue.ref.issueId,
+						issue_identifier: event.issue.identifier,
+						delivery_id: event.deliveryId,
+					}),
+				)
+				if (!(yield* event.issue.isSubscribed())) yield* event.issue.subscribe()
+				yield* Effect.sleep(Duration.seconds(2))
+				yield* event.session.thought('thinking about session created...')
+				yield* Effect.sleep(Duration.seconds(2))
+				yield* event.session.respond('The example agent received this session and completed its callback.')
+			}),
+		onAgentSessionPrompted: (event) =>
+			Effect.gen(function* () {
+				yield* Effect.logInfo('Linear agent session prompted').pipe(
+					Effect.annotateLogs({
+						organization_id: event.session.ref.organizationId,
+						agent_session_id: event.session.ref.sessionId,
+						issue_id: event.issue.ref.issueId,
+						issue_identifier: event.issue.identifier,
+						prompt_activity_id: event.prompt.id,
+						delivery_id: event.deliveryId,
+					}),
+				)
+				yield* Effect.sleep(Duration.seconds(2))
+				yield* event.session.thought('Thinking about session continuation...')
+				yield* Effect.sleep(Duration.seconds(2))
+				yield* event.session.respond(
+					'The example agent received the follow-up prompt and completed its callback.',
+				)
+			}),
 		onIssueCreated: (event) =>
 			Effect.gen(function* () {
 				yield* Effect.logInfo('Linear issue created').pipe(

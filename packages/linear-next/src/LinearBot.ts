@@ -2,13 +2,14 @@ import {
 	ChannelsProviderUnavailable,
 	type ChannelsProvider,
 	type DeliveryAdmissionBatch,
-	type DeliveryMode,
+	SerialDeliveryMode,
 } from '@humanlayer/channels-delivery-next'
-import { Config, Effect, Layer, Predicate, Redacted, Schema } from 'effect'
+import { Config, Effect, Layer, Match, Option, Predicate, Redacted, Schema } from 'effect'
 
 import { LinearApi } from './LinearApi'
 import { LinearApiLiveOptions, makeLinearApiLive } from './LinearApiLive'
-import type { ClientCredentials } from './LinearAuth'
+import type { AuthenticationInput } from './LinearAuth'
+import * as LinearAuth from './LinearAuth'
 import { LinearCallbacks, type LinearCallbackHandlers } from './LinearCallbacks'
 import { makeLinearEventProcessor } from './LinearEventProcessor'
 import { LinearOrganizationId, LinearUserId } from './LinearIdentity'
@@ -22,9 +23,8 @@ export interface LinearBotConfiguration extends Schema.Schema.Type<typeof Linear
 
 export type MakeOptions<E, R, ApiError, ApiRequirements> = {
 	readonly webhookSecret: Config.Config<Redacted.Redacted<string>>
-	readonly deliveryMode: DeliveryMode
 	readonly bot: LinearBotConfiguration | Config.Config<LinearBotConfiguration>
-	readonly auth: ClientCredentials
+	readonly auth: AuthenticationInput
 	readonly handlers: LinearCallbackHandlers<E, R>
 	readonly linearApi?: Layer.Layer<LinearApi, ApiError, ApiRequirements>
 	readonly maxBodyBytes?: number
@@ -46,39 +46,63 @@ export const make = <E, R, ApiError = never, ApiRequirements = never>(
 	const readBotConfiguration = Schema.is(LinearBotConfiguration)(options.bot)
 		? Effect.succeed(options.bot)
 		: unavailable('read_bot_configuration', options.bot)
-	const botConfig = Schema.is(LinearBotConfiguration)(options.bot)
-		? Config.succeed(options.bot)
-		: options.bot
-	const defaultApi = makeLinearApiLive(LinearApiLiveOptions.make({
-		auth: options.auth,
-		organizationId: botConfig.pipe(Config.map((bot) => bot.organizationId)),
-		appUserId: botConfig.pipe(Config.map((bot) => bot.appUserId)),
-	}))
+	const botConfig = Schema.is(LinearBotConfiguration)(options.bot) ? Config.succeed(options.bot) : options.bot
+	const readOauthClientId = LinearAuth.resolve(options.auth).pipe(
+		Effect.flatMap((auth) =>
+			Match.value(auth).pipe(
+				Match.tagsExhaustive({
+					LinearClientCredentials: (credentials) => credentials.clientId.pipe(Effect.asSome),
+					LinearDeveloperToken: () => Effect.succeed(Option.none<string>()),
+				}),
+			),
+		),
+	)
+	const defaultApi = makeLinearApiLive(
+		LinearApiLiveOptions.make({
+			auth: options.auth,
+			organizationId: botConfig.pipe(Config.map((bot) => bot.organizationId)),
+			appUserId: botConfig.pipe(Config.map((bot) => bot.appUserId)),
+		}),
+	)
 	const buildLinearApi = Predicate.isUndefined(options.linearApi)
 		? unavailable('build_linear_api', Layer.build(defaultApi))
 		: unavailable('build_linear_api', Layer.build(options.linearApi))
 
 	return {
 		providerName: 'linear',
-		deliveryMode: options.deliveryMode,
+		// Agent Session events must begin processing immediately and one at a time so
+		// the automatic acknowledgement can satisfy Linear's ten-second deadline.
+		deliveryMode: SerialDeliveryMode.make({}),
 		webhookProvider: ({ namespace }) =>
 			Effect.gen(function* () {
 				const webhookSecret = yield* unavailable('read_webhook_secret', options.webhookSecret)
 				const bot = yield* readBotConfiguration
+				const oauthClientId = yield* unavailable('read_client_id', readOauthClientId)
+				// Build this half's API context for host configuration discovery only.
+				// The live layer performs no network I/O until an API operation runs.
 				yield* buildLinearApi
 				return makeLinearWebhookProvider({
 					namespace,
 					webhookSecret,
 					organizationId: bot.organizationId,
-					...(options.maxBodyBytes === undefined ? {} : { maxBodyBytes: options.maxBodyBytes }),
-					...(options.maxTimestampAgeMs === undefined ? {} : { maxTimestampAgeMs: options.maxTimestampAgeMs }),
+					appUserId: bot.appUserId,
+					...(Option.isNone(oauthClientId) ? {} : { oauthClientId: oauthClientId.value }),
+					...(Predicate.isUndefined(options.maxBodyBytes) ? {} : { maxBodyBytes: options.maxBodyBytes }),
+					...(Predicate.isUndefined(options.maxTimestampAgeMs)
+						? {}
+						: { maxTimestampAgeMs: options.maxTimestampAgeMs }),
 				})
 			}).pipe(Effect.withSpan('linear.bot.build_webhook_provider')),
 		eventProcessor: ({ namespace }) =>
 			Effect.gen(function* () {
-				yield* readBotConfiguration
+				const bot = yield* readBotConfiguration
+				const oauthClientId = yield* unavailable('read_client_id', readOauthClientId)
 				const linearApi = yield* buildLinearApi
-				const processor = makeLinearEventProcessor({ namespace })
+				const processor = makeLinearEventProcessor({
+					namespace,
+					bot,
+					...(Option.isNone(oauthClientId) ? {} : { oauthClientId: oauthClientId.value }),
+				})
 				return {
 					namespace: processor.namespace,
 					providerName: processor.providerName,

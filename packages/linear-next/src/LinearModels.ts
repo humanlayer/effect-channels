@@ -1,6 +1,15 @@
 import { Schema } from 'effect'
 
-import { LinearIssueId, LinearOrganizationId, LinearTeamId, LinearUserId } from './LinearIdentity'
+import {
+	LinearAgentActivityId,
+	LinearAgentSessionId,
+	LinearCommentId,
+	LinearIssueId,
+	LinearOrganizationId,
+	LinearTeamId,
+	LinearUserId,
+	LinearWebhookDeliveryId,
+} from './LinearIdentity'
 
 export const LinearInstallationRef = Schema.Struct({ organizationId: LinearOrganizationId })
 export interface LinearInstallationRef extends Schema.Schema.Type<typeof LinearInstallationRef> {}
@@ -16,6 +25,8 @@ export const LinearParticipant = Schema.Struct({
 	id: LinearUserId,
 	name: Schema.String,
 	email: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	url: Schema.optionalKey(Schema.NullOr(Schema.String)),
+	avatarUrl: Schema.optionalKey(Schema.NullOr(Schema.String)),
 })
 export interface LinearParticipant extends Schema.Schema.Type<typeof LinearParticipant> {}
 
@@ -29,12 +40,94 @@ export interface LinearTeamSnapshot extends Schema.Schema.Type<typeof LinearTeam
 export const LinearIssueSnapshot = Schema.Struct({
 	ref: LinearIssueRef,
 	identifier: Schema.NonEmptyString,
-	number: Schema.Int,
+	number: Schema.NullOr(Schema.Int),
 	title: Schema.String,
 	description: Schema.NullOr(Schema.String),
-	priority: Schema.Int,
+	priority: Schema.NullOr(Schema.Int),
 	url: Schema.String,
 	team: LinearTeamSnapshot,
 	creator: Schema.NullOr(LinearParticipant),
 })
 export interface LinearIssueSnapshot extends Schema.Schema.Type<typeof LinearIssueSnapshot> {}
+
+export const LinearCommentRef = Schema.Struct({
+	organizationId: LinearOrganizationId,
+	teamId: LinearTeamId,
+	issueId: LinearIssueId,
+	commentId: LinearCommentId,
+})
+export interface LinearCommentRef extends Schema.Schema.Type<typeof LinearCommentRef> {}
+
+export const LinearContent = Schema.Struct({ markdown: Schema.String })
+export interface LinearContent extends Schema.Schema.Type<typeof LinearContent> {}
+
+export const LinearCommentSnapshot = Schema.Struct({
+	ref: LinearCommentRef,
+	issue: LinearIssueRef,
+	parentCommentId: Schema.NullOr(LinearCommentId),
+	content: LinearContent,
+	author: Schema.NullOr(LinearParticipant),
+})
+export interface LinearCommentSnapshot extends Schema.Schema.Type<typeof LinearCommentSnapshot> {}
+
+export const LinearAgentSessionRef = Schema.Struct({
+	organizationId: LinearOrganizationId,
+	appUserId: LinearUserId,
+	sessionId: LinearAgentSessionId,
+	issueId: LinearIssueId,
+})
+export interface LinearAgentSessionRef extends Schema.Schema.Type<typeof LinearAgentSessionRef> {}
+
+export const LinearAgentSessionSnapshot = Schema.Struct({
+	ref: LinearAgentSessionRef,
+	triggerEventId: Schema.NonEmptyString,
+	createdAt: Schema.String,
+	endedAt: Schema.NullOr(Schema.String),
+	commentId: Schema.NullOr(LinearCommentId),
+	sourceCommentId: Schema.NullOr(LinearCommentId),
+	creator: Schema.NullOr(LinearParticipant),
+})
+export interface LinearAgentSessionSnapshot extends Schema.Schema.Type<typeof LinearAgentSessionSnapshot> {}
+
+export const LinearAgentPrompt = Schema.Struct({
+	id: LinearAgentActivityId,
+	body: Schema.String,
+	createdAt: Schema.String,
+	user: LinearParticipant,
+})
+export interface LinearAgentPrompt extends Schema.Schema.Type<typeof LinearAgentPrompt> {}
+
+export const LinearAgentSessionComment = Schema.Struct({
+	id: LinearCommentId,
+	body: Schema.String,
+	issueId: Schema.NullOr(LinearIssueId),
+	userId: Schema.NullOr(LinearUserId),
+})
+export interface LinearAgentSessionComment extends Schema.Schema.Type<typeof LinearAgentSessionComment> {}
+
+export const LinearAgentGuidance = Schema.Struct({
+	body: Schema.String,
+	origin: Schema.String,
+})
+export interface LinearAgentGuidance extends Schema.Schema.Type<typeof LinearAgentGuidance> {}
+
+export const LinearActivityContent = Schema.TaggedUnion({
+	Thought: { body: Schema.String },
+	Response: { body: Schema.String },
+})
+export type LinearActivityContent = typeof LinearActivityContent.Type
+
+export const LinearAgentActivityReceipt = Schema.Struct({
+	activityId: LinearAgentActivityId,
+	sessionId: LinearAgentSessionId,
+})
+export interface LinearAgentActivityReceipt extends Schema.Schema.Type<typeof LinearAgentActivityReceipt> {}
+
+export const LinearCreateAgentActivityRequest = Schema.Struct({
+	organizationId: LinearOrganizationId,
+	sessionId: LinearAgentSessionId,
+	content: LinearActivityContent,
+	ephemeral: Schema.Boolean,
+	deliveryId: LinearWebhookDeliveryId,
+})
+export interface LinearCreateAgentActivityRequest extends Schema.Schema.Type<typeof LinearCreateAgentActivityRequest> {}

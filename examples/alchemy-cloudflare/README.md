@@ -4,13 +4,22 @@ This example receives Slack, GitHub, and Linear webhooks in a Cloudflare Worker,
 
 ## Linear Application setup
 
-Create a Linear Application for the workspace, enable the **Issues** webhook category, and set its webhook URL to:
+Create a Linear Application for the workspace, enable the **Issues**, **Agent Session events**, and **Inbox Notifications** webhook categories, and set its webhook URL to:
 
 ```text
 https://<your-worker-hostname>/integrations/linear/webhook
 ```
 
-Use the app actor and client-credentials flow for this one-workspace example. Put the following values in `.env`:
+Use the app actor with either an application developer token:
+
+```dotenv
+LINEAR_WEBHOOK_SECRET=...
+LINEAR_DEVELOPER_TOKEN=...
+LINEAR_ORGANIZATION_ID=...
+LINEAR_APP_USER_ID=...
+```
+
+or OAuth client credentials:
 
 ```dotenv
 LINEAR_WEBHOOK_SECRET=...
@@ -20,7 +29,13 @@ LINEAR_ORGANIZATION_ID=...
 LINEAR_APP_USER_ID=...
 ```
 
-The configured organization and app-user IDs are explicit identity expectations. Phase 1 admits `Issue.create`, logs safe issue identifiers, and subscribes the issue. Token acquisition remains lazy and no generated bearer token is stored in environment variables, webhook admissions, or Durable Object mailbox state. Agent Session events and Inbox Notifications are not enabled by this slice.
+When both authentication forms are configured, `LINEAR_DEVELOPER_TOKEN` takes precedence. The configured organization and app-user IDs are explicit identity expectations, and both authentication paths verify them with a lazy `viewer` query before the first provider operation. Client credentials acquire and renew short-lived tokens automatically; a developer token remains caller-managed. No credential is placed in webhook admissions or Durable Object mailbox state.
+
+`AgentSessionEvent.created` and `AgentSessionEvent.prompted` are the authoritative agent entry points. Created sessions receive an automatic ephemeral thought before application code runs; both example callbacks then emit a terminal response activity so the Linear card completes. The corresponding Inbox Notification mention and assignment events are still authenticated and decoded, but are acknowledged as supplemental signals instead of starting duplicate work.
+
+Agent activities are at-least-once side effects. The package lets Linear generate activity IDs because Linear's published API does not establish that retrying `agentActivityCreate` with the same caller ID is idempotent. A mailbox retry after a successful activity followed by a callback failure can therefore produce another ephemeral thought or terminal response; the package does not claim exactly-once cards or perform blanket mutation retries.
+
+For a live check, use a unique `channels-live-p2-<timestamp>` marker: mention the app on one issue and delegate a second issue to it. Each action should create one session-scoped mailbox, show an ephemeral thought within ten seconds, invoke `onAgentSessionCreated` once, and finish with the example's terminal response. Send a follow-up message in the session and confirm `onAgentSessionPrompted` uses the same mailbox and produces one response. Corresponding Inbox Notification deliveries must not invoke the legacy mention or assignment callbacks. Logs include only organization, session, issue, delivery, and prompt activity IDs—never prompts, guidance, credentials, signatures, or payload bodies.
 
 ## GitHub App setup
 
@@ -151,9 +166,10 @@ https://<your-worker-hostname>/integrations/slack/webhook
 
 - The Worker verifies provider signatures before admitting events through typed Durable Object RPC.
 - Admissions, processing state, and subscriptions use persistent SQLite-backed Durable Object storage.
-- Mailboxes use debounce delivery: a batch runs after 2 seconds of quiet and no later than 10 seconds after its first event.
+- Slack and GitHub mailboxes use debounce delivery. Linear uses immediate serial delivery so Agent Session acknowledgements can meet Linear's ten-second responsiveness requirement.
 - The alarm claims ordered batches and dispatches them to the matching Slack, GitHub, or Linear processor.
 - GitHub App installation tokens and resolved bot identity are cached by the live GitHub API layer.
+- Linear client-credentials tokens are acquired lazily, identity-verified, and cached only in the processing runtime.
 
 Replace the sample callbacks in `src/Bot.ts` with application behavior. Delivery timing, lease length, and attempt limits are configured there as well.
 

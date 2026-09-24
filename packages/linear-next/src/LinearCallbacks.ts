@@ -1,8 +1,14 @@
-import { Cause, Context, Effect, Layer, Option, Schema } from 'effect'
+import { Cause, Context, Effect, Layer, Option, Predicate, Schema } from 'effect'
 
-import type { LinearIssueCreated } from './LinearCallbackEvents'
+import type { LinearCallbackEventMap } from './LinearCallbackEvents'
 
-export const LinearCallbackName = Schema.Literal('onIssueCreated')
+export const LinearCallbackName = Schema.Literals([
+	'onAgentSessionCreated',
+	'onAgentSessionPrompted',
+	'onIssueCreated',
+	'onMentioned',
+	'onAssigned',
+])
 export type LinearCallbackName = typeof LinearCallbackName.Type
 
 export const LinearCallbackRetryability = Schema.Struct({
@@ -17,7 +23,7 @@ export class LinearCallbackError extends Schema.TaggedError<LinearCallbackError>
 }) {}
 
 export type LinearCallbackHandlers<E, R> = {
-	readonly onIssueCreated?: (event: LinearIssueCreated) => Effect.Effect<void, E, R>
+	readonly [Name in keyof LinearCallbackEventMap]?: (event: LinearCallbackEventMap[Name]) => Effect.Effect<void, E, R>
 }
 
 const retryableFromCause = (cause: Cause.Cause<unknown>): boolean =>
@@ -30,23 +36,24 @@ const retryableFromCause = (cause: Cause.Cause<unknown>): boolean =>
 		},
 	})
 
-const narrowCause = (cause: Cause.Cause<unknown>) => {
+const narrowCause = (callback: LinearCallbackName, cause: Cause.Cause<unknown>) => {
 	if (Cause.hasInterrupts(cause)) {
 		const reasons = cause.reasons.filter((reason) => Cause.isInterruptReason(reason) || Cause.isDieReason(reason))
 		const preserve = Effect.failCause(Cause.fromReasons<never>(reasons))
 		return Cause.hasInterruptsOnly(cause)
 			? preserve
 			: Effect.logError('Linear application callback was interrupted with additional failures', cause).pipe(
+					Effect.annotateLogs({ callback, classification: 'interrupted_with_failure' }),
 					Effect.andThen(preserve),
 				)
 	}
 	const unexpected = Cause.hasDies(cause)
 	return Effect.logError('Linear application callback failed', cause).pipe(
-		Effect.annotateLogs({ callback: 'onIssueCreated', classification: unexpected ? 'unexpected_defect' : 'failed' }),
+		Effect.annotateLogs({ callback, classification: unexpected ? 'unexpected_defect' : 'failed' }),
 		Effect.andThen(
 			Effect.fail(
 				LinearCallbackError.make({
-					callback: 'onIssueCreated',
+					callback,
 					reason: unexpected ? 'unexpected' : 'failed',
 					retryable: unexpected ? true : retryableFromCause(cause),
 				}),
@@ -55,28 +62,55 @@ const narrowCause = (cause: Cause.Cause<unknown>) => {
 	)
 }
 
+const wrapCallback = <Name extends keyof LinearCallbackEventMap, E, R>(
+	context: Context.Context<R>,
+	callback: Name,
+	handler: (event: LinearCallbackEventMap[Name]) => Effect.Effect<void, E, R>,
+) =>
+	Effect.fn(`linear.callbacks.${callback}`)((event: LinearCallbackEventMap[Name]) =>
+		Effect.suspend(() => handler(event)).pipe(
+			Effect.provide(context),
+			Effect.catchCause((cause) => narrowCause(callback, cause)),
+		),
+	)
+
 export class LinearCallbacks extends Context.Service<
 	LinearCallbacks,
 	LinearCallbackHandlers<LinearCallbackError, never>
->()(
-	'@humanlayer/channels-linear-next/LinearCallbacks',
-) {
+>()('@humanlayer/channels-linear-next/LinearCallbacks') {
 	static readonly layer = <E, R>(handlers: LinearCallbackHandlers<E, R>): Layer.Layer<LinearCallbacks, never, R> =>
 		Layer.effect(
 			LinearCallbacks,
 			Effect.gen(function* () {
 				const context = yield* Effect.context<R>()
 				return LinearCallbacks.of({
-					...(handlers.onIssueCreated === undefined
+					...(Predicate.isUndefined(handlers.onAgentSessionCreated)
 						? {}
 						: {
-								onIssueCreated: Effect.fn('linear.callbacks.onIssueCreated')((event: LinearIssueCreated) =>
-									Effect.suspend(() => handlers.onIssueCreated?.(event) ?? Effect.void).pipe(
-										Effect.provide(context),
-										Effect.catchCause(narrowCause),
-									),
+								onAgentSessionCreated: wrapCallback(
+									context,
+									'onAgentSessionCreated',
+									handlers.onAgentSessionCreated,
 								),
 							}),
+					...(Predicate.isUndefined(handlers.onAgentSessionPrompted)
+						? {}
+						: {
+								onAgentSessionPrompted: wrapCallback(
+									context,
+									'onAgentSessionPrompted',
+									handlers.onAgentSessionPrompted,
+								),
+							}),
+					...(Predicate.isUndefined(handlers.onIssueCreated)
+						? {}
+						: { onIssueCreated: wrapCallback(context, 'onIssueCreated', handlers.onIssueCreated) }),
+					...(Predicate.isUndefined(handlers.onMentioned)
+						? {}
+						: { onMentioned: wrapCallback(context, 'onMentioned', handlers.onMentioned) }),
+					...(Predicate.isUndefined(handlers.onAssigned)
+						? {}
+						: { onAssigned: wrapCallback(context, 'onAssigned', handlers.onAssigned) }),
 				})
 			}),
 		)
