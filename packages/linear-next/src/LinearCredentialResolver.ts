@@ -1,7 +1,9 @@
-import { Clock, Context, Effect, Option, Redacted, Ref, Schema, Semaphore } from 'effect'
+import { Clock, Context, Effect, Layer, Option, Redacted, Ref, Schema, Semaphore } from 'effect'
 import * as HttpClient from 'effect/unstable/http/HttpClient'
+import * as HttpClientRequest from 'effect/unstable/http/HttpClientRequest'
 
 import { getViewerIdentity } from './api/GetViewerIdentity'
+import { narrowLinearProviderError } from './api/LinearApiErrors'
 import { acquireClientCredentialsToken } from './auth/AcquireClientCredentialsToken'
 import { LinearApiError } from './LinearApi'
 import { LinearOrganizationId, LinearUserId } from './LinearIdentity'
@@ -12,7 +14,7 @@ export const LinearVerifiedCredential = Schema.Struct({
 	organizationId: LinearOrganizationId,
 	appUserId: LinearUserId,
 })
-export interface LinearVerifiedCredential extends Schema.Schema.Type<typeof LinearVerifiedCredential> {}
+export type LinearVerifiedCredential = typeof LinearVerifiedCredential.Type
 
 export type LinearCredentialResolverOptions = {
 	readonly clientId: string
@@ -30,11 +32,10 @@ export type LinearDeveloperTokenResolverOptions = {
 export class LinearCredentialResolver extends Context.Service<
 	LinearCredentialResolver,
 	{
+		readonly organizationId: LinearOrganizationId
 		readonly canRefresh: boolean
-		readonly resolve: (
-			organizationId: LinearOrganizationId,
-		) => Effect.Effect<LinearVerifiedCredential, LinearApiError>
-		readonly invalidate: (organizationId: LinearOrganizationId) => Effect.Effect<void>
+		readonly resolve: Effect.Effect<LinearVerifiedCredential, LinearApiError>
+		readonly invalidate: Effect.Effect<void>
 	}
 >()('@humanlayer/channels-linear-next/LinearCredentialResolver') {}
 
@@ -55,8 +56,10 @@ const makeResolver = Effect.fn('linear.credentials.make')(function* (options: {
 
 	const acquire = Effect.gen(function* () {
 		const token = yield* options.acquire.pipe(Effect.provideService(HttpClient.HttpClient, client))
-		const identity = yield* getViewerIdentity(token.accessToken).pipe(
-			Effect.provideService(HttpClient.HttpClient, client),
+		const authenticatedClient = client.pipe(HttpClient.mapRequest(HttpClientRequest.bearerToken(token.accessToken)))
+		const identity = yield* getViewerIdentity().pipe(
+			Effect.provideService(HttpClient.HttpClient, authenticatedClient),
+			Effect.mapError(narrowLinearProviderError),
 		)
 		if (identity.viewer.id !== options.appUserId || identity.viewer.organization.id !== options.organizationId)
 			return yield* LinearApiError.make({
@@ -74,13 +77,7 @@ const makeResolver = Effect.fn('linear.credentials.make')(function* (options: {
 		return verified
 	})
 
-	const resolve = Effect.fn('linear.credentials.resolve')(function* (organizationId: LinearOrganizationId) {
-		if (organizationId !== options.organizationId)
-			return yield* LinearApiError.make({
-				operation: 'viewer_identity',
-				reason: 'identity_mismatch',
-				retryable: false,
-			})
+	const resolve = Effect.fn('linear.credentials.resolve')(function* () {
 		const now = yield* Clock.currentTimeMillis
 		const cached = yield* Ref.get(credential)
 		if (Option.isSome(cached) && cached.value.expiresAt > now) return cached.value
@@ -94,10 +91,10 @@ const makeResolver = Effect.fn('linear.credentials.make')(function* (options: {
 	})
 
 	return LinearCredentialResolver.of({
+		organizationId: options.organizationId,
 		canRefresh: options.canRefresh,
-		resolve,
-		invalidate: (organizationId) =>
-			organizationId === options.organizationId ? Ref.set(credential, Option.none()) : Effect.void,
+		resolve: resolve(),
+		invalidate: Ref.set(credential, Option.none()),
 	})
 })
 
@@ -125,3 +122,9 @@ export const makeLinearDeveloperTokenResolver = (options: LinearDeveloperTokenRe
 		organizationId: options.organizationId,
 		appUserId: options.appUserId,
 	})
+
+export const LinearCredentialResolverClientCredentials = (options: LinearCredentialResolverOptions) =>
+	Layer.effect(LinearCredentialResolver, makeLinearCredentialResolver(options))
+
+export const LinearCredentialResolverDeveloperToken = (options: LinearDeveloperTokenResolverOptions) =>
+	Layer.effect(LinearCredentialResolver, makeLinearDeveloperTokenResolver(options))

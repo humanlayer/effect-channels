@@ -19,7 +19,7 @@ export const LinearBotConfiguration = Schema.Struct({
 	organizationId: LinearOrganizationId,
 	appUserId: LinearUserId,
 })
-export interface LinearBotConfiguration extends Schema.Schema.Type<typeof LinearBotConfiguration> {}
+export type LinearBotConfiguration = typeof LinearBotConfiguration.Type
 
 export type MakeOptions<E, R, ApiError, ApiRequirements> = {
 	readonly webhookSecret: Config.Config<Redacted.Redacted<string>>

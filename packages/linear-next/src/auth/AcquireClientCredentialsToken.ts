@@ -15,7 +15,7 @@ export const LinearUnverifiedCredential = Schema.Struct({
 	accessToken: Schema.Redacted(Schema.NonEmptyString, { disallowJsonEncode: true }),
 	expiresAt: Schema.Finite,
 })
-export interface LinearUnverifiedCredential extends Schema.Schema.Type<typeof LinearUnverifiedCredential> {}
+export type LinearUnverifiedCredential = typeof LinearUnverifiedCredential.Type
 
 export type AcquireClientCredentialsTokenInput = {
 	readonly clientId: string

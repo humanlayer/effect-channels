@@ -36,7 +36,7 @@ const makeLayer = <E>(
 ) =>
 	Layer.mergeAll(
 		LinearCallbacks.layer(handlers),
-		Layer.succeed(LinearApi, LinearApi.of({ createAgentActivity })),
+		Layer.mock(LinearApi, { createAgentActivity }),
 		Layer.mock(MailboxSubscriptions, {
 			isSubscribed: () => Effect.succeed(false),
 			subscribe: () => Effect.die('not used'),

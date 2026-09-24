@@ -1,4 +1,4 @@
-import { Redacted, Schema } from 'effect'
+import { Schema } from 'effect'
 
 import { LinearOrganizationId, LinearUserId } from '../LinearIdentity'
 import { linearGraphql } from './LinearGraphql'
@@ -17,11 +17,10 @@ const query = `query LinearViewerIdentity {
   }
 }`
 
-export const getViewerIdentity = (credential: Redacted.Redacted<string>) =>
+export const getViewerIdentity = () =>
 	linearGraphql({
 		operation: 'viewer_identity',
 		query,
 		variables: {},
-		credential,
 		data: ViewerIdentityData,
 	})

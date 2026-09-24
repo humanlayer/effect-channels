@@ -108,7 +108,9 @@ describe('LinearBot.make', () => {
 					LinearApi,
 					Effect.gen(function* () {
 						yield* Config.string('CUSTOM_LINEAR_API_CONFIGURATION')
-						return LinearApi.of({ createAgentActivity: () => Effect.die('not used') })
+						return LinearApi.of({
+							createAgentActivity: () => Effect.die('not used'),
+						} as unknown as Parameters<typeof LinearApi.of>[0])
 					}),
 				),
 				handlers: {},

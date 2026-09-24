@@ -21,6 +21,12 @@ export type LinearReactionId = typeof LinearReactionId.Type
 export const LinearAttachmentId = Schema.NonEmptyString.pipe(Schema.brand('LinearAttachmentId'))
 export type LinearAttachmentId = typeof LinearAttachmentId.Type
 
+export const LinearWorkflowStateId = Schema.NonEmptyString.pipe(Schema.brand('LinearWorkflowStateId'))
+export type LinearWorkflowStateId = typeof LinearWorkflowStateId.Type
+
+export const LinearIssueLabelId = Schema.NonEmptyString.pipe(Schema.brand('LinearIssueLabelId'))
+export type LinearIssueLabelId = typeof LinearIssueLabelId.Type
+
 export const LinearNotificationId = Schema.NonEmptyString.pipe(Schema.brand('LinearNotificationId'))
 export type LinearNotificationId = typeof LinearNotificationId.Type
 

@@ -6,22 +6,24 @@ import {
 	LinearAttachmentId,
 	LinearCommentId,
 	LinearIssueId,
+	LinearIssueLabelId,
 	LinearOrganizationId,
 	LinearReactionId,
 	LinearTeamId,
 	LinearUserId,
 	LinearWebhookDeliveryId,
+	LinearWorkflowStateId,
 } from './LinearIdentity'
 
 export const LinearInstallationRef = Schema.Struct({ organizationId: LinearOrganizationId })
-export interface LinearInstallationRef extends Schema.Schema.Type<typeof LinearInstallationRef> {}
+export type LinearInstallationRef = typeof LinearInstallationRef.Type
 
 export const LinearIssueRef = Schema.Struct({
 	organizationId: LinearOrganizationId,
 	teamId: Schema.NullOr(LinearTeamId),
 	issueId: LinearIssueId,
 })
-export interface LinearIssueRef extends Schema.Schema.Type<typeof LinearIssueRef> {}
+export type LinearIssueRef = typeof LinearIssueRef.Type
 
 export const LinearParticipant = Schema.Struct({
 	id: LinearUserId,
@@ -30,14 +32,14 @@ export const LinearParticipant = Schema.Struct({
 	url: Schema.optionalKey(Schema.NullOr(Schema.String)),
 	avatarUrl: Schema.optionalKey(Schema.NullOr(Schema.String)),
 })
-export interface LinearParticipant extends Schema.Schema.Type<typeof LinearParticipant> {}
+export type LinearParticipant = typeof LinearParticipant.Type
 
 export const LinearTeamSnapshot = Schema.Struct({
 	id: LinearTeamId,
 	key: Schema.NonEmptyString,
 	name: Schema.String,
 })
-export interface LinearTeamSnapshot extends Schema.Schema.Type<typeof LinearTeamSnapshot> {}
+export type LinearTeamSnapshot = typeof LinearTeamSnapshot.Type
 
 export const LinearIssueSnapshot = Schema.Struct({
 	ref: LinearIssueRef,
@@ -50,7 +52,7 @@ export const LinearIssueSnapshot = Schema.Struct({
 	team: Schema.NullOr(LinearTeamSnapshot),
 	creator: Schema.NullOr(LinearParticipant),
 })
-export interface LinearIssueSnapshot extends Schema.Schema.Type<typeof LinearIssueSnapshot> {}
+export type LinearIssueSnapshot = typeof LinearIssueSnapshot.Type
 
 export const LinearCommentRef = Schema.Struct({
 	organizationId: LinearOrganizationId,
@@ -58,10 +60,10 @@ export const LinearCommentRef = Schema.Struct({
 	issueId: LinearIssueId,
 	commentId: LinearCommentId,
 })
-export interface LinearCommentRef extends Schema.Schema.Type<typeof LinearCommentRef> {}
+export type LinearCommentRef = typeof LinearCommentRef.Type
 
 export const LinearContent = Schema.Struct({ markdown: Schema.String })
-export interface LinearContent extends Schema.Schema.Type<typeof LinearContent> {}
+export type LinearContent = typeof LinearContent.Type
 
 export const LinearCommentSnapshot = Schema.Struct({
 	ref: LinearCommentRef,
@@ -70,7 +72,7 @@ export const LinearCommentSnapshot = Schema.Struct({
 	content: LinearContent,
 	author: Schema.NullOr(LinearParticipant),
 })
-export interface LinearCommentSnapshot extends Schema.Schema.Type<typeof LinearCommentSnapshot> {}
+export type LinearCommentSnapshot = typeof LinearCommentSnapshot.Type
 
 export const LinearReactionSnapshot = Schema.Struct({
 	id: LinearReactionId,
@@ -79,7 +81,7 @@ export const LinearReactionSnapshot = Schema.Struct({
 	emoji: Schema.String,
 	author: Schema.NullOr(LinearParticipant),
 })
-export interface LinearReactionSnapshot extends Schema.Schema.Type<typeof LinearReactionSnapshot> {}
+export type LinearReactionSnapshot = typeof LinearReactionSnapshot.Type
 
 export const LinearIssueAttachmentSnapshot = Schema.Struct({
 	id: LinearAttachmentId,
@@ -87,9 +89,57 @@ export const LinearIssueAttachmentSnapshot = Schema.Struct({
 	title: Schema.String,
 	subtitle: Schema.NullOr(Schema.String),
 	url: Schema.String,
-	metadata: Schema.optionalKey(Schema.Json),
+	metadata: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json)),
 })
-export interface LinearIssueAttachmentSnapshot extends Schema.Schema.Type<typeof LinearIssueAttachmentSnapshot> {}
+export type LinearIssueAttachmentSnapshot = typeof LinearIssueAttachmentSnapshot.Type
+
+export const LinearWorkflowState = Schema.Struct({
+	id: LinearWorkflowStateId,
+	name: Schema.String,
+	type: Schema.String,
+})
+export type LinearWorkflowState = typeof LinearWorkflowState.Type
+
+export const LinearIssueLabel = Schema.Struct({ id: LinearIssueLabelId, name: Schema.String, color: Schema.String })
+export type LinearIssueLabel = typeof LinearIssueLabel.Type
+
+export const LinearIssueInfo = Schema.Struct({
+	ref: LinearIssueRef,
+	identifier: Schema.NonEmptyString,
+	title: Schema.String,
+	description: Schema.NullOr(Schema.String),
+	priority: Schema.Int,
+	url: Schema.String,
+	state: LinearWorkflowState,
+	labels: Schema.Array(LinearIssueLabel),
+	assignee: Schema.NullOr(LinearParticipant),
+	delegate: Schema.NullOr(LinearParticipant),
+})
+export type LinearIssueInfo = typeof LinearIssueInfo.Type
+
+export const LinearUser = Schema.Struct({
+	id: LinearUserId,
+	name: Schema.String,
+	email: Schema.NullOr(Schema.String),
+	active: Schema.Boolean,
+	app: Schema.Boolean,
+	isAssignable: Schema.Boolean,
+	canAccessAnyPublicTeam: Schema.Boolean,
+	teamIds: Schema.Array(LinearTeamId),
+})
+export type LinearUser = typeof LinearUser.Type
+
+export const LinearAppUser = Schema.Struct({ ...LinearUser.fields, app: Schema.Literal(true) })
+export type LinearAppUser = typeof LinearAppUser.Type
+
+export const LinearPageInfo = Schema.Struct({ endCursor: Schema.NullOr(Schema.String), hasNextPage: Schema.Boolean })
+export type LinearPageInfo = typeof LinearPageInfo.Type
+
+export const LinearUserPage = Schema.Struct({ users: Schema.Array(LinearUser), pageInfo: LinearPageInfo })
+export type LinearUserPage = typeof LinearUserPage.Type
+
+export const LinearAppUserPage = Schema.Struct({ users: Schema.Array(LinearAppUser), pageInfo: LinearPageInfo })
+export type LinearAppUserPage = typeof LinearAppUserPage.Type
 
 export const LinearAgentSessionRef = Schema.Struct({
 	organizationId: LinearOrganizationId,
@@ -97,7 +147,7 @@ export const LinearAgentSessionRef = Schema.Struct({
 	sessionId: LinearAgentSessionId,
 	issueId: LinearIssueId,
 })
-export interface LinearAgentSessionRef extends Schema.Schema.Type<typeof LinearAgentSessionRef> {}
+export type LinearAgentSessionRef = typeof LinearAgentSessionRef.Type
 
 export const LinearAgentSessionSnapshot = Schema.Struct({
 	ref: LinearAgentSessionRef,
@@ -108,7 +158,7 @@ export const LinearAgentSessionSnapshot = Schema.Struct({
 	sourceCommentId: Schema.NullOr(LinearCommentId),
 	creator: Schema.NullOr(LinearParticipant),
 })
-export interface LinearAgentSessionSnapshot extends Schema.Schema.Type<typeof LinearAgentSessionSnapshot> {}
+export type LinearAgentSessionSnapshot = typeof LinearAgentSessionSnapshot.Type
 
 export const LinearAgentPrompt = Schema.Struct({
 	id: LinearAgentActivityId,
@@ -116,7 +166,7 @@ export const LinearAgentPrompt = Schema.Struct({
 	createdAt: Schema.String,
 	user: LinearParticipant,
 })
-export interface LinearAgentPrompt extends Schema.Schema.Type<typeof LinearAgentPrompt> {}
+export type LinearAgentPrompt = typeof LinearAgentPrompt.Type
 
 export const LinearAgentSessionComment = Schema.Struct({
 	id: LinearCommentId,
@@ -124,13 +174,13 @@ export const LinearAgentSessionComment = Schema.Struct({
 	issueId: Schema.NullOr(LinearIssueId),
 	userId: Schema.NullOr(LinearUserId),
 })
-export interface LinearAgentSessionComment extends Schema.Schema.Type<typeof LinearAgentSessionComment> {}
+export type LinearAgentSessionComment = typeof LinearAgentSessionComment.Type
 
 export const LinearAgentGuidance = Schema.Struct({
 	body: Schema.String,
 	origin: Schema.String,
 })
-export interface LinearAgentGuidance extends Schema.Schema.Type<typeof LinearAgentGuidance> {}
+export type LinearAgentGuidance = typeof LinearAgentGuidance.Type
 
 export const LinearActivityContent = Schema.TaggedUnion({
 	Thought: { body: Schema.String },
@@ -142,7 +192,7 @@ export const LinearAgentActivityReceipt = Schema.Struct({
 	activityId: LinearAgentActivityId,
 	sessionId: LinearAgentSessionId,
 })
-export interface LinearAgentActivityReceipt extends Schema.Schema.Type<typeof LinearAgentActivityReceipt> {}
+export type LinearAgentActivityReceipt = typeof LinearAgentActivityReceipt.Type
 
 export const LinearCreateAgentActivityRequest = Schema.Struct({
 	organizationId: LinearOrganizationId,
@@ -151,4 +201,4 @@ export const LinearCreateAgentActivityRequest = Schema.Struct({
 	ephemeral: Schema.Boolean,
 	deliveryId: LinearWebhookDeliveryId,
 })
-export interface LinearCreateAgentActivityRequest extends Schema.Schema.Type<typeof LinearCreateAgentActivityRequest> {}
+export type LinearCreateAgentActivityRequest = typeof LinearCreateAgentActivityRequest.Type

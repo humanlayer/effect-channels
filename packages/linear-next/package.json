@@ -10,7 +10,8 @@
 		".": "./src/index.ts"
 	},
 	"scripts": {
-		"typecheck": "tsc --noEmit -p tsconfig.json"
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"smoke:api:live": "bun run scripts/linear-api-live-smoke.ts"
 	},
 	"dependencies": {
 		"@humanlayer/channels-delivery-next": "workspace:*",

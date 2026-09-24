@@ -1,12 +1,12 @@
-import { Effect, Redacted, Schema } from 'effect'
+import { Effect, Schema } from 'effect'
 
-import { LinearApiError } from '../LinearApi'
 import { LinearAgentActivityId, LinearAgentSessionId } from '../LinearIdentity'
 import {
 	LinearActivityContent,
 	LinearAgentActivityReceipt,
 	type LinearCreateAgentActivityRequest,
 } from '../LinearModels'
+import { LinearProviderError } from './LinearApiErrors'
 import { linearGraphql } from './LinearGraphql'
 
 const CreateAgentActivityData = Schema.Struct({
@@ -29,10 +29,7 @@ const mutation = `mutation LinearAgentActivityCreate($input: AgentActivityCreate
   }
 }`
 
-export const createAgentActivity = (
-	request: LinearCreateAgentActivityRequest,
-	credential: Redacted.Redacted<string>,
-) => {
+export const createAgentActivity = (request: LinearCreateAgentActivityRequest) => {
 	const content = LinearActivityContent.match(request.content, {
 		Thought: ({ body }) => ({ type: 'thought', body }),
 		Response: ({ body }) => ({ type: 'response', body }),
@@ -47,16 +44,15 @@ export const createAgentActivity = (
 				ephemeral: request.ephemeral,
 			},
 		},
-		credential,
 		data: CreateAgentActivityData,
 	}).pipe(
 		Effect.flatMap((data) => {
 			const activity = data.agentActivityCreate.agentActivity
 			if (!data.agentActivityCreate.success || activity.agentSession.id !== request.sessionId)
 				return Effect.fail(
-					LinearApiError.make({
+					LinearProviderError.make({
 						operation: 'create_agent_activity',
-						reason: 'rejected',
+						reason: 'graphql',
 						retryable: false,
 					}),
 				)

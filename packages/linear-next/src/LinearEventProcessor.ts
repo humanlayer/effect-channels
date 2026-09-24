@@ -447,7 +447,18 @@ const reactionFromResource = (
 		commentId: nullable(webhook.data.commentId ?? webhook.data.comment?.id),
 		emoji: webhook.data.emoji,
 		author: participantOrNull(webhook.data.user),
+		ref: {
+			issue: LinearIssueRef.make({
+				organizationId: webhook.organizationId,
+				teamId: webhook.data.issue?.teamId ?? null,
+				issueId,
+			}),
+			reactionId: webhook.data.id,
+		},
 	})
+
+const isJsonObject = (value: Schema.Json): value is Schema.JsonObject =>
+	typeof value === 'object' && value !== null && !Array.isArray(value)
 
 const attachmentFromResource = (webhook: Extract<LinearResourceWebhookEvent, { readonly type: 'Attachment' }>) =>
 	LinearIssueAttachment.make({
@@ -456,7 +467,15 @@ const attachmentFromResource = (webhook: Extract<LinearResourceWebhookEvent, { r
 		title: webhook.data.title,
 		subtitle: nullable(webhook.data.subtitle),
 		url: webhook.data.url,
-		metadata: webhook.data.metadata,
+		...(isJsonObject(webhook.data.metadata) ? { metadata: webhook.data.metadata } : {}),
+		ref: {
+			issue: LinearIssueRef.make({
+				organizationId: webhook.organizationId,
+				teamId: null,
+				issueId: webhook.data.issueId,
+			}),
+			attachmentId: webhook.data.id,
+		},
 	})
 
 const normalizeResourceWebhook = (
