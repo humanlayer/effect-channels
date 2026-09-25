@@ -16,26 +16,25 @@ export type LinearHttpRequest = {
 	readonly request: HttpClientRequest
 }
 
-export type LinearHttpClientShape = {
-	readonly organizationId: LinearOrganizationId
-	readonly canRefresh: boolean
-	readonly invalidateCredential: Effect.Effect<void>
-	readonly execute: (
-		input: LinearHttpRequest,
-	) => Effect.Effect<HttpClientResponse, LinearTransportError | LinearApiError>
-	/**
-	 * Sends one absolute HTTPS file request without following redirects or recording its URL in client spans. The
-	 * bearer credential is attached only when the request targets the approved Linear upload origin.
-	 */
-	readonly executeFile: (
-		input: LinearHttpRequest,
-	) => Effect.Effect<HttpClientResponse, LinearTransportError | LinearFileOriginRejectedError | LinearApiError>
-}
-
 /** One organization-scoped, bearer-authenticated transport for Linear API operations. */
-export class LinearHttpClient extends Context.Service<LinearHttpClient, LinearHttpClientShape>()(
-	'@humanlayer/channels-linear-next/LinearHttpClient',
-) {}
+export class LinearHttpClient extends Context.Service<
+	LinearHttpClient,
+	{
+		readonly organizationId: LinearOrganizationId
+		readonly canRefresh: boolean
+		readonly invalidateCredential: Effect.Effect<void>
+		readonly execute: (
+			input: LinearHttpRequest,
+		) => Effect.Effect<HttpClientResponse, LinearTransportError | LinearApiError>
+		/**
+		 * Sends one absolute HTTPS file request without following redirects or recording its URL in client spans. The
+		 * bearer credential is attached only when the request targets the approved Linear upload origin.
+		 */
+		readonly executeFile: (
+			input: LinearHttpRequest,
+		) => Effect.Effect<HttpClientResponse, LinearTransportError | LinearFileOriginRejectedError | LinearApiError>
+	}
+>()('@humanlayer/channels-linear-next/LinearHttpClient') {}
 
 const executeAuthenticated = (
 	client: HttpClient.HttpClient,
@@ -91,7 +90,7 @@ const executeFileRequest = (
 export const makeAuthenticatedLinearHttpClient = (
 	client: HttpClient.HttpClient,
 	credentials: LinearCredentialResolver['Service'],
-): LinearHttpClientShape => ({
+): LinearHttpClient['Service'] => ({
 	organizationId: credentials.organizationId,
 	canRefresh: credentials.canRefresh,
 	invalidateCredential: credentials.invalidate,
@@ -114,7 +113,7 @@ export const makeFixedCredentialLinearHttpClient = (
 	client: HttpClient.HttpClient,
 	organizationId: LinearOrganizationId,
 	accessToken: Redacted.Redacted<string>,
-): LinearHttpClientShape => ({
+): LinearHttpClient['Service'] => ({
 	organizationId,
 	canRefresh: false,
 	invalidateCredential: Effect.void,

@@ -9,7 +9,7 @@ import {
 	narrowLinearProviderStreamErrors,
 } from './api/LinearApiErrors'
 import { projectLinearUploadedFile } from './api/LinearApiProjections'
-import { LinearHttpClient, LinearHttpClientLive, type LinearHttpClientShape } from './api/LinearHttpClient'
+import { LinearHttpClient, LinearHttpClientLive } from './api/LinearHttpClient'
 import {
 	createAttachment,
 	createComment,
@@ -78,7 +78,7 @@ const readRetryPolicy = Schedule.exponential('50 millis').pipe(
 const uploadedAttachmentSubtitle = (size: number) => `${(size / 1024).toFixed(1)} KB`
 
 const apiService = (
-	client: LinearHttpClientShape,
+	client: LinearHttpClient['Service'],
 	http: HttpClient.HttpClient,
 	filePolicy: LinearFileTransferPolicy,
 ) => {
