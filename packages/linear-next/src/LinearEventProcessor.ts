@@ -9,7 +9,7 @@ import {
 	ProviderEventInvalid,
 	type ProviderEventProcessor,
 } from '@humanlayer/channels-delivery-next'
-import { Effect, Match, Predicate, Schema } from 'effect'
+import { Array as Arr, Effect, Match, Predicate, Schema } from 'effect'
 
 import { LinearApi } from './LinearApi'
 import {
@@ -23,6 +23,7 @@ import {
 	LinearCommentUpdated,
 	LinearCommentReaction,
 	LinearIssueActivity,
+	type LinearIssueCallbackEvent,
 	LinearIssueAssigned,
 	LinearIssueCreated,
 	LinearIssueAttachmentCreated,
@@ -72,7 +73,11 @@ import {
 	LinearIssueAttachment,
 	LinearReaction,
 } from './LinearResources'
-import type { LinearAppUserNotificationWebhook, LinearResourceWebhookEvent } from './LinearWebhookEventSchemas'
+import type {
+	LinearAppUserNotificationWebhook,
+	LinearLifecycleWebhookEvent,
+	LinearResourceWebhookEvent,
+} from './LinearWebhookEventSchemas'
 import {
 	normalizeLinearAgentSessionWebhook,
 	normalizeLinearAppUserNotificationWebhook,
@@ -126,7 +131,7 @@ const parseIssueAddress = (resourceId: string) =>
 		const encoded = parts[3]
 		if (Predicate.isUndefined(encoded)) return yield* identityMismatch()
 		const decoded = yield* Effect.try({ try: () => decodeURIComponent(encoded), catch: identityMismatch })
-		return yield* Schema.decodeUnknownEffect(LinearIssueId)(decoded).pipe(Effect.mapError(identityMismatch))
+		return yield* Schema.decodeEffect(LinearIssueId)(decoded).pipe(Effect.mapError(identityMismatch))
 	})
 
 const parseAgentSessionAddress = (resourceId: string) =>
@@ -136,11 +141,11 @@ const parseAgentSessionAddress = (resourceId: string) =>
 		const encoded = resourceId.slice(prefix.length)
 		if (encoded.length === 0) return yield* identityMismatch()
 		const decoded = yield* Effect.try({ try: () => decodeURIComponent(encoded), catch: identityMismatch })
-		return yield* Schema.decodeUnknownEffect(LinearAgentSessionId)(decoded).pipe(Effect.mapError(identityMismatch))
+		return yield* Schema.decodeEffect(LinearAgentSessionId)(decoded).pipe(Effect.mapError(identityMismatch))
 	})
 
 const participant = (value: {
-	readonly id: (typeof LinearParticipant.Type)['id']
+	readonly id: LinearParticipant['id']
 	readonly name: string
 	readonly email?: string | null
 	readonly url?: string | null
@@ -157,7 +162,7 @@ const participant = (value: {
 const participantOrNull = (
 	value:
 		| {
-				readonly id: (typeof LinearParticipant.Type)['id']
+				readonly id: LinearParticipant['id']
 				readonly name?: string
 				readonly email?: string | null
 				readonly url?: string | null
@@ -182,7 +187,7 @@ type IssueSnapshotInput = {
 }
 
 const issueFromSnapshot = (
-	organizationId: (typeof LinearIssueRef.Type)['organizationId'],
+	organizationId: LinearIssueRef['organizationId'],
 	issue: IssueSnapshotInput,
 	mailboxKey: string,
 ) => {
@@ -202,10 +207,8 @@ const issueFromSnapshot = (
 	})
 }
 
-const issueFromCreate = (
-	webhook: Extract<typeof LinearSupportedWebhook.Type, { readonly type: 'Issue' }>,
-	mailboxKey: string,
-) => issueFromSnapshot(webhook.organizationId, webhook.data, mailboxKey)
+const issueFromCreate = (webhook: Extract<LinearSupportedWebhook, { readonly type: 'Issue' }>, mailboxKey: string) =>
+	issueFromSnapshot(webhook.organizationId, webhook.data, mailboxKey)
 
 const issueFromNotification = (webhook: LinearAppUserNotificationWebhook, mailboxKey: string) => {
 	const issue = webhook.notification.issue
@@ -301,7 +304,7 @@ const commentFromNotification = (
 
 const normalizeWebhook = (
 	webhook:
-		| Extract<typeof LinearSupportedWebhook.Type, { readonly type: 'Issue'; readonly action: 'create' }>
+		| Extract<LinearSupportedWebhook, { readonly type: 'Issue'; readonly action: 'create' }>
 		| LinearAppUserNotificationWebhook,
 	admission: DeliveryAdmission,
 	mailboxKey: string,
@@ -397,14 +400,14 @@ const hasIssueSnapshot = (webhook: LinearResourceWebhookEvent) =>
 	((webhook.type === 'Comment' || webhook.type === 'Reaction') && Predicate.isNotNullish(webhook.data.issue))
 
 const issueFromResource = (webhook: LinearResourceWebhookEvent, issueId: LinearIssueId, mailboxKey: string) => {
-	const snapshot =
-		webhook.type === 'Issue'
-			? webhook.data
-			: webhook.type === 'Reaction'
-				? webhook.data.issue
-				: webhook.type === 'Comment'
-					? webhook.data.issue
-					: undefined
+	const snapshot = Match.value(webhook).pipe(
+		Match.discriminators('type')({
+			Issue: ({ data }) => data,
+			Reaction: ({ data }) => data.issue,
+			Comment: ({ data }) => data.issue,
+		}),
+		Match.orElse(() => undefined),
+	)
 	if (Predicate.isNotNullish(snapshot)) return issueFromSnapshot(webhook.organizationId, snapshot, mailboxKey)
 	return LinearIssue.make({
 		ref: LinearIssueRef.make({
@@ -466,17 +469,15 @@ const reactionFromResource = (
 		},
 	})
 
-const isJsonObject = (value: Schema.Json): value is Schema.JsonObject =>
-	typeof value === 'object' && value !== null && !Array.isArray(value)
+const isJsonObject = (value: Schema.Json): value is Schema.JsonObject => Predicate.isObject(value)
 
-const attachmentFromResource = (webhook: Extract<LinearResourceWebhookEvent, { readonly type: 'Attachment' }>) =>
-	LinearIssueAttachment.make({
+const attachmentFromResource = (webhook: Extract<LinearResourceWebhookEvent, { readonly type: 'Attachment' }>) => {
+	const fields = {
 		id: webhook.data.id,
 		issueId: webhook.data.issueId,
 		title: webhook.data.title,
 		subtitle: nullable(webhook.data.subtitle),
 		url: webhook.data.url,
-		...(isJsonObject(webhook.data.metadata) ? { metadata: webhook.data.metadata } : {}),
 		ref: {
 			issue: LinearIssueRef.make({
 				organizationId: webhook.organizationId,
@@ -485,7 +486,11 @@ const attachmentFromResource = (webhook: Extract<LinearResourceWebhookEvent, { r
 			}),
 			attachmentId: webhook.data.id,
 		},
-	})
+	}
+	const metadata = webhook.data.metadata
+	if (isJsonObject(metadata)) return LinearIssueAttachment.make({ ...fields, metadata })
+	return LinearIssueAttachment.make(fields)
+}
 
 const normalizeResourceWebhook = (
 	webhook: LinearResourceWebhookEvent,
@@ -497,9 +502,7 @@ const normalizeResourceWebhook = (
 	const actor = participantOrNull(webhook.actor)
 	if (webhook.type === 'Issue') {
 		if (webhook.action === 'update') {
-			const { changes, otherChanges } = normalizeLinearIssueChanges(
-				webhook.updatedFrom as Readonly<Record<string, unknown>>,
-			)
+			const { changes, otherChanges } = normalizeLinearIssueChanges(webhook.updatedFrom)
 			if (changes.length === 0 && Object.keys(otherChanges).length === 0) return undefined
 			return LinearIssueUpdated.make({
 				eventId,
@@ -516,13 +519,10 @@ const normalizeResourceWebhook = (
 		if (webhook.action === 'create') return LinearCommentCreated.make({ eventId, actor, comment })
 		if (webhook.action === 'remove') return LinearCommentRemoved.make({ eventId, actor, comment })
 		const { body, ...otherChanges } = webhook.updatedFrom
-		return LinearCommentUpdated.make({
-			eventId,
-			actor,
-			comment,
-			...(Predicate.isString(body) || body === null ? { previousBody: body } : {}),
-			otherChanges,
-		})
+		const fields = { eventId, actor, comment, otherChanges }
+		if (Predicate.isString(body) || Predicate.isNull(body))
+			return LinearCommentUpdated.make({ ...fields, previousBody: body })
+		return LinearCommentUpdated.make(fields)
 	}
 	if (webhook.type === 'Reaction') {
 		const reaction = reactionFromResource(webhook, issueId)
@@ -537,7 +537,7 @@ const normalizeResourceWebhook = (
 		eventId,
 		actor,
 		attachment,
-		otherChanges: webhook.updatedFrom as Record<string, Schema.Json>,
+		otherChanges: webhook.updatedFrom,
 	})
 }
 
@@ -556,7 +556,7 @@ const runCallback = (effect: Effect.Effect<void, { readonly retryable: boolean }
 const processAgentSessionBatch = (
 	options: LinearEventProcessorOptions,
 	admissions: DeliveryAdmissionBatch,
-	storedWebhooks: ReadonlyArray<typeof LinearStoredWebhook.Type>,
+	storedWebhooks: ReadonlyArray<LinearStoredWebhook>,
 ) =>
 	Effect.gen(function* () {
 		const callbacks = yield* LinearCallbacks
@@ -656,98 +656,278 @@ const processAgentSessionBatch = (
 		)
 	})
 
-const processLinearBatch = (options: LinearEventProcessorOptions) =>
-	Effect.fn('linear.process_event_batch')(function* (admissions: DeliveryAdmissionBatch) {
-		const callbacks = yield* LinearCallbacks
-		yield* LinearApi
-		const first = admissions[0]
-		const webhooks = yield* Effect.forEach(admissions, decodeWebhook)
-		if (Predicate.isNotUndefined(webhooks[0]) && Schema.is(LinearStoredAgentSessionWebhook)(webhooks[0]))
-			return yield* processAgentSessionBatch(options, admissions, webhooks)
-		if (
-			webhooks.every(
-				(webhook) =>
-					!Schema.is(LinearStoredAgentSessionWebhook)(webhook) &&
-					(webhook.type === 'OAuthApp' || webhook.type === 'PermissionChange'),
-			)
-		) {
-			for (let index = 0; index < admissions.length; index += 1) {
-				const admission = admissions[index]
-				const webhook = webhooks[index]
-				if (
-					Predicate.isUndefined(admission) ||
-					Predicate.isUndefined(webhook) ||
-					Schema.is(LinearStoredAgentSessionWebhook)(webhook) ||
-					(webhook.type !== 'OAuthApp' && webhook.type !== 'PermissionChange') ||
-					admission.namespace !== options.namespace ||
-					admission.provider !== 'linear' ||
-					admission.installationId !== webhook.organizationId ||
-					admission.resourceId !== linearInstallationResourceId() ||
-					(Predicate.isNotUndefined(options.bot) && webhook.organizationId !== options.bot.organizationId) ||
-					(webhook.type === 'PermissionChange' &&
-						Predicate.isNotUndefined(options.bot) &&
-						webhook.appUserId !== options.bot.appUserId) ||
-					(Predicate.isNotUndefined(options.oauthClientId) && webhook.oauthClientId !== options.oauthClientId)
-				)
-					return yield* identityMismatch()
-			}
-			yield* Effect.logInfo('Linear installation lifecycle event observed').pipe(
-				Effect.annotateLogs({
-					disposition: webhooks.some(
-						(webhook) =>
-							!Schema.is(LinearStoredAgentSessionWebhook)(webhook) && webhook.type === 'OAuthApp',
-					)
-						? 'observed_revocation'
-						: 'observed_team_access_change',
-				}),
-			)
-			return ProviderEventIgnored.make({ reason: 'lifecycle_event' })
-		}
-		const issueWebhooks = yield* Effect.forEach(webhooks, (webhook) =>
-			Schema.is(LinearStoredAgentSessionWebhook)(webhook)
-				? Effect.fail(identityMismatch())
-				: webhook.type === 'OAuthApp' || webhook.type === 'PermissionChange'
-					? Effect.fail(identityMismatch())
-					: Effect.succeed(webhook),
-		)
-		const issueId = yield* parseIssueAddress(first.resourceId)
+type LinearIssueBatchWebhook = LinearResourceWebhookEvent | LinearAppUserNotificationWebhook
+type LinearEventCallbacks = LinearCallbacks['Service']
 
+const lifecycleWebhook = (webhook: LinearStoredWebhook): LinearLifecycleWebhookEvent | undefined => {
+	if (Schema.is(LinearStoredAgentSessionWebhook)(webhook)) return undefined
+	return webhook.type === 'OAuthApp' || webhook.type === 'PermissionChange' ? webhook : undefined
+}
+
+const isLifecycleIdentityMismatch = (
+	options: LinearEventProcessorOptions,
+	admission: DeliveryAdmission,
+	webhook: LinearLifecycleWebhookEvent,
+) =>
+	admission.namespace !== options.namespace ||
+	admission.provider !== 'linear' ||
+	admission.installationId !== webhook.organizationId ||
+	admission.resourceId !== linearInstallationResourceId() ||
+	(Predicate.isNotUndefined(options.bot) && webhook.organizationId !== options.bot.organizationId) ||
+	(webhook.type === 'PermissionChange' &&
+		Predicate.isNotUndefined(options.bot) &&
+		webhook.appUserId !== options.bot.appUserId) ||
+	(Predicate.isNotUndefined(options.oauthClientId) && webhook.oauthClientId !== options.oauthClientId)
+
+const processLifecycleBatch = (
+	options: LinearEventProcessorOptions,
+	admissions: DeliveryAdmissionBatch,
+	webhooks: ReadonlyArray<LinearLifecycleWebhookEvent>,
+) =>
+	Effect.gen(function* () {
 		for (let index = 0; index < admissions.length; index += 1) {
 			const admission = admissions[index]
-			const webhook = issueWebhooks[index]
+			const webhook = webhooks[index]
+			if (
+				Predicate.isUndefined(admission) ||
+				Predicate.isUndefined(webhook) ||
+				isLifecycleIdentityMismatch(options, admission, webhook)
+			)
+				return yield* identityMismatch()
+		}
+		yield* Effect.logInfo('Linear installation lifecycle event observed').pipe(
+			Effect.annotateLogs({
+				disposition: webhooks.some((webhook) => webhook.type === 'OAuthApp')
+					? 'observed_revocation'
+					: 'observed_team_access_change',
+			}),
+		)
+		return ProviderEventIgnored.make({ reason: 'lifecycle_event' })
+	})
+
+const issueBatchWebhook = (webhook: LinearStoredWebhook) => {
+	if (Schema.is(LinearStoredAgentSessionWebhook)(webhook)) return Effect.fail(identityMismatch())
+	if (webhook.type === 'OAuthApp' || webhook.type === 'PermissionChange') return Effect.fail(identityMismatch())
+	return Effect.succeed(webhook)
+}
+
+const isForeignAppUserNotification = (options: LinearEventProcessorOptions, webhook: LinearIssueBatchWebhook) =>
+	webhook.type === 'AppUserNotification' &&
+	((Predicate.isNotUndefined(options.bot) &&
+		(webhook.organizationId !== options.bot.organizationId || webhook.appUserId !== options.bot.appUserId)) ||
+		(Predicate.isNotUndefined(options.oauthClientId) && webhook.oauthClientId !== options.oauthClientId))
+
+const isIssueIdentityMismatch = (
+	options: LinearEventProcessorOptions,
+	first: DeliveryAdmission,
+	admission: DeliveryAdmission,
+	webhook: LinearIssueBatchWebhook,
+	webhookIssueId: LinearIssueId,
+	issueId: LinearIssueId,
+) =>
+	admission.namespace !== options.namespace ||
+	admission.provider !== 'linear' ||
+	admission.installationId !== first.installationId ||
+	admission.resourceId !== first.resourceId ||
+	admission.installationId !== webhook.organizationId ||
+	webhookIssueId !== issueId ||
+	linearIssueResourceId(webhookIssueId) !== admission.resourceId ||
+	isForeignAppUserNotification(options, webhook)
+
+const validateIssueBatch = (
+	options: LinearEventProcessorOptions,
+	admissions: DeliveryAdmissionBatch,
+	webhooks: ReadonlyArray<LinearIssueBatchWebhook>,
+	issueId: LinearIssueId,
+) =>
+	Effect.gen(function* () {
+		const first = admissions[0]
+		for (let index = 0; index < admissions.length; index += 1) {
+			const admission = admissions[index]
+			const webhook = webhooks[index]
 			if (Predicate.isUndefined(admission) || Predicate.isUndefined(webhook)) return yield* identityMismatch()
 			const webhookIssueId =
 				webhook.type === 'AppUserNotification' ? webhook.notification.issueId : resourceIssueId(webhook)
 			if (Predicate.isUndefined(webhookIssueId)) return yield* identityMismatch()
-			if (
-				admission.namespace !== options.namespace ||
-				admission.provider !== 'linear' ||
-				admission.installationId !== first.installationId ||
-				admission.resourceId !== first.resourceId ||
-				admission.installationId !== webhook.organizationId ||
-				webhookIssueId !== issueId ||
-				linearIssueResourceId(webhookIssueId) !== admission.resourceId ||
-				(webhook.type === 'AppUserNotification' &&
-					((Predicate.isNotUndefined(options.bot) &&
-						(webhook.organizationId !== options.bot.organizationId ||
-							webhook.appUserId !== options.bot.appUserId)) ||
-						(Predicate.isNotUndefined(options.oauthClientId) &&
-							webhook.oauthClientId !== options.oauthClientId)))
-			)
+			if (isIssueIdentityMismatch(options, first, admission, webhook, webhookIssueId, issueId))
 				return yield* identityMismatch()
 		}
+	})
+
+const activationEvent = (
+	options: LinearEventProcessorOptions,
+	webhook: LinearIssueBatchWebhook,
+	admission: DeliveryAdmission,
+	mailboxKey: string,
+) => {
+	if (webhook.type === 'AppUserNotification') return normalizeWebhook(webhook, admission, mailboxKey)
+	if (webhook.type === 'Issue' && webhook.action === 'create' && !isSelfAuthoredResource(webhook, options))
+		return normalizeWebhook(webhook, admission, mailboxKey)
+	return undefined
+}
+
+const isEntrySignal = (event: LinearIssueActivity) =>
+	Schema.is(LinearIssueMention)(event) ||
+	Schema.is(LinearCommentMention)(event) ||
+	Schema.is(LinearAssignmentNotification)(event)
+
+const isDirectedTrigger = (callbacks: LinearEventCallbacks) => (event: LinearIssueActivity) =>
+	((Schema.is(LinearIssueMention)(event) || Schema.is(LinearCommentMention)(event)) &&
+		!Predicate.isUndefined(callbacks.onMentioned)) ||
+	(Schema.is(LinearAssignmentNotification)(event) && !Predicate.isUndefined(callbacks.onAssigned))
+
+const handled = Effect.as(true)
+
+const runDirectedCallback = (
+	callbacks: LinearEventCallbacks,
+	trigger: LinearIssueActivity,
+	events: ReadonlyArray<LinearIssueCallbackEvent>,
+) => {
+	if (Schema.is(LinearIssueMention)(trigger) && !Predicate.isUndefined(callbacks.onMentioned))
+		return handled(
+			runCallback(callbacks.onMentioned(LinearIssueMentioned.make({ issue: trigger.issue, trigger, events }))),
+		)
+	if (Schema.is(LinearCommentMention)(trigger) && !Predicate.isUndefined(callbacks.onMentioned))
+		return handled(
+			runCallback(callbacks.onMentioned(LinearCommentMentioned.make({ issue: trigger.issue, trigger, events }))),
+		)
+	if (Schema.is(LinearAssignmentNotification)(trigger) && !Predicate.isUndefined(callbacks.onAssigned))
+		return handled(
+			runCallback(callbacks.onAssigned(LinearIssueAssigned.make({ issue: trigger.issue, trigger, events }))),
+		)
+	return Effect.succeed(false)
+}
+
+const runIssueCreatedCallback = (
+	callbacks: LinearEventCallbacks,
+	activationEvents: ReadonlyArray<LinearIssueActivity>,
+	callbackEvents: ReadonlyArray<LinearIssueCallbackEvent>,
+) => {
+	const trigger = activationEvents.find(Schema.is(LinearIssueOpened))
+	if (Predicate.isUndefined(trigger) || Predicate.isUndefined(callbacks.onIssueCreated)) return Effect.succeed(false)
+	return handled(
+		runCallback(
+			callbacks.onIssueCreated(
+				LinearIssueCreated.make({
+					issue: trigger.issue,
+					trigger,
+					events: callbackEvents.filter((event) => event !== trigger),
+				}),
+			),
+		),
+	)
+}
+
+/** Runs at most one entry callback: a directed mention or assignment first, then issue creation. */
+const runEntryCallbacks = (
+	callbacks: LinearEventCallbacks,
+	activationEvents: ReadonlyArray<LinearIssueActivity>,
+	callbackEvents: ReadonlyArray<LinearIssueCallbackEvent>,
+	supplementalSignal: boolean,
+) =>
+	Effect.gen(function* () {
+		const directed = supplementalSignal ? undefined : activationEvents.find(isDirectedTrigger(callbacks))
+		if (Predicate.isNotUndefined(directed)) {
+			const events = callbackEvents.filter((event) => event !== directed)
+			if (yield* runDirectedCallback(callbacks, directed, events)) return true
+		}
+		return yield* runIssueCreatedCallback(callbacks, activationEvents, callbackEvents)
+	})
+
+const unsubscribeIssue = (mailboxKey: string) =>
+	Effect.flatMap(MailboxSubscriptions, (subscriptions) => subscriptions.unsubscribe({ mailboxKey })).pipe(
+		Effect.mapError(() => providerFailure('subscription_cleanup_failed')),
+	)
+
+const runSubscribedCallback = (
+	callbacks: LinearEventCallbacks,
+	webhooks: ReadonlyArray<LinearIssueBatchWebhook>,
+	subscribedEvents: ReadonlyArray<LinearSubscribedIssueEvent>,
+	issueId: LinearIssueId,
+	mailboxKey: string,
+) => {
+	const resourceWebhooks = webhooks.filter(
+		(webhook): webhook is LinearResourceWebhookEvent => webhook.type !== 'AppUserNotification',
+	)
+	const firstResource = resourceWebhooks.find(hasIssueSnapshot) ?? resourceWebhooks[0]
+	if (
+		!Arr.isReadonlyArrayNonEmpty(subscribedEvents) ||
+		Predicate.isUndefined(firstResource) ||
+		Predicate.isUndefined(callbacks.onSubscribedEvent)
+	)
+		return Effect.succeed(false)
+	const issue = issueFromResource(firstResource, issueId, mailboxKey)
+	return handled(
+		runCallback(callbacks.onSubscribedEvent(LinearSubscribedEvents.make({ issue, events: subscribedEvents }))),
+	)
+}
+
+const processSubscribedIssueBatch = (
+	callbacks: LinearEventCallbacks,
+	webhooks: ReadonlyArray<LinearIssueBatchWebhook>,
+	subscribedEvents: ReadonlyArray<LinearSubscribedIssueEvent>,
+	issueId: LinearIssueId,
+	mailboxKey: string,
+	entryHandled: boolean,
+) =>
+	Effect.gen(function* () {
+		const removed = webhooks.some((webhook) => webhook.type === 'Issue' && webhook.action === 'remove')
+		if (entryHandled) {
+			if (removed) yield* unsubscribeIssue(mailboxKey)
+			return ProviderEventHandled.make({})
+		}
+		const subscribedHandled = yield* runSubscribedCallback(
+			callbacks,
+			webhooks,
+			subscribedEvents,
+			issueId,
+			mailboxKey,
+		)
+		if (removed) {
+			yield* unsubscribeIssue(mailboxKey)
+			return ProviderEventHandled.make({})
+		}
+		if (subscribedHandled) return ProviderEventHandled.make({})
+		return ProviderEventIgnored.make({
+			reason: Predicate.isUndefined(callbacks.onSubscribedEvent)
+				? 'callback_not_configured'
+				: 'no_relevant_event',
+		})
+	})
+
+const unsubscribedIssueDisposition = (
+	activationEvents: ReadonlyArray<LinearIssueActivity>,
+	entryHandled: boolean,
+	supplementalSignal: boolean,
+) => {
+	if (entryHandled) return ProviderEventHandled.make({})
+	if (supplementalSignal) return ProviderEventIgnored.make({ reason: 'supplemental_signal' })
+	const hasUnconfiguredEntry = activationEvents.some(
+		(event) => isEntrySignal(event) || Schema.is(LinearIssueOpened)(event),
+	)
+	return ProviderEventIgnored.make({
+		reason: hasUnconfiguredEntry ? 'callback_not_configured' : 'not_subscribed',
+	})
+}
+
+const processIssueBatch = (
+	options: LinearEventProcessorOptions,
+	callbacks: LinearEventCallbacks,
+	admissions: DeliveryAdmissionBatch,
+	webhooks: ReadonlyArray<LinearStoredWebhook>,
+) =>
+	Effect.gen(function* () {
+		const first = admissions[0]
+		const issueWebhooks = yield* Effect.forEach(webhooks, issueBatchWebhook)
+		const issueId = yield* parseIssueAddress(first.resourceId)
+		yield* validateIssueBatch(options, admissions, issueWebhooks, issueId)
 
 		const mailboxKey = deliveryMailboxKey(first)
 		const normalized = yield* Effect.forEach(issueWebhooks, (webhook, index) => {
 			const admission = admissions[index]
 			return Predicate.isUndefined(admission)
 				? Effect.fail(identityMismatch())
-				: webhook.type === 'AppUserNotification' ||
-					  (webhook.type === 'Issue' &&
-							webhook.action === 'create' &&
-							!isSelfAuthoredResource(webhook, options))
-					? Effect.succeed(normalizeWebhook(webhook, admission, mailboxKey))
-					: Effect.succeed(undefined)
+				: Effect.succeed(activationEvent(options, webhook, admission, mailboxKey))
 		})
 		const activationEvents = normalized.filter(Predicate.isNotUndefined)
 		const subscribedEventsByIndex = issueWebhooks.map((webhook, index) => {
@@ -762,64 +942,8 @@ const processLinearBatch = (options: LinearEventProcessorOptions) =>
 		const hasAgentSessionCallbacks =
 			!Predicate.isUndefined(callbacks.onAgentSessionCreated) ||
 			!Predicate.isUndefined(callbacks.onAgentSessionPrompted)
-		const supplementalSignal =
-			hasAgentSessionCallbacks &&
-			activationEvents.some(
-				(event) =>
-					Schema.is(LinearIssueMention)(event) ||
-					Schema.is(LinearCommentMention)(event) ||
-					Schema.is(LinearAssignmentNotification)(event),
-			)
-		let entryHandled = false
-		const directedIndex = supplementalSignal
-			? -1
-			: activationEvents.findIndex(
-					(event) =>
-						((Schema.is(LinearIssueMention)(event) || Schema.is(LinearCommentMention)(event)) &&
-							!Predicate.isUndefined(callbacks.onMentioned)) ||
-						(Schema.is(LinearAssignmentNotification)(event) &&
-							!Predicate.isUndefined(callbacks.onAssigned)),
-				)
-		if (directedIndex >= 0) {
-			const trigger = activationEvents[directedIndex]
-			if (Predicate.isUndefined(trigger)) return ProviderEventIgnored.make({ reason: 'no_activation_event' })
-			const events = callbackEvents.filter((event) => event !== trigger)
-			if (Schema.is(LinearIssueMention)(trigger) && !Predicate.isUndefined(callbacks.onMentioned)) {
-				yield* runCallback(
-					callbacks.onMentioned(LinearIssueMentioned.make({ issue: trigger.issue, trigger, events })),
-				)
-				entryHandled = true
-			}
-			if (Schema.is(LinearCommentMention)(trigger) && !Predicate.isUndefined(callbacks.onMentioned)) {
-				yield* runCallback(
-					callbacks.onMentioned(LinearCommentMentioned.make({ issue: trigger.issue, trigger, events })),
-				)
-				entryHandled = true
-			}
-			if (Schema.is(LinearAssignmentNotification)(trigger) && !Predicate.isUndefined(callbacks.onAssigned)) {
-				yield* runCallback(
-					callbacks.onAssigned(LinearIssueAssigned.make({ issue: trigger.issue, trigger, events })),
-				)
-				entryHandled = true
-			}
-		}
-
-		const openedIndex = activationEvents.findIndex(Schema.is(LinearIssueOpened))
-		if (!entryHandled && openedIndex >= 0 && !Predicate.isUndefined(callbacks.onIssueCreated)) {
-			const trigger = activationEvents[openedIndex]
-			if (Predicate.isUndefined(trigger) || !Schema.is(LinearIssueOpened)(trigger))
-				return ProviderEventIgnored.make({ reason: 'no_activation_event' })
-			yield* runCallback(
-				callbacks.onIssueCreated(
-					LinearIssueCreated.make({
-						issue: trigger.issue,
-						trigger,
-						events: callbackEvents.filter((event) => event !== trigger),
-					}),
-				),
-			)
-			entryHandled = true
-		}
+		const supplementalSignal = hasAgentSessionCallbacks && activationEvents.some(isEntrySignal)
+		const entryHandled = yield* runEntryCallbacks(callbacks, activationEvents, callbackEvents, supplementalSignal)
 
 		const subscribed = yield* Effect.flatMap(MailboxSubscriptions, (subscriptions) =>
 			subscriptions.isSubscribed({ mailboxKey }),
@@ -827,64 +951,29 @@ const processLinearBatch = (options: LinearEventProcessorOptions) =>
 			Effect.tapError((error) => Effect.logError('Linear subscription lookup failed', error)),
 			Effect.mapError(() => providerFailure('subscription_lookup_failed')),
 		)
-		if (subscribed) {
-			const removed = issueWebhooks.some((webhook) => webhook.type === 'Issue' && webhook.action === 'remove')
-			if (entryHandled) {
-				if (removed)
-					yield* Effect.flatMap(MailboxSubscriptions, (subscriptions) =>
-						subscriptions.unsubscribe({ mailboxKey }),
-					).pipe(Effect.mapError(() => providerFailure('subscription_cleanup_failed')))
-				return ProviderEventHandled.make({})
-			}
-			const resourceWebhooks = issueWebhooks.filter(
-				(webhook): webhook is LinearResourceWebhookEvent => webhook.type !== 'AppUserNotification',
+		if (subscribed)
+			return yield* processSubscribedIssueBatch(
+				callbacks,
+				issueWebhooks,
+				subscribedEvents,
+				issueId,
+				mailboxKey,
+				entryHandled,
 			)
-			const firstResource = resourceWebhooks.find(hasIssueSnapshot) ?? resourceWebhooks[0]
-			let subscribedHandled = false
-			if (
-				subscribedEvents.length > 0 &&
-				Predicate.isNotUndefined(firstResource) &&
-				Predicate.isNotUndefined(callbacks.onSubscribedEvent)
-			) {
-				const issue = issueFromResource(firstResource, issueId, mailboxKey)
-				yield* runCallback(
-					callbacks.onSubscribedEvent(
-						LinearSubscribedEvents.make({
-							issue,
-							events: subscribedEvents as [
-								LinearSubscribedIssueEvent,
-								...Array<LinearSubscribedIssueEvent>,
-							],
-						}),
-					),
-				)
-				subscribedHandled = true
-			}
-			if (removed) {
-				yield* Effect.flatMap(MailboxSubscriptions, (subscriptions) =>
-					subscriptions.unsubscribe({ mailboxKey }),
-				).pipe(Effect.mapError(() => providerFailure('subscription_cleanup_failed')))
-				return ProviderEventHandled.make({})
-			}
-			if (subscribedHandled) return ProviderEventHandled.make({})
-			return ProviderEventIgnored.make({
-				reason: Predicate.isUndefined(callbacks.onSubscribedEvent)
-					? 'callback_not_configured'
-					: 'no_relevant_event',
-			})
-		}
-		if (entryHandled) return ProviderEventHandled.make({})
-		if (supplementalSignal) return ProviderEventIgnored.make({ reason: 'supplemental_signal' })
-		const hasUnconfiguredEntry = activationEvents.some(
-			(event) =>
-				Schema.is(LinearIssueMention)(event) ||
-				Schema.is(LinearCommentMention)(event) ||
-				Schema.is(LinearAssignmentNotification)(event) ||
-				Schema.is(LinearIssueOpened)(event),
-		)
-		return ProviderEventIgnored.make({
-			reason: hasUnconfiguredEntry ? 'callback_not_configured' : 'not_subscribed',
-		})
+		return unsubscribedIssueDisposition(activationEvents, entryHandled, supplementalSignal)
+	})
+
+const processLinearBatch = (options: LinearEventProcessorOptions) =>
+	Effect.fn('linear.process_event_batch')(function* (admissions: DeliveryAdmissionBatch) {
+		const callbacks = yield* LinearCallbacks
+		yield* LinearApi
+		const webhooks = yield* Effect.forEach(admissions, decodeWebhook)
+		if (Predicate.isNotUndefined(webhooks[0]) && Schema.is(LinearStoredAgentSessionWebhook)(webhooks[0]))
+			return yield* processAgentSessionBatch(options, admissions, webhooks)
+		const lifecycleWebhooks = webhooks.map(lifecycleWebhook)
+		if (lifecycleWebhooks.every(Predicate.isNotUndefined))
+			return yield* processLifecycleBatch(options, admissions, lifecycleWebhooks)
+		return yield* processIssueBatch(options, callbacks, admissions, webhooks)
 	})
 
 export const makeLinearEventProcessor = (

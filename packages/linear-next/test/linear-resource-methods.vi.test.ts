@@ -56,8 +56,8 @@ describe('Linear resource methods', () => {
 				ref: { issue, attachmentId: LinearAttachmentId.make('attachment-1') },
 			})
 			const record =
-				<A>(method: string, output: A) =>
-				(input: unknown) =>
+				<Input, A>(method: string, output: A) =>
+				(input: Input) =>
 					Queue.offer(calls, { method, input }).pipe(Effect.as(output))
 			const layer = Layer.mock(LinearApi, {
 				getIssue: record('getIssue', info),

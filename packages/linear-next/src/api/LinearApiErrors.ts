@@ -104,15 +104,17 @@ export const linearProviderErrorDetails = (
 	retryAfterMs: overrides.retryAfterMs ?? null,
 })
 
+type LinearApiErrorFields = {
+	readonly operation: LinearApiOperation
+	readonly reason: LinearApiError['reason']
+	readonly retryable: boolean
+	status?: number
+	message?: string
+	retryAfterMs?: number
+}
+
 const toLinearApiError = (error: LinearProviderError, reason: LinearApiError['reason']): LinearApiError => {
-	const details: {
-		operation: LinearApiOperation
-		reason: LinearApiError['reason']
-		retryable: boolean
-		status?: number
-		message?: string
-		retryAfterMs?: number
-	} = { operation: error.operation, reason, retryable: error.retryable }
+	const details: LinearApiErrorFields = { operation: error.operation, reason, retryable: error.retryable }
 	if (error.status !== null) details.status = error.status
 	if (error.message !== null) details.message = error.message
 	if (error.retryAfterMs !== null) details.retryAfterMs = error.retryAfterMs

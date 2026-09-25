@@ -35,9 +35,8 @@ import { LinearApi, LinearApiError } from './LinearApi'
 import { LinearAuthenticationInput } from './LinearAuth'
 import * as LinearAuth from './LinearAuth'
 import {
-	LinearCredentialResolver,
-	makeLinearCredentialResolver,
-	makeLinearDeveloperTokenResolver,
+	LinearCredentialResolverClientCredentials,
+	LinearCredentialResolverDeveloperToken,
 } from './LinearCredentialResolver'
 import {
 	defaultLinearFileTransferPolicy,
@@ -224,8 +223,7 @@ export const LinearApiLiveFromResolver = makeLinearApiServiceLive(defaultLinearF
 
 /** Injectable transport seam. Construction reads configuration and initializes local state but performs no I/O. */
 export const makeLinearApiLiveBase = (options: LinearApiLiveOptions) => {
-	const resolverLayer = Layer.effect(
-		LinearCredentialResolver,
+	const resolverLayer = Layer.unwrap(
 		Effect.gen(function* () {
 			const organizationId = yield* options.organizationId
 			const appUserId = yield* options.appUserId
@@ -236,7 +234,7 @@ export const makeLinearApiLiveBase = (options: LinearApiLiveOptions) => {
 						Effect.gen(function* () {
 							const clientId = yield* credentials.clientId
 							const clientSecret = yield* credentials.clientSecret
-							return yield* makeLinearCredentialResolver({
+							return LinearCredentialResolverClientCredentials({
 								clientId,
 								clientSecret,
 								organizationId,
@@ -246,7 +244,7 @@ export const makeLinearApiLiveBase = (options: LinearApiLiveOptions) => {
 					LinearDeveloperToken: (developer) =>
 						Effect.gen(function* () {
 							const token = yield* developer.token
-							return yield* makeLinearDeveloperTokenResolver({ token, organizationId, appUserId })
+							return LinearCredentialResolverDeveloperToken({ token, organizationId, appUserId })
 						}),
 				}),
 			)

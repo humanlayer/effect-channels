@@ -20,6 +20,7 @@ import {
 	LinearIssueRequest,
 	LinearIssueUpdate,
 	LinearListUsersRequest,
+	LinearReactionTarget,
 	type LinearUpdateAttachmentInput,
 	LinearUpdateAttachmentRequest,
 	LinearUpdateCommentRequest,
@@ -55,18 +56,8 @@ import {
 
 const issueAttributes = (issueId: string) => ({ 'linear.issue_id': issueId })
 
-const linearListUsersRequest = (issue: LinearIssueRef, options: LinearUserPageOptions) => {
-	const request: {
-		issue: LinearIssueRef
-		first?: number
-		after?: string
-		query?: string
-	} = { issue }
-	if (options.first !== undefined) request.first = options.first
-	if (options.after !== undefined) request.after = options.after
-	if (options.query !== undefined) request.query = options.query
-	return LinearListUsersRequest.make(request)
-}
+const linearListUsersRequest = (issue: LinearIssueRef, options: LinearUserPageOptions) =>
+	LinearListUsersRequest.make({ issue, ...options })
 
 export class LinearIssue extends Schema.TaggedClass<LinearIssue>()('LinearIssue', {
 	...LinearIssueSnapshot.fields,
@@ -113,12 +104,12 @@ export class LinearIssue extends Schema.TaggedClass<LinearIssue>()('LinearIssue'
 			api.listIssueAttachments(LinearIssueRequest.make({ issue: this.ref })),
 		)
 	}
-	postComment(content: typeof LinearContent.Type): Effect.Effect<LinearComment, LinearApiError, LinearApi> {
+	postComment(content: LinearContent): Effect.Effect<LinearComment, LinearApiError, LinearApi> {
 		return Effect.flatMap(LinearApi, (api) =>
 			api.createComment(LinearCreateCommentRequest.make({ issue: this.ref, content })),
 		)
 	}
-	update(update: typeof LinearIssueUpdate.Type): Effect.Effect<LinearIssueInfo, LinearApiError, LinearApi> {
+	update(update: LinearIssueUpdate): Effect.Effect<LinearIssueInfo, LinearApiError, LinearApi> {
 		return Effect.flatMap(LinearApi, (api) =>
 			api.updateIssue(LinearUpdateIssueRequest.make({ issue: this.ref, update })),
 		)
@@ -143,7 +134,12 @@ export class LinearIssue extends Schema.TaggedClass<LinearIssue>()('LinearIssue'
 	}
 	addReaction(emoji: string): Effect.Effect<LinearReaction, LinearApiError, LinearApi> {
 		return Effect.flatMap(LinearApi, (api) =>
-			api.createReaction(LinearCreateReactionRequest.make({ target: { _tag: 'Issue', issue: this.ref }, emoji })),
+			api.createReaction(
+				LinearCreateReactionRequest.make({
+					target: LinearReactionTarget.cases.Issue.make({ issue: this.ref }),
+					emoji,
+				}),
+			),
 		)
 	}
 	createAttachment(
@@ -173,14 +169,14 @@ export class LinearComment extends Schema.TaggedClass<LinearComment>()('LinearCo
 	...LinearCommentSnapshot.fields,
 	files: Schema.Array(LinearFile),
 }) {
-	reply(content: typeof LinearContent.Type): Effect.Effect<LinearComment, LinearApiError, LinearApi> {
+	reply(content: LinearContent): Effect.Effect<LinearComment, LinearApiError, LinearApi> {
 		return Effect.flatMap(LinearApi, (api) =>
 			api.createComment(
 				LinearCreateCommentRequest.make({ issue: this.issue, parentId: this.ref.commentId, content }),
 			),
 		)
 	}
-	update(content: typeof LinearContent.Type): Effect.Effect<LinearComment, LinearApiError, LinearApi> {
+	update(content: LinearContent): Effect.Effect<LinearComment, LinearApiError, LinearApi> {
 		return Effect.flatMap(LinearApi, (api) =>
 			api.updateComment(LinearUpdateCommentRequest.make({ comment: this.ref, content })),
 		)
@@ -193,7 +189,10 @@ export class LinearComment extends Schema.TaggedClass<LinearComment>()('LinearCo
 	addReaction(emoji: string): Effect.Effect<LinearReaction, LinearApiError, LinearApi> {
 		return Effect.flatMap(LinearApi, (api) =>
 			api.createReaction(
-				LinearCreateReactionRequest.make({ target: { _tag: 'Comment', comment: this.ref }, emoji }),
+				LinearCreateReactionRequest.make({
+					target: LinearReactionTarget.cases.Comment.make({ comment: this.ref }),
+					emoji,
+				}),
 			),
 		)
 	}

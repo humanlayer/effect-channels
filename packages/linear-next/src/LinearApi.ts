@@ -75,10 +75,10 @@ export const LinearUpdateCommentRequest = Schema.Struct({ comment: LinearComment
 export type LinearUpdateCommentRequest = typeof LinearUpdateCommentRequest.Type
 export const LinearDeleteCommentRequest = Schema.Struct({ comment: LinearCommentRef })
 export type LinearDeleteCommentRequest = typeof LinearDeleteCommentRequest.Type
-export const LinearReactionTarget = Schema.Union([
-	Schema.TaggedStruct('Issue', { issue: LinearIssueRef }),
-	Schema.TaggedStruct('Comment', { comment: LinearCommentRef }),
-])
+export const LinearReactionTarget = Schema.TaggedUnion({
+	Issue: { issue: LinearIssueRef },
+	Comment: { comment: LinearCommentRef },
+})
 export type LinearReactionTarget = typeof LinearReactionTarget.Type
 export const LinearCreateReactionRequest = Schema.Struct({ target: LinearReactionTarget, emoji: Schema.NonEmptyString })
 export type LinearCreateReactionRequest = typeof LinearCreateReactionRequest.Type

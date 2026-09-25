@@ -1,5 +1,3 @@
-import { Schema } from 'effect'
-
 import type { LinearIssueRequest } from '../LinearApi'
 import { discoverLinearFiles, LinearFile, LinearFileRef } from '../LinearFiles'
 import {
@@ -66,26 +64,8 @@ export const projectLinearUploadedFile = (
 		size: target.size,
 	})
 
-export const projectLinearAttachment = (issue: LinearIssueRequest['issue'], value: typeof LinearApiAttachment.Type) => {
-	const input: {
-		id: typeof value.id
-		issueId: typeof issue.issueId
-		title: string
-		subtitle: string | null
-		url: string
-		metadata?: Readonly<Record<string, Schema.Json>>
-		ref: { issue: typeof issue; attachmentId: typeof value.id }
-	} = {
-		id: value.id,
-		issueId: issue.issueId,
-		title: value.title,
-		subtitle: value.subtitle,
-		url: value.url,
-		ref: { issue, attachmentId: value.id },
-	}
-	if (value.metadata !== undefined) input.metadata = value.metadata
-	return LinearIssueAttachment.make(input)
-}
+export const projectLinearAttachment = (issue: LinearIssueRequest['issue'], value: typeof LinearApiAttachment.Type) =>
+	LinearIssueAttachment.make({ ...value, issueId: issue.issueId, ref: { issue, attachmentId: value.id } })
 
 export const projectLinearUser = (value: typeof LinearApiParticipant.Type) =>
 	LinearUser.make({
