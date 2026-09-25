@@ -15,6 +15,20 @@ Always configure `LINEAR_WEBHOOK_SECRET`, `LINEAR_ORGANIZATION_ID`, and `LINEAR_
 
 Unknown authenticated event types/actions are acknowledged and ignored. API credentials are resolved lazily; the first operation verifies `viewer.id` and `viewer.organization.id` before its requested query or mutation runs.
 
+## Files
+
+Linear keeps three representations separate:
+
+| Representation | Operation | Result |
+| --- | --- | --- |
+| Markdown link or image | existing issue/comment Markdown writes | content containing a `LinearFile` URL |
+| Uploaded asset | `issue.uploadFile({ filename, contentType, bytes })` | `LinearFile` |
+| First-class issue card | `issue.uploadAttachment(...)` or `issue.createAttachment({ url, title })` | `LinearIssueAttachment` |
+
+`LinearIssue.files` and `LinearComment.files` are discovered from parsed Markdown links, images, reference links, autolinks, and GFM bare URLs. Only canonical `https://uploads.linear.app/<workspace>/<asset>/<file>` URLs become files; ordinary links, lookalike hosts, and other URL forms stay content.
+
+`file.download()` streams bytes; `file.downloadBytes({ maxBytes })` fails with `LinearFileSizeLimitExceeded` from the declared size, `Content-Length`, or the running byte count. Downloads send the workspace credential only to `https://uploads.linear.app`, follow redirects manually within `LinearApiLiveOptions.filePolicy` (default three hops and a 60-second response timeout), and never forward the credential to another origin. Uploads call Linear's `fileUpload` mutation, then `PUT` the exact bytes to the signed target with only the returned headers and declared content type. The signed target URL and bearer token never appear in public values or logs. Uploads are limited to 50 MiB.
+
 ## Live API smoke
 
-See [`scripts/README.md`](scripts/README.md). The smoke is opt-in and never prints access tokens.
+See [`scripts/README.md`](scripts/README.md). The smokes are opt-in and never print access tokens.

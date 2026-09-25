@@ -11,11 +11,16 @@
 	},
 	"scripts": {
 		"typecheck": "tsc --noEmit -p tsconfig.json",
-		"smoke:api:live": "bun run scripts/linear-api-live-smoke.ts"
+		"smoke:api:live": "bun run scripts/linear-api-live-smoke.ts",
+		"smoke:files:live": "bun run scripts/linear-files-live-smoke.ts"
 	},
 	"dependencies": {
 		"@humanlayer/channels-delivery-next": "workspace:*",
-		"effect": "catalog:"
+		"@types/mdast": "^4.0.4",
+		"effect": "catalog:",
+		"mdast-util-from-markdown": "^2.0.3",
+		"mdast-util-gfm": "^3.1.0",
+		"micromark-extension-gfm": "^3.0.0"
 	},
 	"devDependencies": {
 		"@effect/platform-node": "catalog:",

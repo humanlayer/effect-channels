@@ -26,6 +26,13 @@ import {
 	LinearUpdateIssueRequest,
 	type LinearUserPageOptions,
 } from './LinearApi'
+import {
+	LinearFile,
+	LinearUploadAttachmentRequest,
+	LinearUploadFileRequest,
+	type LinearUploadAttachmentInput,
+	type LinearUploadFileInput,
+} from './LinearFiles'
 import type { LinearIssueLabelId, LinearUserId, LinearWorkflowStateId } from './LinearIdentity'
 import { LinearReactionId } from './LinearIdentity'
 import { LinearWebhookDeliveryId } from './LinearIdentity'
@@ -64,6 +71,7 @@ const linearListUsersRequest = (issue: LinearIssueRef, options: LinearUserPageOp
 export class LinearIssue extends Schema.TaggedClass<LinearIssue>()('LinearIssue', {
 	...LinearIssueSnapshot.fields,
 	mailboxKey: Schema.NonEmptyString,
+	files: Schema.Array(LinearFile),
 }) {
 	subscribe(): Effect.Effect<MailboxSubscriptionResult, MailboxSubscriptionError, MailboxSubscriptions> {
 		return Effect.flatMap(MailboxSubscriptions, (subscriptions) =>
@@ -145,10 +153,25 @@ export class LinearIssue extends Schema.TaggedClass<LinearIssue>()('LinearIssue'
 			api.createAttachment(LinearCreateAttachmentRequest.make({ issue: this.ref, input })),
 		)
 	}
+	/** Uploads bytes as a Linear asset. Place the returned `url` in issue or comment Markdown to show it. */
+	uploadFile(input: LinearUploadFileInput): Effect.Effect<LinearFile, LinearApiError, LinearApi> {
+		return Effect.flatMap(LinearApi, (api) =>
+			api.uploadFile(LinearUploadFileRequest.make({ issue: this.ref, input })),
+		).pipe(Effect.withSpan('linear.issue.upload_file', { attributes: issueAttributes(this.ref.issueId) }))
+	}
+	/** Uploads bytes and attaches the asset to this issue as a first-class Linear attachment card. */
+	uploadAttachment(
+		input: LinearUploadAttachmentInput,
+	): Effect.Effect<LinearIssueAttachment, LinearApiError, LinearApi> {
+		return Effect.flatMap(LinearApi, (api) =>
+			api.uploadAttachment(LinearUploadAttachmentRequest.make({ issue: this.ref, input })),
+		).pipe(Effect.withSpan('linear.issue.upload_attachment', { attributes: issueAttributes(this.ref.issueId) }))
+	}
 }
 
 export class LinearComment extends Schema.TaggedClass<LinearComment>()('LinearComment', {
 	...LinearCommentSnapshot.fields,
+	files: Schema.Array(LinearFile),
 }) {
 	reply(content: typeof LinearContent.Type): Effect.Effect<LinearComment, LinearApiError, LinearApi> {
 		return Effect.flatMap(LinearApi, (api) =>

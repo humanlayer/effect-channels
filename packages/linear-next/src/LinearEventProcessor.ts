@@ -43,6 +43,7 @@ import {
 	type LinearSubscribedIssueEvent,
 } from './LinearCallbackEvents'
 import { LinearCallbacks } from './LinearCallbacks'
+import { discoverLinearFiles, LinearFileRef } from './LinearFiles'
 import {
 	LinearAgentSessionId,
 	LinearIssueId,
@@ -93,6 +94,8 @@ const identityMismatch = () => ProviderEventInvalid.make({ provider: 'linear', r
 const providerFailure = (safeCode: string) =>
 	ProviderEventExecutionFailed.make({ provider: 'linear', retryable: true, safeCode })
 const nullable = <A>(value: A | null | undefined): A | null => (Predicate.isNullish(value) ? null : value)
+const filesIn = (organizationId: LinearIssueRef['organizationId'], issueId: LinearIssueId, markdown: string | null) =>
+	discoverLinearFiles(LinearFileRef.make({ organizationId, issueId }), markdown)
 
 const issueMailboxKey = (admission: DeliveryAdmission, issueId: LinearIssueId) =>
 	deliveryMailboxKey({
@@ -195,6 +198,7 @@ const issueFromSnapshot = (
 		url: issue.url,
 		team: LinearTeamSnapshot.make(team),
 		creator: participantOrNull(issue.creator),
+		files: filesIn(organizationId, issue.id, nullable(issue.description)),
 	})
 }
 
@@ -220,6 +224,7 @@ const issueFromNotification = (webhook: LinearAppUserNotificationWebhook, mailbo
 		url: issue.url,
 		team: LinearTeamSnapshot.make(issue.team),
 		creator: null,
+		files: filesIn(webhook.organizationId, issue.id, nullable(issue.description)),
 	})
 }
 
@@ -240,6 +245,7 @@ const issueFromAgentSession = (normalized: LinearNormalizedAgentSessionWebhook, 
 		url: issue.url,
 		team: LinearTeamSnapshot.make(issue.team),
 		creator: null,
+		files: filesIn(webhook.organizationId, issue.id, nullable(issue.description)),
 	})
 }
 
@@ -289,6 +295,7 @@ const commentFromNotification = (
 		parentCommentId: nullable(webhook.notification.parentCommentId),
 		content: LinearContent.make({ markdown: value.body }),
 		author: Predicate.isNotNullish(actor) && actor.id === value.userId ? participant(actor) : null,
+		files: filesIn(issue.ref.organizationId, issue.ref.issueId, value.body),
 	})
 }
 
@@ -414,6 +421,7 @@ const issueFromResource = (webhook: LinearResourceWebhookEvent, issueId: LinearI
 		url: null,
 		team: null,
 		creator: null,
+		files: [],
 	})
 }
 
@@ -434,6 +442,7 @@ const commentFromResource = (
 		parentCommentId: nullable(webhook.data.parentId),
 		content: LinearContent.make({ markdown: webhook.data.body }),
 		author: participantOrNull(webhook.data.user),
+		files: filesIn(webhook.organizationId, issueId, webhook.data.body),
 	})
 }
 

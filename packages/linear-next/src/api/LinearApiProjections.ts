@@ -1,6 +1,7 @@
 import { Schema } from 'effect'
 
 import type { LinearIssueRequest } from '../LinearApi'
+import { discoverLinearFiles, LinearFile, LinearFileRef } from '../LinearFiles'
 import {
 	LinearCommentRef,
 	LinearIssueInfo,
@@ -11,6 +12,7 @@ import {
 } from '../LinearModels'
 import { LinearComment, LinearIssueAttachment } from '../LinearResources'
 import { LinearApiAttachment, LinearApiComment, LinearApiIssue, LinearApiParticipant } from './LinearApiSchemas'
+import type { LinearUploadTarget } from './RequestLinearFileUpload'
 
 export const projectLinearParticipant = (value: typeof LinearApiParticipant.Type | null) => {
 	if (value === null) return null
@@ -44,6 +46,24 @@ export const projectLinearComment = (issue: LinearIssueRequest['issue'], value: 
 		parentCommentId: value.parent?.id ?? null,
 		content: { markdown: value.body },
 		author: projectLinearParticipant(value.user),
+		files: discoverLinearFiles(
+			LinearFileRef.make({ organizationId: issue.organizationId, issueId: issue.issueId }),
+			value.body,
+		),
+	})
+
+/** Linear returns the storage key as `filename`, so the public name is the caller's filename. */
+export const projectLinearUploadedFile = (
+	issue: LinearIssueRequest['issue'],
+	filename: string,
+	target: LinearUploadTarget,
+) =>
+	LinearFile.make({
+		ref: LinearFileRef.make({ organizationId: issue.organizationId, issueId: issue.issueId }),
+		url: target.assetUrl,
+		name: filename,
+		contentType: target.contentType,
+		size: target.size,
 	})
 
 export const projectLinearAttachment = (issue: LinearIssueRequest['issue'], value: typeof LinearApiAttachment.Type) => {

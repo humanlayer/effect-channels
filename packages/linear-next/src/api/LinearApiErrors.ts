@@ -1,4 +1,4 @@
-import { Effect, Schema } from 'effect'
+import { Effect, Schema, Stream } from 'effect'
 
 import { LinearApiError, LinearApiOperation } from '../LinearApi'
 
@@ -56,6 +56,20 @@ export class LinearMutationRejectedError extends Schema.TaggedError<LinearMutati
 	{ ...LinearProviderErrorFields },
 ) {}
 
+export class LinearFileOriginRejectedError extends Schema.TaggedError<LinearFileOriginRejectedError>()(
+	'LinearFileOriginRejectedError',
+	{ ...LinearProviderErrorFields },
+) {}
+
+export class LinearFileRedirectError extends Schema.TaggedError<LinearFileRedirectError>()('LinearFileRedirectError', {
+	...LinearProviderErrorFields,
+}) {}
+
+export class LinearFileTransferRejectedError extends Schema.TaggedError<LinearFileTransferRejectedError>()(
+	'LinearFileTransferRejectedError',
+	{ ...LinearProviderErrorFields },
+) {}
+
 export type LinearProviderError =
 	| LinearTransportError
 	| LinearAuthenticationError
@@ -67,6 +81,9 @@ export type LinearProviderError =
 	| LinearGraphqlRequestError
 	| LinearResponseDecodeError
 	| LinearMutationRejectedError
+	| LinearFileOriginRejectedError
+	| LinearFileRedirectError
+	| LinearFileTransferRejectedError
 
 type LinearProviderErrorDetails = {
 	readonly operation: LinearApiOperation
@@ -118,8 +135,17 @@ export const narrowLinearProviderErrors = <A, R>(
 			LinearGraphqlRequestError: (error) => Effect.fail(toLinearApiError(error, 'rejected')),
 			LinearResponseDecodeError: (error) => Effect.fail(toLinearApiError(error, 'invalid_response')),
 			LinearMutationRejectedError: (error) => Effect.fail(toLinearApiError(error, 'rejected')),
+			LinearFileOriginRejectedError: (error) => Effect.fail(toLinearApiError(error, 'validation')),
+			LinearFileRedirectError: (error) => Effect.fail(toLinearApiError(error, 'invalid_response')),
+			LinearFileTransferRejectedError: (error) => Effect.fail(toLinearApiError(error, 'rejected')),
 		}),
 	)
+
+/** Narrows failures raised while a file byte stream is being consumed. */
+export const narrowLinearProviderStreamErrors = <A, R>(
+	stream: Stream.Stream<A, LinearTransportError, R>,
+): Stream.Stream<A, LinearApiError, R> =>
+	stream.pipe(Stream.catchTag('LinearTransportError', (error) => Stream.fail(toLinearApiError(error, 'unavailable'))))
 
 export const failLinearMutation = (operation: LinearApiOperation) =>
 	Effect.fail(new LinearMutationRejectedError(linearProviderErrorDetails(operation)))

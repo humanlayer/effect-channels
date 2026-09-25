@@ -37,6 +37,7 @@ describe('Linear resource methods', () => {
 				parentCommentId: null,
 				content: LinearContent.make({ markdown: 'body' }),
 				author: null,
+				files: [],
 			})
 			const reaction = LinearReaction.make({
 				id: LinearReactionId.make('reaction-1'),
@@ -98,6 +99,7 @@ describe('Linear resource methods', () => {
 				url: '',
 				team: null,
 				creator: null,
+				files: [],
 			})
 			const run = <A, E>(effect: Effect.Effect<A, E, LinearApi>) => effect.pipe(Effect.provide(layer))
 			yield* run(resource.fetchInfo())

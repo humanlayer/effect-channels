@@ -1,5 +1,13 @@
-import { Context, Effect, Schema } from 'effect'
+import { Context, Effect, Schema, type Stream } from 'effect'
 
+import type {
+	LinearDownloadFileBytesRequest,
+	LinearDownloadFileRequest,
+	LinearFile,
+	LinearFileError,
+	LinearUploadAttachmentRequest,
+	LinearUploadFileRequest,
+} from './LinearFiles'
 import {
 	LinearAttachmentId,
 	LinearCommentId,
@@ -123,6 +131,9 @@ export const LinearApiOperation = Schema.Literals([
 	'create_attachment',
 	'update_attachment',
 	'delete_attachment',
+	'request_file_upload',
+	'upload_file_bytes',
+	'download_file',
 ])
 export type LinearApiOperation = typeof LinearApiOperation.Type
 
@@ -177,5 +188,15 @@ export class LinearApi extends Context.Service<
 			request: LinearUpdateAttachmentRequest,
 		) => Effect.Effect<LinearIssueAttachment, LinearApiError>
 		readonly deleteAttachment: (request: LinearDeleteAttachmentRequest) => Effect.Effect<void, LinearApiError>
+		readonly uploadFile: (request: LinearUploadFileRequest) => Effect.Effect<LinearFile, LinearApiError>
+		readonly uploadAttachment: (
+			request: LinearUploadAttachmentRequest,
+		) => Effect.Effect<LinearIssueAttachment, LinearApiError>
+		readonly downloadFile: (
+			request: LinearDownloadFileRequest,
+		) => Effect.Effect<Stream.Stream<Uint8Array, LinearApiError>, LinearApiError>
+		readonly downloadFileBytes: (
+			request: LinearDownloadFileBytesRequest,
+		) => Effect.Effect<Uint8Array, LinearFileError>
 	}
 >()('@humanlayer/channels-linear-next/LinearApi') {}
