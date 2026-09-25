@@ -28,7 +28,15 @@ import {
 } from './SlackCallbackEvents'
 import { SlackCallbacks } from './SlackCallbacks'
 import { SlackChannelId, SlackMessageTs, SlackTeamId, slackThreadResourceId } from './SlackIdentity'
-import { SlackMarkdownContent, SlackMessage, SlackMessageRef, SlackReaction, SlackThreadRef } from './SlackModels'
+import {
+	slackFileFromMetadata,
+	SlackMarkdownContent,
+	SlackMessage,
+	SlackMessageRef,
+	type SlackParticipant,
+	SlackReaction,
+	SlackThreadRef,
+} from './SlackModels'
 import { SlackThread } from './SlackThread'
 import type { SlackMessageSnapshot } from './SlackWebhookEventSchemas'
 import {
@@ -54,13 +62,32 @@ const SlackResourceAddress = Schema.Struct({
 type SlackResourceAddress = typeof SlackResourceAddress.Type
 
 type SlackEnvelope =
-	| typeof SlackAppMentionEnvelope.Type
-	| typeof SlackMessageEnvelope.Type
-	| typeof SlackMessageUpdatedEnvelope.Type
-	| typeof SlackMessageDeletedEnvelope.Type
-	| typeof SlackReactionAddedEnvelope.Type
-	| typeof SlackReactionRemovedEnvelope.Type
-	| typeof SlackAgentSessionStoppedEnvelope.Type
+	| SlackAppMentionEnvelope
+	| SlackMessageEnvelope
+	| SlackMessageUpdatedEnvelope
+	| SlackMessageDeletedEnvelope
+	| SlackReactionAddedEnvelope
+	| SlackReactionRemovedEnvelope
+	| SlackAgentSessionStoppedEnvelope
+
+type SlackParticipantLookup = {
+	readonly teamId: SlackTeamId
+	readonly user?: string
+	readonly botId?: string
+}
+
+type SlackParticipantLookupRequest = {
+	teamId: SlackTeamId
+	userId?: string
+	botId?: string
+}
+
+type SlackMessageDeletedFields = {
+	eventId: SlackEventId
+	messageRef: SlackMessageRef
+	previousMessage?: SlackMessage
+	actor?: SlackParticipant
+}
 
 type NormalizedEvent = {
 	readonly event: SlackThreadEvent
@@ -98,7 +125,7 @@ const decodeEnvelope = (admission: DeliveryAdmission) =>
 										onExcessProperty: 'preserve',
 									}),
 								),
-								Match.when(undefined, () => Effect.succeed(messageEnvelope)),
+								Match.whenOr(undefined, 'file_share', () => Effect.succeed(messageEnvelope)),
 								Match.orElse(() => Effect.fail(invalidPayload())),
 							),
 						),
@@ -144,7 +171,7 @@ const parseResourceAddress = (resourceId: string) =>
 			}),
 			catch: identityMismatch,
 		})
-		return yield* Schema.decodeUnknownEffect(SlackResourceAddress)(decoded).pipe(Effect.mapError(identityMismatch))
+		return yield* Schema.decodeEffect(SlackResourceAddress)(decoded).pipe(Effect.mapError(identityMismatch))
 	})
 
 const envelopeChannelId = (envelope: SlackEnvelope) =>
@@ -192,14 +219,13 @@ const isDirectMessageEnvelope = (envelope: SlackEnvelope) =>
 		}),
 	)
 
-const resolveParticipant = (input: { readonly teamId: SlackTeamId; readonly user?: string; readonly botId?: string }) =>
-	Effect.flatMap(SlackApi, (api) =>
-		api.resolveParticipant({
-			teamId: input.teamId,
-			...(input.user === undefined ? {} : { userId: input.user }),
-			...(input.botId === undefined ? {} : { botId: input.botId }),
-		}),
-	)
+const resolveParticipant = (input: SlackParticipantLookup) =>
+	Effect.flatMap(SlackApi, (api) => {
+		const request: SlackParticipantLookupRequest = { teamId: input.teamId }
+		if (input.user !== undefined) request.userId = input.user
+		if (input.botId !== undefined) request.botId = input.botId
+		return api.resolveParticipant(request)
+	})
 
 const makeMessage = (input: {
 	readonly teamId: SlackTeamId
@@ -224,11 +250,8 @@ const makeMessage = (input: {
 			thread: input.thread,
 			author,
 			content: SlackMarkdownContent.make({ markdown: input.snapshot.text ?? '' }),
-			metadata: {
-				eventId: input.eventId,
-				eventTime: input.eventTime,
-				...(input.snapshot.files === undefined ? {} : { files: input.snapshot.files }),
-			},
+			files: (input.snapshot.files ?? []).map((file) => slackFileFromMetadata(input.teamId, file)),
+			metadata: { eventId: input.eventId, eventTime: input.eventTime },
 		})
 	})
 
@@ -265,15 +288,17 @@ const normalizeEnvelope = (envelope: SlackEnvelope, thread: SlackThreadRef) =>
 									eventTime: envelope.event_time,
 									snapshot,
 								})
-								const previousMessage = yield* event.previous_message === undefined
-									? Effect.succeed(undefined)
-									: makeMessage({
-											teamId: envelope.team_id,
-											thread,
-											eventId,
-											eventTime: envelope.event_time,
-											snapshot: event.previous_message,
-										})
+								const previousSnapshot = event.previous_message
+								const previousMessage =
+									previousSnapshot === undefined
+										? undefined
+										: yield* makeMessage({
+												teamId: envelope.team_id,
+												thread,
+												eventId,
+												eventTime: envelope.event_time,
+												snapshot: previousSnapshot,
+											})
 								if (message.author.isMe || previousMessage?.author.isMe === true) {
 									return Option.none<NormalizedEvent>()
 								}
@@ -294,35 +319,33 @@ const normalizeEnvelope = (envelope: SlackEnvelope, thread: SlackThreadRef) =>
 									channelId: event.channel,
 									messageTs,
 								})
-								const previousMessage = yield* event.previous_message === undefined
-									? Effect.succeed(undefined)
-									: makeMessage({
-											teamId: envelope.team_id,
-											thread,
-											eventId,
-											eventTime: envelope.event_time,
-											snapshot: event.previous_message,
-										})
-								if (previousMessage?.author.isMe === true) return Option.none<NormalizedEvent>()
-								const actor = yield* event.user === undefined && event.bot_id === undefined
-									? Effect.succeed(undefined)
-									: resolveParticipant({
-											teamId: envelope.team_id,
-											user: event.user,
-											botId: event.bot_id,
-										})
-								return Option.some<NormalizedEvent>({
-									event: SlackMessageDeleted.make({
+								const fields: SlackMessageDeletedFields = { eventId, messageRef }
+								const previousSnapshot = event.previous_message
+								if (previousSnapshot !== undefined) {
+									const previousMessage = yield* makeMessage({
+										teamId: envelope.team_id,
+										thread,
 										eventId,
-										messageRef,
-										...(previousMessage === undefined ? {} : { previousMessage }),
-										...(actor === undefined ? {} : { actor }),
-									}),
+										eventTime: envelope.event_time,
+										snapshot: previousSnapshot,
+									})
+									if (previousMessage.author.isMe) return Option.none<NormalizedEvent>()
+									fields.previousMessage = previousMessage
+								}
+								if (event.user !== undefined || event.bot_id !== undefined) {
+									fields.actor = yield* resolveParticipant({
+										teamId: envelope.team_id,
+										user: event.user,
+										botId: event.bot_id,
+									})
+								}
+								return Option.some<NormalizedEvent>({
+									event: SlackMessageDeleted.make(fields),
 									activation: Option.none(),
 								})
 							}),
 						),
-						Match.when(undefined, () =>
+						Match.whenOr(undefined, 'file_share', () =>
 							Effect.gen(function* () {
 								const message = yield* makeMessage({
 									teamId: envelope.team_id,
@@ -421,6 +444,23 @@ const runCallback = (effect: Effect.Effect<void, { readonly retryable: boolean }
 		Effect.as(ProviderEventHandled.make({})),
 	)
 
+const belongsToBatch = (
+	options: SlackEventProcessorOptions,
+	first: DeliveryAdmission,
+	address: SlackResourceAddress,
+	admission: DeliveryAdmission,
+	envelope: SlackEnvelope,
+) =>
+	admission.namespace === options.namespace &&
+	admission.provider === 'slack' &&
+	admission.installationId === first.installationId &&
+	admission.resourceId === first.resourceId &&
+	envelope.team_id === address.teamId &&
+	envelope.team_id === admission.installationId &&
+	envelopeChannelId(envelope) === address.channelId &&
+	envelopeRoot(envelope, address) === address.threadTs &&
+	slackThreadResourceId(address) === admission.resourceId
+
 const processSlackBatch = (options: SlackEventProcessorOptions) =>
 	Effect.fn('slack.process_event_batch')(function* (admissions: DeliveryAdmissionBatch) {
 		const callbacks = yield* SlackCallbacks
@@ -432,19 +472,7 @@ const processSlackBatch = (options: SlackEventProcessorOptions) =>
 			const admission = admissions[index]
 			const envelope = envelopes[index]
 			if (admission === undefined || envelope === undefined) return yield* identityMismatch()
-			if (
-				admission.namespace !== options.namespace ||
-				admission.provider !== 'slack' ||
-				admission.installationId !== first.installationId ||
-				admission.resourceId !== first.resourceId ||
-				envelope.team_id !== address.teamId ||
-				envelope.team_id !== admission.installationId ||
-				envelopeChannelId(envelope) !== address.channelId ||
-				envelopeRoot(envelope, address) !== address.threadTs ||
-				slackThreadResourceId(address) !== admission.resourceId
-			) {
-				return yield* identityMismatch()
-			}
+			if (!belongsToBatch(options, first, address, admission, envelope)) return yield* identityMismatch()
 		}
 
 		const isDm = address.channelId.startsWith('D') || envelopes.some(isDirectMessageEnvelope)

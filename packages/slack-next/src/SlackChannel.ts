@@ -1,8 +1,15 @@
 import { Effect, Schema } from 'effect'
 
-import type { SlackApiError } from './SlackApi'
+import type { SlackApiError, SlackFileUploadError } from './SlackApi'
 import { SlackApi } from './SlackApi'
-import { SlackChannelInfo, SlackChannelRef, type SlackContent, type SlackSentMessage } from './SlackModels'
+import {
+	SlackChannelInfo,
+	SlackChannelRef,
+	type SlackContent,
+	type SlackFile,
+	type SlackSentMessage,
+	type SlackUploadFileInput,
+} from './SlackModels'
 
 const spanAttributes = (channel: SlackChannelRef) => ({
 	'slack.team_id': channel.teamId,
@@ -16,6 +23,13 @@ export class SlackChannel extends Schema.TaggedClass<SlackChannel>()('SlackChann
 	post(content: SlackContent): Effect.Effect<SlackSentMessage, SlackApiError, SlackApi> {
 		return Effect.flatMap(SlackApi, (api) => api.postToChannel({ channel: this.ref, content })).pipe(
 			Effect.withSpan('slack.channel.post', { attributes: spanAttributes(this.ref) }),
+		)
+	}
+
+	/** Uploads bytes and shares the file at the channel root. */
+	uploadFile(input: SlackUploadFileInput): Effect.Effect<SlackFile, SlackFileUploadError, SlackApi> {
+		return Effect.flatMap(SlackApi, (api) => api.uploadFileToChannel({ channel: this.ref, input })).pipe(
+			Effect.withSpan('slack.channel.upload_file', { attributes: spanAttributes(this.ref) }),
 		)
 	}
 

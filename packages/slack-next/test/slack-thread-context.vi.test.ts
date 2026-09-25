@@ -50,6 +50,7 @@ const message = SlackMessage.make({
 	thread: threadRef,
 	author: participant,
 	content: SlackPlainTextContent.make({ text: 'hello' }),
+	files: [],
 	metadata: { source: 'test', ordinal: 1 },
 })
 const sent = SlackSentMessage.make({ ref: rootMessageRef, message })
@@ -90,6 +91,10 @@ const makeApi = (
 	getThreadInfo: (request) => Queue.offer(calls, { operation: 'getThreadInfo', request }).pipe(Effect.as(threadInfo)),
 	getChannelInfo: (request) =>
 		Queue.offer(calls, { operation: 'getChannelInfo', request }).pipe(Effect.as(channelInfo)),
+	uploadFileToChannel: () => unexpected('uploadFileToChannel'),
+	uploadFileToThread: () => unexpected('uploadFileToThread'),
+	downloadFile: () => unexpected('downloadFile'),
+	downloadFileBytes: () => unexpected('downloadFileBytes'),
 	...overrides,
 })
 
@@ -145,7 +150,7 @@ describe('SlackThread context API', () => {
 
 			const error = yield* dmThread
 				.listChannelMessagesBeforeThread(count)
-				.pipe(Effect.provide(Layer.succeed(SlackApi, api)), Effect.flip)
+				.pipe(Effect.provideService(SlackApi, api), Effect.flip)
 
 			expect(error).toEqual(new SlackChannelHistoryUnavailable({ thread: dmRef }))
 			expect(yield* Queue.poll(calls)).toEqual(Option.none())
@@ -162,6 +167,7 @@ describe('SlackThread context API', () => {
 				thread: message.thread,
 				author: message.author,
 				content: message.content,
+				files: message.files,
 				metadata: message.metadata,
 			})
 

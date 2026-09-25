@@ -8,6 +8,7 @@ import { SlackChannelId, SlackMessageTs, SlackTeamId } from '../src/SlackIdentit
 import {
 	SlackChannelInfo,
 	SlackChannelRef,
+	slackFileFromMetadata,
 	SlackMarkdownContent,
 	SlackMessage,
 	SlackMessageCount,
@@ -18,6 +19,7 @@ import {
 	SlackUserId,
 } from '../src/SlackModels'
 import { SlackThread } from '../src/SlackThread'
+import { slackFileMetadata, slackFileObject } from './slack-file-fixtures'
 
 const teamId = SlackTeamId.make('T_PAGINATION')
 const channelId = SlackChannelId.make('C_PAGINATION')
@@ -57,7 +59,7 @@ const me = SlackParticipant.make({
 
 const message = (timestamp: string, author = alice) => {
 	const ref = SlackMessageRef.make({ teamId, channelId, messageTs: SlackMessageTs.make(timestamp) })
-	return SlackMessage.make({ ref, thread: threadRef, author, content, metadata: {} })
+	return SlackMessage.make({ ref, thread: threadRef, author, content, files: [], metadata: {} })
 }
 
 const rootMessage = message(threadTs)
@@ -116,6 +118,7 @@ const makeHarness = Effect.fn('test.makeSlackApiHarness')(function* () {
 					),
 					ts: item.ref.messageTs,
 					thread_ts: item.thread.threadTs,
+					files: item.files.length === 0 ? undefined : [slackFileObject],
 				})),
 				response_metadata: { next_cursor: page.nextCursor ?? '' },
 			}),
@@ -245,6 +248,29 @@ describe('SlackApi paginated thread layer', () => {
 				operation: 'listThreadMessagesPage',
 				request: { thread: threadRef, cursor: 'thread-page-2', limit: 15 },
 			})
+		}),
+	)
+
+	it.effect('keeps file metadata on API-loaded messages', ({ expect }) =>
+		Effect.gen(function* () {
+			const harness = yield* makeHarness()
+			const plain = message('1700000001.000000')
+			const base = message('1700000002.000000')
+			const withFile = SlackMessage.make({
+				ref: base.ref,
+				thread: base.thread,
+				author: base.author,
+				content: base.content,
+				files: [slackFileFromMetadata(teamId, slackFileMetadata)],
+				metadata: base.metadata,
+			})
+			yield* Queue.offer(harness.threadPages, { messages: [withFile, plain] })
+
+			const messages = yield* Effect.flatMap(SlackApi, (api) =>
+				api.listThreadMessages({ thread: threadRef }),
+			).pipe(Effect.provide(harness.layer))
+			expect(messages).toEqual([plain, withFile])
+			expect(messages[1]?.files[0]?.downloadUrl).toBe(slackFileMetadata.url_private_download)
 		}),
 	)
 

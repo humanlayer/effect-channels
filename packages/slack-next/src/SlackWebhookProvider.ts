@@ -37,19 +37,14 @@ export type SlackWebhookProviderOptions = {
 	readonly signingSecret: Redacted.Redacted<string>
 }
 
-/**
- * The slack webhook handler effect
- */
 const slackWebhookHandler =
 	(options: SlackWebhookProviderOptions) =>
 	(input: RawWebhookInput): Effect.Effect<ProviderWebhookOutcome, ProviderWebhookError, Crypto.Crypto | SlackApi> =>
 		Effect.gen(function* () {
-			// make sure that the webhook headers include the necessary fields for signature authentication
 			const headers = yield* Schema.decodeUnknownEffect(SlackWebhookHeaders)(input.headers).pipe(
 				Effect.mapError(() => WebhookAuthenticationError.make({ reason: 'invalid_signature_headers' })),
 			)
 
-			// Authenticate the request
 			yield* verifySlackSignature({
 				body: input.body,
 				timestamp: headers['x-slack-request-timestamp'],
@@ -57,29 +52,22 @@ const slackWebhookHandler =
 				signingSecret: options.signingSecret,
 			})
 
-			// Get the body text of the payload and parse to JSON of an unknown shape
 			const bodyText = new TextDecoder().decode(input.body)
-			const unknownJsonBody = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(
-				bodyText,
-			).pipe(Effect.mapError(() => WebhookPayloadInvalidError.make({ reason: 'invalid_json' })))
-
-			// Decode URL-verification payloads and return the challenge as ProviderWebhookResponse.
-			const envelope = yield* Schema.decodeUnknownEffect(SlackWebhookEnvelope)(unknownJsonBody).pipe(
+			const jsonBody = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Json))(bodyText).pipe(
+				Effect.mapError(() => WebhookPayloadInvalidError.make({ reason: 'invalid_json' })),
+			)
+			const envelope = yield* Schema.decodeUnknownEffect(SlackWebhookEnvelope)(jsonBody).pipe(
 				Effect.mapError(() => WebhookPayloadInvalidError.make({ reason: 'invalid_envelope' })),
 			)
 
-			// handle it appropriately based on what it is - if url_verification handle it
-			// otherwise handle event callbacks
 			return yield* Match.value(envelope.type).pipe(
-				// handle URL verification response
-				Match.when('url_verification', () => handleUrlVerification(unknownJsonBody)),
-				// handle Slack event callbacks separately from top-level Slack protocol messages
-				Match.when('event_callback', () => handleSlackEvent(options, unknownJsonBody)),
+				Match.when('url_verification', () => handleUrlVerification(jsonBody)),
+				Match.when('event_callback', () => handleSlackEvent(options, jsonBody)),
 				Match.orElse(() => Effect.succeed(ProviderWebhookIgnored.make({}))),
 			)
 		})
 
-// Slack Webhook provider constructor
+/** Verifies Slack Events API requests from their exact bytes and admits supported events to thread mailboxes. */
 export const makeSlackWebhookProvider = (
 	options: SlackWebhookProviderOptions,
 ): WebhookProvider<Crypto.Crypto | SlackApi> => ({
@@ -87,26 +75,23 @@ export const makeSlackWebhookProvider = (
 	handle: slackWebhookHandler(options),
 })
 
-// handle URL verification by parsing the event and creating the response
 const handleUrlVerification = (
-	verification: unknown,
+	verification: Schema.Json,
 ): Effect.Effect<ProviderWebhookResponse, WebhookPayloadInvalidError> =>
-	Schema.decodeUnknownEffect(SlackUrlVerification)(verification)
-		.pipe(
-			Effect.map((payload) =>
-				ProviderWebhookResponse.make({
-					status: 200,
-					body: new TextEncoder().encode(payload.challenge),
-					headers: { 'content-type': 'text/plain; charset=utf-8' },
-				}),
-			),
-		)
-		.pipe(Effect.mapError(() => WebhookPayloadInvalidError.make({ reason: 'invalid_url_verification' })))
+	Schema.decodeUnknownEffect(SlackUrlVerification)(verification).pipe(
+		Effect.map((payload) =>
+			ProviderWebhookResponse.make({
+				status: 200,
+				body: new TextEncoder().encode(payload.challenge),
+				headers: { 'content-type': 'text/plain; charset=utf-8' },
+			}),
+		),
+		Effect.mapError(() => WebhookPayloadInvalidError.make({ reason: 'invalid_url_verification' })),
+	)
 
-// handle Slack events by first parsing the shared event metadata, then matching the inner event type
 const handleSlackEvent = (
 	options: SlackWebhookProviderOptions,
-	eventEnvelope: unknown,
+	eventEnvelope: Schema.Json,
 ): Effect.Effect<ProviderWebhookOutcome, WebhookPayloadInvalidError, SlackApi> =>
 	Schema.decodeUnknownEffect(SlackEventEnvelope)(eventEnvelope).pipe(
 		Effect.mapError(() => WebhookPayloadInvalidError.make({ reason: 'invalid_event_envelope' })),
@@ -124,7 +109,7 @@ const handleSlackEvent = (
 
 const handleAgentSessionStopped = (
 	options: SlackWebhookProviderOptions,
-	eventEnvelope: unknown,
+	eventEnvelope: Schema.Json,
 ): Effect.Effect<ProviderWebhookOutcome, WebhookPayloadInvalidError> =>
 	Schema.decodeUnknownEffect(SlackAgentSessionStoppedEnvelope)(eventEnvelope, {
 		onExcessProperty: 'preserve',
@@ -147,13 +132,13 @@ const handleAgentSessionStopped = (
 
 const handleMessage = (
 	options: SlackWebhookProviderOptions,
-	eventEnvelope: unknown,
+	eventEnvelope: Schema.Json,
 ): Effect.Effect<ProviderWebhookOutcome, WebhookPayloadInvalidError> =>
 	Schema.decodeUnknownEffect(SlackMessageEnvelope)(eventEnvelope, { onExcessProperty: 'preserve' }).pipe(
 		Effect.mapError(() => WebhookPayloadInvalidError.make({ reason: 'invalid_message' })),
 		Effect.flatMap((envelope) =>
 			Match.value(envelope.event.subtype).pipe(
-				Match.when(undefined, () =>
+				Match.whenOr(undefined, 'file_share', () =>
 					Effect.succeed(
 						makeSlackAdmissionOutcome({
 							options,
@@ -177,7 +162,7 @@ const handleMessage = (
 
 const handleMessageUpdated = (
 	options: SlackWebhookProviderOptions,
-	eventEnvelope: unknown,
+	eventEnvelope: Schema.Json,
 ): Effect.Effect<ProviderWebhookOutcome, WebhookPayloadInvalidError> =>
 	Schema.decodeUnknownEffect(SlackMessageUpdatedEnvelope)(eventEnvelope, { onExcessProperty: 'preserve' }).pipe(
 		Effect.mapError(() => WebhookPayloadInvalidError.make({ reason: 'invalid_message_changed' })),
@@ -198,7 +183,7 @@ const handleMessageUpdated = (
 
 const handleMessageDeleted = (
 	options: SlackWebhookProviderOptions,
-	eventEnvelope: unknown,
+	eventEnvelope: Schema.Json,
 ): Effect.Effect<ProviderWebhookOutcome, WebhookPayloadInvalidError> =>
 	Schema.decodeUnknownEffect(SlackMessageDeletedEnvelope)(eventEnvelope, { onExcessProperty: 'preserve' }).pipe(
 		Effect.mapError(() => WebhookPayloadInvalidError.make({ reason: 'invalid_message_deleted' })),
@@ -237,10 +222,9 @@ const makeSlackAdmissionOutcome = (input: {
 		}),
 	})
 
-// parse one complete app-mention envelope and prepare it for durable admission
 const handleAppMention = (
 	options: SlackWebhookProviderOptions,
-	eventEnvelope: unknown,
+	eventEnvelope: Schema.Json,
 ): Effect.Effect<ProviderWebhookOutcome, WebhookPayloadInvalidError> =>
 	Schema.decodeUnknownEffect(SlackAppMentionEnvelope)(eventEnvelope, {
 		onExcessProperty: 'preserve',
@@ -261,13 +245,13 @@ const handleAppMention = (
 		),
 	)
 
-const handleReactionAdded = (options: SlackWebhookProviderOptions, eventEnvelope: unknown) =>
+const handleReactionAdded = (options: SlackWebhookProviderOptions, eventEnvelope: Schema.Json) =>
 	Schema.decodeUnknownEffect(SlackReactionAddedEnvelope)(eventEnvelope, { onExcessProperty: 'preserve' }).pipe(
 		Effect.mapError(() => WebhookPayloadInvalidError.make({ reason: 'invalid_reaction_added' })),
 		Effect.flatMap((envelope) => admitReaction(options, envelope)),
 	)
 
-const handleReactionRemoved = (options: SlackWebhookProviderOptions, eventEnvelope: unknown) =>
+const handleReactionRemoved = (options: SlackWebhookProviderOptions, eventEnvelope: Schema.Json) =>
 	Schema.decodeUnknownEffect(SlackReactionRemovedEnvelope)(eventEnvelope, { onExcessProperty: 'preserve' }).pipe(
 		Effect.mapError(() => WebhookPayloadInvalidError.make({ reason: 'invalid_reaction_removed' })),
 		Effect.flatMap((envelope) => admitReaction(options, envelope)),

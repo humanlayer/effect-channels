@@ -5,19 +5,21 @@ import {
 } from '@humanlayer/channels-delivery-next'
 import { Effect, Schema, Stream } from 'effect'
 
-import type { SlackApiError } from './SlackApi'
+import type { SlackApiError, SlackFileUploadError } from './SlackApi'
 import { SlackApi } from './SlackApi'
 import { SlackChannel } from './SlackChannel'
 import {
 	type SlackChannelInfo,
 	SlackChannelRef,
 	type SlackContent,
+	type SlackFile,
 	type SlackMessageCount,
 	type SlackMessages,
 	type SlackParticipants,
 	type SlackSentMessage,
 	SlackThreadInfo,
 	SlackThreadRef,
+	type SlackUploadFileInput,
 } from './SlackModels'
 import type { SlackStreamChunk } from './SlackStreamChunk'
 
@@ -79,6 +81,13 @@ export class SlackThread extends Schema.TaggedClass<SlackThread>()('SlackThread'
 	post(content: SlackContent): Effect.Effect<SlackSentMessage, SlackApiError, SlackApi> {
 		return Effect.flatMap(SlackApi, (api) => api.postToThread({ thread: this.ref, content })).pipe(
 			Effect.withSpan('slack.thread.post', { attributes: spanAttributes(this.ref) }),
+		)
+	}
+
+	/** Uploads bytes and shares the file as a reply in this thread. */
+	uploadFile(input: SlackUploadFileInput): Effect.Effect<SlackFile, SlackFileUploadError, SlackApi> {
+		return Effect.flatMap(SlackApi, (api) => api.uploadFileToThread({ thread: this.ref, input })).pipe(
+			Effect.withSpan('slack.thread.upload_file', { attributes: spanAttributes(this.ref) }),
 		)
 	}
 

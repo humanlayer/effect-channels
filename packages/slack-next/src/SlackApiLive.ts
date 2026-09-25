@@ -1,12 +1,20 @@
-import { Config, Duration, Effect, Layer, Match, Option, Predicate, Schedule, Schema, Stream } from 'effect'
+import { Config, Effect, Layer, Match, Option, Predicate, Schema, Stream } from 'effect'
 import * as FetchHttpClient from 'effect/unstable/http/FetchHttpClient'
 import * as HttpClient from 'effect/unstable/http/HttpClient'
-import * as HttpClientRequest from 'effect/unstable/http/HttpClientRequest'
+import type * as UrlParams from 'effect/unstable/http/UrlParams'
 
+import { completeSlackFileUpload, type SlackFileUploadDestination } from './api/CompleteSlackFileUpload'
+import { downloadSlackFile, readBoundedSlackFileBytes } from './api/DownloadSlackFile'
+import { getSlackFileUploadUrl } from './api/GetSlackFileUploadUrl'
+import { SlackHttpClient, SlackHttpClientLive, type SlackWebApiError } from './api/SlackHttpClient'
+import { uploadSlackFileBytes } from './api/UploadSlackFileBytes'
 import {
 	SlackApi,
 	SlackApiError,
-	SlackApiOperation,
+	type SlackApiOperation,
+	type SlackDownloadFileRequest,
+	SlackFileAuthorizationError,
+	SlackFileSizeLimitExceeded,
 	type SlackMessageRequest,
 	type SlackParticipantRequest,
 } from './SlackApi'
@@ -15,6 +23,7 @@ import {
 	SlackChannelInfo,
 	SlackChannelRef,
 	type SlackContent,
+	slackFileFromMetadata,
 	SlackMarkdownContent,
 	SlackMessage,
 	type SlackMessages,
@@ -23,16 +32,13 @@ import {
 	SlackSentMessage,
 	SlackThreadInfo,
 	SlackThreadRef,
+	type SlackUploadFileInput,
 	SlackUserId,
 } from './SlackModels'
 import type { SlackStreamChunk } from './SlackStreamChunk'
+import { SlackFileMetadata } from './SlackWebhookEventSchemas'
 
 const SlackResponse = Schema.Struct({ ok: Schema.Boolean, error: Schema.optionalKey(Schema.String) })
-
-class SlackRateLimitedError extends Schema.TaggedError<SlackRateLimitedError>()('SlackRateLimitedError', {
-	operation: SlackApiOperation,
-	retryAfterMs: Schema.optionalKey(Schema.Finite),
-}) {}
 
 const SlackResponseMetadata = Schema.Struct({ next_cursor: Schema.optionalKey(Schema.String) })
 
@@ -44,6 +50,7 @@ const SlackMessageSnapshot = Schema.Struct({
 	text: Schema.optionalKey(Schema.String),
 	ts: SlackMessageTs,
 	thread_ts: Schema.optionalKey(SlackMessageTs),
+	files: Schema.optionalKey(Schema.Array(SlackFileMetadata)),
 })
 type SlackMessageSnapshot = typeof SlackMessageSnapshot.Type
 
@@ -203,114 +210,35 @@ const nextCursor = (metadata: typeof SlackResponseMetadata.Type | undefined) => 
 const chronological = (messages: SlackMessages): SlackMessages =>
 	Array.from(messages).sort((left, right) => left.ref.messageTs.localeCompare(right.ref.messageTs))
 
-/** Live Slack API implementation. Slack transport, decoding, pagination, and credentials stay private. */
-export const SlackApiLiveBase = Layer.effect(
+const SlackApiService = Layer.effect(
 	SlackApi,
 	Effect.gen(function* () {
-		const client = yield* HttpClient.HttpClient
-		const botToken = yield* Config.redacted('SLACK_BOT_TOKEN')
+		const client = yield* SlackHttpClient
+		const http = yield* HttpClient.HttpClient
 		const configuredBotUserId = yield* Config.option(Config.string('SLACK_BOT_USER_ID'))
-		const apiOrigin = yield* Config.url('SLACK_API_ORIGIN').pipe(
-			Config.withDefault(new URL('https://slack.com/api/')),
-		)
-		const rateLimitRetryPolicy = Schedule.exponential('200 millis').pipe(
-			Schedule.setInputType<SlackRateLimitedError | SlackApiError>(),
-			Schedule.jittered,
-			Schedule.upTo({ times: 3 }),
-			Schedule.passthrough,
-			Schedule.while(({ input }) => Schema.is(SlackRateLimitedError)(input)),
-			Schedule.modifyDelay(({ input, duration }) =>
-				Effect.succeed(
-					Schema.is(SlackRateLimitedError)(input) && Predicate.isNotUndefined(input.retryAfterMs)
-						? Duration.max(duration, Duration.millis(input.retryAfterMs))
-						: duration,
-				),
-			),
-			Schedule.tap(({ input, attempt }) =>
-				Schema.is(SlackRateLimitedError)(input)
-					? Effect.logWarning('Slack rate limit reached; retrying request').pipe(
-							Effect.annotateLogs({ operation: input.operation, retry_attempt: attempt }),
-						)
-					: Effect.void,
-			),
-		)
 
-		const executeSlack = <A extends { readonly ok: boolean; readonly error?: string }>(
-			operation: SlackApiOperation,
-			method: string,
-			request: Effect.Effect<HttpClientRequest.HttpClientRequest, SlackApiError>,
-			schema: Schema.Codec<A, unknown, never, never>,
-		): Effect.Effect<A, SlackApiError> =>
-			Effect.gen(function* () {
-				const slackRequest = yield* request
-				const response = yield* client
-					.execute(slackRequest)
-					.pipe(Effect.mapError(() => SlackApiError.make({ operation, message: 'Could not reach Slack' })))
-				if (response.status === 429) {
-					const retryAfterSeconds = Number(response.headers['retry-after'])
-					return yield* Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0
-						? SlackRateLimitedError.make({ operation, retryAfterMs: retryAfterSeconds * 1_000 })
-						: SlackRateLimitedError.make({ operation })
-				}
-				if (response.status < 200 || response.status >= 300) {
-					return yield* SlackApiError.make({ operation, message: `Slack returned HTTP ${response.status}` })
-				}
-				const decoded = yield* response.json.pipe(
-					Effect.flatMap(Schema.decodeUnknownEffect(schema)),
-					Effect.mapError(() =>
-						SlackApiError.make({ operation, message: 'Slack returned an invalid response' }),
-					),
-				)
-				if (!decoded.ok) {
-					return yield* SlackApiError.make({
-						operation,
-						message: decoded.error ?? 'Slack rejected the request',
-					})
-				}
-				return decoded
-			}).pipe(
-				Effect.retry(rateLimitRetryPolicy),
-				Effect.catchTag('SlackRateLimitedError', () =>
-					Effect.fail(SlackApiError.make({ operation, message: 'Slack rate limit persisted after retries' })),
+		const narrowMissingScope = <A>(effect: Effect.Effect<A, SlackWebApiError>): Effect.Effect<A, SlackApiError> =>
+			effect.pipe(
+				Effect.catchTag('SlackMissingScopeError', (error) =>
+					Effect.fail(SlackApiError.make({ operation: error.operation, message: 'missing_scope' })),
 				),
-				Effect.withSpan('slack.api.request', {
-					attributes: { 'slack.operation': operation, 'slack.method': method },
-				}),
 			)
 
-		const callSlack = <A extends { readonly ok: boolean; readonly error?: string }>(
+		const callSlack = <A>(
 			operation: SlackApiOperation,
 			method: string,
 			body: Schema.Json,
-			schema: Schema.Codec<A, unknown, never, never>,
+			schema: Schema.Codec<A, unknown>,
 		): Effect.Effect<A, SlackApiError> =>
-			executeSlack(
-				operation,
-				method,
-				HttpClientRequest.post(new URL(method, apiOrigin).toString()).pipe(
-					HttpClientRequest.bearerToken(botToken),
-					HttpClientRequest.schemaBodyJson(Schema.Json)(body),
-					Effect.mapError(() => SlackApiError.make({ operation, message: 'Could not encode Slack request' })),
-				),
-				schema,
-			)
+			narrowMissingScope(client.postJson({ operation, method, params: body, response: schema }))
 
-		const callSlackGet = <A extends { readonly ok: boolean; readonly error?: string }>(
+		const callSlackGet = <A>(
 			operation: SlackApiOperation,
 			method: string,
-			query: Readonly<Record<string, string | number | boolean>>,
-			schema: Schema.Codec<A, unknown, never, never>,
+			query: UrlParams.CoercibleRecord,
+			schema: Schema.Codec<A, unknown>,
 		): Effect.Effect<A, SlackApiError> =>
-			executeSlack(
-				operation,
-				method,
-				Effect.succeed(
-					HttpClientRequest.get(new URL(method, apiOrigin).toString(), { urlParams: query }).pipe(
-						HttpClientRequest.bearerToken(botToken),
-					),
-				),
-				schema,
-			)
+			narrowMissingScope(client.get({ operation, method, params: query, response: schema }))
 
 		const authUserId = yield* Effect.cached(
 			Option.match(configuredBotUserId, {
@@ -438,9 +366,56 @@ export const SlackApiLiveBase = Layer.effect(
 				thread,
 				author,
 				content: SlackMarkdownContent.make({ markdown: snapshot.text ?? '' }),
+				files: (snapshot.files ?? []).map((file) => slackFileFromMetadata(thread.teamId, file)),
 				metadata: {},
 			})
 		})
+
+		const requireFilesWrite = <A>(effect: Effect.Effect<A, SlackWebApiError, SlackHttpClient>) =>
+			effect.pipe(
+				Effect.catchTag('SlackMissingScopeError', (error) =>
+					Effect.logWarning('Slack bot token cannot upload files').pipe(
+						Effect.annotateLogs({ operation: error.operation, needed_scope: error.needed ?? 'unknown' }),
+						Effect.andThen(
+							Effect.fail(
+								SlackFileAuthorizationError.make({
+									operation: error.operation,
+									requiredScope: 'files:write',
+									retryable: false,
+								}),
+							),
+						),
+					),
+				),
+				Effect.provideService(SlackHttpClient, client),
+			)
+
+		const uploadFile = Effect.fn('slack.api.upload_file')(function* (
+			destination: SlackFileUploadDestination,
+			input: SlackUploadFileInput,
+		) {
+			const target = yield* requireFilesWrite(getSlackFileUploadUrl(input))
+			yield* uploadSlackFileBytes({ target, bytes: input.bytes }).pipe(
+				Effect.provideService(HttpClient.HttpClient, http),
+			)
+			const metadata = yield* requireFilesWrite(completeSlackFileUpload({ target, destination, input }))
+			const file = slackFileFromMetadata(
+				destination.channel.teamId,
+				SlackFileMetadata.make({ ...metadata, name: input.filename, size: input.bytes.byteLength }),
+			)
+			yield* Effect.logInfo('Slack file uploaded').pipe(
+				Effect.annotateLogs({
+					channel_id: destination.channel.channelId,
+					thread_ts: destination.threadTs ?? 'none',
+					file_id: file.ref.fileId,
+					bytes: input.bytes.byteLength,
+				}),
+			)
+			return file
+		})
+
+		const openDownload = (request: SlackDownloadFileRequest) =>
+			downloadSlackFile(request).pipe(Effect.provideService(SlackHttpClient, client))
 
 		const listThreadMessagesPage = Effect.fn('slack.api.list_thread_messages_page')(function* (
 			thread: SlackThreadRef,
@@ -796,9 +771,39 @@ export const SlackApiLiveBase = Layer.effect(
 						return Effect.succeed(SlackChannelInfo.make(fields))
 					}),
 				),
+			uploadFileToChannel: ({ channel, input }) => uploadFile({ channel, threadTs: null }, input),
+			uploadFileToThread: ({ thread, input }) =>
+				uploadFile(
+					{
+						channel: SlackChannelRef.make({
+							teamId: thread.teamId,
+							channelId: thread.channelId,
+							isDm: thread.isDm,
+						}),
+						threadTs: thread.threadTs,
+					},
+					input,
+				),
+			downloadFile: (request) => openDownload(request).pipe(Effect.map((download) => download.stream)),
+			downloadFileBytes: (request) => {
+				if (request.size !== null && request.size > request.maxBytes)
+					return Effect.fail(
+						SlackFileSizeLimitExceeded.make({
+							maxBytes: request.maxBytes,
+							observedBytes: request.size,
+							source: 'declared_size',
+						}),
+					)
+				return openDownload(request).pipe(
+					Effect.flatMap((download) => readBoundedSlackFileBytes(download, request.maxBytes)),
+				)
+			},
 		})
 	}),
 )
+
+/** Live Slack API implementation. Slack transport, decoding, pagination, and credentials stay private. */
+export const SlackApiLiveBase = SlackApiService.pipe(Layer.provide(SlackHttpClientLive))
 
 /** Slack API implementation with the standard Fetch transport. */
 export const SlackApiLive = SlackApiLiveBase.pipe(Layer.provide(FetchHttpClient.layer))

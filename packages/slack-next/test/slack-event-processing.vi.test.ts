@@ -1,3 +1,4 @@
+import { NodeCrypto } from '@effect/platform-node'
 import { describe, it } from '@effect/vitest'
 import {
 	DeliveryAdmission,
@@ -8,10 +9,11 @@ import {
 	ProviderEventHandled,
 	ProviderEventIgnored,
 	ProviderEventInvalid,
+	ProviderWebhookEvent,
 	MailboxSubscriptionsMemory,
 } from '@humanlayer/channels-delivery-next'
-import { Cause, Effect, Exit, Layer } from 'effect'
-import { vi } from 'vitest'
+import { Cause, Effect, Exit, Layer, Redacted, Schema } from 'effect'
+import { vi } from 'vite-plus/test'
 
 import { SlackApi } from '../src/SlackApi'
 import {
@@ -27,7 +29,14 @@ import {
 import { SlackCallbacks, type SlackCallbackHandlers } from '../src/SlackCallbacks'
 import { makeSlackEventProcessor } from '../src/SlackEventProcessor'
 import { SlackChannelId, SlackMessageTs, SlackTeamId, slackThreadResourceId } from '../src/SlackIdentity'
-import { SlackMarkdownContent, SlackMessage, SlackParticipant, SlackUserId } from '../src/SlackModels'
+import {
+	slackFileFromMetadata,
+	SlackMarkdownContent,
+	SlackMessage,
+	SlackParticipant,
+	SlackUserId,
+} from '../src/SlackModels'
+import { makeSlackWebhookProvider } from '../src/SlackWebhookProvider'
 import {
 	SlackAgentSessionStoppedEnvelope,
 	SlackAppMentionEnvelope,
@@ -37,7 +46,8 @@ import {
 	SlackReactionAddedEnvelope,
 	SlackReactionRemovedEnvelope,
 } from '../src/SlackWebhookSchemas'
-import { makeInMemoryMailboxFixture } from './fixtures'
+import { makeInMemoryMailboxFixture, signedSlackInput } from './fixtures'
+import { slackFileMetadata, slackFileObject } from './slack-file-fixtures'
 
 const teamId = SlackTeamId.make('T_TEST')
 const channelId = SlackChannelId.make('C_TEST')
@@ -116,6 +126,9 @@ const reaction = (eventId = 'Ev_REACTION') =>
 		},
 	})
 
+type MentionCallback = (event: SlackNewMention) => Effect.Effect<void>
+type SubscribedCallback = (event: SlackSubscribedThreadEvents) => Effect.Effect<void>
+
 const apiLayer = Layer.mock(SlackApi, {
 	resolveParticipant: (request) => Effect.succeed(request.userId === agent.userId ? agent : alice),
 	getMessage: (request) =>
@@ -125,6 +138,7 @@ const apiLayer = Layer.mock(SlackApi, {
 				thread: request.thread,
 				author: alice,
 				content: SlackMarkdownContent.make({ markdown: 'thread reply' }),
+				files: [],
 				metadata: { source: 'test-provider' },
 			}),
 		),
@@ -138,14 +152,13 @@ const subscribedRuntimeLayer = Layer.merge(
 
 const process = <E, R>(handlers: SlackCallbackHandlers<E, R>, batch: DeliveryAdmissionBatch, layer = runtimeLayer) =>
 	processProviderEvent([makeSlackEventProcessor({ namespace: 'mention-test' })])(batch).pipe(
-		Effect.provide(SlackCallbacks.layer(handlers)),
-		Effect.provide(layer),
+		Effect.provide(Layer.merge(SlackCallbacks.layer(handlers), layer)),
 	)
 
 describe('Slack event batch processing', () => {
 	it.effect('delivers mention plus later message and reaction in one onNewMention call', ({ expect }) =>
 		Effect.gen(function* () {
-			const onNewMention = vi.fn((_event: SlackNewMention) => Effect.void)
+			const onNewMention = vi.fn<MentionCallback>(() => Effect.void)
 			const admissions = DeliveryAdmissionBatch.make([
 				admission('Ev_MENTION', mention()),
 				admission('Ev_REPLY', reply()),
@@ -160,7 +173,7 @@ describe('Slack event batch processing', () => {
 			expect(
 				yield* mailbox
 					.processBatch(mailboxKey)
-					.pipe(Effect.provide(SlackCallbacks.layer({ onNewMention })), Effect.provide(runtimeLayer)),
+					.pipe(Effect.provide(Layer.merge(SlackCallbacks.layer({ onNewMention }), runtimeLayer))),
 			).toEqual(ProviderEventHandled.make({}))
 			expect(onNewMention).toHaveBeenCalledOnce()
 			const callback = onNewMention.mock.calls[0]?.[0]
@@ -173,8 +186,8 @@ describe('Slack event batch processing', () => {
 
 	it.effect('delivers every relevant event in one subscribed callback', ({ expect }) =>
 		Effect.gen(function* () {
-			const onNewMention = vi.fn((_event: SlackNewMention) => Effect.void)
-			const onSubscribedThreadEvents = vi.fn((_event: SlackSubscribedThreadEvents) => Effect.void)
+			const onNewMention = vi.fn<MentionCallback>(() => Effect.void)
+			const onSubscribedThreadEvents = vi.fn<SubscribedCallback>(() => Effect.void)
 			const batch = DeliveryAdmissionBatch.make([
 				admission('Ev_MENTION', mention()),
 				admission('Ev_REPLY', reply()),
@@ -196,7 +209,7 @@ describe('Slack event batch processing', () => {
 
 	it.effect('normalizes lifecycle variants into the subscribed event union in order', ({ expect }) =>
 		Effect.gen(function* () {
-			const onSubscribedThreadEvents = vi.fn((_event: SlackSubscribedThreadEvents) => Effect.void)
+			const onSubscribedThreadEvents = vi.fn<SubscribedCallback>(() => Effect.void)
 			const snapshot = {
 				user: alice.userId,
 				text: 'edited',
@@ -275,7 +288,7 @@ describe('Slack event batch processing', () => {
 
 	it.effect('ignores relevant events before the first activation', ({ expect }) =>
 		Effect.gen(function* () {
-			const onNewMention = vi.fn((_event: SlackNewMention) => Effect.void)
+			const onNewMention = vi.fn<MentionCallback>(() => Effect.void)
 			const batch = DeliveryAdmissionBatch.make([
 				admission('Ev_BEFORE', reply('Ev_BEFORE')),
 				admission('Ev_MENTION', mention()),
@@ -293,7 +306,7 @@ describe('Slack event batch processing', () => {
 
 	it.effect('activates each top-level direct message independently', ({ expect }) =>
 		Effect.gen(function* () {
-			const onNewMention = vi.fn((_event: SlackNewMention) => Effect.void)
+			const onNewMention = vi.fn<MentionCallback>(() => Effect.void)
 			const dmChannel = SlackChannelId.make('D_DIRECT')
 			const firstTs = SlackMessageTs.make('1700000100.000001')
 			const secondTs = SlackMessageTs.make('1700000200.000001')
@@ -330,7 +343,7 @@ describe('Slack event batch processing', () => {
 
 	it.effect('does not activate an unsubscribed DM thread reply', ({ expect }) =>
 		Effect.gen(function* () {
-			const onNewMention = vi.fn((_event: SlackNewMention) => Effect.void)
+			const onNewMention = vi.fn<MentionCallback>(() => Effect.void)
 			const dmChannel = SlackChannelId.make('D_DIRECT')
 			const dmResource = slackThreadResourceId({ teamId, channelId: dmChannel, threadTs: rootTs })
 			const payload = SlackMessageEnvelope.make({
@@ -382,6 +395,76 @@ describe('Slack event batch processing', () => {
 				DeliveryAdmissionBatch.make([admission('Ev_MENTION', mention())]),
 			).pipe(Effect.exit)
 			expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true)
+		}),
+	)
+
+	it.effect('exposes mention files as SlackFile values instead of raw metadata', ({ expect }) =>
+		Effect.gen(function* () {
+			const onNewMention = vi.fn<MentionCallback>(() => Effect.void)
+			const withFiles = SlackAppMentionEnvelope.make({
+				...mention(),
+				event: { ...mention().event, files: [slackFileMetadata] },
+			})
+
+			yield* process({ onNewMention }, DeliveryAdmissionBatch.make([admission('Ev_MENTION', withFiles)]))
+			const trigger = onNewMention.mock.calls[0]?.[0].trigger
+			expect(trigger?.files).toEqual([slackFileFromMetadata(teamId, slackFileMetadata)])
+			expect(trigger?.metadata).toEqual({ eventId: 'Ev_MENTION', eventTime: 1_700_000_000 })
+		}),
+	)
+
+	it.effect('admits and delivers a signed file_share follow-up in a subscribed thread', ({ expect }) =>
+		Effect.gen(function* () {
+			const onSubscribedThreadEvents = vi.fn<SubscribedCallback>(() => Effect.void)
+			const fileShareTs = '1700000003.000001'
+			const payload = {
+				type: 'event_callback',
+				team_id: teamId,
+				api_app_id: 'A0123APP',
+				event_id: 'Ev_FILE_SHARE',
+				event_time: 1_700_000_003,
+				event: {
+					type: 'message',
+					subtype: 'file_share',
+					text: 'here is the log',
+					files: [slackFileObject],
+					upload: false,
+					user: alice.userId,
+					display_as_bot: false,
+					ts: fileShareTs,
+					thread_ts: rootTs,
+					client_msg_id: '8e7c2d1a-0000-4000-8000-000000000001',
+					channel: channelId,
+					event_ts: fileShareTs,
+					channel_type: 'channel',
+				},
+			}
+			const provider = makeSlackWebhookProvider({
+				namespace: 'mention-test',
+				signingSecret: Redacted.make('file-share-secret'),
+			})
+			const outcome = yield* provider
+				.handle(signedSlackInput('file-share-secret', payload))
+				.pipe(Effect.provide(Layer.merge(NodeCrypto.layer, apiLayer)))
+			if (!Schema.is(ProviderWebhookEvent)(outcome)) return yield* Effect.die('expected an admitted event')
+			expect(outcome.event.resourceId).toBe(resourceId)
+
+			expect(
+				yield* process(
+					{ onSubscribedThreadEvents },
+					DeliveryAdmissionBatch.make([outcome.event]),
+					subscribedRuntimeLayer,
+				),
+			).toEqual(ProviderEventHandled.make({}))
+			const received = onSubscribedThreadEvents.mock.calls[0]?.[0].events[0]
+			expect(received).toBeInstanceOf(SlackMessageReceived)
+			expect(received).toMatchObject({
+				message: {
+					ref: { messageTs: fileShareTs },
+					files: [slackFileFromMetadata(teamId, slackFileMetadata)],
+					metadata: { eventId: 'Ev_FILE_SHARE', eventTime: 1_700_000_003 },
+				},
+			})
 		}),
 	)
 })
