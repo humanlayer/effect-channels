@@ -4,7 +4,7 @@ This example receives Slack, GitHub, and Linear webhooks in a Cloudflare Worker,
 
 ## Linear Application setup
 
-Create a Linear Application for the workspace, enable the **Issues**, **Agent Session events**, and **Inbox Notifications** webhook categories, and set its webhook URL to:
+Create a Linear Application for the workspace with the scopes and webhook categories listed in [`packages/linear-next/README.md`](../../packages/linear-next/README.md), and set its webhook URL to:
 
 ```text
 https://<your-worker-hostname>/integrations/linear/webhook
@@ -149,7 +149,7 @@ In the GitHub App settings, **Advanced → Recent Deliveries** shows each webhoo
 
 ## Slack setup
 
-Copy these values from your Slack app into `.env`:
+Create the Slack app from [`slack-app-manifest.example.json`](slack-app-manifest.example.json) after replacing its name and request URL. [`packages/slack-next/README.md`](../../packages/slack-next/README.md) explains each scope and event. Install the app, invite the bot to your test channel, and copy these values into `.env`:
 
 ```dotenv
 SLACK_SIGNING_SECRET=...

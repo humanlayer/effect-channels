@@ -4,14 +4,53 @@
 
 ## Linear application setup
 
-Create a Linear Application using the app actor and configure:
+Linear has no app manifest; configure the application by hand in Linear's API settings. Create it using the app actor, so its actions appear as the app rather than a person.
 
-- webhook URL: `https://<host>/integrations/linear/webhook`
-- webhook category: **Issues**
-- OAuth scopes: `read`; add `write`, `app:mentionable`, and `app:assignable` when enabling later resource and notification capabilities
-- either an application developer token or client-credentials authentication for the application-owning workspace
+- **Webhook URL:** `https://<host>/integrations/linear/webhook`
+- **Scopes:** `read`, `write`, `app:mentionable`, `app:assignable`
 
-Always configure `LINEAR_WEBHOOK_SECRET`, `LINEAR_ORGANIZATION_ID`, and `LINEAR_APP_USER_ID`. For API authentication, configure either `LINEAR_DEVELOPER_TOKEN` or both `LINEAR_CLIENT_ID` and `LINEAR_CLIENT_SECRET`. When both forms are present, the developer token takes precedence. Both paths lazily verify the token's `viewer` app-user and organization identities before the first provider operation. Client credentials acquire and renew short-lived access tokens automatically; developer-token replacement remains the caller's responsibility. Credentials are never placed in webhook admissions.
+### Scopes
+
+| Scope             | Used for                                                                             |
+| ----------------- | ------------------------------------------------------------------------------------ |
+| `read`            | Reading issues, comments, attachments, users, and files.                             |
+| `write`           | Comments, reactions, issue changes, attachments, file uploads, and agent activities. |
+| `app:mentionable` | Letting people mention the app, which starts an Agent Session.                       |
+| `app:assignable`  | Letting people assign or delegate issues to the app, which starts an Agent Session.  |
+
+### Webhook categories
+
+| Category             | Webhook type          | Used for                                                                                                                  |
+| -------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Agent session events | `AgentSessionEvent`   | `created` and `prompted` start and continue agent work.                                                                   |
+| Issues               | `Issue`               | `onIssueCreated`, plus updates and removal of subscribed issues.                                                          |
+| Comments             | `Comment`             | Comments on subscribed issues.                                                                                            |
+| Emoji reactions      | `Reaction`            | Reactions on subscribed issues and their comments.                                                                        |
+| Issue attachments    | `Attachment`          | Link and file cards on subscribed issues.                                                                                 |
+| Inbox notifications  | `AppUserNotification` | Mention and assignment notices. They are acknowledged without starting duplicate work, because Agent Sessions already do. |
+| Permission changes   | `PermissionChange`    | Team access changes; acknowledged and logged.                                                                             |
+| OAuth app events     | `OAuthApp`            | App revocation; acknowledged and logged.                                                                                  |
+
+The app's own changes are admitted and then ignored, so they never re-enter callbacks. Other event types and actions are acknowledged and ignored.
+
+### Credentials
+
+```dotenv
+LINEAR_WEBHOOK_SECRET=...
+LINEAR_ORGANIZATION_ID=...
+LINEAR_APP_USER_ID=...
+LINEAR_DEVELOPER_TOKEN=...
+# or, instead of the developer token:
+LINEAR_CLIENT_ID=...
+LINEAR_CLIENT_SECRET=...
+```
+
+- `LINEAR_WEBHOOK_SECRET` verifies webhooks. Pass it to `LinearBot.make` as `webhookSecret`.
+- `LINEAR_ORGANIZATION_ID` and `LINEAR_APP_USER_ID` are the one workspace and app user this bot serves. Before its first API call, the bot checks that its token belongs to both.
+- `LINEAR_DEVELOPER_TOKEN` is the application's developer token. It takes precedence when set. Replace it yourself if it is revoked.
+- `LINEAR_CLIENT_ID` and `LINEAR_CLIENT_SECRET` are used only when no developer token is set. The bot then fetches and renews short-lived tokens itself.
+
+`LinearAuth.fromEnvironment` reads these variables. Credentials are never stored in webhook admissions or mailboxes.
 
 Unknown authenticated event types/actions are acknowledged and ignored. API credentials are resolved lazily; the first operation verifies `viewer.id` and `viewer.organization.id` before its requested query or mutation runs.
 
@@ -19,11 +58,11 @@ Unknown authenticated event types/actions are acknowledged and ignored. API cred
 
 Linear keeps three representations separate:
 
-| Representation | Operation | Result |
-| --- | --- | --- |
-| Markdown link or image | existing issue/comment Markdown writes | content containing a `LinearFile` URL |
-| Uploaded asset | `issue.uploadFile({ filename, contentType, bytes })` | `LinearFile` |
-| First-class issue card | `issue.uploadAttachment(...)` or `issue.createAttachment({ url, title })` | `LinearIssueAttachment` |
+| Representation         | Operation                                                                 | Result                                |
+| ---------------------- | ------------------------------------------------------------------------- | ------------------------------------- |
+| Markdown link or image | existing issue/comment Markdown writes                                    | content containing a `LinearFile` URL |
+| Uploaded asset         | `issue.uploadFile({ filename, contentType, bytes })`                      | `LinearFile`                          |
+| First-class issue card | `issue.uploadAttachment(...)` or `issue.createAttachment({ url, title })` | `LinearIssueAttachment`               |
 
 `LinearIssue.files` and `LinearComment.files` are discovered from parsed Markdown links, images, reference links, autolinks, and GFM bare URLs. Only canonical `https://uploads.linear.app/<workspace>/<asset>/<file>` URLs become files; ordinary links, lookalike hosts, and other URL forms stay content.
 

@@ -17,6 +17,8 @@ Configure:
 
 OAuth callbacks, user authorization, device flow, and setup URLs are not required.
 
+[`examples/alchemy-cloudflare/github-app-manifest.example.json`](../../examples/alchemy-cloudflare/github-app-manifest.example.json) records every permission and event below as a [GitHub App manifest](https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-from-a-manifest).
+
 ## Repository permissions
 
 GitHub Apps use repository permissions rather than OAuth scopes. Configure these permissions:

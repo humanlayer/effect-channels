@@ -1,0 +1,64 @@
+{
+	"display_information": {
+		"name": "replace-with-your-app-name",
+		"description": "Channels example agent",
+		"background_color": "#031830"
+	},
+	"features": {
+		"app_home": {
+			"home_tab_enabled": false,
+			"messages_tab_enabled": true,
+			"messages_tab_read_only_enabled": false
+		},
+		"bot_user": {
+			"display_name": "replace-with-your-app-name",
+			"always_online": true
+		},
+		"agent_view": {
+			"agent_description": "Replace with a description of your agent",
+			"suggested_prompts": []
+		}
+	},
+	"oauth_config": {
+		"scopes": {
+			"bot": [
+				"app_mentions:read",
+				"assistant:write",
+				"channels:history",
+				"channels:read",
+				"chat:write",
+				"chat:write.public",
+				"files:read",
+				"files:write",
+				"groups:history",
+				"groups:read",
+				"im:history",
+				"im:read",
+				"mpim:history",
+				"mpim:read",
+				"reactions:read",
+				"reactions:write",
+				"users:read"
+			]
+		},
+		"pkce_enabled": false
+	},
+	"settings": {
+		"event_subscriptions": {
+			"request_url": "https://replace-with-your-worker-hostname.example/integrations/slack/webhook",
+			"bot_events": [
+				"agent_session_stopped",
+				"app_mention",
+				"message.channels",
+				"message.groups",
+				"message.im",
+				"message.mpim",
+				"reaction_added",
+				"reaction_removed"
+			]
+		},
+		"org_deploy_enabled": false,
+		"socket_mode_enabled": false,
+		"token_rotation_enabled": false
+	}
+}
