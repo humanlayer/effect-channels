@@ -265,6 +265,7 @@ describe('GitHubApiLive', () => {
 						return HttpClientResponse.fromWeb(request, Response.json({ slug: 'agent' }))
 					}
 					if (url.pathname === '/users/agent%5Bbot%5D') {
+						expect(web.headers.get('authorization')).toBeNull()
 						return HttpClientResponse.fromWeb(request, Response.json(participant))
 					}
 					if (url.pathname.startsWith('/app/installations/')) {

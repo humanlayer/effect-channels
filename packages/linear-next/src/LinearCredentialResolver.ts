@@ -1,9 +1,9 @@
 import { Clock, Context, Effect, Layer, Option, Redacted, Ref, Schema, Semaphore } from 'effect'
 import * as HttpClient from 'effect/unstable/http/HttpClient'
-import * as HttpClientRequest from 'effect/unstable/http/HttpClientRequest'
 
 import { getViewerIdentity } from './api/GetViewerIdentity'
-import { narrowLinearProviderError } from './api/LinearApiErrors'
+import { narrowLinearProviderErrors } from './api/LinearApiErrors'
+import { LinearHttpClient, makeFixedCredentialLinearHttpClient } from './api/LinearHttpClient'
 import { acquireClientCredentialsToken } from './auth/AcquireClientCredentialsToken'
 import { LinearApiError } from './LinearApi'
 import { LinearOrganizationId, LinearUserId } from './LinearIdentity'
@@ -56,10 +56,12 @@ const makeResolver = Effect.fn('linear.credentials.make')(function* (options: {
 
 	const acquire = Effect.gen(function* () {
 		const token = yield* options.acquire.pipe(Effect.provideService(HttpClient.HttpClient, client))
-		const authenticatedClient = client.pipe(HttpClient.mapRequest(HttpClientRequest.bearerToken(token.accessToken)))
 		const identity = yield* getViewerIdentity().pipe(
-			Effect.provideService(HttpClient.HttpClient, authenticatedClient),
-			Effect.mapError(narrowLinearProviderError),
+			Effect.provideService(
+				LinearHttpClient,
+				makeFixedCredentialLinearHttpClient(client, options.organizationId, token.accessToken),
+			),
+			narrowLinearProviderErrors,
 		)
 		if (identity.viewer.id !== options.appUserId || identity.viewer.organization.id !== options.organizationId)
 			return yield* LinearApiError.make({
@@ -85,7 +87,8 @@ const makeResolver = Effect.fn('linear.credentials.make')(function* (options: {
 			Effect.gen(function* () {
 				const currentTime = yield* Clock.currentTimeMillis
 				const current = yield* Ref.get(credential)
-				return Option.isSome(current) && current.value.expiresAt > currentTime ? current.value : yield* acquire
+				if (Option.isSome(current) && current.value.expiresAt > currentTime) return current.value
+				return yield* acquire
 			}),
 		)
 	})

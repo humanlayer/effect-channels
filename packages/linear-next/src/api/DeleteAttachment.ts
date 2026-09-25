@@ -1,23 +1,22 @@
 import { Effect, Schema } from 'effect'
 
 import type { LinearDeleteAttachmentRequest } from '../LinearApi'
-import { LinearProviderError } from './LinearApiErrors'
-import { runGraphql } from './ProcedureSupport'
+import { failLinearMutation } from './LinearApiErrors'
+import { linearGraphql } from './LinearGraphql'
 
 const document = `mutation LinearAttachmentDelete($id: String!) { attachmentDelete(id: $id) { success } }`
-const Data = Schema.Struct({ attachmentDelete: Schema.Struct({ success: Schema.Boolean }) })
+const DeleteAttachmentResponse = Schema.Struct({ attachmentDelete: Schema.Struct({ success: Schema.Boolean }) })
+
 export const deleteAttachment = Effect.fn('linear.api.delete_attachment')((input: LinearDeleteAttachmentRequest) =>
-	runGraphql('delete_attachment', document, { id: input.attachment.attachmentId }, Data).pipe(
-		Effect.flatMap(({ attachmentDelete }) =>
-			attachmentDelete.success
-				? Effect.void
-				: Effect.fail(
-						LinearProviderError.make({
-							operation: 'delete_attachment',
-							reason: 'graphql',
-							retryable: false,
-						}),
-					),
-		),
+	linearGraphql({
+		operation: 'delete_attachment',
+		query: document,
+		variables: { id: input.attachment.attachmentId },
+		response: DeleteAttachmentResponse,
+	}).pipe(
+		Effect.flatMap(({ attachmentDelete }) => {
+			if (!attachmentDelete.success) return failLinearMutation('delete_attachment')
+			return Effect.void
+		}),
 	),
 )

@@ -3,7 +3,7 @@ import { Schema } from 'effect'
 import { LinearOrganizationId, LinearUserId } from '../LinearIdentity'
 import { linearGraphql } from './LinearGraphql'
 
-const ViewerIdentityData = Schema.Struct({
+const GetViewerIdentityResponse = Schema.Struct({
 	viewer: Schema.Struct({
 		id: LinearUserId,
 		organization: Schema.Struct({ id: LinearOrganizationId }),
@@ -22,5 +22,5 @@ export const getViewerIdentity = () =>
 		operation: 'viewer_identity',
 		query,
 		variables: {},
-		data: ViewerIdentityData,
+		response: GetViewerIdentityResponse,
 	})

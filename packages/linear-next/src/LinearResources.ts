@@ -48,6 +48,19 @@ import {
 
 const issueAttributes = (issueId: string) => ({ 'linear.issue_id': issueId })
 
+const linearListUsersRequest = (issue: LinearIssueRef, options: LinearUserPageOptions) => {
+	const request: {
+		issue: LinearIssueRef
+		first?: number
+		after?: string
+		query?: string
+	} = { issue }
+	if (options.first !== undefined) request.first = options.first
+	if (options.after !== undefined) request.after = options.after
+	if (options.query !== undefined) request.query = options.query
+	return LinearListUsersRequest.make(request)
+}
+
 export class LinearIssue extends Schema.TaggedClass<LinearIssue>()('LinearIssue', {
 	...LinearIssueSnapshot.fields,
 	mailboxKey: Schema.NonEmptyString,
@@ -76,28 +89,10 @@ export class LinearIssue extends Schema.TaggedClass<LinearIssue>()('LinearIssue'
 		)
 	}
 	listAssignableUsers(options: LinearUserPageOptions = {}): Effect.Effect<LinearUserPage, LinearApiError, LinearApi> {
-		return Effect.flatMap(LinearApi, (api) =>
-			api.listAssignableUsers(
-				LinearListUsersRequest.make({
-					issue: this.ref,
-					...(options.first === undefined ? {} : { first: options.first }),
-					...(options.after === undefined ? {} : { after: options.after }),
-					...(options.query === undefined ? {} : { query: options.query }),
-				}),
-			),
-		)
+		return Effect.flatMap(LinearApi, (api) => api.listAssignableUsers(linearListUsersRequest(this.ref, options)))
 	}
 	listAppUsers(options: LinearUserPageOptions = {}): Effect.Effect<LinearAppUserPage, LinearApiError, LinearApi> {
-		return Effect.flatMap(LinearApi, (api) =>
-			api.listAppUsers(
-				LinearListUsersRequest.make({
-					issue: this.ref,
-					...(options.first === undefined ? {} : { first: options.first }),
-					...(options.after === undefined ? {} : { after: options.after }),
-					...(options.query === undefined ? {} : { query: options.query }),
-				}),
-			),
-		)
+		return Effect.flatMap(LinearApi, (api) => api.listAppUsers(linearListUsersRequest(this.ref, options)))
 	}
 	getUser(userId: LinearUserId): Effect.Effect<LinearUser, LinearApiError, LinearApi> {
 		return Effect.flatMap(LinearApi, (api) => api.getUser(LinearGetUserRequest.make({ issue: this.ref, userId })))

@@ -1,12 +1,18 @@
 import { Effect, Schema } from 'effect'
 
 import type { LinearIssueRequest } from '../LinearApi'
-import { Issue, issueFields, issueInfo, runGraphql } from './ProcedureSupport'
+import { projectLinearIssue } from './LinearApiProjections'
+import { LinearApiIssue, linearApiIssueFields } from './LinearApiSchemas'
+import { linearGraphql } from './LinearGraphql'
 
-const document = `query LinearIssue($id: String!) { issue(id: $id) { ${issueFields} } }`
-const Data = Schema.Struct({ issue: Issue })
+const document = `query LinearIssue($id: String!) { issue(id: $id) { ${linearApiIssueFields} } }`
+const GetIssueResponse = Schema.Struct({ issue: LinearApiIssue })
+
 export const getIssue = Effect.fn('linear.api.get_issue')((input: LinearIssueRequest) =>
-	runGraphql('get_issue', document, { id: input.issue.issueId }, Data).pipe(
-		Effect.map(({ issue }) => issueInfo(input.issue, issue)),
-	),
+	linearGraphql({
+		operation: 'get_issue',
+		query: document,
+		variables: { id: input.issue.issueId },
+		response: GetIssueResponse,
+	}).pipe(Effect.map(({ issue }) => projectLinearIssue(input.issue, issue))),
 )

@@ -6,10 +6,10 @@ import {
 	LinearAgentActivityReceipt,
 	type LinearCreateAgentActivityRequest,
 } from '../LinearModels'
-import { LinearProviderError } from './LinearApiErrors'
+import { failLinearMutation } from './LinearApiErrors'
 import { linearGraphql } from './LinearGraphql'
 
-const CreateAgentActivityData = Schema.Struct({
+const CreateAgentActivityResponse = Schema.Struct({
 	agentActivityCreate: Schema.Struct({
 		success: Schema.Boolean,
 		agentActivity: Schema.Struct({
@@ -44,18 +44,13 @@ export const createAgentActivity = (request: LinearCreateAgentActivityRequest) =
 				ephemeral: request.ephemeral,
 			},
 		},
-		data: CreateAgentActivityData,
+		response: CreateAgentActivityResponse,
 	}).pipe(
 		Effect.flatMap((data) => {
 			const activity = data.agentActivityCreate.agentActivity
-			if (!data.agentActivityCreate.success || activity.agentSession.id !== request.sessionId)
-				return Effect.fail(
-					LinearProviderError.make({
-						operation: 'create_agent_activity',
-						reason: 'graphql',
-						retryable: false,
-					}),
-				)
+			if (!data.agentActivityCreate.success || activity.agentSession.id !== request.sessionId) {
+				return failLinearMutation('create_agent_activity')
+			}
 			return Effect.succeed(
 				LinearAgentActivityReceipt.make({
 					activityId: activity.id,

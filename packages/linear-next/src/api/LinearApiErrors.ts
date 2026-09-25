@@ -1,44 +1,125 @@
-import { Schema } from 'effect'
+import { Effect, Schema } from 'effect'
 
-import { LinearApiError, type LinearApiOperation } from '../LinearApi'
+import { LinearApiError, LinearApiOperation } from '../LinearApi'
 
-/** Rich transport failure retained inside the package until the orchestration boundary narrows it. */
-export class LinearProviderError extends Schema.TaggedError<LinearProviderError>()('LinearProviderError', {
-	operation: Schema.String,
-	reason: Schema.Literals([
-		'transport',
-		'authentication',
-		'forbidden',
-		'not_found',
-		'validation',
-		'rate_limited',
-		'unavailable',
-		'graphql',
-		'decode',
-	]),
+const RetryAfterMilliseconds = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
+const LinearProviderErrorFields = {
+	operation: LinearApiOperation,
 	retryable: Schema.Boolean,
-	status: Schema.optionalKey(Schema.Int),
-	message: Schema.optionalKey(Schema.String),
-	retryAfterMs: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
-}) {
-	readonly _operation!: LinearApiOperation
+	status: Schema.NullOr(Schema.Int),
+	message: Schema.NullOr(Schema.String),
+	retryAfterMs: Schema.NullOr(RetryAfterMilliseconds),
 }
 
-export const narrowLinearProviderError = (error: LinearProviderError): LinearApiError =>
-	LinearApiError.make({
-		operation: error.operation as LinearApiOperation,
-		reason:
-			error.reason === 'transport' || error.reason === 'unavailable'
-				? 'unavailable'
-				: error.reason === 'authentication'
-					? 'unauthorized'
-					: error.reason === 'graphql'
-						? 'rejected'
-						: error.reason === 'decode'
-							? 'invalid_response'
-							: error.reason,
-		retryable: error.retryable,
-		...(error.status === undefined ? {} : { status: error.status }),
-		...(error.message === undefined ? {} : { message: error.message }),
-		...(error.retryAfterMs === undefined ? {} : { retryAfterMs: error.retryAfterMs }),
-	})
+export class LinearTransportError extends Schema.TaggedError<LinearTransportError>()('LinearTransportError', {
+	...LinearProviderErrorFields,
+}) {}
+
+export class LinearAuthenticationError extends Schema.TaggedError<LinearAuthenticationError>()(
+	'LinearAuthenticationError',
+	{ ...LinearProviderErrorFields },
+) {}
+
+export class LinearForbiddenError extends Schema.TaggedError<LinearForbiddenError>()('LinearForbiddenError', {
+	...LinearProviderErrorFields,
+}) {}
+
+export class LinearResourceNotFoundError extends Schema.TaggedError<LinearResourceNotFoundError>()(
+	'LinearResourceNotFoundError',
+	{ ...LinearProviderErrorFields },
+) {}
+
+export class LinearValidationError extends Schema.TaggedError<LinearValidationError>()('LinearValidationError', {
+	...LinearProviderErrorFields,
+}) {}
+
+export class LinearRateLimitedError extends Schema.TaggedError<LinearRateLimitedError>()('LinearRateLimitedError', {
+	...LinearProviderErrorFields,
+}) {}
+
+export class LinearUnavailableError extends Schema.TaggedError<LinearUnavailableError>()('LinearUnavailableError', {
+	...LinearProviderErrorFields,
+}) {}
+
+export class LinearGraphqlRequestError extends Schema.TaggedError<LinearGraphqlRequestError>()(
+	'LinearGraphqlRequestError',
+	{ ...LinearProviderErrorFields },
+) {}
+
+export class LinearResponseDecodeError extends Schema.TaggedError<LinearResponseDecodeError>()(
+	'LinearResponseDecodeError',
+	{ ...LinearProviderErrorFields },
+) {}
+
+export class LinearMutationRejectedError extends Schema.TaggedError<LinearMutationRejectedError>()(
+	'LinearMutationRejectedError',
+	{ ...LinearProviderErrorFields },
+) {}
+
+export type LinearProviderError =
+	| LinearTransportError
+	| LinearAuthenticationError
+	| LinearForbiddenError
+	| LinearResourceNotFoundError
+	| LinearValidationError
+	| LinearRateLimitedError
+	| LinearUnavailableError
+	| LinearGraphqlRequestError
+	| LinearResponseDecodeError
+	| LinearMutationRejectedError
+
+type LinearProviderErrorDetails = {
+	readonly operation: LinearApiOperation
+	readonly retryable: boolean
+	readonly status: number | null
+	readonly message: string | null
+	readonly retryAfterMs: number | null
+}
+
+export const linearProviderErrorDetails = (
+	operation: LinearApiOperation,
+	overrides: Partial<Omit<LinearProviderErrorDetails, 'operation'>> = {},
+): LinearProviderErrorDetails => ({
+	operation,
+	retryable: overrides.retryable ?? false,
+	status: overrides.status ?? null,
+	message: overrides.message ?? null,
+	retryAfterMs: overrides.retryAfterMs ?? null,
+})
+
+const toLinearApiError = (error: LinearProviderError, reason: LinearApiError['reason']): LinearApiError => {
+	const details: {
+		operation: LinearApiOperation
+		reason: LinearApiError['reason']
+		retryable: boolean
+		status?: number
+		message?: string
+		retryAfterMs?: number
+	} = { operation: error.operation, reason, retryable: error.retryable }
+	if (error.status !== null) details.status = error.status
+	if (error.message !== null) details.message = error.message
+	if (error.retryAfterMs !== null) details.retryAfterMs = error.retryAfterMs
+	return LinearApiError.make(details)
+}
+
+/** Narrows provider-boundary failures to the stable public LinearApi contract. */
+export const narrowLinearProviderErrors = <A, R>(
+	effect: Effect.Effect<A, LinearProviderError | LinearApiError, R>,
+): Effect.Effect<A, LinearApiError, R> =>
+	effect.pipe(
+		Effect.catchTags({
+			LinearTransportError: (error) => Effect.fail(toLinearApiError(error, 'unavailable')),
+			LinearAuthenticationError: (error) => Effect.fail(toLinearApiError(error, 'unauthorized')),
+			LinearForbiddenError: (error) => Effect.fail(toLinearApiError(error, 'forbidden')),
+			LinearResourceNotFoundError: (error) => Effect.fail(toLinearApiError(error, 'not_found')),
+			LinearValidationError: (error) => Effect.fail(toLinearApiError(error, 'validation')),
+			LinearRateLimitedError: (error) => Effect.fail(toLinearApiError(error, 'rate_limited')),
+			LinearUnavailableError: (error) => Effect.fail(toLinearApiError(error, 'unavailable')),
+			LinearGraphqlRequestError: (error) => Effect.fail(toLinearApiError(error, 'rejected')),
+			LinearResponseDecodeError: (error) => Effect.fail(toLinearApiError(error, 'invalid_response')),
+			LinearMutationRejectedError: (error) => Effect.fail(toLinearApiError(error, 'rejected')),
+		}),
+	)
+
+export const failLinearMutation = (operation: LinearApiOperation) =>
+	Effect.fail(new LinearMutationRejectedError(linearProviderErrorDetails(operation)))

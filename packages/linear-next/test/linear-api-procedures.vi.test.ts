@@ -1,8 +1,10 @@
 import { describe, it } from '@effect/vitest'
-import { Effect, Layer, Schema } from 'effect'
+import { Effect, Layer, Redacted, Schema } from 'effect'
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http'
 
 import { getIssue } from '../src/api/GetIssue'
+import { narrowLinearProviderErrors } from '../src/api/LinearApiErrors'
+import { LinearHttpClient, makeFixedCredentialLinearHttpClient } from '../src/api/LinearHttpClient'
 import {
 	createAttachment,
 	createComment,
@@ -27,6 +29,12 @@ import {
 } from '../src/LinearIdentity'
 import { issue, issueJson } from './api-test-fixtures'
 
+const procedureLayer = (http: HttpClient.HttpClient) =>
+	Layer.succeed(
+		LinearHttpClient,
+		makeFixedCredentialLinearHttpClient(http, issue.organizationId, Redacted.make('test-token')),
+	)
+
 describe('Linear GraphQL procedures', () => {
 	it.effect('owns its document, variables, decoding, and domain projection', ({ expect }) =>
 		Effect.gen(function* () {
@@ -39,7 +47,7 @@ describe('Linear GraphQL procedures', () => {
 					return HttpClientResponse.fromWeb(request, Response.json({ data: { issue: issueJson } }))
 				}),
 			)
-			const result = yield* getIssue({ issue }).pipe(Effect.provide(Layer.succeed(HttpClient.HttpClient, http)))
+			const result = yield* getIssue({ issue }).pipe(Effect.provide(procedureLayer(http)))
 			expect(result.identifier).toBe('CORE-1')
 		}),
 	)
@@ -93,7 +101,7 @@ describe('Linear GraphQL procedures', () => {
 					)
 				}),
 			)
-			const layer = Layer.succeed(HttpClient.HttpClient, http)
+			const layer = procedureLayer(http)
 			const updated = yield* updateIssue({
 				issue,
 				update: {
@@ -132,7 +140,8 @@ describe('Linear GraphQL procedures', () => {
 					),
 				)
 				const error = yield* getIssue({ issue }).pipe(
-					Effect.provide(Layer.succeed(HttpClient.HttpClient, http)),
+					Effect.provide(procedureLayer(http)),
+					narrowLinearProviderErrors,
 					Effect.flip,
 				)
 				expect(error.reason).toBe(reason)
@@ -158,13 +167,36 @@ describe('Linear GraphQL procedures', () => {
 				),
 			)
 			const rateError = yield* getIssue({ issue }).pipe(
-				Effect.provide(Layer.succeed(HttpClient.HttpClient, rateLimited)),
+				Effect.provide(procedureLayer(rateLimited)),
+				narrowLinearProviderErrors,
 				Effect.flip,
 			)
 			expect(rateError.reason).toBe('rate_limited')
 			expect(rateError.status).toBe(429)
 			expect(rateError.retryable).toBe(true)
 			expect(rateError.retryAfterMs).toBe(123)
+		}),
+	)
+
+	it.effect('fails a decoded mutation whose success flag is false', ({ expect }) =>
+		Effect.gen(function* () {
+			const http = HttpClient.make((request) =>
+				Effect.succeed(
+					HttpClientResponse.fromWeb(
+						request,
+						Response.json({
+							data: { issueUpdate: { success: false, issue: null } },
+						}),
+					),
+				),
+			)
+			const error = yield* updateIssue({ issue, update: { priority: 3 } }).pipe(
+				Effect.provide(procedureLayer(http)),
+				narrowLinearProviderErrors,
+				Effect.flip,
+			)
+			expect(error.reason).toBe('rejected')
+			expect(error.retryable).toBe(false)
 		}),
 	)
 
@@ -325,7 +357,7 @@ describe('Linear GraphQL procedures', () => {
 					}
 				}),
 			)
-			const layer = Layer.succeed(HttpClient.HttpClient, http)
+			const layer = procedureLayer(http)
 			const commentRef = { ...issue, commentId: LinearCommentId.make('comment-1') }
 			const resolvedUser = yield* getUser({ issue, userId: LinearUserId.make('user-1') }).pipe(
 				Effect.provide(layer),

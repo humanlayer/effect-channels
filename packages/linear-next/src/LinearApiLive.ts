@@ -1,10 +1,9 @@
-import { Config, Duration, Effect, Layer, Match, Predicate, Schedule, Schema } from 'effect'
+import { Config, Duration, Effect, Layer, Match, Schedule, Schema } from 'effect'
 import * as FetchHttpClient from 'effect/unstable/http/FetchHttpClient'
-import * as HttpClient from 'effect/unstable/http/HttpClient'
-import * as HttpClientRequest from 'effect/unstable/http/HttpClientRequest'
 
 import { createAgentActivity } from './api/CreateAgentActivity'
-import { type LinearProviderError, narrowLinearProviderError } from './api/LinearApiErrors'
+import { type LinearProviderError, narrowLinearProviderErrors } from './api/LinearApiErrors'
+import { LinearHttpClient, LinearHttpClientLive, type LinearHttpClientShape } from './api/LinearHttpClient'
 import {
 	createAttachment,
 	createComment,
@@ -46,65 +45,45 @@ export const LinearApiLiveOptions = Schema.TaggedStruct('LinearApiLiveOptions', 
 })
 export type LinearApiLiveOptions = typeof LinearApiLiveOptions.Type
 
-const apiService = (client: HttpClient.HttpClient, credentials: LinearCredentialResolver['Service']) => {
-	const readRetryPolicy = Schedule.exponential('50 millis').pipe(
-		Schedule.setInputType<LinearApiError>(),
-		Schedule.jittered,
-		Schedule.upTo({ times: 2 }),
-		Schedule.passthrough,
-		Schedule.while(({ input }) => input.retryable),
-		Schedule.modifyDelay(({ input, duration }) =>
-			Effect.succeed(
-				Predicate.isUndefined(input.retryAfterMs)
-					? duration
-					: Duration.max(duration, Duration.millis(input.retryAfterMs)),
-			),
-		),
-	)
+const readRetryPolicy = Schedule.exponential('50 millis').pipe(
+	Schedule.setInputType<LinearApiError>(),
+	Schedule.jittered,
+	Schedule.upTo({ times: 2 }),
+	Schedule.passthrough,
+	Schedule.while(({ input }) => input.retryable),
+	Schedule.modifyDelay(({ input, duration }) => {
+		if (input.retryAfterMs === undefined) return Effect.succeed(duration)
+		return Effect.succeed(Duration.max(duration, Duration.millis(input.retryAfterMs)))
+	}),
+)
 
+const apiService = (client: LinearHttpClientShape) => {
 	const executeAuthenticated = <A>(
 		organizationId: LinearOrganizationId,
-		procedure: Effect.Effect<A, LinearProviderError, HttpClient.HttpClient>,
-	) =>
-		organizationId === credentials.organizationId
-			? Effect.suspend(() =>
-					credentials.resolve.pipe(
-						Effect.flatMap((credential) =>
-							procedure.pipe(
-								Effect.provideService(
-									HttpClient.HttpClient,
-									client.pipe(
-										HttpClient.mapRequest(HttpClientRequest.bearerToken(credential.accessToken)),
-									),
-								),
-								Effect.mapError(narrowLinearProviderError),
-							),
-						),
-					),
-				)
-			: Effect.fail(
-					LinearApiError.make({
-						operation: 'viewer_identity',
-						reason: 'identity_mismatch',
-						retryable: false,
-					}),
-				)
+		procedure: Effect.Effect<A, LinearProviderError | LinearApiError, LinearHttpClient>,
+	): Effect.Effect<A, LinearApiError> => {
+		if (organizationId !== client.organizationId) {
+			return Effect.fail(
+				LinearApiError.make({ operation: 'viewer_identity', reason: 'identity_mismatch', retryable: false }),
+			)
+		}
+		return procedure.pipe(Effect.provideService(LinearHttpClient, client), narrowLinearProviderErrors)
+	}
 
 	const refreshAuthentication = <A>(
 		organizationId: LinearOrganizationId,
-		procedure: Effect.Effect<A, LinearProviderError, HttpClient.HttpClient>,
+		procedure: Effect.Effect<A, LinearProviderError | LinearApiError, LinearHttpClient>,
 	) =>
 		executeAuthenticated(organizationId, procedure).pipe(
-			Effect.catchTag('LinearApiError', (error) =>
-				error.reason === 'unauthorized' && credentials.canRefresh
-					? credentials.invalidate.pipe(Effect.andThen(executeAuthenticated(organizationId, procedure)))
-					: Effect.fail(error),
-			),
+			Effect.catchTag('LinearApiError', (error) => {
+				if (error.reason !== 'unauthorized' || !client.canRefresh) return Effect.fail(error)
+				return client.invalidateCredential.pipe(Effect.andThen(executeAuthenticated(organizationId, procedure)))
+			}),
 		)
 
 	const executeRead = <A>(
 		organizationId: LinearOrganizationId,
-		procedure: Effect.Effect<A, LinearProviderError, HttpClient.HttpClient>,
+		procedure: Effect.Effect<A, LinearProviderError | LinearApiError, LinearHttpClient>,
 	) => refreshAuthentication(organizationId, procedure).pipe(Effect.retry(readRetryPolicy))
 
 	const executeMutation = refreshAuthentication
@@ -133,13 +112,15 @@ const apiService = (client: HttpClient.HttpClient, credentials: LinearCredential
 		createComment: (request) => executeMutation(request.issue.organizationId, createComment(request)),
 		updateComment: (request) => executeMutation(request.comment.organizationId, updateComment(request)),
 		deleteComment: (request) => executeMutation(request.comment.organizationId, deleteComment(request)),
-		createReaction: (request) =>
-			executeMutation(
-				request.target._tag === 'Issue'
-					? request.target.issue.organizationId
-					: request.target.comment.organizationId,
-				createReaction(request),
-			),
+		createReaction: (request) => {
+			const organizationId = Match.value(request.target).pipe(
+				Match.tagsExhaustive({
+					Issue: ({ issue }) => issue.organizationId,
+					Comment: ({ comment }) => comment.organizationId,
+				}),
+			)
+			return executeMutation(organizationId, createReaction(request))
+		},
 		deleteReaction: (request) => executeMutation(request.issue.organizationId, deleteReaction(request)),
 		createAttachment: (request) => executeMutation(request.issue.organizationId, createAttachment(request)),
 		updateAttachment: (request) =>
@@ -149,24 +130,25 @@ const apiService = (client: HttpClient.HttpClient, credentials: LinearCredential
 	})
 }
 
-/** Builds LinearApi from an injected HTTP transport and credential resolver. */
-export const LinearApiLiveFromResolver = Layer.effect(
+const LinearApiServiceLive = Layer.effect(
 	LinearApi,
 	Effect.gen(function* () {
-		return apiService(yield* HttpClient.HttpClient, yield* LinearCredentialResolver)
+		return apiService(yield* LinearHttpClient)
 	}),
 )
 
+/** Builds LinearApi from an injected HTTP transport and credential resolver. */
+export const LinearApiLiveFromResolver = LinearApiServiceLive.pipe(Layer.provide(LinearHttpClientLive))
+
 /** Injectable transport seam. Construction reads configuration and initializes local state but performs no I/O. */
-export const makeLinearApiLiveBase = (options: LinearApiLiveOptions) =>
-	Layer.effect(
-		LinearApi,
+export const makeLinearApiLiveBase = (options: LinearApiLiveOptions) => {
+	const resolverLayer = Layer.effect(
+		LinearCredentialResolver,
 		Effect.gen(function* () {
-			const client = yield* HttpClient.HttpClient
 			const organizationId = yield* options.organizationId
 			const appUserId = yield* options.appUserId
 			const auth = yield* LinearAuth.resolve(options.auth)
-			const credentials = yield* Match.value(auth).pipe(
+			return yield* Match.value(auth).pipe(
 				Match.tagsExhaustive({
 					LinearClientCredentials: (credentials) =>
 						Effect.gen(function* () {
@@ -185,11 +167,12 @@ export const makeLinearApiLiveBase = (options: LinearApiLiveOptions) =>
 							return yield* makeLinearDeveloperTokenResolver({ token, organizationId, appUserId })
 						}),
 				}),
-				Effect.provideService(HttpClient.HttpClient, client),
 			)
-			return apiService(client, credentials)
 		}),
 	)
+	const linearHttpLayer = LinearHttpClientLive.pipe(Layer.provide(resolverLayer))
+	return LinearApiServiceLive.pipe(Layer.provide(linearHttpLayer))
+}
 
 const defaultOptions = LinearApiLiveOptions.make({
 	auth: LinearAuth.fromEnvironment,

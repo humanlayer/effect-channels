@@ -68,14 +68,14 @@ const program = Effect.gen(function* () {
 
 	const inputs = mutationInputs()
 	if (inputs === null) return
-	const comments = yield* Ref.make<ReadonlyArray<Parameters<typeof api.deleteComment>[0]['comment']>>([])
+	const commentsToDelete = yield* Ref.make<ReadonlyArray<Parameters<typeof api.deleteComment>[0]['comment']>>([])
 	const attachmentsToDelete = yield* Ref.make<
 		ReadonlyArray<Parameters<typeof api.deleteAttachment>[0]['attachment']>
 	>([])
 	const cleanup = Effect.gen(function* () {
 		for (const attachment of yield* Ref.get(attachmentsToDelete))
 			yield* api.deleteAttachment({ attachment }).pipe(Effect.ignore)
-		for (const comment of [...(yield* Ref.get(comments))].reverse())
+		for (const comment of [...(yield* Ref.get(commentsToDelete))].reverse())
 			yield* api.deleteComment({ comment }).pipe(Effect.ignore)
 	})
 	yield* Effect.gen(function* () {
@@ -86,7 +86,7 @@ const program = Effect.gen(function* () {
 		yield* api.updateIssue({ issue: issue.ref, update: { assigneeId: inputs.assigneeId } })
 		yield* api.updateIssue({ issue: issue.ref, update: { delegateId: inputs.delegateId } })
 		const comment = yield* api.createComment({ issue: issue.ref, content: { markdown: inputs.marker } })
-		yield* Ref.update(comments, (refs) => [...refs, comment.ref])
+		yield* Ref.update(commentsToDelete, (refs) => [...refs, comment.ref])
 		const edited = yield* api.updateComment({
 			comment: comment.ref,
 			content: { markdown: `${inputs.marker} edited` },
@@ -96,7 +96,7 @@ const program = Effect.gen(function* () {
 			parentId: edited.ref.commentId,
 			content: { markdown: `${inputs.marker} reply` },
 		})
-		yield* Ref.update(comments, (refs) => [...refs, reply.ref])
+		yield* Ref.update(commentsToDelete, (refs) => [...refs, reply.ref])
 		const reaction = yield* api.createReaction({ target: { _tag: 'Comment', comment: reply.ref }, emoji: 'eyes' })
 		yield* api.deleteReaction({ issue: issue.ref, reactionId: reaction.ref.reactionId })
 		const card = yield* api.createAttachment({

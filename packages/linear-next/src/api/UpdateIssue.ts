@@ -1,23 +1,31 @@
-import { Effect, Predicate, Schema } from 'effect'
+import { Effect, Schema } from 'effect'
 
 import type { LinearUpdateIssueRequest } from '../LinearApi'
-import { Issue, issueFields, issueInfo, runGraphql } from './ProcedureSupport'
+import { failLinearMutation } from './LinearApiErrors'
+import { projectLinearIssue } from './LinearApiProjections'
+import { LinearApiIssue, linearApiIssueFields } from './LinearApiSchemas'
+import { linearGraphql } from './LinearGraphql'
 
-const document = `mutation LinearIssueUpdate($id: String!, $input: IssueUpdateInput!) { issueUpdate(id: $id, input: $input) { success issue { ${issueFields} } } }`
-const Data = Schema.Struct({ issueUpdate: Schema.Struct({ success: Schema.Boolean, issue: Issue }) })
+const document = `mutation LinearIssueUpdate($id: String!, $input: IssueUpdateInput!) { issueUpdate(id: $id, input: $input) { success issue { ${linearApiIssueFields} } } }`
+const UpdateIssueResponse = Schema.Struct({
+	issueUpdate: Schema.Struct({ success: Schema.Boolean, issue: Schema.NullOr(LinearApiIssue) }),
+})
+
 export const updateIssue = Effect.fn('linear.api.update_issue')((input: LinearUpdateIssueRequest) => {
 	const { addLabelIds, removeLabelIds, ...fields } = input.update
-	return runGraphql(
-		'update_issue',
-		document,
-		{
-			id: input.issue.issueId,
-			input: {
-				...fields,
-				...(Predicate.isUndefined(addLabelIds) ? {} : { addedLabelIds: addLabelIds }),
-				...(Predicate.isUndefined(removeLabelIds) ? {} : { removedLabelIds: removeLabelIds }),
-			},
-		},
-		Data,
-	).pipe(Effect.map(({ issueUpdate }) => issueInfo(input.issue, issueUpdate.issue)))
+	const update: Record<string, Schema.Json> = { ...fields }
+	if (addLabelIds !== undefined) update.addedLabelIds = addLabelIds
+	if (removeLabelIds !== undefined) update.removedLabelIds = removeLabelIds
+	return linearGraphql({
+		operation: 'update_issue',
+		query: document,
+		variables: { id: input.issue.issueId, input: update },
+		response: UpdateIssueResponse,
+	}).pipe(
+		Effect.flatMap(({ issueUpdate }) => {
+			if (!issueUpdate.success) return failLinearMutation('update_issue')
+			if (issueUpdate.issue === null) return failLinearMutation('update_issue')
+			return Effect.succeed(projectLinearIssue(input.issue, issueUpdate.issue))
+		}),
+	)
 })
