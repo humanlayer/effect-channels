@@ -1,6 +1,7 @@
 import { Schema } from 'effect'
 
 import { GitHubId } from './GitHubIdentity'
+import { GitHubDiffLine } from './GitHubModels'
 
 export const GitHubUser = Schema.Struct({
 	id: GitHubId,
@@ -91,7 +92,7 @@ export const GitHubReviewComment = Schema.Struct({
 	diff_hunk: Schema.String,
 	pull_request_url: Schema.String,
 	in_reply_to_id: Schema.optionalKey(Schema.NullOr(GitHubId)),
-	line: Schema.optionalKey(Schema.NullOr(Schema.Number)),
-	start_line: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+	line: Schema.optionalKey(Schema.NullOr(GitHubDiffLine)),
+	start_line: Schema.optionalKey(Schema.NullOr(GitHubDiffLine)),
 	side: Schema.optionalKey(Schema.Literals(['LEFT', 'RIGHT'])),
 })

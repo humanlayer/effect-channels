@@ -1074,7 +1074,7 @@ export class Slack extends Context.Service<Slack, SlackService>()('slack/Slack')
 													recipient: { userId: input.recipientUserId, teamId: ref.teamId },
 												})
 									const started = yield* client.startStream(startInput).pipe(
-										Effect.map(Option.some),
+										Effect.asSome,
 										Effect.catchTags({
 											UnknownTenant: () =>
 												Effect.fail(fail('unknown Slack workspace', 'non_retryable')),
@@ -1087,7 +1087,7 @@ export class Slack extends Context.Service<Slack, SlackService>()('slack/Slack')
 												),
 											SlackApiError: (error) =>
 												nativeStreamingUnsupported.has(error.code)
-													? Effect.succeed(Option.none())
+													? Effect.succeedNone
 													: Effect.fail(
 															fail(
 																'Slack native stream start failed',

@@ -95,12 +95,13 @@ export const linearNotificationAdmission = (
 		payload,
 	})
 
-export const linearAgentSessionAdmission = (
+export const linearAgentSessionAdmission = Effect.fn('linear.test.agent_session_admission')(function* (
 	payload: (typeof agentSessionPayloads)[number],
 	namespace = 'linear-processing-test',
 	deliveryId = `delivery-${payload.action}`,
-) =>
-	DeliveryAdmission.make({
+) {
+	const webhook = yield* Schema.decodeUnknownEffect(LinearAgentSessionEventWebhook)(payload)
+	return DeliveryAdmission.make({
 		namespace,
 		provider: 'linear',
 		installationId: payload.organizationId,
@@ -111,9 +112,10 @@ export const linearAgentSessionAdmission = (
 				: `agent-session-prompted:${payload.agentActivity.id}`,
 		payload: LinearStoredAgentSessionWebhook.make({
 			deliveryId: LinearWebhookDeliveryId.make(deliveryId),
-			webhook: Schema.decodeUnknownSync(LinearAgentSessionEventWebhook)(payload),
+			webhook,
 		}),
 	})
+})
 
 export const linearIssueCreateAdmission = (namespace = 'linear-processing-test') =>
 	DeliveryAdmission.make({

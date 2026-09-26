@@ -74,38 +74,36 @@ export const make = <E, R, ApiError = never, ApiRequirements = never>(
 		providerName: 'linear',
 		/** Agent Session events must begin processing immediately and one at a time so the automatic acknowledgement can satisfy Linear's ten-second deadline. */
 		deliveryMode: SerialDeliveryMode.make({}),
-		webhookProvider: ({ namespace }) =>
-			Effect.gen(function* () {
-				const webhookSecret = yield* unavailable('read_webhook_secret', options.webhookSecret)
-				const bot = yield* readBotConfiguration
-				const oauthClientId = yield* unavailable('read_client_id', readOauthClientId)
-				yield* discoverLinearApiConfiguration
-				return makeLinearWebhookProvider({
-					namespace,
-					webhookSecret,
-					organizationId: bot.organizationId,
-					appUserId: bot.appUserId,
-					oauthClientId: Option.getOrUndefined(oauthClientId),
-					maxBodyBytes: options.maxBodyBytes,
-					maxTimestampAgeMs: options.maxTimestampAgeMs,
-				})
-			}).pipe(Effect.withSpan('linear.bot.build_webhook_provider')),
-		eventProcessor: ({ namespace }) =>
-			Effect.gen(function* () {
-				const bot = yield* readBotConfiguration
-				const oauthClientId = yield* unavailable('read_client_id', readOauthClientId)
-				const linearApi = yield* buildLinearApi
-				const processor = makeLinearEventProcessor({
-					namespace,
-					bot,
-					oauthClientId: Option.getOrUndefined(oauthClientId),
-				})
-				return {
-					namespace: processor.namespace,
-					providerName: processor.providerName,
-					process: (admissions: DeliveryAdmissionBatch) =>
-						processor.process(admissions).pipe(Effect.provide(callbacks), Effect.provide(linearApi)),
-				}
-			}).pipe(Effect.withSpan('linear.bot.build_event_processor')),
+		webhookProvider: Effect.fn('linear.bot.build_webhook_provider')(function* ({ namespace }) {
+			const webhookSecret = yield* unavailable('read_webhook_secret', options.webhookSecret)
+			const bot = yield* readBotConfiguration
+			const oauthClientId = yield* unavailable('read_client_id', readOauthClientId)
+			yield* discoverLinearApiConfiguration
+			return makeLinearWebhookProvider({
+				namespace,
+				webhookSecret,
+				organizationId: bot.organizationId,
+				appUserId: bot.appUserId,
+				oauthClientId: Option.getOrUndefined(oauthClientId),
+				maxBodyBytes: options.maxBodyBytes,
+				maxTimestampAgeMs: options.maxTimestampAgeMs,
+			})
+		}),
+		eventProcessor: Effect.fn('linear.bot.build_event_processor')(function* ({ namespace }) {
+			const bot = yield* readBotConfiguration
+			const oauthClientId = yield* unavailable('read_client_id', readOauthClientId)
+			const linearApi = yield* buildLinearApi
+			const processor = makeLinearEventProcessor({
+				namespace,
+				bot,
+				oauthClientId: Option.getOrUndefined(oauthClientId),
+			})
+			return {
+				namespace: processor.namespace,
+				providerName: processor.providerName,
+				process: (admissions: DeliveryAdmissionBatch) =>
+					processor.process(admissions).pipe(Effect.provide(callbacks), Effect.provide(linearApi)),
+			}
+		}),
 	}
 }

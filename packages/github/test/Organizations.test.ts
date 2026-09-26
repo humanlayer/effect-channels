@@ -142,7 +142,7 @@ for (const callback of ['onCreation', 'onMention'] as const) {
 			const secondKey = mailboxKey({
 				namespace: 'org',
 				provider: 'github',
-				handlerId: JSON.stringify(['second', callback === 'onCreation' ? 'creation' : 'mention']),
+				handlerId: callback === 'onCreation' ? '["second","creation"]' : '["second","mention"]',
 				installation: '100',
 				resourceKey: issueResourceKey(event.resource),
 			})

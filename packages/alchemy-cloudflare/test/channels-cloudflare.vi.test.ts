@@ -9,9 +9,8 @@ import {
 	type DeliveryAdmissionBatch,
 } from '@humanlayer/channels-delivery-next'
 import { RuntimeContext } from 'alchemy/RuntimeContext'
-import { Effect, Ref } from 'effect'
+import { Effect, Layer, Ref } from 'effect'
 import { HttpServerRequest, HttpServerResponse } from 'effect/unstable/http'
-import { expect } from 'vite-plus/test'
 
 import { ChannelsCloudflare } from '../src'
 import { DurableObjectFake, DurableObjectFakeAlarm } from './DurableObjectFake'
@@ -54,7 +53,7 @@ const makeBot = (batchSizes: Ref.Ref<ReadonlyArray<number>>) =>
 		eventProcessing: { concurrency: 1, leaseMs: 30_000 },
 	})
 
-it.effect('ChannelsCloudflare mailbox: deliver sets the alarm and the alarm runs the provider callback', () =>
+it.effect('ChannelsCloudflare mailbox: deliver sets the alarm and the alarm runs the provider callback', ({ expect }) =>
 	Effect.gen(function* () {
 		const batchSizes = yield* Ref.make<ReadonlyArray<number>>([])
 		const bot = makeBot(batchSizes)
@@ -69,33 +68,35 @@ it.effect('ChannelsCloudflare mailbox: deliver sets the alarm and the alarm runs
 
 		expect(yield* Ref.get(batchSizes)).toEqual([1])
 		expect(yield* alarm.scheduledAt).toEqual(null)
-	}).pipe(Effect.provide(DurableObjectFake), Effect.provide(RuntimeContext.phantom)),
+	}).pipe(Effect.provide(Layer.merge(DurableObjectFake, RuntimeContext.phantom))),
 )
 
-it.effect('ChannelsCloudflare ingress: a webhook under the base path reaches the mailbox named by its key', () =>
-	Effect.gen(function* () {
-		const delivered = yield* Ref.make<ReadonlyArray<string>>([])
-		const bot = makeBot(yield* Ref.make<ReadonlyArray<number>>([]))
-		const fetch = yield* bot
-			.ingress({
-				getByName: (mailboxKey) => ({
-					deliver: () =>
-						Ref.update(delivered, (keys) => [...keys, mailboxKey]).pipe(Effect.as({ accepted: true })),
-				}),
-			})
-			.fetch.pipe(Effect.provide(NodeCrypto.layer))
+it.effect(
+	'ChannelsCloudflare ingress: a webhook under the base path reaches the mailbox named by its key',
+	({ expect }) =>
+		Effect.gen(function* () {
+			const delivered = yield* Ref.make<ReadonlyArray<string>>([])
+			const bot = makeBot(yield* Ref.make<ReadonlyArray<number>>([]))
+			const fetch = yield* bot
+				.ingress({
+					getByName: (mailboxKey) => ({
+						deliver: () =>
+							Ref.update(delivered, (keys) => [...keys, mailboxKey]).pipe(Effect.as({ accepted: true })),
+					}),
+				})
+				.fetch.pipe(Effect.provide(NodeCrypto.layer))
 
-		const post = (path: string) =>
-			fetch.pipe(
-				Effect.provideService(
-					HttpServerRequest.HttpServerRequest,
-					HttpServerRequest.fromWeb(new Request(`http://localhost${path}`, { method: 'POST' })),
-				),
-				Effect.catch(() => Effect.succeed(HttpServerResponse.empty({ status: 404 }))),
-			)
+			const post = (path: string) =>
+				fetch.pipe(
+					Effect.provideService(
+						HttpServerRequest.HttpServerRequest,
+						HttpServerRequest.fromWeb(new Request(`http://localhost${path}`, { method: 'POST' })),
+					),
+					Effect.orElseSucceed(() => HttpServerResponse.empty({ status: 404 })),
+				)
 
-		expect((yield* post('/integrations/example/webhook')).status).toEqual(404)
-		expect((yield* post('/api/channels/integrations/example/webhook')).status).toEqual(200)
-		expect((yield* Ref.get(delivered)).length).toEqual(1)
-	}),
+			expect((yield* post('/integrations/example/webhook')).status).toEqual(404)
+			expect((yield* post('/api/channels/integrations/example/webhook')).status).toEqual(200)
+			expect((yield* Ref.get(delivered)).length).toEqual(1)
+		}),
 )

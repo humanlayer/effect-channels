@@ -184,9 +184,9 @@ type DeliveryBinding<A> = {
 		readonly key: string
 		readonly controlId: string
 	}) => Effect.Effect<void, BindingError, MailboxStore>
-	readonly processMailbox: (
-		input: { readonly key: string },
-	) => Effect.Effect<
+	readonly processMailbox: (input: {
+		readonly key: string
+	}) => Effect.Effect<
 		boolean,
 		BindingError | DeliveryOutputError | HandlerFailure,
 		MailboxStore | SlackAuthors | SlackIngressBindings
@@ -269,9 +269,9 @@ export class SlackIngressBindings extends Context.Service<
 			input: StopInput,
 		) => Effect.Effect<void, SlackIngressError, DeliveryQueue | DeliveryInterruption | IngressAttributionStore>
 		readonly awaitStoppedTargets: (input: StopInput) => Effect.Effect<void, BindingError, MailboxStore>
-		readonly processMailbox: (
-			input: { readonly key: string },
-		) => Effect.Effect<void, SlackIngressError, MailboxStore | SlackAuthors | SlackIngressBindings>
+		readonly processMailbox: (input: {
+			readonly key: string
+		}) => Effect.Effect<void, SlackIngressError, MailboxStore | SlackAuthors | SlackIngressBindings>
 		readonly run: (
 			input: RunnerOptions,
 		) => Effect.Effect<
@@ -492,18 +492,15 @@ const makeBindings = <E, R>(options: SlackIngressOptions<E, R>) =>
 					entry?.binding === undefined
 				)
 					return yield* SlackIngressError.make({ operation: 'configuration' })
-				yield* entry.binding.processMailbox({ key }).pipe(
-					mapIngressError('delivery_run'),
-					Effect.asVoid,
-				)
+				yield* entry.binding.processMailbox({ key }).pipe(mapIngressError('delivery_run'), Effect.asVoid)
 			}),
 			run: (input) =>
 				(allBindings.length === 0
 					? Effect.never
-					: Effect.all(
-							allBindings.map((binding) => binding.run(input)),
-							{ concurrency: 'unbounded', discard: true },
-						)
+					: Effect.forEach(allBindings, (binding) => binding.run(input), {
+							concurrency: 'unbounded',
+							discard: true,
+						})
 				).pipe(mapIngressError('delivery_run'), Effect.withSpan('slack.ingress.bindings_run')),
 		})
 	})

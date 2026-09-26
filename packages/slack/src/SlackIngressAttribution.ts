@@ -48,7 +48,7 @@ export const resolveSlackIngressAttribution = Effect.fn('slack.ingress.organizat
 						: reject({ classification: 'lookup_failed', errorTag: 'SlackOrganizationLookupError' }),
 				),
 			)
-		const organization = yield* Schema.decodeUnknownEffect(Schema.NullOr(SlackOrganization))(resolved).pipe(
+		const organization = yield* Schema.decodeEffect(Schema.NullOr(SlackOrganization))(resolved).pipe(
 			Effect.catchTag('SchemaError', () => reject({ classification: 'invalid_result' })),
 		)
 		if (organization === null) return null

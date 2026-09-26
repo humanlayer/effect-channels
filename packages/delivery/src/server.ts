@@ -27,7 +27,7 @@ export interface DeliveryApiMiddlewareInput<C> extends DeliveryApiContextInput {
 	readonly input: { readonly deliveryId: DeliveryId; readonly markdown?: string }
 	readonly delivery: ResolvedDelivery
 	readonly context: C
-	readonly next: () => Effect.Effect<DeliveryTerminalReceipt, DeliveryControlError>
+	readonly next: Effect.Effect<DeliveryTerminalReceipt, DeliveryControlError>
 }
 
 export interface DeliveryApiOptions<C, RC, RM> {
@@ -89,7 +89,7 @@ const makeEndpoint = <C, RC, RM>(
 			request: request.request,
 			delivery,
 			context: context as C,
-			next: () => next,
+			next,
 		}).pipe(Effect.provide(runtime))
 	})
 

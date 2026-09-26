@@ -21,7 +21,7 @@ function make<const H extends ReadonlyArray<GitHubHandlerRegistration<unknown, u
 		}
 	},
 ): ReturnType<typeof assemble<Effect.Error<HandlerResult<H[number]>>, Effect.Services<HandlerResult<H[number]>>>>
-function make(options: GitHubIngressOptions<unknown, unknown>) {
+function make<E, R>(options: GitHubIngressOptions<E, R>) {
 	return assemble(options)
 }
 

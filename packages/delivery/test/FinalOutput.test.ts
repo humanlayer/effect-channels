@@ -13,7 +13,6 @@ import {
 	type FinalMessageOperation,
 } from '../src/DeliveryOperation'
 import { DeliveryPolicy } from '../src/DeliveryPolicy'
-import { DeliveryQueue } from '../src/DeliveryQueue'
 import type { EventDefinition } from '../src/EventDefinition'
 import { activeBatches } from '../src/Mailbox'
 import { layerMailboxStoreServices } from '../src/MailboxServices'

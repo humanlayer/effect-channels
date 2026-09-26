@@ -1,8 +1,8 @@
 import { createHmac } from 'node:crypto'
 import { createServer } from 'node:http'
 
-import { NodeHttpServer } from '@effect/platform-node'
-import { Context, Effect, Layer, Predicate, Queue, Redacted, Schema } from 'effect'
+import { NodeHttpServer, NodeSocketServer } from '@effect/platform-node'
+import { Context, Effect, Layer, Match, Predicate, Queue, Redacted, Schema } from 'effect'
 import {
 	FetchHttpClient,
 	HttpClient,
@@ -14,25 +14,29 @@ import {
 } from 'effect/unstable/http'
 import { createEmulator } from 'emulate'
 
-import { GitHubCredentials, GitHubCrypto, GitHubRepository, GitHubActivityEvent, GitHubIssueData } from '../src/index'
+import {
+	GitHubCredentials,
+	GitHubCrypto,
+	GitHubRepository,
+	GitHubActivityEvent,
+	GitHubIssueData,
+	GitHubWebhookPayload,
+} from '../src/index'
 
 export const secret = 'github-test-webhook-secret'
-export const availablePort = Effect.promise(
-	() =>
-		new Promise<number>((resolve, reject) => {
-			const server = createServer()
-			server.once('error', reject)
-			server.listen(0, '127.0.0.1', () => {
-				const address = server.address()
-				if (address === null || !Predicate.hasProperty(address, 'port') || !Predicate.isNumber(address.port)) {
-					server.close()
-					reject(new Error('No TCP address'))
-					return
-				}
-				const port = address.port
-				server.close((error) => (error ? reject(error) : resolve(port)))
-			})
-		}),
+
+class GitHubEmulatorError extends Schema.TaggedError<GitHubEmulatorError>()('GitHubEmulatorError', {
+	reason: Schema.Literals(['status', 'app_key']),
+	path: Schema.optionalKey(Schema.String),
+	status: Schema.optionalKey(Schema.Int),
+}) {}
+
+export const availablePort = Effect.scoped(
+	Effect.gen(function* () {
+		const { address } = yield* NodeSocketServer.make({ port: 0, host: '127.0.0.1' })
+		if (!Predicate.isTagged(address, 'TcpAddress')) return yield* Effect.die('Expected TCP address')
+		return address.port
+	}),
 )
 export const adminCall = <S extends Schema.Top>(url: string, path: string, schema: S, body?: Schema.Json) =>
 	Effect.gen(function* () {
@@ -44,7 +48,7 @@ export const adminCall = <S extends Schema.Top>(url: string, path: string, schem
 			body === undefined ? request : yield* HttpClientRequest.bodyJson(request, body),
 		)
 		if (response.status >= 300)
-			return yield* Effect.fail(new Error(`Emulator status ${response.status} at ${path}`))
+			return yield* GitHubEmulatorError.make({ reason: 'status', path, status: response.status })
 		return yield* HttpClientResponse.schemaBodyJson(schema)(response)
 	})
 
@@ -96,7 +100,7 @@ export const emulator = (webhookUrl?: string) =>
 			(resource) => Effect.promise(() => resource.close()),
 		)
 		const key = resource.generatedSecrets.find((entry) => entry.id === '42')?.value
-		if (key === undefined) return yield* Effect.fail(new Error('Missing emulator generated App key'))
+		if (key === undefined) return yield* GitHubEmulatorError.make({ reason: 'app_key' })
 		const repo = yield* adminCall(resource.url, '/repos/alice/project', Schema.Struct({ id: Schema.Int }))
 		const repository = GitHubRepository.make({
 			kind: 'github.repository',
@@ -126,7 +130,8 @@ export const eventFor = (
 	issue,
 	sender: issue.user,
 })
-export const payloadFor = (event: GitHubActivityEvent) => ({
+/** Webhook fields that locate an event: action, installation and repository. */
+export const webhookLocation = (event: GitHubActivityEvent) => ({
 	action: event.action,
 	installation: { id: event.resource.repository.installationId },
 	repository: {
@@ -134,11 +139,29 @@ export const payloadFor = (event: GitHubActivityEvent) => ({
 		name: event.resource.repository.name,
 		owner: { login: event.resource.repository.owner },
 	},
-	issue: event.event === 'issues' || event.event === 'issue_comment' ? event.issue : undefined,
-	pull_request: event.event === 'issues' || event.event === 'issue_comment' ? undefined : event.pull_request,
-	sender: event.sender,
-	comment: event.event === 'issue_comment' ? event.comment : undefined,
 })
+/** Webhook fields shared by every event: its location and sender. */
+export const webhookBase = (event: GitHubActivityEvent) => ({ ...webhookLocation(event), sender: event.sender })
+export const payloadFor = (event: GitHubActivityEvent) =>
+	Match.value(event).pipe(
+		Match.discriminatorsExhaustive('event')({
+			issues: (event) => ({ ...webhookBase(event), issue: event.issue }),
+			issue_comment: (event) => ({ ...webhookBase(event), issue: event.issue, comment: event.comment }),
+			pull_request: (event) => ({ ...webhookBase(event), pull_request: event.pull_request }),
+			pull_request_review: (event) => ({ ...webhookBase(event), pull_request: event.pull_request }),
+			pull_request_review_comment: (event) => ({ ...webhookBase(event), pull_request: event.pull_request }),
+			pull_request_review_thread: (event) => ({ ...webhookBase(event), pull_request: event.pull_request }),
+		}),
+	)
+/** A signed webhook delivery: the `x-github-event` name and its body. */
+export interface WebhookFixture {
+	readonly event: string
+	readonly payload: GitHubWebhookPayload
+}
+export const encodeWebhookBody = Schema.encodeEffect(Schema.fromJsonString(GitHubWebhookPayload))
+/** Encodes a webhook payload to its JSON body and signs it. */
+export const webhookRequest = (event: string, payload: GitHubWebhookPayload, deliveryId?: string) =>
+	encodeWebhookBody(payload).pipe(Effect.map((body) => signedRequest(event, body, deliveryId)))
 export const signedRequest = (event: string, body: string | Uint8Array<ArrayBuffer>, deliveryId = 'delivery-1') =>
 	new Request('http://test/integrations/github/webhook', {
 		method: 'POST',

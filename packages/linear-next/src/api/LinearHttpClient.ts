@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Redacted } from 'effect'
+import { Context, Effect, Redacted } from 'effect'
 import * as FetchHttpClient from 'effect/unstable/http/FetchHttpClient'
 import * as HttpClient from 'effect/unstable/http/HttpClient'
 import type { HttpClientRequest } from 'effect/unstable/http/HttpClientRequest'
@@ -6,7 +6,7 @@ import * as HttpClientRequestModule from 'effect/unstable/http/HttpClientRequest
 import type { HttpClientResponse } from 'effect/unstable/http/HttpClientResponse'
 
 import type { LinearApiError, LinearApiOperation } from '../LinearApi'
-import { LinearCredentialResolver } from '../LinearCredentialResolver'
+import type { LinearCredentialResolver } from '../LinearCredentialResolver'
 import { isLinearFileOrigin } from '../LinearFiles'
 import type { LinearOrganizationId } from '../LinearIdentity'
 import { LinearFileOriginRejectedError, LinearTransportError, linearProviderErrorDetails } from './LinearApiErrors'
@@ -101,13 +101,6 @@ export const makeAuthenticatedLinearHttpClient = (
 	executeFile: (input) =>
 		executeFileRequest(client, credentials.resolve.pipe(Effect.map((credential) => credential.accessToken)), input),
 })
-
-export const LinearHttpClientLive = Layer.effect(
-	LinearHttpClient,
-	Effect.gen(function* () {
-		return makeAuthenticatedLinearHttpClient(yield* HttpClient.HttpClient, yield* LinearCredentialResolver)
-	}),
-)
 
 export const makeFixedCredentialLinearHttpClient = (
 	client: HttpClient.HttpClient,

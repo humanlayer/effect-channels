@@ -1,11 +1,14 @@
 import { describe, it } from '@effect/vitest'
-import { MailboxSubscriptionCreatedResult, MailboxSubscriptions } from '@humanlayer/channels-delivery-next'
+import {
+	MailboxSubscriptionCreatedResult,
+	type MailboxSubscriptionError,
+	MailboxSubscriptions,
+} from '@humanlayer/channels-delivery-next'
 import { Effect, Layer, Predicate } from 'effect'
 import { vi } from 'vite-plus/test'
 
 import { LinearApi } from '../src/LinearApi'
-import type { LinearMentioned } from '../src/LinearCallbackEvents'
-import { LinearCallbacks } from '../src/LinearCallbacks'
+import { type LinearCallbackHandler, LinearCallbacks } from '../src/LinearCallbacks'
 import { makeLinearEventProcessor } from '../src/LinearEventProcessor'
 import { appUserNotificationPayloads, linearNotificationAdmission } from './fixtures'
 
@@ -13,15 +16,17 @@ describe('Linear issue context', () => {
 	it.effect('builds a comment resource and delegates issue subscription methods', ({ expect }) =>
 		Effect.gen(function* () {
 			let subscribed = false
-			const subscribe = vi.fn(() => {
+			const subscribe = vi.fn<MailboxSubscriptions['Service']['subscribe']>(() => {
 				subscribed = true
 				return Effect.succeed(MailboxSubscriptionCreatedResult.make({}))
 			})
-			const unsubscribe = vi.fn(() => {
+			const unsubscribe = vi.fn<MailboxSubscriptions['Service']['unsubscribe']>(() => {
 				subscribed = false
 				return Effect.void
 			})
-			const onMentioned = vi.fn((event: LinearMentioned) =>
+			const onMentioned = vi.fn<
+				LinearCallbackHandler<'onMentioned', MailboxSubscriptionError, MailboxSubscriptions>
+			>((event) =>
 				Effect.gen(function* () {
 					expect(Predicate.isTagged('LinearCommentMentioned')(event)).toBe(true)
 					if (!Predicate.isTagged('LinearCommentMentioned')(event)) return

@@ -8,14 +8,12 @@ import {
 	SlackSubscriptions,
 	type SlackTeamId,
 } from '@humanlayer/channels-slack'
-import { Clock, ConfigProvider, Context, Deferred, Effect, Fiber, Layer, Logger, Queue, Ref, Scope } from 'effect'
+import { Clock, ConfigProvider, Context, Deferred, Effect, Exit, Fiber, Layer, Logger, Queue, Ref, Scope } from 'effect'
 import { TestClock } from 'effect/testing'
 import { HttpRouter } from 'effect/unstable/http'
 import { expectTypeOf } from 'vite-plus/test'
 
 import {
-	HistoryResponse,
-	PostedMessageResponse,
 	SlackEmulator,
 	slackEmulatorAliceToken,
 	slackEmulatorBotToken,
@@ -130,35 +128,31 @@ it.effect(
 			})
 			yield* Effect.addFinalizer(() => Effect.promise(web.dispose))
 			const clock = Context.merge(Context.make(Clock.Clock, yield* Clock.Clock), yield* Layer.build(logger))
-			const root = yield* emulator.call(
-				slackEmulatorAliceToken,
-				'chat.postMessage',
-				{ channel: emulator.publicChannelId, text: 'organization test' },
-				PostedMessageResponse,
-			)
+			const root = yield* emulator.call(slackEmulatorAliceToken, 'chat.postMessage', {
+				channel: emulator.publicChannelId,
+				text: 'organization test',
+			})
 			const deliver = (id: string, index: number, signal?: AbortSignal) =>
-				Effect.promise(() =>
-					web.handler(
-						new Request(
-							emulator.signedWebhook({
-								type: 'event_callback',
-								team_id: emulator.teamId,
-								event_id: `Ev_organization_${id}`,
-								event_time: 1,
-								event: {
-									type: 'app_mention',
-									channel: root.channel,
-									thread_ts: root.ts,
-									ts: `${Math.floor(Number(root.ts)) + index}.000001`,
-									text: `<@${slackEmulatorBotUserId}> hello`,
-									user: emulator.aliceUserId,
-								},
-							}),
-							{ signal },
+				emulator
+					.signedWebhook({
+						type: 'event_callback',
+						team_id: emulator.teamId,
+						event_id: `Ev_organization_${id}`,
+						event_time: 1,
+						event: {
+							type: 'app_mention',
+							channel: root.channel,
+							thread_ts: root.ts,
+							ts: `${Math.floor(Number(root.ts)) + index}.000001`,
+							text: `<@${slackEmulatorBotUserId}> hello`,
+							user: emulator.aliceUserId,
+						},
+					})
+					.pipe(
+						Effect.flatMap((request) =>
+							Effect.promise(() => web.handler(new Request(request, { signal }), clock)),
 						),
-						clock,
-					),
-				)
+					)
 			assert.strictEqual((yield* deliver('first', 1)).status, 200)
 			const readiness = Context.get(context, MailboxReadiness)
 			const [key] = yield* readiness.scanReady({ prefix: '', now: yield* Clock.currentTimeMillis, limit: 10 })
@@ -183,11 +177,12 @@ it.effect(
 			assert.ok(logs.every((log) => !log.includes('private-')))
 			synchronousThrow = false
 			yield* Ref.set(mode, 'cancel')
-			const abort = new AbortController()
+			const clientScope = yield* Scope.make()
+			const clientSignal = yield* Effect.abortSignal.pipe(Scope.provide(clientScope))
 			const logCount = logs.length
-			const sending = yield* deliver('cancel', 6, abort.signal).pipe(Effect.forkChild)
+			const sending = yield* deliver('cancel', 6, clientSignal).pipe(Effect.forkChild)
 			yield* Deferred.await(entered)
-			abort.abort()
+			yield* Scope.close(clientScope, Exit.void)
 			assert.strictEqual((yield* Fiber.join(sending)).status, 499)
 			yield* Deferred.await(finalized)
 			assert.strictEqual(logs.length, logCount)
@@ -198,12 +193,10 @@ it.effect(
 			const final = yield* underlying.loadMailbox({ key })
 			assert.strictEqual(final?.state.active, null)
 			assert.strictEqual(final?.state.outcomes.length, 1)
-			const history = yield* emulator.call(
-				slackEmulatorBotToken,
-				'conversations.replies',
-				{ channel: root.channel, ts: root.ts },
-				HistoryResponse,
-			)
+			const history = yield* emulator.call(slackEmulatorBotToken, 'conversations.replies', {
+				channel: root.channel,
+				ts: root.ts,
+			})
 			assert.deepStrictEqual(
 				history.messages
 					.filter((message) => message.user === slackEmulatorBotUserId)

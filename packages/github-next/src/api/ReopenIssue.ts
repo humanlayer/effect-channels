@@ -5,7 +5,10 @@ import { GitHubApiClient } from './GitHubApiClient'
 import { issueInfo, repositoryPath } from './GitHubApiProjections'
 import { Issue } from './GitHubApiSchemas'
 
-const ReopenIssueBody = Schema.Struct({ state: Schema.Literal('open'), state_reason: Schema.Literal('reopened') })
+export const ReopenIssueBody = Schema.Struct({
+	state: Schema.Literal('open'),
+	state_reason: Schema.Literal('reopened'),
+})
 
 export const reopenIssue = Effect.fn('github.api.reopen_issue')(function* (input: GitHubIssueRequest) {
 	const api = yield* GitHubApiClient

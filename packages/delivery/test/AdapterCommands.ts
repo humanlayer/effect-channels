@@ -178,6 +178,6 @@ export const mailboxCodecCases: ReadonlyArray<MailboxState> = [
 		readyAt: 250,
 	},
 ]
-export const encodeState = Schema.encodeSync(Schema.fromJsonString(MailboxState))
-export const encodeSnapshot = Schema.encodeSync(Schema.fromJsonString(MailboxSnapshot))
-export const encodeKey = Schema.encodeSync(Schema.fromJsonString(Schema.String))
+export const encodeState = Schema.encodeEffect(Schema.fromJsonString(MailboxState))
+export const encodeSnapshot = Schema.encodeEffect(Schema.fromJsonString(MailboxSnapshot))
+export const encodeKey = Schema.encodeEffect(Schema.fromJsonString(Schema.String))

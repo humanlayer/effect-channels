@@ -39,6 +39,10 @@ export interface GitHubHandlerRegistration<E, R> {
 	) => Effect.Effect<void | DeliveryHandoff, E, R>
 }
 
+const HandlerRoute = Schema.Literals(['creation', 'mention', 'subscribed'])
+type HandlerRoute = typeof HandlerRoute.Type
+const HandlerId = Schema.fromJsonString(Schema.Tuple([Schema.String, HandlerRoute]))
+
 export interface GitHubIngressOptions<E, R> {
 	readonly namespace: string
 	readonly policy: DeliveryPolicy
@@ -55,7 +59,9 @@ export class GitHubIngress extends Context.Service<
 		readonly processActivity: (input: {
 			readonly event: GitHubActivityEvent
 		}) => Effect.Effect<void, GitHubIngressError, MailboxStore>
-		readonly processMailbox: (input: { readonly key: string }) => Effect.Effect<void, GitHubIngressError, MailboxStore>
+		readonly processMailbox: (input: {
+			readonly key: string
+		}) => Effect.Effect<void, GitHubIngressError, MailboxStore>
 		readonly run: (input: RunnerOptions) => Effect.Effect<void, GitHubIngressError, MailboxStore | MailboxReadiness>
 	}
 >()('github/GitHubIngress') {
@@ -93,6 +99,8 @@ export class GitHubIngress extends Context.Service<
 				const ids = new Set<string>()
 				const bindings: Array<{
 					readonly id: string
+					readonly route: HandlerRoute
+					readonly registration: GitHubHandlerRegistration<E, R>
 					readonly binding: ReturnType<
 						typeof bind<typeof GitHubActivityEvent, typeof GitHubDiscussionRef, never>
 					>
@@ -101,7 +109,7 @@ export class GitHubIngress extends Context.Service<
 					if (registration.id.length === 0 || ids.has(registration.id))
 						return yield* GitHubIngressError.make({ operation: 'configuration' })
 					ids.add(registration.id)
-					for (const route of ['creation', 'mention', 'subscribed'] as const) {
+					for (const route of HandlerRoute.literals) {
 						const configured = Match.value(route).pipe(
 							Match.when('creation', () => registration.onCreation !== undefined),
 							Match.when('mention', () => registration.onMention !== undefined),
@@ -109,7 +117,9 @@ export class GitHubIngress extends Context.Service<
 							Match.exhaustive,
 						)
 						if (!configured) continue
-						const id = JSON.stringify([registration.id, route])
+						const id = yield* Schema.encodeEffect(HandlerId)([registration.id, route]).pipe(
+							Effect.mapError(() => GitHubIngressError.make({ operation: 'configuration' })),
+						)
 						const binding = bind({
 							namespace: options.namespace,
 							handlerId: id,
@@ -169,7 +179,7 @@ export class GitHubIngress extends Context.Service<
 										),
 								}),
 						})
-						bindings.push({ id, binding })
+						bindings.push({ id, route, registration, binding })
 					}
 				}
 				const provide = <A, E, R2>(operation: 'admit' | 'process' | 'run', effect: Effect.Effect<A, E, R2>) =>
@@ -190,16 +200,15 @@ export class GitHubIngress extends Context.Service<
 								const direct: Array<string> = []
 								const followed: Array<string> = []
 								if (!input.own)
-									for (const registration of options.handlers) {
-										if (
-											registration.onCreation !== undefined &&
-											Schema.is(GitHubCreationEvent)(event)
+									for (const { id, route, registration } of bindings) {
+										if (route === 'creation' && Schema.is(GitHubCreationEvent)(event))
+											direct.push(id)
+										else if (route === 'mention' && input.mentioned) direct.push(id)
+										else if (
+											route === 'subscribed' &&
+											!(input.mentioned && registration.onMention !== undefined)
 										)
-											direct.push(JSON.stringify([registration.id, 'creation']))
-										if (input.mentioned && registration.onMention !== undefined)
-											direct.push(JSON.stringify([registration.id, 'mention']))
-										else if (registration.onSubscribedEvent !== undefined)
-											followed.push(JSON.stringify([registration.id, 'subscribed']))
+											followed.push(id)
 									}
 								const decision = yield* subscriptions.resolveRoute({
 									namespace: options.namespace,

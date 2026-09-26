@@ -6,7 +6,7 @@ const LinearSignatureInput = Schema.Struct({
 	signature: Schema.String,
 	timestamp: Schema.String,
 	webhookSecret: Schema.Redacted(Schema.String, { disallowJsonEncode: true }),
-	maxAgeMs: Schema.Number,
+	maxAgeMs: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
 })
 type LinearSignatureInput = typeof LinearSignatureInput.Type
 

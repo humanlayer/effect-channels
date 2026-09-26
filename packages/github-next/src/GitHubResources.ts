@@ -22,6 +22,7 @@ import {
 	type GitHubCheckRunInfo,
 	GitHubCommit,
 	type GitHubContent,
+	GitHubDiffLine,
 	GitHubIssueCommentRef,
 	type GitHubIssueInfo,
 	GitHubIssueRef,
@@ -388,8 +389,8 @@ export class GitHubReviewComment extends Schema.TaggedClass<GitHubReviewComment>
 	originalCommitId: Schema.String,
 	diffHunk: Schema.String,
 	inReplyToId: Schema.optionalKey(Schema.NullOr(GitHubId)),
-	line: Schema.optionalKey(Schema.NullOr(Schema.Number)),
-	startLine: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+	line: Schema.optionalKey(Schema.NullOr(GitHubDiffLine)),
+	startLine: Schema.optionalKey(Schema.NullOr(GitHubDiffLine)),
 	side: Schema.optionalKey(Schema.Literals(['LEFT', 'RIGHT'])),
 }) {
 	reply(content: GitHubContent): Effect.Effect<GitHubReviewComment, GitHubApiError, GitHubApi> {

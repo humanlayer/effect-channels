@@ -1,5 +1,5 @@
 import { assert, it } from '@effect/vitest'
-import { Clock, Context, Deferred, Effect, Fiber, Layer, Logger, Redacted, Ref } from 'effect'
+import { Context, DateTime, Deferred, Effect, Fiber, Layer, Logger, Redacted, Ref } from 'effect'
 import { TestClock } from 'effect/testing'
 import { HttpClient, HttpClientResponse } from 'effect/unstable/http'
 
@@ -30,14 +30,14 @@ it.effect(
 						const n = yield* Ref.updateAndGet(calls, (n) => n + 1)
 						yield* Deferred.succeed(entered, undefined)
 						yield* Deferred.await(release)
-						const now = yield* Clock.currentTimeMillis
+						const now = yield* DateTime.now
 						return HttpClientResponse.fromWeb(
 							request,
 							(yield* Ref.get(fail))
 								? new Response('private-key-never-log', { status: 500 })
 								: Response.json({
 										token: `token-${n}`,
-										expires_at: new Date(now + 120_000).toISOString(),
+										expires_at: DateTime.formatIso(DateTime.add(now, { seconds: 120 })),
 									}),
 						)
 					}),
@@ -105,8 +105,12 @@ for (const status of [401, 403, 404, 422, 429, 500, 200]) {
 			const result = yield* Effect.flatMap(GitHub, (github) =>
 				github.createIssue({ repository: event.resource.repository, title: 'Hello', body: 'body-never-log' }),
 			).pipe(
-				Effect.provide(GitHub.layer.pipe(Layer.provide(credentials), Layer.provide(http))),
-				Effect.provide(Logger.layer([Logger.make((entry) => logs.push(JSON.stringify(entry.message)))])),
+				Effect.provide(
+					Layer.merge(
+						GitHub.layer.pipe(Layer.provide(credentials), Layer.provide(http)),
+						Logger.layer([Logger.make((entry) => logs.push(JSON.stringify(entry.message)))]),
+					),
+				),
 				Effect.flip,
 			)
 			assert.ok(SchemaCheck(result))

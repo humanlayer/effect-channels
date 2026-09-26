@@ -1,5 +1,5 @@
 import { assert, it } from '@effect/vitest'
-import { Effect, Layer, Option, Queue, Redacted, Schema } from 'effect'
+import { Effect, Layer, Queue, Redacted, Schema } from 'effect'
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http'
 
 import { SlackTransportError } from '../src/Errors'
@@ -35,11 +35,9 @@ it.effect('encodes authenticated threaded chat.postMessage requests', () =>
 		)
 		const credentials = SlackTenantCredentials.make({
 			load: () =>
-				Effect.succeed(
-					Option.some({
-						botToken: Redacted.make('xoxb-test-token'),
-					}),
-				),
+				Effect.succeedSome({
+					botToken: Redacted.make('xoxb-test-token'),
+				}),
 			save: () => Effect.void,
 		})
 		const dependencies = Layer.merge(Layer.succeed(HttpClient.HttpClient, httpClient), credentials)
@@ -77,7 +75,7 @@ it.effect('decodes Retry-After seconds from a Slack rate-limit response', () =>
 			),
 		)
 		const credentials = SlackTenantCredentials.make({
-			load: () => Effect.succeed(Option.some({ botToken: Redacted.make('xoxb-test-token') })),
+			load: () => Effect.succeedSome({ botToken: Redacted.make('xoxb-test-token') }),
 			save: () => Effect.void,
 		})
 		const clientLayer = SlackClient.layer.pipe(

@@ -123,7 +123,8 @@ it.effect('Postgres command seam: bounded retention, TTL refresh, and frozen rou
 					?.sql.startsWith('DELETE FROM humanlayer_slack_v1_subscriptions WHERE thread_id ='),
 			)
 			const frozen = { thread: proactiveThread, subscribed: true }
-			yield* Queue.offer(fake.replies, Effect.succeed([{ route_json: encodeRoute(frozen) }]))
+			const frozenJson = yield* encodeRoute(frozen)
+			yield* Queue.offer(fake.replies, Effect.succeed([{ route_json: frozenJson }]))
 			assert.deepStrictEqual(yield* store.resolveDirectMessageRoute(routeInput), frozen)
 			const route = (yield* Queue.takeAll(fake.commands)).at(-1)
 			assert.ok(route?.sql.includes('ON CONFLICT (tenant, channel_id, event_id) DO UPDATE'))
@@ -134,10 +135,10 @@ it.effect('Postgres command seam: bounded retention, TTL refresh, and frozen rou
 				rootedThread.channel.id,
 				routeInput.eventId,
 				rootedThread.id,
-				encodeRoute({ thread: rootedThread, subscribed: true }),
+				yield* encodeRoute({ thread: rootedThread, subscribed: true }),
 				proactiveThread.id,
-				encodeRoute(frozen),
-				encodeRoute({ thread: rootedThread, subscribed: false }),
+				frozenJson,
+				yield* encodeRoute({ thread: rootedThread, subscribed: false }),
 			])
 		}).pipe(Effect.provide(layer.pipe(Layer.provide(fake.layer))))
 	}),

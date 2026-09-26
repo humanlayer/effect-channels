@@ -23,8 +23,10 @@ import { stubSlackClientLayer, testChannelId, testRootTs, testTeamId } from './s
 export const expectTaggedFailure =
 	<K extends string>(tag: K) =>
 	<A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<E & { readonly _tag: K }, A, R> =>
-		Effect.flatMap(Effect.flip(effect), (error) =>
-			Predicate.isTagged(tag)(error) ? Effect.succeed(error) : Effect.die(new Error(`expected a ${tag} failure`)),
+		Effect.filterOrElse(
+			Effect.flip(effect),
+			(error): error is E & { readonly _tag: K } => Predicate.isTagged(error, tag),
+			() => Effect.die(new Error(`expected a ${tag} failure`)),
 		)
 
 export const testThreadRef = slackThreadRef(
@@ -40,7 +42,7 @@ export const testAuthor = Author.make({
 	isMe: false,
 })
 
-export const testMessage = Message.make({
+const testMessageFields = {
 	ref: MessageRef.make('100.1'),
 	threadRef: testThreadRef,
 	text: 'hello',
@@ -49,7 +51,9 @@ export const testMessage = Message.make({
 	metadata: { sentAt: DateTime.makeUnsafe('2026-08-29T12:00:00Z') },
 	attachments: [],
 	raw: { type: 'app_mention' },
-})
+}
+
+export const testMessage = Message.make(testMessageFields)
 
 export const testThread = Thread.make({
 	ref: testThreadRef,
@@ -58,7 +62,7 @@ export const testThread = Thread.make({
 })
 
 export const nativeMessage = (seed: string) => {
-	const message = Message.make({ ...testMessage, text: seed, markdown: seed })
+	const message = Message.make({ ...testMessageFields, text: seed, markdown: seed })
 	return NormalizedMessage.make({
 		provider: 'slack',
 		tenant: testThreadRef.channel.tenant,

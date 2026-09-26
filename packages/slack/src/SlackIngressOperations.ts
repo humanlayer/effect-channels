@@ -2,7 +2,6 @@ import {
 	DeliveryQueue,
 	DeliveryInterruption,
 	IngressAttributionStore,
-	MailboxStore,
 	type RunnerOptions,
 } from '@humanlayer/channels-delivery'
 import { Effect } from 'effect'
@@ -216,11 +215,7 @@ export const acceptConversationStopped = Effect.fn('slack.ingress.conversation_s
 ): Effect.fn.Return<
 	IngressResult,
 	SlackIngressError,
-	| SlackSubscriptions
-	| SlackIngressBindings
-	| DeliveryQueue
-	| DeliveryInterruption
-	| IngressAttributionStore
+	SlackSubscriptions | SlackIngressBindings | DeliveryQueue | DeliveryInterruption | IngressAttributionStore
 > {
 	const direct = yield* resolveDirectMessageIdentity({
 		idempotencyKey: event.idempotencyKey,

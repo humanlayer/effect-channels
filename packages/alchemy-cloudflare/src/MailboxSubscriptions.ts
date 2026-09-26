@@ -8,9 +8,9 @@ import {
 } from '@humanlayer/channels-delivery-next'
 import * as Cloudflare from 'alchemy/Cloudflare'
 import { RuntimeContext } from 'alchemy/RuntimeContext'
-import { Effect, Layer, Predicate, Schema } from 'effect'
+import { Effect, Exit, Layer, Predicate, Schema } from 'effect'
 
-const marker = Schema.Literal(true)
+const decodeMarker = Schema.decodeUnknownEffect(Schema.Literal(true))
 
 const subscriptionStorageKey = (mailboxKey: string) => `mailbox-subscription:${mailboxKey}`
 
@@ -59,37 +59,40 @@ export const MailboxSubscriptionsFromDurableObjectStorage = Layer.effect(
 
 							if (Predicate.isUndefined(stored)) {
 								yield* transaction.put(key, true)
-								const result: MailboxSubscriptionResult = MailboxSubscriptionCreatedResult.make({})
-								return result
+								return Exit.succeed<MailboxSubscriptionResult>(
+									MailboxSubscriptionCreatedResult.make({}),
+								)
 							}
 
-							Schema.decodeUnknownSync(marker)(stored)
-							const result: MailboxSubscriptionResult = MailboxSubscriptionAlreadyExistsResult.make({})
-							return result
+							const decoded = yield* decodeMarker(stored).pipe(Effect.exit)
+							if (Exit.isFailure(decoded)) return Exit.failCause(decoded.cause)
+							return Exit.succeed<MailboxSubscriptionResult>(
+								MailboxSubscriptionAlreadyExistsResult.make({}),
+							)
 						}),
 					)
 					.pipe(
+						Effect.flatten,
 						Effect.provideService(RuntimeContext, runtimeContext),
 						(effect) => unavailable('subscribe', effect),
 						Effect.withSpan('delivery.cloudflare.subscriptions.subscribe'),
 					),
 
-			isSubscribed: ({ mailboxKey }) =>
-				Effect.gen(function* () {
+			isSubscribed: Effect.fn('delivery.cloudflare.subscriptions.is_subscribed')(
+				function* ({ mailboxKey }) {
 					const stored = yield* state.storage.get<unknown>(subscriptionStorageKey(mailboxKey))
 
 					if (Predicate.isUndefined(stored)) {
 						return false
 					}
 
-					yield* Schema.decodeUnknownEffect(marker)(stored)
+					yield* decodeMarker(stored)
 
 					return true
-				}).pipe(
-					Effect.provideService(RuntimeContext, runtimeContext),
-					(effect) => unavailable('is_subscribed', effect),
-					Effect.withSpan('delivery.cloudflare.subscriptions.is_subscribed'),
-				),
+				},
+				Effect.provideService(RuntimeContext, runtimeContext),
+				(effect) => unavailable('is_subscribed', effect),
+			),
 
 			unsubscribe: ({ mailboxKey }) =>
 				state.storage

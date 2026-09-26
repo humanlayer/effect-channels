@@ -6,7 +6,7 @@ import { GitHubApiClient } from './GitHubApiClient'
 import { issueComment, repositoryPath } from './GitHubApiProjections'
 import { IssueComment } from './GitHubApiSchemas'
 
-const PostIssueCommentBody = Schema.Struct({ body: Schema.String })
+export const PostIssueCommentBody = Schema.Struct({ body: Schema.String })
 
 export const postIssueComment = Effect.fn('github.api.post_issue_comment')(function* (input: GitHubPostIssueComment) {
 	const api = yield* GitHubApiClient

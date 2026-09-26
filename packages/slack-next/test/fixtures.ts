@@ -1,8 +1,5 @@
-import { createHmac } from 'node:crypto'
-import * as NodeHttp from 'node:http'
-
-import { NodeCrypto } from '@effect/platform-node'
-import { createServer, serve, type WebhookDispatcher } from '@emulators/core'
+import { NodeCrypto, NodeHttpServer } from '@effect/platform-node'
+import { createServer, type WebhookDispatcher } from '@emulators/core'
 import { getSlackStore, seedFromConfig, slackPlugin, type SlackSeedConfig } from '@emulators/slack'
 import {
 	type DeliveryAdmission,
@@ -13,11 +10,12 @@ import {
 	webhookRoutes,
 	type RawWebhookInput,
 } from '@humanlayer/channels-delivery-next'
-import { Clock, Context, Effect, Layer, Predicate, Queue, Redacted, Schema } from 'effect'
-import { Headers, HttpRouter } from 'effect/unstable/http'
+import { Clock, Context, Effect, Layer, Match, Queue, Redacted, Schema } from 'effect'
+import { Headers, HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from 'effect/unstable/http'
 
 import { SlackApi } from '../src/SlackApi'
 import { makeSlackWebhookProvider } from '../src/SlackWebhookProvider'
+import { signSlackBody } from '../src/SlackWebhookSignature'
 
 export const slackEmulatorSigningSecret = 'slack-next-emulator-signing-secret'
 export const slackEmulatorBotToken = 'xoxb-slack-next-emulator'
@@ -80,18 +78,31 @@ export const makeInMemoryMailboxFixture = <R>(processors: ReadonlyArray<Provider
 		}
 	})
 
-export const signedSlackInput = (signingSecret: string, payload: Schema.Json, timestamp = '0'): RawWebhookInput => {
-	const bodyText = JSON.stringify(payload)
-	const body = new TextEncoder().encode(bodyText)
-	const signature = createHmac('sha256', signingSecret).update(`v0:${timestamp}:${bodyText}`).digest('hex')
-	return {
-		headers: Headers.fromInput({
-			'x-slack-request-timestamp': timestamp,
-			'x-slack-signature': `v0=${signature}`,
-		}),
-		body,
-	}
-}
+const textEncoder = new TextEncoder()
+
+/** Signs raw body bytes the way Slack does, for webhook inputs that production ingress must authenticate. */
+export const signedSlackBody = (signingSecret: string, body: Uint8Array, timestamp = '0') =>
+	signSlackBody({ signingSecret: Redacted.make(signingSecret), timestamp, body }).pipe(
+		Effect.map((signature): RawWebhookInput => ({
+			headers: Headers.fromInput({
+				'x-slack-request-timestamp': timestamp,
+				'x-slack-signature': signature,
+			}),
+			body,
+		})),
+		Effect.provide(NodeCrypto.layer),
+	)
+
+/** Signs an arbitrary JSON webhook payload, including payloads production ingress must reject. */
+export const signedSlackInput = (signingSecret: string, payload: Schema.Json, timestamp = '0') =>
+	Schema.encodeEffect(Schema.fromJsonString(Schema.Json))(payload).pipe(
+		Effect.flatMap((bodyText) => signedSlackBody(signingSecret, textEncoder.encode(bodyText), timestamp)),
+	)
+
+export class SlackEmulatorFixtureError extends Schema.TaggedError<SlackEmulatorFixtureError>()(
+	'SlackEmulatorFixtureError',
+	{ reason: Schema.Literals(['non_tcp_address', 'incomplete_seed']) },
+) {}
 
 const slackSeed = {
 	team: {
@@ -150,69 +161,25 @@ const slackSeed = {
 	strict_scopes: false,
 } satisfies SlackSeedConfig
 
-const listen = (server: NodeHttp.Server) =>
-	Effect.callback<number, Error>((resume) => {
-		server.once('error', (cause) => resume(Effect.fail(cause)))
-		server.listen(0, '127.0.0.1', () => {
-			const address = server.address()
-			if (address === null || Predicate.isString(address)) {
-				resume(Effect.fail(new Error('Emulator server did not expose a TCP port')))
-				return
-			}
-			resume(Effect.succeed(address.port))
-		})
-	})
-
-const close = (server: NodeHttp.Server) =>
-	Effect.promise(
-		() =>
-			new Promise<void>((resolve, reject) => {
-				server.close((cause) => (cause === undefined ? resolve() : reject(cause)))
+/** Serves an HTTP app on a fresh ephemeral TCP port for the current scope and returns the port. */
+const serveOnEphemeralPort = <E, R>(app: Effect.Effect<HttpServerResponse.HttpServerResponse, E, R>) =>
+	Effect.gen(function* () {
+		const server = yield* Layer.build(Layer.fresh(NodeHttpServer.layerTest))
+		yield* HttpServer.serveEffect(app).pipe(Effect.provideContext(server))
+		return yield* Match.value(Context.get(server, HttpServer.HttpServer).address).pipe(
+			Match.tagsExhaustive({
+				TcpAddress: (address) => Effect.succeed(address.port),
+				UnixAddress: () => Effect.fail(SlackEmulatorFixtureError.make({ reason: 'non_tcp_address' })),
 			}),
-	)
-
-const requestListener =
-	(handler: (request: Request) => Promise<Response>): NodeHttp.RequestListener =>
-	(request, response) => {
-		const chunks: Array<Uint8Array> = []
-		request.on('data', (chunk: Uint8Array) => chunks.push(chunk))
-		request.on('end', () => {
-			const body = Buffer.concat(chunks)
-			const url = `http://${request.headers.host ?? '127.0.0.1'}${request.url ?? '/'}`
-			const headers = new globalThis.Headers()
-			for (const [name, value] of Object.entries(request.headers)) {
-				if (Array.isArray(value)) {
-					for (const item of value) headers.append(name, item)
-				} else if (value !== undefined) {
-					headers.set(name, value)
-				}
-			}
-			void handler(new Request(url, { method: request.method, headers, body })).then(
-				async (result) => {
-					response.writeHead(result.status, Object.fromEntries(result.headers))
-					response.end(Buffer.from(await result.arrayBuffer()))
-				},
-				() => {
-					response.writeHead(500)
-					response.end()
-				},
-			)
-		})
-	}
+		)
+	})
 
 /**
- * `@emulators/core` defaults to GitHub webhook headers. `@emulators/slack` stores `signing_secret` but does not
- * install a Slack signature header factory, so the fixture must sign callbacks before exercising production ingress.
+ * `@emulators/core` defaults to GitHub webhook headers and `@emulators/slack` does not sign callbacks, so the
+ * emulator posts plain JSON and the callback server signs each body before exercising production ingress.
  */
-const signEmulatorCallbacks = (webhooks: WebhookDispatcher, timestamp: string) =>
-	webhooks.setHeaderFactory(({ body }) => {
-		const signature = createHmac('sha256', slackEmulatorSigningSecret).update(`v0:${timestamp}:${body}`).digest('hex')
-		return {
-			'content-type': 'application/json',
-			'x-slack-request-timestamp': timestamp,
-			'x-slack-signature': `v0=${signature}`,
-		}
-	})
+const sendJsonCallbacks = (webhooks: WebhookDispatcher) =>
+	webhooks.setHeaderFactory(() => ({ 'content-type': 'application/json' }))
 
 /**
  * Scoped Slack emulator fixture with seeded users, an app, a channel, and a real callback URL wired to the
@@ -239,15 +206,34 @@ export const makeSlackEmulatorFixture = (options: SlackEmulatorFixtureOptions) =
 			Context.merge(slackApiContext),
 		)
 
-		const callbackServer = NodeHttp.createServer(requestListener((request) => web.handler(request, context)))
-		const callbackPort = yield* listen(callbackServer)
-		yield* Effect.addFinalizer(() => close(callbackServer))
+		const callbackPort = yield* serveOnEphemeralPort(
+			Effect.gen(function* () {
+				const request = yield* HttpServerRequest.HttpServerRequest
+				const body = yield* request.arrayBuffer
+				const signed = yield* signedSlackBody(
+					slackEmulatorSigningSecret,
+					new Uint8Array(body),
+					webhookTimestamp,
+				)
+				const response = yield* Effect.promise(() =>
+					web.handler(
+						new Request(`http://127.0.0.1${request.url}`, {
+							method: request.method,
+							headers: signed.headers,
+							body,
+						}),
+						context,
+					),
+				)
+				return HttpServerResponse.fromWeb(response)
+			}),
+		)
 
 		const emulator = createServer(slackPlugin, { baseUrl: 'http://127.0.0.1' })
 		slackPlugin.seed?.(emulator.store, emulator.baseUrl)
 		seedFromConfig(emulator.store, emulator.baseUrl, slackSeed)
 
-		signEmulatorCallbacks(emulator.webhooks, webhookTimestamp)
+		sendJsonCallbacks(emulator.webhooks)
 		emulator.webhooks.register({
 			owner: 'slack',
 			url: `http://127.0.0.1:${callbackPort}/integrations/slack/webhook`,
@@ -255,9 +241,12 @@ export const makeSlackEmulatorFixture = (options: SlackEmulatorFixtureOptions) =
 			active: true,
 		})
 
-		const emulatorServer = serve({ fetch: emulator.app.fetch, hostname: '127.0.0.1', port: 0 })
-		const emulatorPort = yield* listen(emulatorServer)
-		yield* Effect.addFinalizer(() => close(emulatorServer))
+		const emulatorPort = yield* serveOnEphemeralPort(
+			Effect.gen(function* () {
+				const request = yield* HttpServerRequest.toWeb(yield* HttpServerRequest.HttpServerRequest)
+				return HttpServerResponse.fromWeb(yield* Effect.promise(() => emulator.app.fetch(request)))
+			}),
+		)
 
 		const store = getSlackStore(emulator.store)
 		const team = store.teams.findOneBy('domain', 'slack-next-test')
@@ -272,7 +261,7 @@ export const makeSlackEmulatorFixture = (options: SlackEmulatorFixtureOptions) =
 			channel === undefined ||
 			app === undefined
 		) {
-			return yield* Effect.fail(new Error('Slack emulator fixture seed is incomplete'))
+			return yield* SlackEmulatorFixtureError.make({ reason: 'incomplete_seed' })
 		}
 
 		return {

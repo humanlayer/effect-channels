@@ -47,9 +47,8 @@ describe('Linear webhook handling', () => {
 
 	it.effect('rejects stale timestamps', ({ expect }) =>
 		Effect.gen(function* () {
-			const body = new TextEncoder().encode(JSON.stringify(issueCreatePayload))
 			const error = yield* makeLinearTestProvider()
-				.handle(signedLinearBody(body, undefined, 100_000))
+				.handle(signedLinearInput(issueCreatePayload, 'Issue', undefined, 100_000))
 				.pipe(Effect.flip)
 			expect(error).toEqual(WebhookAuthenticationError.make({ reason: 'stale_timestamp' }))
 		}),

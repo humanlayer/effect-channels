@@ -142,18 +142,22 @@ export const normalizeSlackHistoryMessage = (input: {
 	readonly threadRef: ThreadRef
 	readonly teamId: SlackTeamId
 	readonly identity: SlackBotIdentity
-}): Message => {
+}) => {
 	const text = input.snapshot.text ?? ''
-	return Message.make({
-		ref: MessageRef.make(input.snapshot.ts),
-		threadRef: input.threadRef,
-		text,
-		markdown: text,
-		author: slackAuthor(input.identity, input.snapshot),
-		metadata: { sentAt: slackTsToDateTime(input.snapshot.ts, 0) },
-		attachments: slackFileAttachments(input.teamId, input.snapshot.files),
-		raw: Schema.encodeSync(SlackHistoryMessage)(input.snapshot),
-	})
+	return Schema.encodeEffect(SlackHistoryMessage)(input.snapshot).pipe(
+		Effect.map((raw) =>
+			Message.make({
+				ref: MessageRef.make(input.snapshot.ts),
+				threadRef: input.threadRef,
+				text,
+				markdown: text,
+				author: slackAuthor(input.identity, input.snapshot),
+				metadata: { sentAt: slackTsToDateTime(input.snapshot.ts, 0) },
+				attachments: slackFileAttachments(input.teamId, input.snapshot.files),
+				raw,
+			}),
+		),
+	)
 }
 
 export const normalizeSlackMessage = Effect.fn('slack.normalize.message')(function* (input: {
@@ -241,12 +245,12 @@ export const normalizeSlackMessageUpdated = Effect.fn('slack.normalize.message_u
 		directMessageKind: eventDirectMessageKind,
 	})
 	const threadRef = threadRefs.threadRef
-	const normalizedMessage = normalizeSlackHistoryMessage({
+	const normalizedMessage = yield* normalizeSlackHistoryMessage({
 		snapshot,
 		threadRef,
 		teamId: input.callback.team_id,
 		identity: input.identity,
-	})
+	}).pipe(Effect.mapError(() => SlackWebhookError.make({ reason: 'decode' })))
 	const messageFields = {
 		ref: normalizedMessage.ref,
 		threadRef: normalizedMessage.threadRef,
@@ -267,12 +271,12 @@ export const normalizeSlackMessageUpdated = Effect.fn('slack.normalize.message_u
 	const previousMessage =
 		event.previous_message === undefined
 			? undefined
-			: normalizeSlackHistoryMessage({
+			: yield* normalizeSlackHistoryMessage({
 					snapshot: event.previous_message,
 					threadRef,
 					teamId: input.callback.team_id,
 					identity: input.identity,
-				})
+				}).pipe(Effect.mapError(() => SlackWebhookError.make({ reason: 'decode' })))
 	const raw = yield* Schema.encodeEffect(SlackEventCallback)(input.callback).pipe(
 		Effect.mapError(() => SlackWebhookError.make({ reason: 'decode' })),
 	)
@@ -319,12 +323,12 @@ export const normalizeSlackMessageDeleted = Effect.fn('slack.normalize.message_d
 	const previousMessage =
 		event.previous_message === undefined
 			? undefined
-			: normalizeSlackHistoryMessage({
+			: yield* normalizeSlackHistoryMessage({
 					snapshot: event.previous_message,
 					threadRef,
 					teamId: input.callback.team_id,
 					identity: input.identity,
-				})
+				}).pipe(Effect.mapError(() => SlackWebhookError.make({ reason: 'decode' })))
 	const raw = yield* Schema.encodeEffect(SlackEventCallback)(input.callback).pipe(
 		Effect.mapError(() => SlackWebhookError.make({ reason: 'decode' })),
 	)

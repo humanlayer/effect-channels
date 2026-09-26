@@ -1,5 +1,5 @@
 import { describe, it } from '@effect/vitest'
-import { Cause, Context, Effect, Exit, Layer } from 'effect'
+import { Cause, Context, Effect, Exit, Layer, Schema } from 'effect'
 
 import {
 	SlackCallbackError,
@@ -24,6 +24,8 @@ import {
 class CallbackDependency extends Context.Service<CallbackDependency, { readonly value: string }>()(
 	'@humanlayer/channels-slack-next/test/CallbackDependency',
 ) {}
+
+class ApplicationFailure extends Schema.TaggedError<ApplicationFailure>()('ApplicationFailure', {}) {}
 
 const dependencyLayer = Layer.succeed(CallbackDependency, CallbackDependency.of({ value: 'captured' }))
 const teamId = SlackTeamId.make('T_CALLBACKS')
@@ -81,7 +83,7 @@ describe('SlackCallbacks', () => {
 	it.effect('turns typed failures into retryable callback errors', ({ expect }) =>
 		Effect.gen(function* () {
 			const callbacks = yield* buildCallbacks({
-				onNewMention: () => Effect.fail(new Error('application failure')),
+				onNewMention: () => Effect.fail(ApplicationFailure.make({})),
 			})
 			const error = yield* requireNewMention(callbacks)(newMention).pipe(Effect.flip)
 			expect(error).toEqual(

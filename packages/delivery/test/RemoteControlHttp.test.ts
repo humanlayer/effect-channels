@@ -215,7 +215,7 @@ it.effect('runs middleware without context and supplies null', () =>
 								assert.strictEqual(context, null)
 								const calls = yield* Calls
 								calls.push('middleware-only')
-								return yield* next()
+								return yield* next
 							}),
 					},
 				}).pipe(Layer.provideMerge(base)),
@@ -279,8 +279,8 @@ it.effect('runs context then endpoint middleware through the generated client', 
 								? Effect.gen(function* () {
 										assert.strictEqual(input.markdown, 'HTTP final answer')
 										const recorded = yield* Calls
-										const accepted = yield* next()
-										const replay = yield* next()
+										const accepted = yield* next
+										const replay = yield* next
 										assert.deepStrictEqual(replay, accepted)
 										recorded.push(`middleware:${delivery.organizationId}`)
 										recorded.push('after')
@@ -295,7 +295,7 @@ it.effect('runs context then endpoint middleware through the generated client', 
 						fail: ({ request, next }) =>
 							request.headers['x-fail'] === 'unavailable'
 								? Effect.fail(Unavailable.make({ message: 'Fail policy unavailable.' }))
-								: next(),
+								: next,
 					},
 				}),
 			),

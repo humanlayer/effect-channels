@@ -37,6 +37,10 @@ const InstallationTokenResponse = Schema.Struct({ token: Schema.NonEmptyString, 
 const AppResponse = Schema.Struct({ slug: Schema.NonEmptyString })
 const ErrorBody = Schema.Struct({ message: Schema.String })
 const InstallationTokenRequestBody = Schema.Struct({ repository_ids: Schema.Array(GitHubId) })
+const AppJwtHeaderJson = Schema.fromJsonString(
+	Schema.Struct({ alg: Schema.Literal('RS256'), typ: Schema.Literal('JWT') }),
+)
+const AppJwtClaimsJson = Schema.fromJsonString(Schema.Struct({ iss: Schema.String, iat: Schema.Int, exp: Schema.Int }))
 
 type ApiMethod = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'
 type RequestInput = {
@@ -116,23 +120,24 @@ export const GitHubApiClientLive = Layer.effect(
 				HttpClientRequest.setHeader('user-agent', 'humanlayer-channels-github-next'),
 			)
 
-		const appJwt = Effect.fn('github.api.app_jwt')(function* () {
-			const now = yield* Clock.currentTimeMillis
-			const header = Encoding.encodeBase64Url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }))
-			const payload = Encoding.encodeBase64Url(
-				JSON.stringify({
+		const appJwt = Effect.fn('github.api.app_jwt')(
+			function* () {
+				const now = yield* Clock.currentTimeMillis
+				const header = yield* Schema.encodeEffect(AppJwtHeaderJson)({ alg: 'RS256', typ: 'JWT' })
+				const claims = yield* Schema.encodeEffect(AppJwtClaimsJson)({
 					iss: String(config.appId),
 					iat: Math.floor(now / 1_000) - 60,
 					exp: Math.floor(now / 1_000) + 540,
-				}),
-			)
-			const unsigned = `${header}.${payload}`
-			const signature = yield* signer.sign({ privateKey: config.privateKey, data: unsigned }).pipe(
-				Effect.tapError((error) => Effect.logError('GitHub App JWT signing failed', error)),
-				Effect.mapError(() => GitHubTransportError.make({ stage: 'signing' })),
-			)
-			return `${unsigned}.${signature}`
-		})
+				})
+				const unsigned = `${Encoding.encodeBase64Url(header)}.${Encoding.encodeBase64Url(claims)}`
+				const signature = yield* signer.sign({ privateKey: config.privateKey, data: unsigned }).pipe(
+					Effect.tapError((error) => Effect.logError('GitHub App JWT signing failed', error)),
+					Effect.mapError(() => GitHubTransportError.make({ stage: 'signing' })),
+				)
+				return `${unsigned}.${signature}`
+			},
+			Effect.catchTag('SchemaError', () => Effect.fail(GitHubTransportError.make({ stage: 'signing' }))),
+		)
 
 		const inspectStatus = Effect.fn('github.api.inspect_status')(function* (
 			response: HttpClientResponse.HttpClientResponse,
@@ -142,10 +147,10 @@ export const GitHubApiClientLive = Layer.effect(
 				return yield* GitHubTransportError.make({ stage: 'redirect', status: response.status })
 			}
 			const retryAfterHeaderMs = secondsToMillis(response.headers['retry-after'])
-			const body = yield* response.text.pipe(Effect.catch(() => Effect.succeed('')))
+			const body = yield* response.text.pipe(Effect.orElseSucceed(() => ''))
 			const decoded = yield* Schema.decodeEffect(Schema.fromJsonString(ErrorBody))(body).pipe(
 				Effect.map((value) => value.message.trim().slice(0, 1_024)),
-				Effect.catch(() => Effect.succeed(undefined)),
+				Effect.orElseSucceed(() => undefined),
 			)
 			const rateLimited =
 				response.status === 429 ||

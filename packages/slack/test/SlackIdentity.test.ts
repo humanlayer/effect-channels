@@ -1,6 +1,6 @@
 import { NodeCrypto } from '@effect/platform-node'
 import { assert, it } from '@effect/vitest'
-import { ConfigProvider, Context, Effect, Layer, Option, Queue, Redacted, Ref, Schema } from 'effect'
+import { ConfigProvider, Context, Effect, Layer, Queue, Redacted, Ref, Schema } from 'effect'
 import { HttpRouter } from 'effect/unstable/http'
 
 import { CredentialStoreError } from '../src/Errors'
@@ -57,15 +57,15 @@ interface RecordedIngress {
 
 const loadIdentityCredentials = (input: SlackLoadCredentialsInput) => {
 	if (input.teamId === 'T_TENANT') {
-		return Effect.succeed(Option.some({ botToken: Redacted.make(testBotToken), botUserId: 'UTENANT' }))
+		return Effect.succeedSome({ botToken: Redacted.make(testBotToken), botUserId: 'UTENANT' })
 	}
 	if (input.teamId === 'T_PLAIN') {
-		return Effect.succeed(Option.some({ botToken: Redacted.make(testBotToken) }))
+		return Effect.succeedSome({ botToken: Redacted.make(testBotToken) })
 	}
 	if (input.teamId === 'T_BROKEN') {
 		return Effect.fail(CredentialStoreError.make({ operation: 'load', teamId: input.teamId }))
 	}
-	return Effect.succeed(Option.none())
+	return Effect.succeedNone
 }
 
 const identityCredentialsLayer = SlackTenantCredentials.make({

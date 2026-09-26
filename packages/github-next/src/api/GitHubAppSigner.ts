@@ -1,4 +1,4 @@
-import { Context, Effect, Encoding, Layer, Redacted, Schema } from 'effect'
+import { Context, Effect, Encoding, Layer, Redacted, Result, Schema } from 'effect'
 
 export class GitHubSigningError extends Schema.TaggedError<GitHubSigningError>()('GitHubSigningError', {}) {}
 
@@ -15,26 +15,25 @@ export class GitHubAppSigner extends Context.Service<
 	static readonly layerWebCrypto = Layer.sync(GitHubAppSigner, () => {
 		const encoder = new TextEncoder()
 		return GitHubAppSigner.of({
-			sign: ({ privateKey, data }) =>
-				Effect.tryPromise({
-					try: async () => {
-						const bytes = privateKeyBytes(Redacted.value(privateKey))
-						const key = await globalThis.crypto.subtle.importKey(
+			sign: Effect.fn('github.app_signer.sign')(function* ({ privateKey, data }) {
+				const bytes = yield* privateKeyBytes(Redacted.value(privateKey))
+				const key = yield* Effect.tryPromise({
+					try: () =>
+						globalThis.crypto.subtle.importKey(
 							'pkcs8',
 							bytes,
 							{ name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
 							false,
 							['sign'],
-						)
-						const signature = await globalThis.crypto.subtle.sign(
-							'RSASSA-PKCS1-v1_5',
-							key,
-							encoder.encode(data),
-						)
-						return Encoding.encodeBase64Url(new Uint8Array(signature))
-					},
+						),
 					catch: () => GitHubSigningError.make({}),
-				}),
+				})
+				const signature = yield* Effect.tryPromise({
+					try: () => globalThis.crypto.subtle.sign('RSASSA-PKCS1-v1_5', key, encoder.encode(data)),
+					catch: () => GitHubSigningError.make({}),
+				})
+				return Encoding.encodeBase64Url(new Uint8Array(signature))
+			}),
 		})
 	})
 }
@@ -49,24 +48,24 @@ const der = (tag: number, bytes: Uint8Array): Uint8Array<ArrayBuffer> => {
 	return new Uint8Array([tag, ...length, ...bytes])
 }
 
-const privateKeyBytes = (pem: string) => {
+const privateKeyBytes = (pem: string): Effect.Effect<Uint8Array<ArrayBuffer>, GitHubSigningError> => {
 	const pkcs1 = pem.startsWith('-----BEGIN RSA PRIVATE KEY-----')
 	let label = 'PRIVATE KEY'
 	if (pkcs1) label = 'RSA PRIVATE KEY'
 	if (!pem.startsWith(`-----BEGIN ${label}-----`) || !pem.trimEnd().endsWith(`-----END ${label}-----`)) {
-		throw new Error('Invalid PEM')
+		return Effect.fail(GitHubSigningError.make({}))
 	}
-	const bytes = Uint8Array.from(
-		atob(
-			pem
-				.replace(`-----BEGIN ${label}-----`, '')
-				.replace(`-----END ${label}-----`, '')
-				.replace(pemWhitespace, ''),
-		),
-		(character) => character.charCodeAt(0),
+	return Encoding.decodeBase64(
+		pem.replace(`-----BEGIN ${label}-----`, '').replace(`-----END ${label}-----`, '').replace(pemWhitespace, ''),
+	).pipe(
+		Result.map((bytes) => (pkcs1 ? pkcs1ToPkcs8(bytes) : new Uint8Array(bytes))),
+		Result.mapError(() => GitHubSigningError.make({})),
+		Effect.fromResult,
 	)
-	if (!pkcs1) return bytes
-	return der(
+}
+
+const pkcs1ToPkcs8 = (bytes: Uint8Array) =>
+	der(
 		0x30,
 		new Uint8Array([
 			0x02,
@@ -90,4 +89,3 @@ const privateKeyBytes = (pem: string) => {
 			...der(0x04, bytes),
 		]),
 	)
-}

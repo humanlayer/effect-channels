@@ -103,8 +103,10 @@ export const mailboxBackendContract = <E>(
 	/** A Durable Object store holds one mailbox, so it skips the tests that need several. */
 	options: { readonly holdsManyMailboxes: boolean } = { holdsManyMailboxes: true },
 ) => {
-	const contract = (name: string, test: Effect.Effect<void, unknown, MailboxDelivery | MailboxProcessingBackend>) =>
-		it.effect(`${storeName}: ${name}`, () => test.pipe(Effect.provide(makeEmptyStore())))
+	const contract = <TestError>(
+		name: string,
+		test: Effect.Effect<void, TestError, MailboxDelivery | MailboxProcessingBackend>,
+	) => it.effect(`${storeName}: ${name}`, () => test.pipe(Effect.provide(makeEmptyStore())))
 
 	contract(
 		'reports what is waiting, with arrival times and growing sequence numbers',

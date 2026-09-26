@@ -14,6 +14,7 @@ import {
 	SchemaIssue,
 } from 'effect'
 
+import { DeliveryInterruption, InterruptDelivery } from './DeliveryInterruption'
 import {
 	DeliveredDeliveryOperation,
 	DeliveryOutputError,
@@ -22,7 +23,6 @@ import {
 	FailedDeliveryOperation,
 	PendingDeliveryOperation,
 } from './DeliveryOperation'
-import { DeliveryInterruption, InterruptDelivery } from './DeliveryInterruption'
 import { DeliveryPolicy } from './DeliveryPolicy'
 import { DeliveryAdmission, DeliveryQueue } from './DeliveryQueue'
 import { encodeDeliveryId } from './DeliveryReference'
@@ -39,8 +39,6 @@ import {
 	eventIdentity,
 	ExternalDeliveryStage,
 	LocalDeliveryStage,
-	mailboxCapacityUsage,
-	mailboxEnvelopes,
 	mailboxKey,
 	mailboxPrefix,
 	MailboxAddress,
@@ -109,9 +107,6 @@ const transition = <A>(input: {
 		}
 		return yield* DeliveryError.make({ reason: 'conflict' })
 	})
-
-const retained = retainedOutcomes
-const envelopes = mailboxEnvelopes
 
 export type HandlerRegistration<Event extends Schema.Constraint, Resource extends Schema.Constraint, R> = {
 	readonly namespace: string
@@ -428,7 +423,7 @@ export const bind = <Event extends Schema.Constraint, Resource extends Schema.Co
 					...state,
 					failed: kind === 'failed' ? [...state.failed, batch] : state.failed,
 					outcomes: [
-						...retained(state, now),
+						...retainedOutcomes(state, now),
 						...batch.envelopes.map((event, index) => {
 							const base = { identity: eventIdentity(event), kind, expiresAt: now + policy.retentionMs }
 							return batch.deliveryId === undefined ||

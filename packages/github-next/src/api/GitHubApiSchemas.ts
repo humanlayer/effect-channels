@@ -1,7 +1,7 @@
 import { Schema } from 'effect'
 
 import { GitHubId } from '../GitHubIdentity'
-import { GitHubCheckConclusion, GitHubCheckStatus } from '../GitHubModels'
+import { GitHubCheckConclusion, GitHubCheckStatus, GitHubDiffLine } from '../GitHubModels'
 
 export const Participant = Schema.Struct({ id: GitHubId, login: Schema.NonEmptyString, type: Schema.String })
 export const Issue = Schema.Struct({
@@ -51,8 +51,8 @@ export const ReviewComment = Schema.Struct({
 	original_commit_id: Schema.String,
 	diff_hunk: Schema.String,
 	in_reply_to_id: Schema.optionalKey(Schema.NullOr(GitHubId)),
-	line: Schema.optionalKey(Schema.NullOr(Schema.Number)),
-	start_line: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+	line: Schema.optionalKey(Schema.NullOr(GitHubDiffLine)),
+	start_line: Schema.optionalKey(Schema.NullOr(GitHubDiffLine)),
 	side: Schema.optionalKey(Schema.Literals(['LEFT', 'RIGHT'])),
 })
 export const Reaction = Schema.Struct({ id: GitHubId, content: Schema.String, user: Schema.NullOr(Participant) })

@@ -1,7 +1,6 @@
 import { describe, it } from '@effect/vitest'
 import { ConfigProvider, Effect, Layer, Queue, Ref } from 'effect'
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http'
-import { expect } from 'vite-plus/test'
 
 import { GitHubApi } from '../src/GitHubApi'
 import { GitHubApiLiveBase, GitHubAppSigner } from '../src/GitHubApiLive'
@@ -169,7 +168,7 @@ const observeRequest = (request: Request): Effect.Effect<ObservedRequest> =>
 	})
 
 describe('GitHubApiLive agent capabilities', () => {
-	it.effect('fetches pull request files, a text diff, and commits through their HTTP seams', () =>
+	it.effect('fetches pull request files, a text diff, and commits through their HTTP seams', ({ expect }) =>
 		Effect.gen(function* () {
 			const calls = yield* Queue.unbounded<ObservedRequest>()
 			const httpClient = HttpClient.make((request) =>
@@ -317,88 +316,90 @@ describe('GitHubApiLive agent capabilities', () => {
 		}),
 	)
 
-	it.effect('uses the Issues API and distinct add, set, remove, and remove-all label verbs for issues and PRs', () =>
-		Effect.gen(function* () {
-			const calls = yield* Queue.unbounded<ObservedRequest>()
-			const httpClient = HttpClient.make((request) =>
-				Effect.gen(function* () {
-					const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie)
-					const url = new URL(web.url)
-					if (url.pathname.startsWith('/app/installations/')) {
-						return HttpClientResponse.fromWeb(request, tokenResponse())
-					}
-					yield* Queue.offer(calls, yield* observeRequest(web))
-					if (web.method === 'DELETE' && url.pathname.endsWith('/labels')) {
-						return HttpClientResponse.fromWeb(request, new Response(null, { status: 204 }))
-					}
-					return HttpClientResponse.fromWeb(
-						request,
-						Response.json([{ id: 1, name: 'bug', color: 'd73a4a', description: null }]),
-					)
-				}),
-			)
+	it.effect(
+		'uses the Issues API and distinct add, set, remove, and remove-all label verbs for issues and PRs',
+		({ expect }) =>
+			Effect.gen(function* () {
+				const calls = yield* Queue.unbounded<ObservedRequest>()
+				const httpClient = HttpClient.make((request) =>
+					Effect.gen(function* () {
+						const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie)
+						const url = new URL(web.url)
+						if (url.pathname.startsWith('/app/installations/')) {
+							return HttpClientResponse.fromWeb(request, tokenResponse())
+						}
+						yield* Queue.offer(calls, yield* observeRequest(web))
+						if (web.method === 'DELETE' && url.pathname.endsWith('/labels')) {
+							return HttpClientResponse.fromWeb(request, new Response(null, { status: 204 }))
+						}
+						return HttpClientResponse.fromWeb(
+							request,
+							Response.json([{ id: 1, name: 'bug', color: 'd73a4a', description: null }]),
+						)
+					}),
+				)
 
-			const results = yield* Effect.gen(function* () {
-				const api = yield* GitHubApi
-				const issueLabels = [
-					yield* api.listIssueLabels({ issue }),
-					yield* api.addIssueLabels({ issue, labels: ['bug'] }),
-					yield* api.setIssueLabels({ issue, labels: ['bug', 'urgent'] }),
-					yield* api.removeIssueLabel({ issue, label: 'needs review' }),
-				]
-				yield* api.removeAllIssueLabels({ issue })
-				const pullRequestLabels = [
-					yield* api.listPullRequestLabels({ pullRequest }),
-					yield* api.addPullRequestLabels({ pullRequest, labels: ['bug'] }),
-					yield* api.setPullRequestLabels({ pullRequest, labels: ['bug', 'urgent'] }),
-					yield* api.removePullRequestLabel({ pullRequest, label: 'needs review' }),
-				]
-				yield* api.removeAllPullRequestLabels({ pullRequest })
-				return [...issueLabels, ...pullRequestLabels]
-			}).pipe(Effect.provide(makeLayer(httpClient)))
+				const results = yield* Effect.gen(function* () {
+					const api = yield* GitHubApi
+					const issueLabels = [
+						yield* api.listIssueLabels({ issue }),
+						yield* api.addIssueLabels({ issue, labels: ['bug'] }),
+						yield* api.setIssueLabels({ issue, labels: ['bug', 'urgent'] }),
+						yield* api.removeIssueLabel({ issue, label: 'needs review' }),
+					]
+					yield* api.removeAllIssueLabels({ issue })
+					const pullRequestLabels = [
+						yield* api.listPullRequestLabels({ pullRequest }),
+						yield* api.addPullRequestLabels({ pullRequest, labels: ['bug'] }),
+						yield* api.setPullRequestLabels({ pullRequest, labels: ['bug', 'urgent'] }),
+						yield* api.removePullRequestLabel({ pullRequest, label: 'needs review' }),
+					]
+					yield* api.removeAllPullRequestLabels({ pullRequest })
+					return [...issueLabels, ...pullRequestLabels]
+				}).pipe(Effect.provide(makeLayer(httpClient)))
 
-			for (const result of results) expect(result[0]?.name).toBe('bug')
-			const observed = Array.from(yield* Queue.takeAll(calls))
-			expect(observed.map(({ method, path, body }) => ({ method, path, body }))).toEqual([
-				{ method: 'GET', path: '/repos/humanlayer/channels/issues/42/labels', body: '' },
-				{
-					method: 'POST',
-					path: '/repos/humanlayer/channels/issues/42/labels',
-					body: '{"labels":["bug"]}',
-				},
-				{
-					method: 'PUT',
-					path: '/repos/humanlayer/channels/issues/42/labels',
-					body: '{"labels":["bug","urgent"]}',
-				},
-				{
-					method: 'DELETE',
-					path: '/repos/humanlayer/channels/issues/42/labels/needs%20review',
-					body: '',
-				},
-				{ method: 'DELETE', path: '/repos/humanlayer/channels/issues/42/labels', body: '' },
-				{ method: 'GET', path: '/repos/humanlayer/channels/issues/43/labels', body: '' },
-				{
-					method: 'POST',
-					path: '/repos/humanlayer/channels/issues/43/labels',
-					body: '{"labels":["bug"]}',
-				},
-				{
-					method: 'PUT',
-					path: '/repos/humanlayer/channels/issues/43/labels',
-					body: '{"labels":["bug","urgent"]}',
-				},
-				{
-					method: 'DELETE',
-					path: '/repos/humanlayer/channels/issues/43/labels/needs%20review',
-					body: '',
-				},
-				{ method: 'DELETE', path: '/repos/humanlayer/channels/issues/43/labels', body: '' },
-			])
-		}),
+				for (const result of results) expect(result[0]?.name).toBe('bug')
+				const observed = Array.from(yield* Queue.takeAll(calls))
+				expect(observed.map(({ method, path, body }) => ({ method, path, body }))).toEqual([
+					{ method: 'GET', path: '/repos/humanlayer/channels/issues/42/labels', body: '' },
+					{
+						method: 'POST',
+						path: '/repos/humanlayer/channels/issues/42/labels',
+						body: '{"labels":["bug"]}',
+					},
+					{
+						method: 'PUT',
+						path: '/repos/humanlayer/channels/issues/42/labels',
+						body: '{"labels":["bug","urgent"]}',
+					},
+					{
+						method: 'DELETE',
+						path: '/repos/humanlayer/channels/issues/42/labels/needs%20review',
+						body: '',
+					},
+					{ method: 'DELETE', path: '/repos/humanlayer/channels/issues/42/labels', body: '' },
+					{ method: 'GET', path: '/repos/humanlayer/channels/issues/43/labels', body: '' },
+					{
+						method: 'POST',
+						path: '/repos/humanlayer/channels/issues/43/labels',
+						body: '{"labels":["bug"]}',
+					},
+					{
+						method: 'PUT',
+						path: '/repos/humanlayer/channels/issues/43/labels',
+						body: '{"labels":["bug","urgent"]}',
+					},
+					{
+						method: 'DELETE',
+						path: '/repos/humanlayer/channels/issues/43/labels/needs%20review',
+						body: '',
+					},
+					{ method: 'DELETE', path: '/repos/humanlayer/channels/issues/43/labels', body: '' },
+				])
+			}),
 	)
 
-	it.effect('encodes line, range, and file-level pull request review comments', () =>
+	it.effect('encodes line, range, and file-level pull request review comments', ({ expect }) =>
 		Effect.gen(function* () {
 			const calls = yield* Queue.unbounded<ObservedRequest>()
 			const nextId = yield* Ref.make(500)
@@ -465,7 +466,7 @@ describe('GitHubApiLive agent capabilities', () => {
 		}),
 	)
 
-	it.effect('encodes issue and PR state changes and preserves merge payloads and results', () =>
+	it.effect('encodes issue and PR state changes and preserves merge payloads and results', ({ expect }) =>
 		Effect.gen(function* () {
 			const calls = yield* Queue.unbounded<ObservedRequest>()
 			const httpClient = HttpClient.make((request) =>
@@ -563,7 +564,7 @@ describe('GitHubApiLive agent capabilities', () => {
 		}),
 	)
 
-	it.effect('decodes check-run list envelopes, details, and annotations', () =>
+	it.effect('decodes check-run list envelopes, details, and annotations', ({ expect }) =>
 		Effect.gen(function* () {
 			const calls = yield* Queue.unbounded<ObservedRequest>()
 			const httpClient = HttpClient.make((request) =>
@@ -664,7 +665,7 @@ describe('GitHubApiLive agent capabilities', () => {
 		}),
 	)
 
-	it.effect('preserves nullable check annotation level and message fields', () =>
+	it.effect('preserves nullable check annotation level and message fields', ({ expect }) =>
 		Effect.gen(function* () {
 			const httpClient = HttpClient.make((request) =>
 				Effect.gen(function* () {
@@ -700,7 +701,7 @@ describe('GitHubApiLive agent capabilities', () => {
 		}),
 	)
 
-	it.effect('resolves Actions jobs through check-suite run and job envelopes and decodes job details', () =>
+	it.effect('resolves Actions jobs through check-suite run and job envelopes and decodes job details', ({ expect }) =>
 		Effect.gen(function* () {
 			const calls = yield* Queue.unbounded<ObservedRequest>()
 			const httpClient = HttpClient.make((request) =>
@@ -793,7 +794,7 @@ describe('GitHubApiLive agent capabilities', () => {
 		}),
 	)
 
-	it.effect('preserves a nullable Actions job html URL', () =>
+	it.effect('preserves a nullable Actions job html URL', ({ expect }) =>
 		Effect.gen(function* () {
 			const httpClient = HttpClient.make((request) =>
 				Effect.gen(function* () {
@@ -813,7 +814,7 @@ describe('GitHubApiLive agent capabilities', () => {
 		}),
 	)
 
-	it.effect('turns malformed boundary numbers into typed invalid-response failures', () =>
+	it.effect('turns malformed boundary numbers into typed invalid-response failures', ({ expect }) =>
 		Effect.gen(function* () {
 			const annotationMode = yield* Ref.make<'line' | 'column'>('line')
 			const httpClient = HttpClient.make((request) =>
@@ -903,7 +904,7 @@ describe('GitHubApiLive agent capabilities', () => {
 		}),
 	)
 
-	it.effect('follows an Actions log redirect without forwarding GitHub authorization', () =>
+	it.effect('follows an Actions log redirect without forwarding GitHub authorization', ({ expect }) =>
 		Effect.gen(function* () {
 			const calls = yield* Queue.unbounded<ObservedRequest>()
 			const httpClient = HttpClient.make((request) =>
@@ -946,7 +947,7 @@ describe('GitHubApiLive agent capabilities', () => {
 		}),
 	)
 
-	it.effect('classifies merge rejections and preserves safe provider status and message details', () =>
+	it.effect('classifies merge rejections and preserves safe provider status and message details', ({ expect }) =>
 		Effect.gen(function* () {
 			type ErrorResponse = { readonly status: number; readonly message: string }
 			const response = yield* Ref.make<ErrorResponse>({
@@ -1006,7 +1007,7 @@ describe('GitHubApiLive agent capabilities', () => {
 		}),
 	)
 
-	it.effect('classifies common HTTP failures with status, message, and retryability', () =>
+	it.effect('classifies common HTTP failures with status, message, and retryability', ({ expect }) =>
 		Effect.gen(function* () {
 			type ErrorResponse = { readonly status: number; readonly message: string }
 			const response = yield* Ref.make<ErrorResponse>({

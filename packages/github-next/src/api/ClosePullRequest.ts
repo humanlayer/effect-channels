@@ -5,7 +5,7 @@ import { GitHubApiClient } from './GitHubApiClient'
 import { pullRequestInfo, repositoryPath } from './GitHubApiProjections'
 import { PullRequest } from './GitHubApiSchemas'
 
-const ClosePullRequestBody = Schema.Struct({ state: Schema.Literal('closed') })
+export const ClosePullRequestBody = Schema.Struct({ state: Schema.Literal('closed') })
 
 export const closePullRequest = Effect.fn('github.api.close_pull_request')(function* (input: GitHubPullRequestRequest) {
 	const api = yield* GitHubApiClient

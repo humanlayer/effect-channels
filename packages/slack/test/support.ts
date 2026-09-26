@@ -1,5 +1,5 @@
 import { NodeCrypto } from '@effect/platform-node'
-import { Clock, ConfigProvider, Effect, Layer, Option, Queue, Redacted, Schema } from 'effect'
+import { Clock, ConfigProvider, Effect, Layer, Queue, Redacted, Schema } from 'effect'
 import { TestClock } from 'effect/testing'
 import { HttpClient, HttpClientRequest, HttpClientResponse, HttpRouter } from 'effect/unstable/http'
 
@@ -44,12 +44,12 @@ export const unimplemented = (operation: string): Effect.Effect<never> =>
 	Effect.die(new Error(operation + ' is intentionally unimplemented'))
 
 export const testCredentialsLayer = SlackTenantCredentials.make({
-	load: () => Effect.succeed(Option.some({ botToken: Redacted.make(testBotToken) })),
+	load: () => Effect.succeedSome({ botToken: Redacted.make(testBotToken) }),
 	save: () => Effect.void,
 })
 
 export const unknownTenantCredentialsLayer = SlackTenantCredentials.make({
-	load: () => Effect.succeed(Option.none()),
+	load: () => Effect.succeedNone,
 	save: () => Effect.void,
 })
 

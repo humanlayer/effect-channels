@@ -6,7 +6,7 @@ import { GitHubApiClient } from './GitHubApiClient'
 import { commentPath, commentRepository, issueComment, reviewComment } from './GitHubApiProjections'
 import { IssueComment, ReviewComment } from './GitHubApiSchemas'
 
-const UpdateCommentBody = Schema.Struct({ body: Schema.String })
+export const UpdateCommentBody = Schema.Struct({ body: Schema.String })
 
 export const updateComment = Effect.fn('github.api.update_comment')(function* (input: GitHubUpdateComment) {
 	const api = yield* GitHubApiClient

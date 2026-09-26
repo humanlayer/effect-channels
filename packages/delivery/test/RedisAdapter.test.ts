@@ -46,7 +46,7 @@ it.effect(
 					yield* Schema.decodeUnknownEffect(Schema.fromJsonString(MailboxSnapshot))(args[2]),
 					{ revision: 0, state: { ...emptyMailbox(), readyAt: 0 } },
 				)
-				assert.deepStrictEqual(args.slice(3), ['0', encodeKey(key), '[]'])
+				assert.deepStrictEqual(args.slice(3), ['0', yield* encodeKey(key), '[]'])
 				yield* Queue.offer(fake.replies, Effect.succeed(0))
 				assert.strictEqual(
 					yield* store.commitMailbox({ key, expectedRevision: 5, nextState: emptyMailbox() }),
@@ -55,9 +55,9 @@ it.effect(
 				assert.deepStrictEqual((yield* Queue.take(fake.commands)).args.slice(-6), [
 					'5',
 					'6',
-					encodeSnapshot({ revision: 6, state: emptyMailbox() }),
+					yield* encodeSnapshot({ revision: 6, state: emptyMailbox() }),
 					'',
-					encodeKey(key),
+					yield* encodeKey(key),
 					'[]',
 				])
 			}).pipe(Effect.provide(layer.pipe(Layer.provide(fake.layer))))
@@ -72,14 +72,14 @@ it.effect(
 			yield* Effect.gen(function* () {
 				const readiness = yield* MailboxReadiness
 				for (const prefix of ['', 'app%_*?', '😀', '\ud83d']) {
-					yield* Queue.offer(fake.replies, Effect.succeed([encodeKey(`${prefix}key`)]))
+					yield* Queue.offer(fake.replies, Effect.succeed([yield* encodeKey(`${prefix}key`)]))
 					assert.deepStrictEqual(yield* readiness.scanReady({ prefix, now: 0, limit: 1 }), [`${prefix}key`])
 					assert.deepStrictEqual(yield* Queue.take(fake.commands), {
 						command: 'ZRANGEBYSCORE',
 						args: [readyKey({ prefix }), '-inf', '0', 'LIMIT', '0', '1'],
 					})
 				}
-				yield* Queue.offer(fake.replies, Effect.succeed([encodeKey('unrelated')]))
+				yield* Queue.offer(fake.replies, Effect.succeed([yield* encodeKey('unrelated')]))
 				assert.deepStrictEqual(
 					yield* readiness.scanReady({ prefix: 'mine', now: 0, limit: 1 }).pipe(Effect.flip),
 					MailboxStoreError.make({ operation: 'scan' }),
@@ -99,14 +99,14 @@ it.effect('Redis seam decodes snapshots and rejects malformed replies without lo
 			yield* Queue.offer(fake.replies, Effect.succeed([null, null]))
 			assert.strictEqual(yield* store.loadMailbox({ key: 'key' }), undefined)
 			for (const state of mailboxCodecCases) {
-				yield* Queue.offer(fake.replies, Effect.succeed(['0', encodeSnapshot({ revision: 0, state })]))
+				yield* Queue.offer(fake.replies, Effect.succeed(['0', yield* encodeSnapshot({ revision: 0, state })]))
 				assert.deepStrictEqual(yield* store.loadMailbox({ key: 'key' }), { revision: 0, state })
 			}
 			for (const reply of [
 				[],
 				['0', null],
 				['0', 'private-payload-sentinel'],
-				['1', encodeSnapshot({ revision: 0, state: emptyMailbox() })],
+				['1', yield* encodeSnapshot({ revision: 0, state: emptyMailbox() })],
 			]) {
 				yield* Queue.offer(fake.replies, Effect.succeed(reply))
 				assert.deepStrictEqual(

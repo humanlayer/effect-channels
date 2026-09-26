@@ -23,7 +23,7 @@ import { makeInMemoryMailboxFixture, makeSlackEmulatorFixture, slackEmulatorEven
 describe('Slack webhook routing', () => {
 	it.effect('processes an emulator mention through its keyed mailbox and calls onNewMention', ({ expect }) =>
 		Effect.gen(function* () {
-			const onNewMention = vi.fn((_event: SlackNewMention) => Effect.void)
+			const onNewMention = vi.fn<(event: SlackNewMention) => Effect.Effect<void>>(() => Effect.void)
 			const callbackLayer = Layer.merge(
 				Layer.merge(
 					Layer.mock(SlackApi, {

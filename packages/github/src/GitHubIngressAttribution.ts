@@ -46,7 +46,7 @@ export const resolveGitHubIngressAttribution = Effect.fn('github.ingress.organiz
 						: reject({ classification: 'lookup_failed', errorTag: 'GitHubOrganizationLookupError' }),
 				),
 			)
-		const organization = yield* Schema.decodeUnknownEffect(Schema.NullOr(GitHubOrganization))(resolved).pipe(
+		const organization = yield* Schema.decodeEffect(Schema.NullOr(GitHubOrganization))(resolved).pipe(
 			Effect.catchTag('SchemaError', () => reject({ classification: 'invalid_result' })),
 		)
 		if (organization === null) return null

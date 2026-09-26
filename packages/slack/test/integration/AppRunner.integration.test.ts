@@ -5,8 +5,6 @@ import { Clock, ConfigProvider, Context, Deferred, Effect, Exit, Layer, Scope } 
 import { HttpRouter } from 'effect/unstable/http'
 
 import {
-	HistoryResponse,
-	PostedMessageResponse,
 	SlackEmulator,
 	slackEmulatorAliceToken,
 	slackEmulatorBotToken,
@@ -46,29 +44,25 @@ it.live('routes commit without executing; a scoped runner replies then finalizes
 		const memoMap = yield* Layer.makeMemoMap
 		const web = HttpRouter.toWebHandler(app.routes, { memoMap, disableLogger: true })
 		yield* Effect.addFinalizer(() => Effect.promise(web.dispose))
-		const root = yield* emulator.call(
-			slackEmulatorAliceToken,
-			'chat.postMessage',
-			{ channel: emulator.publicChannelId, text: 'admit before processing' },
-			PostedMessageResponse,
-		)
-		const response = yield* Effect.promise(() =>
-			web.handler(
-				emulator.signedWebhook({
-					type: 'event_callback',
-					team_id: emulator.teamId,
-					event_id: 'Ev_explicit_runner',
-					event_time: 1,
-					event: {
-						type: 'app_mention',
-						channel: root.channel,
-						ts: root.ts,
-						text: root.message.text,
-						user: emulator.aliceUserId,
-					},
-				}),
-			),
-		)
+		const root = yield* emulator.call(slackEmulatorAliceToken, 'chat.postMessage', {
+			channel: emulator.publicChannelId,
+			text: 'admit before processing',
+		})
+		const response = yield* emulator
+			.signedWebhook({
+				type: 'event_callback',
+				team_id: emulator.teamId,
+				event_id: 'Ev_explicit_runner',
+				event_time: 1,
+				event: {
+					type: 'app_mention',
+					channel: root.channel,
+					ts: root.ts,
+					text: root.message.text,
+					user: emulator.aliceUserId,
+				},
+			})
+			.pipe(Effect.flatMap((request) => Effect.promise(() => web.handler(request))))
 		assert.strictEqual(response.status, 200)
 		assert.strictEqual(yield* Deferred.isDone(entered), false)
 		const context = yield* Layer.buildWithMemoMap(app.services, memoMap, yield* Scope.Scope)
@@ -87,12 +81,10 @@ it.live('routes commit without executing; a scoped runner replies then finalizes
 		yield* Effect.addFinalizer(() => Scope.close(workerScope, Exit.void))
 		yield* Layer.buildWithMemoMap(app.worker, memoMap, workerScope)
 		yield* Deferred.await(entered)
-		const history = yield* emulator.call(
-			slackEmulatorBotToken,
-			'conversations.replies',
-			{ channel: root.channel, ts: root.ts },
-			HistoryResponse,
-		)
+		const history = yield* emulator.call(slackEmulatorBotToken, 'conversations.replies', {
+			channel: root.channel,
+			ts: root.ts,
+		})
 		assert.strictEqual(history.messages.filter((message) => message.text === 'explicit runner reply').length, 1)
 		yield* Scope.close(workerScope, Exit.void)
 		assert.strictEqual(yield* Deferred.isDone(finalized), true)

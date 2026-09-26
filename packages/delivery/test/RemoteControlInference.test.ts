@@ -24,7 +24,7 @@ it('infers null when middleware is configured without request context', () => {
 		middleware: {
 			complete: ({ context, next }) => {
 				expectTypeOf(context).toEqualTypeOf<null>()
-				return next()
+				return next
 			},
 		},
 	})
@@ -37,7 +37,7 @@ it('infers the exact successful context value', () => {
 			complete: ({ context, next }) => {
 				expectTypeOf(context.actor).toEqualTypeOf<'agent'>()
 				expectTypeOf(context.permissions[0]).toEqualTypeOf<'complete'>()
-				return next()
+				return next
 			},
 		},
 	})

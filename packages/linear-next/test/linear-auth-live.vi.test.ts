@@ -1,5 +1,5 @@
 import { describe, it } from '@effect/vitest'
-import { Effect, Layer, Redacted, Ref } from 'effect'
+import { Effect, Redacted, Ref } from 'effect'
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http'
 
 import { makeLinearCredentialResolver } from '../src/LinearCredentialResolver'
@@ -27,7 +27,7 @@ describe('Linear client-credentials resolver', () => {
 				clientSecret: Redacted.make('secret'),
 				organizationId,
 				appUserId,
-			}).pipe(Effect.provide(Layer.succeed(HttpClient.HttpClient, http)))
+			}).pipe(Effect.provideService(HttpClient.HttpClient, http))
 			yield* Effect.all([resolver.resolve, resolver.resolve], { concurrency: 2 })
 			expect(yield* Ref.get(tokenCalls)).toBe(1)
 		}),

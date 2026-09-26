@@ -56,7 +56,7 @@ const makeResolver = Effect.fn('linear.credentials.make')(function* (options: {
 
 	const acquire = Effect.gen(function* () {
 		const token = yield* options.acquire.pipe(Effect.provideService(HttpClient.HttpClient, client))
-		const identity = yield* getViewerIdentity().pipe(
+		const identity = yield* getViewerIdentity.pipe(
 			Effect.provideService(
 				LinearHttpClient,
 				makeFixedCredentialLinearHttpClient(client, options.organizationId, token.accessToken),

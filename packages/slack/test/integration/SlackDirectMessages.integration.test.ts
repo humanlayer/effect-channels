@@ -4,8 +4,6 @@ import { SlackConnection, SlackConnectionCredentials } from '@humanlayer/channel
 import { Clock, ConfigProvider, Effect, Queue, Redacted } from 'effect'
 
 import {
-	OpenConversationResponse,
-	PostedMessageResponse,
 	SlackEmulator,
 	slackEmulatorAliceToken,
 	slackEmulatorBotId,
@@ -64,36 +62,29 @@ layer(SlackEmulator.layer, { timeout: '30 seconds' })('Slack direct-message inte
 			})
 			yield* Effect.addFinalizer(() => Effect.promise(() => app.close()))
 
-			const opened = yield* emulator.call(
-				slackEmulatorAliceToken,
-				'conversations.open',
-				{ users: slackEmulatorBotUserId },
-				OpenConversationResponse,
-			)
-			const root = yield* emulator.call(
-				slackEmulatorAliceToken,
-				'chat.postMessage',
-				{ channel: opened.channel.id, text: 'hello in DM' },
-				PostedMessageResponse,
-			)
-			const response = yield* Effect.promise(() =>
-				app.handle(
-					emulator.signedWebhook({
-						type: 'event_callback',
-						team_id: emulator.teamId,
-						event_id: 'Ev_dm_root',
-						event_time: eventTime,
-						event: {
-							type: 'message',
-							channel: root.channel,
-							ts: root.ts,
-							text: root.message.text,
-							user: root.message.user ?? emulator.aliceUserId,
-							channel_type: 'im',
-						},
-					}),
-				),
-			)
+			const opened = yield* emulator.call(slackEmulatorAliceToken, 'conversations.open', {
+				users: slackEmulatorBotUserId,
+			})
+			const root = yield* emulator.call(slackEmulatorAliceToken, 'chat.postMessage', {
+				channel: opened.channel.id,
+				text: 'hello in DM',
+			})
+			const response = yield* emulator
+				.signedWebhook({
+					type: 'event_callback',
+					team_id: emulator.teamId,
+					event_id: 'Ev_dm_root',
+					event_time: eventTime,
+					event: {
+						type: 'message',
+						channel: root.channel,
+						ts: root.ts,
+						text: root.message.text,
+						user: root.message.user ?? emulator.aliceUserId,
+						channel_type: 'im',
+					},
+				})
+				.pipe(Effect.flatMap((request) => Effect.promise(() => app.handle(request))))
 			assert.strictEqual(response.status, 200)
 			const delivered = yield* Queue.take(deliveries)
 			assert.strictEqual(delivered.isDm, true)
@@ -103,36 +94,29 @@ layer(SlackEmulator.layer, { timeout: '30 seconds' })('Slack direct-message inte
 			assert.strictEqual(proactiveThread.isDM, true)
 			assert.strictEqual(proactiveThread.ref.id.endsWith(`:im:${opened.channel.id}`), true)
 
-			const mpim = yield* emulator.call(
-				slackEmulatorAliceToken,
-				'conversations.open',
-				{ users: [slackEmulatorBotUserId, emulator.adminUserId] },
-				OpenConversationResponse,
-			)
-			const mpimRoot = yield* emulator.call(
-				slackEmulatorAliceToken,
-				'chat.postMessage',
-				{ channel: mpim.channel.id, text: 'hello in MPIM' },
-				PostedMessageResponse,
-			)
-			const mpimResponse = yield* Effect.promise(() =>
-				app.handle(
-					emulator.signedWebhook({
-						type: 'event_callback',
-						team_id: emulator.teamId,
-						event_id: 'Ev_mpim_root',
-						event_time: eventTime,
-						event: {
-							type: 'message',
-							channel: mpimRoot.channel,
-							ts: mpimRoot.ts,
-							text: mpimRoot.message.text,
-							user: mpimRoot.message.user ?? emulator.aliceUserId,
-							channel_type: 'mpim',
-						},
-					}),
-				),
-			)
+			const mpim = yield* emulator.call(slackEmulatorAliceToken, 'conversations.open', {
+				users: [slackEmulatorBotUserId, emulator.adminUserId].join(','),
+			})
+			const mpimRoot = yield* emulator.call(slackEmulatorAliceToken, 'chat.postMessage', {
+				channel: mpim.channel.id,
+				text: 'hello in MPIM',
+			})
+			const mpimResponse = yield* emulator
+				.signedWebhook({
+					type: 'event_callback',
+					team_id: emulator.teamId,
+					event_id: 'Ev_mpim_root',
+					event_time: eventTime,
+					event: {
+						type: 'message',
+						channel: mpimRoot.channel,
+						ts: mpimRoot.ts,
+						text: mpimRoot.message.text,
+						user: mpimRoot.message.user ?? emulator.aliceUserId,
+						channel_type: 'mpim',
+					},
+				})
+				.pipe(Effect.flatMap((request) => Effect.promise(() => app.handle(request))))
 			assert.strictEqual(mpimResponse.status, 200)
 			const mpimDelivery = yield* Queue.take(deliveries)
 			assert.ok(mpimDelivery.id.includes(':mpim:'))

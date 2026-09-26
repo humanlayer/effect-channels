@@ -23,13 +23,16 @@ const reaction = {
 	},
 }
 
+const provider = makeSlackWebhookProvider({
+	namespace: 'reaction-test',
+	signingSecret: Redacted.make(signingSecret),
+})
+
 const handleReaction = (resolveReactionThread: (typeof SlackApi.Service)['resolveReactionThread']) =>
-	makeSlackWebhookProvider({
-		namespace: 'reaction-test',
-		signingSecret: Redacted.make(signingSecret),
-	})
-		.handle(signedSlackInput(signingSecret, reaction))
-		.pipe(Effect.provide(Layer.merge(NodeCrypto.layer, Layer.mock(SlackApi, { resolveReactionThread }))))
+	signedSlackInput(signingSecret, reaction).pipe(
+		Effect.flatMap(provider.handle),
+		Effect.provide(Layer.merge(NodeCrypto.layer, Layer.mock(SlackApi, { resolveReactionThread }))),
+	)
 
 describe('Slack reaction thread resolution', () => {
 	it.effect('uses the resolved root timestamp for reaction mailbox identity', ({ expect }) =>

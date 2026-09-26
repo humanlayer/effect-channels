@@ -1,5 +1,5 @@
 import { WebhookAuthenticationError } from '@humanlayer/channels-delivery-next'
-import { Clock, Crypto, Effect, Redacted, Schema } from 'effect'
+import { Clock, Crypto, Effect, Encoding, Redacted, Schema } from 'effect'
 
 const SlackHmacInput = Schema.Struct({
 	secret: Schema.Redacted(Schema.String, { disallowJsonEncode: true }),
@@ -81,6 +81,19 @@ const decodeSignature = (signature: string) => {
  */
 const slackSignatureBase = (timestamp: string, body: Uint8Array): Uint8Array =>
 	concatenateBytes(textEncoder.encode(`v0:${timestamp}:`), body)
+
+/** Computes the `x-slack-signature` header value Slack sends for these body bytes at this timestamp. */
+export const signSlackBody = Effect.fn('slack.signature.sign')(function* (input: {
+	readonly signingSecret: Redacted.Redacted<string>
+	readonly timestamp: string
+	readonly body: Uint8Array
+}) {
+	const signature = yield* hmacSha256({
+		secret: input.signingSecret,
+		data: slackSignatureBase(input.timestamp, input.body),
+	})
+	return `v0=${Encoding.encodeHex(signature)}`
+})
 
 export const verifySlackSignature = Effect.fn('slack.signature.verify')(function* (input: SlackSignatureInput) {
 	const timestamp = Number(input.timestamp)

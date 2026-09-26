@@ -21,7 +21,7 @@ import {
 } from '../src/index'
 import { policy } from './fixtures'
 import { event, routeCredentials, user } from './fixtures'
-import { host, payloadFor, secret, signedRequest } from './support'
+import { encodeWebhookBody, host, payloadFor, secret, signedRequest, webhookRequest } from './support'
 
 it.live(
 	'rejects unsigned, tampered, malformed, oversized and wrong-installation requests; ignores self/unsupported events',
@@ -42,7 +42,7 @@ it.live(
 				),
 			)
 			const payload = payloadFor(event)
-			const body = JSON.stringify(payload)
+			const body = yield* encodeWebhookBody(payload)
 			const bad = signedRequest('issues', body)
 			bad.headers.set('x-hub-signature-256', `sha256=${'0'.repeat(64)}`)
 			assert.equal((yield* request(bad)).status, 401)
@@ -63,17 +63,13 @@ it.live(
 			assert.equal((yield* request(signedRequest('issues', new Uint8Array([0xff])))).status, 400)
 			assert.equal(
 				(yield* request(
-					signedRequest(
-						'issues',
-						JSON.stringify({ ...payload, repository: { ...payload.repository, name: '..' } }),
-					),
+					yield* webhookRequest('issues', { ...payload, repository: { ...payload.repository, name: '..' } }),
 				)).status,
 				400,
 			)
 			assert.equal((yield* request(signedRequest('issues', 'x'.repeat(2_001)))).status, 413)
 			assert.equal(
-				(yield* request(signedRequest('issues', JSON.stringify({ ...payload, installation: { id: 200 } }))))
-					.status,
+				(yield* request(yield* webhookRequest('issues', { ...payload, installation: { id: 200 } }))).status,
 				403,
 			)
 			for (const ignored of [
@@ -82,11 +78,7 @@ it.live(
 			])
 				assert.equal(
 					(yield* request(
-						signedRequest(
-							'issues',
-							JSON.stringify(ignored),
-							ignored.sender?.id === 99 ? 'self' : 'assigned',
-						),
+						yield* webhookRequest('issues', ignored, ignored.sender?.id === 99 ? 'self' : 'assigned'),
 					)).status,
 					200,
 				)
@@ -114,7 +106,7 @@ it.live('partial fanout returns 503; retry fills missing admission, then each ha
 			mailboxKey({
 				namespace: 'fanout',
 				provider: 'github',
-				handlerId: JSON.stringify([id, 'creation']),
+				handlerId: `["${id}","creation"]`,
 				installation: '100',
 				resourceKey: issueResourceKey(event.resource),
 			})
@@ -149,7 +141,7 @@ it.live('partial fanout returns 503; retry fills missing admission, then each ha
 				Layer.provide(GitHubCrypto.layerWebCrypto),
 			),
 		)
-		const send = () => request(signedRequest('issues', JSON.stringify(payloadFor(event)), event.deliveryId))
+		const send = () => webhookRequest('issues', payloadFor(event), event.deliveryId).pipe(Effect.flatMap(request))
 		assert.equal((yield* send()).status, 503)
 		assert.equal((yield* underlying.loadMailbox({ key: keyFor('one') }))?.state.pending.length, 1)
 		assert.equal(yield* underlying.loadMailbox({ key: keyFor('two') }), undefined)
@@ -270,7 +262,7 @@ it.effect('canonical handlers recover existing activity mailbox IDs and saved at
 		for (const route of ['creation', 'mention', 'subscribed'] as const) {
 			const oldBinding = bind({
 				namespace: 'retained',
-				handlerId: JSON.stringify(['receive', route]),
+				handlerId: `["receive","${route}"]`,
 				definition: activityEventDefinition,
 				policy: { ...policy, mode: 'serial' },
 				handler: () => Effect.die('The old binding must never execute'),
@@ -339,14 +331,13 @@ it.live('without bot login, normalized PR creation and followed lifecycle work b
 			sender: user,
 		}
 		const ingress = Context.get(environment, GitHubIngress)
-		assert.equal((yield* send(signedRequest(pr.event, JSON.stringify(payloadFor(pr)), pr.deliveryId))).status, 200)
+		assert.equal((yield* send(yield* webhookRequest(pr.event, payloadFor(pr), pr.deliveryId))).status, 200)
 		yield* ingress.processActivity({ event: pr }).pipe(Effect.provide(environment))
 		assert.deepEqual(yield* Queue.takeAll(seen), ['creation:github.pull-request'])
 		yield* Context.get(environment, GitHubSubscriptions).subscribe({ namespace: 'no-login', resource: pr.resource })
 		assert.equal(
-			(yield* send(
-				signedRequest(pr.event, JSON.stringify({ ...payloadFor(pr), action: 'closed' }), 'no-login-close'),
-			)).status,
+			(yield* send(yield* webhookRequest(pr.event, { ...payloadFor(pr), action: 'closed' }, 'no-login-close')))
+				.status,
 			200,
 		)
 		yield* ingress.processActivity({ event: pr }).pipe(Effect.provide(environment))

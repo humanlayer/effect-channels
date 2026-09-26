@@ -1,7 +1,7 @@
 import { NodeCrypto } from '@effect/platform-node'
 import { describe, it } from '@effect/vitest'
 import { DeliveryReceipt, MailboxDelivery, webhookRoutes } from '@humanlayer/channels-delivery-next'
-import { Context, Effect, Redacted } from 'effect'
+import { Clock, Context, Effect, Redacted } from 'effect'
 import { HttpRouter } from 'effect/unstable/http'
 
 import { makeLinearWebhookProvider } from '../src/LinearWebhookProvider'
@@ -48,14 +48,13 @@ const makeApp = Effect.gen(function* () {
 })
 
 describe('Linear webhook routing', () => {
-	it.effect('maps accepted, unauthenticated, mismatched, and oversized requests', ({ expect }) =>
+	it.live('maps accepted, unauthenticated, mismatched, and oversized requests', ({ expect }) =>
 		Effect.gen(function* () {
 			const request = yield* makeApp
-			expect((yield* request(signedLinearInput(issueCreatePayload, 'Issue', undefined, Date.now()))).status).toBe(
-				200,
-			)
+			const now = yield* Clock.currentTimeMillis
+			expect((yield* request(signedLinearInput(issueCreatePayload, 'Issue', undefined, now))).status).toBe(200)
 
-			const signed = signedLinearInput(issueCreatePayload, 'Issue', undefined, Date.now())
+			const signed = signedLinearInput(issueCreatePayload, 'Issue', undefined, now)
 			const invalid = {
 				...signed,
 				headers: { ...signed.headers, 'linear-signature': '0'.repeat(64) },
@@ -63,10 +62,10 @@ describe('Linear webhook routing', () => {
 			expect((yield* request(invalid)).status).toBe(401)
 
 			const mismatch = { ...issueCreatePayload, organizationId: 'another-workspace' }
-			expect((yield* request(signedLinearInput(mismatch, 'Issue', undefined, Date.now()))).status).toBe(403)
+			expect((yield* request(signedLinearInput(mismatch, 'Issue', undefined, now))).status).toBe(403)
 
 			const oversized = { ...issueCreatePayload, padding: 'x'.repeat(8192) }
-			expect((yield* request(signedLinearInput(oversized, 'Issue', undefined, Date.now()))).status).toBe(413)
+			expect((yield* request(signedLinearInput(oversized, 'Issue', undefined, now))).status).toBe(413)
 		}),
 	)
 })

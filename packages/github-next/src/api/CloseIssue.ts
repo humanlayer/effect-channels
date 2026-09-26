@@ -5,7 +5,7 @@ import { GitHubApiClient } from './GitHubApiClient'
 import { issueInfo, repositoryPath } from './GitHubApiProjections'
 import { Issue } from './GitHubApiSchemas'
 
-const CloseIssueBody = Schema.Struct({ state: Schema.Literal('closed'), state_reason: GitHubIssueCloseReason })
+export const CloseIssueBody = Schema.Struct({ state: Schema.Literal('closed'), state_reason: GitHubIssueCloseReason })
 
 export const closeIssue = Effect.fn('github.api.close_issue')(function* (input: GitHubCloseIssue) {
 	const api = yield* GitHubApiClient

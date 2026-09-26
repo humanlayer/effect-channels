@@ -56,7 +56,7 @@ export class SlackOrganizations extends Context.Service<
 									)
 								}),
 								Effect.flatMap((result) =>
-									Schema.decodeUnknownEffect(Schema.NullOr(SlackOrganization))(result).pipe(
+									Schema.decodeEffect(Schema.NullOr(SlackOrganization))(result).pipe(
 										Effect.tapError(() =>
 											Effect.logError('Slack organization lookup failed').pipe(
 												Effect.annotateLogs({ classification: 'invalid_result' }),

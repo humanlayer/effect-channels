@@ -9,8 +9,7 @@ import { Effect, Layer } from 'effect'
 import { vi } from 'vite-plus/test'
 
 import { LinearApi } from '../src/LinearApi'
-import type { LinearMentioned, LinearSubscribedEvents } from '../src/LinearCallbackEvents'
-import { LinearCallbacks } from '../src/LinearCallbacks'
+import { type LinearCallbackHandler, LinearCallbacks } from '../src/LinearCallbacks'
 import { makeLinearEventProcessor } from '../src/LinearEventProcessor'
 import {
 	appUserNotificationPayloads,
@@ -29,7 +28,7 @@ const timestamp = '2026-01-01T00:00:00.000Z'
 describe('Linear subscribed events', () => {
 	it.effect('preserves ordered issue-scoped resource events in one callback', ({ expect }) =>
 		Effect.gen(function* () {
-			const callback = vi.fn((_event: LinearSubscribedEvents) => Effect.void)
+			const callback = vi.fn<LinearCallbackHandler<'onSubscribedEvent'>>(() => Effect.void)
 			const payloads = [
 				{
 					createdAt: timestamp,
@@ -145,7 +144,7 @@ describe('Linear subscribed events', () => {
 
 	it.effect('delivers updates with unmodeled changes and keeps honest reduced issue context', ({ expect }) =>
 		Effect.gen(function* () {
-			const callback = vi.fn((_event: LinearSubscribedEvents) => Effect.void)
+			const callback = vi.fn<LinearCallbackHandler<'onSubscribedEvent'>>(() => Effect.void)
 			const payloads = [
 				{
 					createdAt: timestamp,
@@ -247,7 +246,7 @@ describe('Linear subscribed events', () => {
 
 	it.effect('delivers resource events batched with supplemental notifications', ({ expect }) =>
 		Effect.gen(function* () {
-			const callback = vi.fn((_event: LinearSubscribedEvents) => Effect.void)
+			const callback = vi.fn<LinearCallbackHandler<'onSubscribedEvent'>>(() => Effect.void)
 			const notification = appUserNotificationPayloads[0]
 			const mixedIssueId = notification.notification.issueId
 			const comment = {
@@ -291,8 +290,8 @@ describe('Linear subscribed events', () => {
 
 	it.effect('includes resource events in the winning directed callback', ({ expect }) =>
 		Effect.gen(function* () {
-			const onMentioned = vi.fn((_event: LinearMentioned) => Effect.void)
-			const onSubscribedEvent = vi.fn((_event: LinearSubscribedEvents) => Effect.void)
+			const onMentioned = vi.fn<LinearCallbackHandler<'onMentioned'>>(() => Effect.void)
+			const onSubscribedEvent = vi.fn<LinearCallbackHandler<'onSubscribedEvent'>>(() => Effect.void)
 			const notification = appUserNotificationPayloads[0]
 			const mixedIssueId = notification.notification.issueId
 			const comment = {
@@ -337,8 +336,8 @@ describe('Linear subscribed events', () => {
 
 	it.effect('suppresses self-created issues and retires removed subscriptions without a callback', ({ expect }) =>
 		Effect.gen(function* () {
-			const createdCallback = vi.fn(() => Effect.void)
-			const unsubscribe = vi.fn(() => Effect.void)
+			const createdCallback = vi.fn<LinearCallbackHandler<'onIssueCreated'>>(() => Effect.void)
+			const unsubscribe = vi.fn<MailboxSubscriptions['Service']['unsubscribe']>(() => Effect.void)
 			const selfCreate = {
 				...issueCreatePayload,
 				actor: { id: linearAppUserId, name: 'App', type: 'user' },

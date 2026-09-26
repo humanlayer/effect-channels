@@ -23,8 +23,13 @@ export class LinearCallbackError extends Schema.TaggedError<LinearCallbackError>
 	reason: Schema.Literals(['failed', 'unexpected']),
 }) {}
 
+/** The application handler for one Linear callback. */
+export type LinearCallbackHandler<Name extends keyof LinearCallbackEventMap, E = never, R = never> = (
+	event: LinearCallbackEventMap[Name],
+) => Effect.Effect<void, E, R>
+
 export type LinearCallbackHandlers<E, R> = {
-	readonly [Name in keyof LinearCallbackEventMap]?: (event: LinearCallbackEventMap[Name]) => Effect.Effect<void, E, R>
+	readonly [Name in keyof LinearCallbackEventMap]?: LinearCallbackHandler<Name, E, R>
 }
 
 const retryableFromCause = (cause: Cause.Cause<unknown>): boolean =>
@@ -66,7 +71,7 @@ const narrowCause = (callback: LinearCallbackName, cause: Cause.Cause<unknown>) 
 const wrapCallback = <Name extends keyof LinearCallbackEventMap, E, R>(
 	context: Context.Context<R>,
 	callback: Name,
-	handler: ((event: LinearCallbackEventMap[Name]) => Effect.Effect<void, E, R>) | undefined,
+	handler: LinearCallbackHandler<Name, E, R> | undefined,
 ) =>
 	Predicate.isUndefined(handler)
 		? undefined

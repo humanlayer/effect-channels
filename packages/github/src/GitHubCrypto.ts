@@ -18,21 +18,20 @@ const der = (tag: number, bytes: Uint8Array): Uint8Array<ArrayBuffer> => {
 				: [0x82, bytes.length >> 8, bytes.length & 255]
 	return new Uint8Array([tag, ...length, ...bytes])
 }
-const privateKeyBytes = (pem: string) => {
+const privateKeyBytes = Effect.fnUntraced(function* (pem: string) {
 	const pkcs1 = pem.startsWith('-----BEGIN RSA PRIVATE KEY-----')
 	const label = pkcs1 ? 'RSA PRIVATE KEY' : 'PRIVATE KEY'
 	if (!pem.startsWith(`-----BEGIN ${label}-----`) || !pem.trimEnd().endsWith(`-----END ${label}-----`))
-		throw new Error('Invalid PEM')
-	const bytes = Uint8Array.from(
-		atob(
+		return yield* GitHubCryptoFailure.make({ operation: 'sign_app' })
+	const bytes = yield* Effect.fromResult(
+		Encoding.decodeBase64(
 			pem
 				.replace(`-----BEGIN ${label}-----`, '')
 				.replace(`-----END ${label}-----`, '')
 				.replace(pemWhitespace, ''),
 		),
-		(c) => c.charCodeAt(0),
-	)
-	if (!pkcs1) return bytes
+	).pipe(Effect.mapError(() => GitHubCryptoFailure.make({ operation: 'sign_app' })))
+	if (!pkcs1) return new Uint8Array(bytes)
 	return der(
 		0x30,
 		new Uint8Array([
@@ -57,7 +56,7 @@ const privateKeyBytes = (pem: string) => {
 			...der(0x04, bytes),
 		]),
 	)
-}
+})
 
 export class GitHubCrypto extends Context.Service<
 	GitHubCrypto,
@@ -76,31 +75,29 @@ export class GitHubCrypto extends Context.Service<
 	static readonly layerWebCrypto = Layer.sync(GitHubCrypto, () => {
 		const encoder = new TextEncoder()
 		return GitHubCrypto.of({
-			signApp: Effect.fn('github.crypto.sign_app')((input) =>
-				Effect.tryPromise({
-					try: async () => {
-						const pem = Redacted.value(input.privateKey)
-						const bytes = privateKeyBytes(pem)
-						const key = await globalThis.crypto.subtle.importKey(
-							'pkcs8',
-							bytes,
-							{ name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
-							false,
-							['sign'],
-						)
-						const signature = await globalThis.crypto.subtle.sign(
-							'RSASSA-PKCS1-v1_5',
-							key,
-							encoder.encode(input.data),
-						)
-						return Encoding.encodeBase64Url(new Uint8Array(signature))
-					},
-					catch: () => GitHubCryptoFailure.make({ operation: 'sign_app' }),
-				}).pipe(
-					Effect.tapError((error) => Effect.logError('GitHub crypto failed', error)),
-					Effect.catchTag('GitHubCryptoFailure', () =>
-						Effect.fail(GitHubError.make({ reason: 'configuration' })),
-					),
+			signApp: Effect.fn('github.crypto.sign_app')(
+				function* (input) {
+					const bytes = yield* privateKeyBytes(Redacted.value(input.privateKey))
+					const key = yield* Effect.tryPromise({
+						try: () =>
+							globalThis.crypto.subtle.importKey(
+								'pkcs8',
+								bytes,
+								{ name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' },
+								false,
+								['sign'],
+							),
+						catch: () => GitHubCryptoFailure.make({ operation: 'sign_app' }),
+					})
+					const signature = yield* Effect.tryPromise({
+						try: () => globalThis.crypto.subtle.sign('RSASSA-PKCS1-v1_5', key, encoder.encode(input.data)),
+						catch: () => GitHubCryptoFailure.make({ operation: 'sign_app' }),
+					})
+					return Encoding.encodeBase64Url(new Uint8Array(signature))
+				},
+				Effect.tapError((error) => Effect.logError('GitHub crypto failed', error)),
+				Effect.catchTag('GitHubCryptoFailure', () =>
+					Effect.fail(GitHubError.make({ reason: 'configuration' })),
 				),
 			),
 			verifyWebhook: Effect.fn('github.crypto.verify_webhook')((input) =>
@@ -110,18 +107,23 @@ export class GitHubCrypto extends Context.Service<
 					const signature = Uint8Array.from(input.signature.slice(7).match(hexPairs) ?? [], (byte) =>
 						Number.parseInt(byte, 16),
 					)
-					const valid = yield* Effect.tryPromise({
-						try: async () => {
-							const key = await globalThis.crypto.subtle.importKey(
-								'raw',
-								encoder.encode(Redacted.value(input.secret)),
-								{ name: 'HMAC', hash: 'SHA-256' },
-								false,
-								['verify'],
-							)
-							return globalThis.crypto.subtle.verify('HMAC', key, signature, new Uint8Array(input.body))
-						},
-						catch: () => GitHubCryptoFailure.make({ operation: 'verify_webhook' }),
+					const valid = yield* Effect.gen(function* () {
+						const key = yield* Effect.tryPromise({
+							try: () =>
+								globalThis.crypto.subtle.importKey(
+									'raw',
+									encoder.encode(Redacted.value(input.secret)),
+									{ name: 'HMAC', hash: 'SHA-256' },
+									false,
+									['verify'],
+								),
+							catch: () => GitHubCryptoFailure.make({ operation: 'verify_webhook' }),
+						})
+						return yield* Effect.tryPromise({
+							try: () =>
+								globalThis.crypto.subtle.verify('HMAC', key, signature, new Uint8Array(input.body)),
+							catch: () => GitHubCryptoFailure.make({ operation: 'verify_webhook' }),
+						})
 					}).pipe(
 						Effect.tapError((error) => Effect.logError('GitHub crypto failed', error)),
 						Effect.catchTag('GitHubCryptoFailure', () =>

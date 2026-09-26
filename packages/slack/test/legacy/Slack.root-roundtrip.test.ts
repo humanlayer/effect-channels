@@ -2,20 +2,7 @@ import { NodeCrypto } from '@effect/platform-node'
 import { assert, it } from '@effect/vitest'
 import { layerMailboxStoreServices } from '@humanlayer/channels-delivery'
 import { layer as memory } from '@humanlayer/channels-delivery/memory'
-import {
-	Clock,
-	ConfigProvider,
-	Context,
-	Deferred,
-	Effect,
-	Fiber,
-	Layer,
-	Option,
-	Queue,
-	Redacted,
-	Ref,
-	Schema,
-} from 'effect'
+import { Clock, ConfigProvider, Context, Deferred, Effect, Fiber, Layer, Queue, Redacted, Ref, Schema } from 'effect'
 import { TestClock } from 'effect/testing'
 import { HttpClient, HttpClientRequest, HttpClientResponse, HttpRouter } from 'effect/unstable/http'
 
@@ -67,7 +54,7 @@ it.effect('delivers one signed mention end to end, subscribes explicitly, and po
 			}),
 		)
 		const credentials = SlackTenantCredentials.make({
-			load: () => Effect.succeed(Option.some({ botToken: Redacted.make('xoxb-test-token') })),
+			load: () => Effect.succeedSome({ botToken: Redacted.make('xoxb-test-token') }),
 			save: () => Effect.void,
 		})
 		const slackClient = SlackClient.layer.pipe(

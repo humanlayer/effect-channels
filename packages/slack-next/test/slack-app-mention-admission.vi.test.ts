@@ -24,23 +24,24 @@ const appMention = (threadTs?: string) => ({
 	event: Predicate.isUndefined(threadTs) ? rootMentionEvent : { ...rootMentionEvent, thread_ts: threadTs },
 })
 
+const provider = makeSlackWebhookProvider({
+	namespace: 'mention-test',
+	signingSecret: Redacted.make(signingSecret),
+})
+
 const handleMention = (payload: Schema.Json) =>
-	makeSlackWebhookProvider({
-		namespace: 'mention-test',
-		signingSecret: Redacted.make(signingSecret),
-	})
-		.handle(signedSlackInput(signingSecret, payload))
-		.pipe(
-			Effect.provide(
-				Layer.merge(
-					NodeCrypto.layer,
-					Layer.mock(SlackApi, {
-						resolveReactionThread: () =>
-							Effect.die(new Error('App mentions must not resolve reaction threads')),
-					}),
-				),
+	signedSlackInput(signingSecret, payload).pipe(
+		Effect.flatMap(provider.handle),
+		Effect.provide(
+			Layer.merge(
+				NodeCrypto.layer,
+				Layer.mock(SlackApi, {
+					resolveReactionThread: () =>
+						Effect.die(new Error('App mentions must not resolve reaction threads')),
+				}),
 			),
-		)
+		),
+	)
 
 describe('Slack app mention admission', () => {
 	it.effect('uses the message timestamp for a root mention', ({ expect }) =>

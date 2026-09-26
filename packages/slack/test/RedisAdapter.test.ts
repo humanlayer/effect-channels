@@ -93,7 +93,8 @@ it.effect('Redis command seam: direct subscription keys and same-slot route scri
 				args: [subscriptionKey({ threadId: rootedThread.id })],
 			})
 			const frozen = { thread: proactiveThread, subscribed: true }
-			yield* Queue.offer(fake.replies, Effect.succeed(encodeRoute(frozen)))
+			const frozenJson = yield* encodeRoute(frozen)
+			yield* Queue.offer(fake.replies, Effect.succeed(frozenJson))
 			assert.deepStrictEqual(yield* store.resolveDirectMessageRoute(routeInput), frozen)
 			const command = yield* Queue.take(fake.commands)
 			assert.strictEqual(command.command, 'EVAL')
@@ -105,9 +106,9 @@ it.effect('Redis command seam: direct subscription keys and same-slot route scri
 			])
 			assert.ok(command.args.slice(2, 5).every((key) => key.match(/\{([^}]+)\}/u)?.[1] === 'state'))
 			assert.deepStrictEqual(command.args.slice(5), [
-				encodeRoute({ thread: rootedThread, subscribed: true }),
-				encodeRoute(frozen),
-				encodeRoute({ thread: rootedThread, subscribed: false }),
+				yield* encodeRoute({ thread: rootedThread, subscribed: true }),
+				frozenJson,
+				yield* encodeRoute({ thread: rootedThread, subscribed: false }),
 				'86400000',
 			])
 			assert.notStrictEqual(

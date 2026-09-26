@@ -6,8 +6,6 @@ import { TestClock } from 'effect/testing'
 import { HttpRouter } from 'effect/unstable/http'
 
 import {
-	HistoryResponse,
-	PostedMessageResponse,
 	SlackEmulator,
 	slackEmulatorAliceToken,
 	slackEmulatorBotToken,
@@ -72,32 +70,30 @@ for (const policy of policies) {
 				const web = HttpRouter.toWebHandler(app.routes, { memoMap, disableLogger: true })
 				yield* Effect.addFinalizer(() => Effect.promise(web.dispose))
 				const clock = Context.make(Clock.Clock, yield* Clock.Clock)
-				const root = yield* emulator.call(
-					slackEmulatorAliceToken,
-					'chat.postMessage',
-					{ channel: emulator.publicChannelId, text: 'mode test root' },
-					PostedMessageResponse,
-				)
+				const root = yield* emulator.call(slackEmulatorAliceToken, 'chat.postMessage', {
+					channel: emulator.publicChannelId,
+					text: 'mode test root',
+				})
 				const deliver = (id: string, index: number) =>
-					Effect.promise(() =>
-						web.handler(
-							emulator.signedWebhook({
-								type: 'event_callback',
-								team_id: emulator.teamId,
-								event_id: `Ev_${id}`,
-								event_time: 1,
-								event: {
-									type: 'app_mention',
-									channel: root.channel,
-									thread_ts: root.ts,
-									ts: `${Math.floor(Number(root.ts)) + index}.000001`,
-									text: `<@${slackEmulatorBotUserId}> ${id}`,
-									user: emulator.aliceUserId,
-								},
-							}),
-							clock,
-						),
-					).pipe(Effect.tap((response) => Effect.sync(() => assert.strictEqual(response.status, 200))))
+					emulator
+						.signedWebhook({
+							type: 'event_callback',
+							team_id: emulator.teamId,
+							event_id: `Ev_${id}`,
+							event_time: 1,
+							event: {
+								type: 'app_mention',
+								channel: root.channel,
+								thread_ts: root.ts,
+								ts: `${Math.floor(Number(root.ts)) + index}.000001`,
+								text: `<@${slackEmulatorBotUserId}> ${id}`,
+								user: emulator.aliceUserId,
+							},
+						})
+						.pipe(
+							Effect.flatMap((request) => Effect.promise(() => web.handler(request, clock))),
+							Effect.tap((response) => Effect.sync(() => assert.strictEqual(response.status, 200))),
+						)
 				yield* deliver('A', 1)
 				yield* TestClock.adjust(100)
 				yield* deliver('B', 2)
@@ -152,12 +148,10 @@ for (const policy of policies) {
 					final.state.outcomes.filter((outcome) => outcome.kind === 'dropped').length,
 					policy.mode === 'drop' ? 3 : 0,
 				)
-				const history = yield* emulator.call(
-					slackEmulatorBotToken,
-					'conversations.replies',
-					{ channel: root.channel, ts: root.ts },
-					HistoryResponse,
-				)
+				const history = yield* emulator.call(slackEmulatorBotToken, 'conversations.replies', {
+					channel: root.channel,
+					ts: root.ts,
+				})
 				assert.deepStrictEqual(
 					history.messages
 						.filter((message) => message.user === slackEmulatorBotUserId)

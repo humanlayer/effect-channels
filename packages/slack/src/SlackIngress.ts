@@ -67,9 +67,9 @@ export class SlackIngress extends Context.Service<
 		readonly acceptConversationStopped: (
 			event: NormalizedConversationStopped,
 		) => Effect.Effect<IngressResult, SlackIngressError>
-		readonly processMailbox: (
-			input: { readonly key: string },
-		) => Effect.Effect<void, SlackIngressError, MailboxStore | SlackAuthors>
+		readonly processMailbox: (input: {
+			readonly key: string
+		}) => Effect.Effect<void, SlackIngressError, MailboxStore | SlackAuthors>
 		readonly run: (
 			input: RunnerOptions,
 		) => Effect.Effect<void, SlackIngressError, MailboxStore | MailboxReadiness | SlackAuthors>

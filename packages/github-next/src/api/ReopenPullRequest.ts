@@ -5,7 +5,7 @@ import { GitHubApiClient } from './GitHubApiClient'
 import { pullRequestInfo, repositoryPath } from './GitHubApiProjections'
 import { PullRequest } from './GitHubApiSchemas'
 
-const ReopenPullRequestBody = Schema.Struct({ state: Schema.Literal('open') })
+export const ReopenPullRequestBody = Schema.Struct({ state: Schema.Literal('open') })
 
 export const reopenPullRequest = Effect.fn('github.api.reopen_pull_request')(function* (
 	input: GitHubPullRequestRequest,

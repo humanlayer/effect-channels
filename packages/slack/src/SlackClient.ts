@@ -496,15 +496,18 @@ const makeReaction = (origin: URL, method: 'reactions.add' | 'reactions.remove')
 		}).pipe(Effect.flatMap((response) => requireOk(method, response)))
 	})
 
-const normalizePageMessages = (input: {
-	readonly identity: SlackBotIdentityType
-	readonly teamId: SlackTeamId
-	readonly channelId: SlackChannelId
-	readonly messages: ReadonlyArray<SlackHistoryMessage>
-	readonly threadRef?: ThreadRef
-	readonly directMessageKind?: 'im' | 'mpim'
-}) =>
-	input.messages.map((snapshot) => {
+const normalizePageMessages = (
+	operation: string,
+	input: {
+		readonly identity: SlackBotIdentityType
+		readonly teamId: SlackTeamId
+		readonly channelId: SlackChannelId
+		readonly messages: ReadonlyArray<SlackHistoryMessage>
+		readonly threadRef?: ThreadRef
+		readonly directMessageKind?: 'im' | 'mpim'
+	},
+) =>
+	Effect.forEach(input.messages, (snapshot) => {
 		const fields = {
 			teamId: input.teamId,
 			channelId: input.channelId,
@@ -519,7 +522,7 @@ const normalizePageMessages = (input: {
 				false,
 			)
 		return normalizeSlackHistoryMessage({ snapshot, threadRef, teamId: input.teamId, identity: input.identity })
-	})
+	}).pipe(Effect.mapError(() => SlackApiError.make({ operation, code: 'malformed_response' })))
 
 const makeReplies = (fallback: SlackBotIdentityType, origin: URL) =>
 	Effect.fn('slack.api.conversations_replies')(function* (input: SlackRepliesInput) {
@@ -553,7 +556,7 @@ const makeReplies = (fallback: SlackBotIdentityType, origin: URL) =>
 				schema: SlackConversationsPageResponse,
 				request,
 			}).pipe(Effect.flatMap((response) => requireOk('conversations.replies', response)))
-			const messages = normalizePageMessages({
+			const messages = yield* normalizePageMessages('conversations.replies', {
 				identity,
 				teamId: input.teamId,
 				channelId: input.channelId,
@@ -592,7 +595,7 @@ const makeReplies = (fallback: SlackBotIdentityType, origin: URL) =>
 		const oldestSelected = selected.at(0)
 		const nextCursor = overflow && oldestSelected !== undefined ? oldestSelected.ts : undefined
 		const newestFirst = [...selected].reverse()
-		const messages = normalizePageMessages({
+		const messages = yield* normalizePageMessages('conversations.replies', {
 			identity,
 			teamId: input.teamId,
 			channelId: input.channelId,
@@ -641,7 +644,8 @@ const makeHistory = (fallback: SlackBotIdentityType, origin: URL) =>
 				channelId: input.channelId,
 				messages: chronological,
 			}
-			const messages = normalizePageMessages(
+			const messages = yield* normalizePageMessages(
+				'conversations.history',
 				conversationThreadRef === undefined
 					? messageInput
 					: { ...messageInput, threadRef: conversationThreadRef },
@@ -664,7 +668,8 @@ const makeHistory = (fallback: SlackBotIdentityType, origin: URL) =>
 		const oldest = newestFirst.at(-1)
 		const nextCursor = decoded.has_more === true && oldest !== undefined ? oldest.ts : undefined
 		const messageInput = { identity, teamId: input.teamId, channelId: input.channelId, messages: newestFirst }
-		const messages = normalizePageMessages(
+		const messages = yield* normalizePageMessages(
+			'conversations.history',
 			conversationThreadRef === undefined ? messageInput : { ...messageInput, threadRef: conversationThreadRef },
 		)
 		return messagePage(messages, nextCursor)
@@ -725,27 +730,33 @@ const makeListThreads = (fallback: SlackBotIdentityType, origin: URL) =>
 		const fetched = decoded.messages ?? []
 		const roots = fetched.filter((message) => (message.reply_count ?? 0) > 0)
 		const returned = roots.slice(0, limit)
-		const threads = returned.map((snapshot) => {
-			const threadRef = slackThreadRef(
-				SlackThreadRef.make({ teamId: input.teamId, channelId: input.channelId, threadTs: snapshot.ts }),
-				false,
-			)
-			const rootMessage = normalizeSlackHistoryMessage({
-				snapshot,
-				threadRef,
-				teamId: input.teamId,
-				identity,
-			})
-			const summary: ThreadSummaryFields = {
-				thread: threadRef,
-				rootMessage,
-				replyCount: snapshot.reply_count ?? 0,
-			}
-			if (snapshot.latest_reply !== undefined) {
-				summary.lastActivityAt = slackTsToDateTime(snapshot.latest_reply, 0)
-			}
-			return ThreadSummary.make(summary)
-		})
+		const threads = yield* Effect.forEach(returned, (snapshot) =>
+			Effect.gen(function* () {
+				const threadRef = slackThreadRef(
+					SlackThreadRef.make({ teamId: input.teamId, channelId: input.channelId, threadTs: snapshot.ts }),
+					false,
+				)
+				const rootMessage = yield* normalizeSlackHistoryMessage({
+					snapshot,
+					threadRef,
+					teamId: input.teamId,
+					identity,
+				}).pipe(
+					Effect.mapError(() =>
+						SlackApiError.make({ operation: 'conversations.history', code: 'malformed_response' }),
+					),
+				)
+				const summary: ThreadSummaryFields = {
+					thread: threadRef,
+					rootMessage,
+					replyCount: snapshot.reply_count ?? 0,
+				}
+				if (snapshot.latest_reply !== undefined) {
+					summary.lastActivityAt = slackTsToDateTime(snapshot.latest_reply, 0)
+				}
+				return ThreadSummary.make(summary)
+			}),
+		)
 		const lastReturnedRoot = returned.at(-1)
 		const oldestFetched = fetched.at(-1)
 		const hasMore = decoded.has_more === true || cursorFromMetadata(decoded.response_metadata) !== undefined

@@ -51,27 +51,25 @@ export const make = <E, R, ApiError = never, ApiRequirements = never>(
 	return {
 		providerName: 'slack',
 		deliveryMode: options.deliveryMode,
-		webhookProvider: ({ namespace }) =>
-			Effect.gen(function* () {
-				const signingSecret = yield* unavailable('read_signing_secret', options.signingSecret)
-				const slackApi = yield* buildSlackApi
-				const webhookProvider = makeSlackWebhookProvider({ namespace, signingSecret })
-				return {
-					providerName: webhookProvider.providerName,
-					handle: (input: RawWebhookInput) => webhookProvider.handle(input).pipe(Effect.provide(slackApi)),
-				}
-			}).pipe(Effect.withSpan('slack.bot.build_webhook_provider')),
-		eventProcessor: ({ namespace }) =>
-			Effect.gen(function* () {
-				const slackApi = yield* buildSlackApi
-				const eventProcessor = makeSlackEventProcessor({ namespace })
-				return {
-					namespace: eventProcessor.namespace,
-					providerName: eventProcessor.providerName,
-					/** The callbacks are wrapped per batch because they read the services of the running batch. */
-					process: (admissions: DeliveryAdmissionBatch) =>
-						eventProcessor.process(admissions).pipe(Effect.provide(callbacks), Effect.provide(slackApi)),
-				}
-			}).pipe(Effect.withSpan('slack.bot.build_event_processor')),
+		webhookProvider: Effect.fn('slack.bot.build_webhook_provider')(function* ({ namespace }) {
+			const signingSecret = yield* unavailable('read_signing_secret', options.signingSecret)
+			const slackApi = yield* buildSlackApi
+			const webhookProvider = makeSlackWebhookProvider({ namespace, signingSecret })
+			return {
+				providerName: webhookProvider.providerName,
+				handle: (input: RawWebhookInput) => webhookProvider.handle(input).pipe(Effect.provide(slackApi)),
+			}
+		}),
+		eventProcessor: Effect.fn('slack.bot.build_event_processor')(function* ({ namespace }) {
+			const slackApi = yield* buildSlackApi
+			const eventProcessor = makeSlackEventProcessor({ namespace })
+			return {
+				namespace: eventProcessor.namespace,
+				providerName: eventProcessor.providerName,
+				/** The callbacks are wrapped per batch because they read the services of the running batch. */
+				process: (admissions: DeliveryAdmissionBatch) =>
+					eventProcessor.process(admissions).pipe(Effect.provide(callbacks), Effect.provide(slackApi)),
+			}
+		}),
 	}
 }

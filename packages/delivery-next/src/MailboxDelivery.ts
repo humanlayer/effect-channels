@@ -24,7 +24,7 @@ export class MailboxDeliveryRejected extends Schema.TaggedError<MailboxDeliveryR
 	reason: Schema.String,
 }) {}
 
-export type MailboxDeliveryError = typeof MailboxDeliveryUnavailable.Type | typeof MailboxDeliveryRejected.Type
+export type MailboxDeliveryError = MailboxDeliveryUnavailable | MailboxDeliveryRejected
 
 /**
  * The provider event delivered to a mailbox.

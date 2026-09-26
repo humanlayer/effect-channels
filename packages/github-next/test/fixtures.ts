@@ -1,8 +1,8 @@
 import { createHmac } from 'node:crypto'
 import * as NodeHttp from 'node:http'
 
-import { NodeCrypto } from '@effect/platform-node'
-import { createServer, serve } from '@emulators/core'
+import { NodeCrypto, NodeHttpServer } from '@effect/platform-node'
+import { createServer } from '@emulators/core'
 import { getGitHubStore, githubPlugin, seedFromConfig, type GitHubSeedConfig } from '@emulators/github'
 import {
 	DeliveryAdmission,
@@ -13,9 +13,29 @@ import {
 	webhookRoutes,
 	type RawWebhookInput,
 } from '@humanlayer/channels-delivery-next'
-import { Context, Effect, Match, Predicate, Queue, Redacted, Schema } from 'effect'
-import { Headers, HttpRouter } from 'effect/unstable/http'
+import { Context, Effect, Layer, Match, Predicate, Queue, Redacted, Schema } from 'effect'
+import {
+	FetchHttpClient,
+	Headers,
+	HttpClient,
+	HttpClientRequest,
+	HttpClientResponse,
+	HttpEffect,
+	type HttpMethod,
+	HttpRouter,
+	HttpServer,
+} from 'effect/unstable/http'
 
+import { AddIssueLabelsBody } from '../src/api/AddIssueLabels'
+import { CloseIssueBody } from '../src/api/CloseIssue'
+import { ClosePullRequestBody } from '../src/api/ClosePullRequest'
+import { Issue, IssueComment, PullRequest, Review, ReviewComment } from '../src/api/GitHubApiSchemas'
+import { PostIssueCommentBody } from '../src/api/PostIssueComment'
+import { PostPullRequestReviewCommentBody } from '../src/api/PostPullRequestReviewComment'
+import { ReopenIssueBody } from '../src/api/ReopenIssue'
+import { ReopenPullRequestBody } from '../src/api/ReopenPullRequest'
+import { UpdateCommentBody } from '../src/api/UpdateComment'
+import { GitHubId } from '../src/GitHubIdentity'
 import { makeGitHubWebhookProvider } from '../src/GitHubWebhookProvider'
 
 export const githubWebhookSecret = 'github-next-test-secret'
@@ -217,80 +237,178 @@ export const makeGitHubTestProvider = (namespace: string) => {
 	}
 }
 
-export const githubEmulatorRequest = (
-	url: string,
-	path: string,
-	token: string,
-	options: { readonly method?: string; readonly body?: unknown } = {},
-) =>
-	Effect.promise(async () => {
-		const response = await fetch(`${url}${path}`, {
-			method: options.method ?? 'POST',
-			headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-			body: options.body === undefined ? undefined : JSON.stringify(options.body),
-		})
-		if (!response.ok)
-			throw new Error(`GitHub emulator returned ${response.status} for ${path}: ${await response.text()}`)
-		if (response.status === 204) return undefined
-		const json: unknown = await response.json()
-		return json
+/** One GitHub REST endpoint the emulator tests call, with the Schemas of its request body and, when read, its response. */
+export interface GitHubEmulatorEndpoint<
+	Params,
+	Body extends Schema.Codec<unknown, unknown>,
+	Response extends Schema.Codec<unknown, unknown> | undefined = undefined,
+> {
+	readonly method: HttpMethod.HttpMethod
+	readonly path: (params: Params) => string
+	readonly body: Body
+	readonly response: Response
+}
+
+const endpoint = <
+	Params,
+	Body extends Schema.Codec<unknown, unknown>,
+	Response extends Schema.Codec<unknown, unknown> | undefined = undefined,
+>(
+	definition: GitHubEmulatorEndpoint<Params, Body, Response>,
+) => definition
+
+const repositoryPath = '/repos/alice/project'
+type IssuePath = { readonly issue: GitHubId }
+type PullRequestPath = { readonly pullRequest: GitHubId }
+const issuePath = ({ issue }: IssuePath) => `${repositoryPath}/issues/${issue}`
+const pullRequestPath = ({ pullRequest }: PullRequestPath) => `${repositoryPath}/pulls/${pullRequest}`
+const Assignees = Schema.Struct({ assignees: Schema.Array(Schema.NonEmptyString) })
+const IssueTitle = Schema.Struct({ title: Schema.String })
+
+/** The GitHub REST endpoints the emulator tests call. */
+export const githubEmulatorEndpoints = {
+	createIssue: endpoint({
+		method: 'POST',
+		path: () => `${repositoryPath}/issues`,
+		body: Schema.Struct({ title: Schema.String, body: Schema.String }),
+		response: Issue,
+	}),
+	editIssueTitle: endpoint({ method: 'PATCH', path: issuePath, body: IssueTitle, response: undefined }),
+	closeIssue: endpoint({ method: 'PATCH', path: issuePath, body: CloseIssueBody, response: undefined }),
+	reopenIssue: endpoint({ method: 'PATCH', path: issuePath, body: ReopenIssueBody, response: undefined }),
+	addAssignees: endpoint({
+		method: 'POST',
+		path: (params: IssuePath) => `${issuePath(params)}/assignees`,
+		body: Assignees,
+		response: undefined,
+	}),
+	removeAssignees: endpoint({
+		method: 'DELETE',
+		path: (params: IssuePath) => `${issuePath(params)}/assignees`,
+		body: Assignees,
+		response: undefined,
+	}),
+	createLabel: endpoint({
+		method: 'POST',
+		path: () => `${repositoryPath}/labels`,
+		body: Schema.Struct({ name: Schema.NonEmptyString, color: Schema.NonEmptyString }),
+		response: undefined,
+	}),
+	addIssueLabels: endpoint({
+		method: 'POST',
+		path: (params: IssuePath) => `${issuePath(params)}/labels`,
+		body: AddIssueLabelsBody,
+		response: undefined,
+	}),
+	removeIssueLabel: endpoint({
+		method: 'DELETE',
+		path: (params: IssuePath & { readonly label: string }) =>
+			`${issuePath(params)}/labels/${encodeURIComponent(params.label)}`,
+		body: Schema.Undefined,
+		response: undefined,
+	}),
+	postIssueComment: endpoint({
+		method: 'POST',
+		path: (params: IssuePath) => `${issuePath(params)}/comments`,
+		body: PostIssueCommentBody,
+		response: IssueComment,
+	}),
+	updateIssueComment: endpoint({
+		method: 'PATCH',
+		path: ({ comment }: { readonly comment: GitHubId }) => `${repositoryPath}/issues/comments/${comment}`,
+		body: UpdateCommentBody,
+		response: undefined,
+	}),
+	deleteIssueComment: endpoint({
+		method: 'DELETE',
+		path: ({ comment }: { readonly comment: GitHubId }) => `${repositoryPath}/issues/comments/${comment}`,
+		body: Schema.Undefined,
+		response: undefined,
+	}),
+	createPullRequest: endpoint({
+		method: 'POST',
+		path: () => `${repositoryPath}/pulls`,
+		body: Schema.Struct({
+			title: Schema.String,
+			body: Schema.String,
+			head: Schema.NonEmptyString,
+			base: Schema.NonEmptyString,
+		}),
+		response: PullRequest,
+	}),
+	editPullRequestTitle: endpoint({ method: 'PATCH', path: pullRequestPath, body: IssueTitle, response: undefined }),
+	closePullRequest: endpoint({
+		method: 'PATCH',
+		path: pullRequestPath,
+		body: ClosePullRequestBody,
+		response: undefined,
+	}),
+	reopenPullRequest: endpoint({
+		method: 'PATCH',
+		path: pullRequestPath,
+		body: ReopenPullRequestBody,
+		response: undefined,
+	}),
+	requestReviewers: endpoint({
+		method: 'POST',
+		path: (params: PullRequestPath) => `${pullRequestPath(params)}/requested_reviewers`,
+		body: Schema.Struct({ reviewers: Schema.Array(Schema.NonEmptyString) }),
+		response: undefined,
+	}),
+	createReview: endpoint({
+		method: 'POST',
+		path: (params: PullRequestPath) => `${pullRequestPath(params)}/reviews`,
+		body: Schema.Struct({ body: Schema.String, event: Schema.Literals(['APPROVE', 'REQUEST_CHANGES', 'COMMENT']) }),
+		response: Review,
+	}),
+	dismissReview: endpoint({
+		method: 'PUT',
+		path: (params: PullRequestPath & { readonly review: GitHubId }) =>
+			`${pullRequestPath(params)}/reviews/${params.review}/dismissals`,
+		body: Schema.Struct({ message: Schema.String }),
+		response: undefined,
+	}),
+	postReviewComment: endpoint({
+		method: 'POST',
+		path: (params: PullRequestPath) => `${pullRequestPath(params)}/comments`,
+		body: PostPullRequestReviewCommentBody,
+		response: ReviewComment,
+	}),
+	updateReviewComment: endpoint({
+		method: 'PATCH',
+		path: ({ comment }: { readonly comment: GitHubId }) => `${repositoryPath}/pulls/comments/${comment}`,
+		body: UpdateCommentBody,
+		response: undefined,
+	}),
+	deleteReviewComment: endpoint({
+		method: 'DELETE',
+		path: ({ comment }: { readonly comment: GitHubId }) => `${repositoryPath}/pulls/comments/${comment}`,
+		body: Schema.Undefined,
+		response: undefined,
+	}),
+}
+
+/** What the emulator tests send to an endpoint. */
+export type GitHubEmulatorCall<Params, Body extends Schema.Codec<unknown, unknown>> = {
+	readonly params: Params
+	readonly token: string
+	readonly body: Body['Type']
+}
+
+export class GitHubEmulatorSeedError extends Schema.TaggedError<GitHubEmulatorSeedError>()(
+	'GitHubEmulatorSeedError',
+	{},
+) {}
+
+const serveOnLoopback = <E, R>(app: Layer.Layer<never, E, R>) =>
+	Effect.gen(function* () {
+		const context = yield* Layer.build(
+			app.pipe(Layer.provideMerge(NodeHttpServer.layer(NodeHttp.createServer, { port: 0, host: '127.0.0.1' }))),
+		)
+		const address = Context.get(context, HttpServer.HttpServer).address
+		if (!Predicate.isTagged(address, 'TcpAddress')) return yield* Effect.die('Expected a TCP address')
+		return `http://127.0.0.1:${address.port}`
 	})
-
-export const decodeGitHubNumberedResponse = Schema.decodeUnknownEffect(Schema.Struct({ number: Schema.Number }))
-
-export const decodeGitHubIdentifiedResponse = Schema.decodeUnknownEffect(Schema.Struct({ id: Schema.Number }))
-
-const listen = (server: NodeHttp.Server) =>
-	Effect.callback<number, Error>((resume) => {
-		server.once('error', (cause) => resume(Effect.fail(cause)))
-		server.listen(0, '127.0.0.1', () => {
-			const address = server.address()
-			if (address === null || Predicate.isString(address)) {
-				resume(Effect.fail(new Error('GitHub emulator server did not expose a TCP port')))
-				return
-			}
-			resume(Effect.succeed(address.port))
-		})
-	})
-
-const close = (server: NodeHttp.Server) =>
-	Effect.promise(
-		() =>
-			new Promise<void>((resolve, reject) => {
-				server.close((cause) => (cause === undefined ? resolve() : reject(cause)))
-			}),
-	)
-
-const requestListener =
-	(handler: (request: Request) => Promise<Response>): NodeHttp.RequestListener =>
-	(request, response) => {
-		const chunks: Array<Uint8Array> = []
-		request.on('data', (chunk: Uint8Array) => chunks.push(chunk))
-		request.on('end', () => {
-			const headers = new globalThis.Headers()
-			for (const [name, value] of Object.entries(request.headers)) {
-				if (Array.isArray(value)) for (const item of value) headers.append(name, item)
-				else if (value !== undefined) headers.set(name, value)
-			}
-			const body = Buffer.concat(chunks)
-			void handler(
-				new Request(`http://${request.headers.host ?? '127.0.0.1'}${request.url ?? '/'}`, {
-					method: request.method,
-					headers,
-					body: body.length === 0 ? undefined : body,
-				}),
-			).then(
-				async (result) => {
-					response.writeHead(result.status, Object.fromEntries(result.headers))
-					response.end(Buffer.from(await result.arrayBuffer()))
-				},
-				() => {
-					response.writeHead(500)
-					response.end()
-				},
-			)
-		})
-	}
 
 export type GitHubEmulatorFixtureOptions = {
 	readonly mailboxDelivery: typeof MailboxDelivery.Service
@@ -302,17 +420,16 @@ export const makeGitHubEmulatorFixture = (options: GitHubEmulatorFixtureOptions)
 			namespace: 'github-emulator-test',
 			webhookSecret: Redacted.make(githubWebhookSecret),
 		})
-		const routes = webhookRoutes([provider]).pipe(HttpRouter.provideRequest(NodeCrypto.layer))
-		const web = HttpRouter.toWebHandler(routes, { disableLogger: true })
-		yield* Effect.addFinalizer(() => Effect.promise(web.dispose))
-		const context = Context.make(MailboxDelivery, options.mailboxDelivery)
-		const callbackServer = NodeHttp.createServer(
-			requestListener(async (request) => {
-				return web.handler(request, context)
-			}),
+		const callbackUrl = yield* serveOnLoopback(
+			HttpRouter.serve(
+				webhookRoutes([provider]).pipe(
+					HttpRouter.provideRequest(
+						Layer.merge(NodeCrypto.layer, Layer.succeed(MailboxDelivery, options.mailboxDelivery)),
+					),
+				),
+				{ disableLogger: true, disableListenLog: true },
+			),
 		)
-		const callbackPort = yield* listen(callbackServer)
-		yield* Effect.addFinalizer(() => close(callbackServer))
 
 		const emulator = createServer(githubPlugin, { baseUrl: 'http://127.0.0.1' })
 		githubPlugin.seed?.(emulator.store, emulator.baseUrl)
@@ -337,7 +454,7 @@ export const makeGitHubEmulatorFixture = (options: GitHubEmulatorFixtureOptions)
 						'pull_request_review',
 						'pull_request_review_comment',
 					],
-					webhook_url: `http://127.0.0.1:${callbackPort}/integrations/github/webhook`,
+					webhook_url: `${callbackUrl}/integrations/github/webhook`,
 					webhook_secret: githubWebhookSecret,
 					installations: [
 						{
@@ -352,9 +469,7 @@ export const makeGitHubEmulatorFixture = (options: GitHubEmulatorFixtureOptions)
 		} satisfies GitHubSeedConfig
 		seedFromConfig(emulator.store, emulator.baseUrl, seed)
 
-		const emulatorServer = serve({ fetch: emulator.app.fetch, hostname: '127.0.0.1', port: 0 })
-		const emulatorPort = yield* listen(emulatorServer)
-		yield* Effect.addFinalizer(() => close(emulatorServer))
+		const emulatorUrl = yield* serveOnLoopback(HttpServer.serve(HttpEffect.fromWebHandler(emulator.app.fetch)))
 
 		const store = getGitHubStore(emulator.store)
 		const alice = store.users.findOneBy('login', 'alice')
@@ -362,13 +477,46 @@ export const makeGitHubEmulatorFixture = (options: GitHubEmulatorFixtureOptions)
 		const repository = store.repos.findOneBy('name', 'project')
 		const installation = store.appInstallations.findOneBy('installation_id', 100)
 		if (alice === undefined || reviewer === undefined || repository === undefined || installation === undefined) {
-			return yield* Effect.fail(new Error('GitHub emulator fixture seed is incomplete'))
+			return yield* GitHubEmulatorSeedError.make({})
 		}
 		emulator.tokenMap.set(githubEmulatorAliceToken, { login: alice.login, id: alice.id, scopes: [] })
 		emulator.tokenMap.set(githubEmulatorReviewerToken, { login: reviewer.login, id: reviewer.id, scopes: [] })
 
+		const client = (yield* HttpClient.HttpClient).pipe(HttpClient.filterStatusOk)
+		const execute = Effect.fn('github.emulator.execute')(function* <
+			Params,
+			Body extends Schema.Codec<unknown, unknown>,
+			Response extends Schema.Codec<unknown, unknown> | undefined,
+		>(endpoint: GitHubEmulatorEndpoint<Params, Body, Response>, call: GitHubEmulatorCall<Params, Body>) {
+			const unsent = HttpClientRequest.make(endpoint.method)(`${emulatorUrl}${endpoint.path(call.params)}`).pipe(
+				HttpClientRequest.bearerToken(call.token),
+			)
+			return yield* client.execute(
+				Predicate.isUndefined(call.body)
+					? unsent
+					: yield* HttpClientRequest.schemaBodyJson(endpoint.body)(unsent, call.body),
+			)
+		})
+		/** Calls an endpoint whose response the test does not read. */
+		const send = Effect.fn('github.emulator.send')(function* <Params, Body extends Schema.Codec<unknown, unknown>>(
+			endpoint: GitHubEmulatorEndpoint<Params, Body>,
+			call: GitHubEmulatorCall<Params, Body>,
+		) {
+			yield* execute(endpoint, call)
+		})
+		/** Calls an endpoint and decodes its response with the endpoint's response Schema. */
+		const request = Effect.fn('github.emulator.request')(function* <
+			Params,
+			Body extends Schema.Codec<unknown, unknown>,
+			Response extends Schema.Codec<unknown, unknown>,
+		>(endpoint: GitHubEmulatorEndpoint<Params, Body, Response>, call: GitHubEmulatorCall<Params, Body>) {
+			const response = yield* execute(endpoint, call)
+			return yield* HttpClientResponse.schemaBodyJson(endpoint.response)(response)
+		})
+
 		return {
-			url: `http://127.0.0.1:${emulatorPort}`,
+			send,
+			request,
 			aliceToken: githubEmulatorAliceToken,
 			reviewerToken: githubEmulatorReviewerToken,
 			aliceUserId: alice.id,
@@ -376,7 +524,7 @@ export const makeGitHubEmulatorFixture = (options: GitHubEmulatorFixtureOptions)
 			repositoryId: repository.id,
 			installationId: installation.installation_id,
 		}
-	})
+	}).pipe(Effect.provide(FetchHttpClient.layer))
 
 export const signedGitHubInput = (event: string, payload: Schema.Json, deliveryId = 'delivery-1'): RawWebhookInput =>
 	signedGitHubBody(event, new TextEncoder().encode(JSON.stringify(payload)), deliveryId)

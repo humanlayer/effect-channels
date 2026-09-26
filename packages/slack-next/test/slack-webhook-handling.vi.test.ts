@@ -13,7 +13,7 @@ import { Headers } from 'effect/unstable/http'
 
 import { SlackApi } from '../src/SlackApi'
 import { makeSlackWebhookProvider } from '../src/SlackWebhookProvider'
-import { signedSlackInput } from './fixtures'
+import { signedSlackBody, signedSlackInput } from './fixtures'
 
 const signingSecret = 'webhook-test-secret'
 const provider = makeSlackWebhookProvider({
@@ -37,7 +37,7 @@ describe('Slack webhook handling', () => {
 	it.effect('returns the URL verification challenge', ({ expect }) =>
 		Effect.gen(function* () {
 			const outcome = yield* handle(
-				signedSlackInput(signingSecret, { type: 'url_verification', challenge: 'challenge-value' }),
+				yield* signedSlackInput(signingSecret, { type: 'url_verification', challenge: 'challenge-value' }),
 			)
 			expect(outcome).toEqual(
 				ProviderWebhookResponse.make({
@@ -58,7 +58,7 @@ describe('Slack webhook handling', () => {
 
 	it.effect('rejects an invalid signature', ({ expect }) =>
 		Effect.gen(function* () {
-			const input = signedSlackInput(signingSecret, { type: 'unknown' })
+			const input = yield* signedSlackInput(signingSecret, { type: 'unknown' })
 			const error = yield* Effect.flip(
 				handle({
 					...input,
@@ -71,16 +71,8 @@ describe('Slack webhook handling', () => {
 
 	it.effect('rejects malformed JSON after signature verification', ({ expect }) =>
 		Effect.gen(function* () {
-			const body = new TextEncoder().encode('{')
-			const signed = signedSlackInput(signingSecret, {}, '0')
-			const bodyText = new TextDecoder().decode(body)
-			const signature = createHmac('sha256', signingSecret).update(`v0:0:${bodyText}`).digest('hex')
-			const error = yield* Effect.flip(
-				handle({
-					body,
-					headers: Headers.set(signed.headers, 'x-slack-signature', `v0=${signature}`),
-				}),
-			)
+			const signed = yield* signedSlackBody(signingSecret, new TextEncoder().encode('{'))
+			const error = yield* Effect.flip(handle(signed))
 			expect(error).toEqual(WebhookPayloadInvalidError.make({ reason: 'invalid_json' }))
 		}),
 	)
@@ -88,7 +80,7 @@ describe('Slack webhook handling', () => {
 	it.effect('ignores a valid unsupported event', ({ expect }) =>
 		Effect.gen(function* () {
 			const outcome = yield* handle(
-				signedSlackInput(signingSecret, {
+				yield* signedSlackInput(signingSecret, {
 					type: 'event_callback',
 					team_id: 'T_TEST',
 					event_id: 'Ev_UNSUPPORTED',
@@ -104,7 +96,7 @@ describe('Slack webhook handling', () => {
 		Effect.gen(function* () {
 			const error = yield* Effect.flip(
 				handle(
-					signedSlackInput(signingSecret, {
+					yield* signedSlackInput(signingSecret, {
 						type: 'event_callback',
 						team_id: 'T_TEST',
 						event_id: 'Ev_BAD_MENTION',
@@ -133,7 +125,7 @@ describe('Slack webhook handling', () => {
 					streaming_message_ts: ['1700000001.000001'],
 				},
 			} as const
-			expect(yield* handle(signedSlackInput(signingSecret, payload))).toEqual(
+			expect(yield* handle(yield* signedSlackInput(signingSecret, payload))).toEqual(
 				ProviderWebhookEvent.make({
 					event: DeliveryAdmission.make({
 						namespace: 'webhook-test',
@@ -148,4 +140,3 @@ describe('Slack webhook handling', () => {
 		}),
 	)
 })
-import { createHmac } from 'node:crypto'

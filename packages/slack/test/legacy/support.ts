@@ -151,8 +151,10 @@ export const makeTestNormalizedMessage = (input: {
 export const expectTaggedFailure =
 	<K extends string>(tag: K) =>
 	<A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<E & { readonly _tag: K }, A, R> =>
-		Effect.flatMap(Effect.flip(effect), (error) =>
-			Predicate.isTagged(tag)(error) ? Effect.succeed(error) : Effect.die(new Error(`expected a ${tag} failure`)),
+		Effect.filterOrElse(
+			Effect.flip(effect),
+			(error): error is E & { readonly _tag: K } => Predicate.isTagged(error, tag),
+			() => Effect.die(new Error(`expected a ${tag} failure`)),
 		)
 
 export const policy = DeliveryPolicy.make({

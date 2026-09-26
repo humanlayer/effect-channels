@@ -1,5 +1,3 @@
-import { createHash } from 'node:crypto'
-
 import { assert, layer } from '@effect/vitest'
 import { FileUpload, MarkdownContent, PlainTextContent } from '@humanlayer/channels-slack'
 import {
@@ -13,21 +11,14 @@ import {
 	slackChannelRef,
 	slackThreadRef,
 } from '@humanlayer/channels-slack'
-import { ConfigProvider, Effect, Layer, Option, Redacted } from 'effect'
+import { ConfigProvider, Effect, Layer, Redacted } from 'effect'
 import * as FetchHttpClient from 'effect/unstable/http/FetchHttpClient'
 
 import { testConnectionStoreLayer } from '../support'
-import {
-	FileInfoResponse,
-	HistoryResponse,
-	PostedMessageResponse,
-	SlackEmulator,
-	slackEmulatorAliceToken,
-	slackEmulatorBotToken,
-} from './support/SlackEmulator'
+import { SlackEmulator, slackEmulatorAliceToken, slackEmulatorBotToken } from './support/SlackEmulator'
 
 const encoder = new TextEncoder()
-const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex')
+const decoder = new TextDecoder()
 
 layer(SlackEmulator.layer, { timeout: '30 seconds' })('Slack file emulator integration', (it) => {
 	it.effect(
@@ -37,13 +28,11 @@ layer(SlackEmulator.layer, { timeout: '30 seconds' })('Slack file emulator integ
 				const emulator = yield* SlackEmulator
 				const credentials = SlackTenantCredentials.make({
 					load: () =>
-						Effect.succeed(
-							Option.some({
-								botToken: Redacted.make(slackEmulatorBotToken),
-								botUserId: 'U_CHANNELS_BOT',
-								botId: 'B_CHANNELS_BOT',
-							}),
-						),
+						Effect.succeedSome({
+							botToken: Redacted.make(slackEmulatorBotToken),
+							botUserId: 'U_CHANNELS_BOT',
+							botId: 'B_CHANNELS_BOT',
+						}),
 					save: () => Effect.void,
 				})
 				const clientLayer = SlackClient.layerWith({ apiOrigin: new URL(`${emulator.emulator.url}/api`) }).pipe(
@@ -54,12 +43,10 @@ layer(SlackEmulator.layer, { timeout: '30 seconds' })('Slack file emulator integ
 					Layer.provide(testConnectionStoreLayer),
 					Layer.provide(clientLayer),
 				)
-				const publicRoot = yield* emulator.call(
-					slackEmulatorAliceToken,
-					'chat.postMessage',
-					{ channel: emulator.publicChannelId, text: 'public file root' },
-					PostedMessageResponse,
-				)
+				const publicRoot = yield* emulator.call(slackEmulatorAliceToken, 'chat.postMessage', {
+					channel: emulator.publicChannelId,
+					text: 'public file root',
+				})
 				const publicThread = slackThreadRef(
 					SlackThreadRef.make({
 						teamId: SlackTeamId.make(emulator.teamId),
@@ -91,7 +78,7 @@ layer(SlackEmulator.layer, { timeout: '30 seconds' })('Slack file emulator integ
 					const downloaded = yield* provider.downloadAttachment({
 						attachment: uploadedAttachment.ref,
 					})
-					assert.strictEqual(hash(downloaded), hash(firstBytes))
+					assert.strictEqual(decoder.decode(downloaded), 'public file payload')
 
 					const privateSent = yield* provider.postToChannel({
 						channel: slackChannelRef(
@@ -120,31 +107,21 @@ layer(SlackEmulator.layer, { timeout: '30 seconds' })('Slack file emulator integ
 				})
 				const uploadedFileId = yield* program.pipe(Effect.provide(providerLayer))
 
-				const info = yield* emulator.call(
-					slackEmulatorBotToken,
-					'files.info',
-					{ file: uploadedFileId },
-					FileInfoResponse,
-				)
+				const info = yield* emulator.call(slackEmulatorBotToken, 'files.info', { file: uploadedFileId })
 				assert.strictEqual(info.file.name, 'public.txt')
 				assert.strictEqual(info.file.size, firstBytes.byteLength)
 				assert.ok(info.file.url_private.startsWith(emulator.emulator.url))
 
-				const publicHistory = yield* emulator.call(
-					slackEmulatorBotToken,
-					'conversations.replies',
-					{ channel: emulator.publicChannelId, ts: publicRoot.ts },
-					HistoryResponse,
-				)
+				const publicHistory = yield* emulator.call(slackEmulatorBotToken, 'conversations.replies', {
+					channel: emulator.publicChannelId,
+					ts: publicRoot.ts,
+				})
 				assert.ok(
 					publicHistory.messages.some((message) => message.files?.some((file) => file.id === uploadedFileId)),
 				)
-				const privateHistory = yield* emulator.call(
-					slackEmulatorBotToken,
-					'conversations.history',
-					{ channel: emulator.privateChannelId },
-					HistoryResponse,
-				)
+				const privateHistory = yield* emulator.call(slackEmulatorBotToken, 'conversations.history', {
+					channel: emulator.privateChannelId,
+				})
 				assert.ok(privateHistory.messages.some((message) => (message.files?.length ?? 0) === 2))
 			}),
 		{ timeout: 20_000 },

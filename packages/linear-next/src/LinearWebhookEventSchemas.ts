@@ -16,6 +16,9 @@ import {
 const optionalNullableString = Schema.optionalKey(Schema.NullOr(Schema.String))
 const optionalNullableJson = Schema.optionalKey(Schema.NullOr(Schema.Json))
 
+/** Epoch milliseconds at which Linear sent the webhook. */
+const LinearWebhookTimestamp = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
+
 export const LinearWebhookActor = Schema.Struct({
 	__typename: Schema.optionalKey(Schema.Literal('UserChildWebhookPayload')),
 	id: LinearUserId,
@@ -94,7 +97,7 @@ export const LinearWebhookIssue = Schema.Struct({
 	cycle: Schema.optionalKey(Schema.Json),
 	cycleId: optionalNullableString,
 	parentId: optionalNullableString,
-	estimate: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+	estimate: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
 	dueDate: optionalNullableString,
 	subscriberIds: Schema.optionalKey(Schema.Array(Schema.String)),
 	archivedAt: optionalNullableString,
@@ -224,7 +227,7 @@ const appUserNotificationFields = {
 	appUserId: LinearUserId,
 	/** Linear's webhook SDL includes `webhookId` and `webhookTimestamp`, but its agent guide and observed Inbox Notification deliveries omit them. The `Linear-Delivery` and `Linear-Timestamp` headers remain the authoritative ingress values either way. */
 	webhookId: Schema.optionalKey(Schema.NonEmptyString),
-	webhookTimestamp: Schema.optionalKey(Schema.Number),
+	webhookTimestamp: Schema.optionalKey(LinearWebhookTimestamp),
 	createdAt: Schema.String,
 }
 
@@ -289,7 +292,7 @@ export const LinearIssueCreateWebhook = Schema.Struct({
 	actor: Schema.optionalKey(Schema.NullOr(LinearEntityWebhookActor)),
 	url: Schema.optionalKey(Schema.NullOr(Schema.String)),
 	webhookId: Schema.NonEmptyString,
-	webhookTimestamp: Schema.Number,
+	webhookTimestamp: LinearWebhookTimestamp,
 	createdAt: Schema.String,
 })
 export type LinearIssueCreateWebhook = typeof LinearIssueCreateWebhook.Type
@@ -347,7 +350,7 @@ const agentSessionEventFields = {
 	appUserId: LinearUserId,
 	createdAt: Schema.String,
 	webhookId: Schema.NonEmptyString,
-	webhookTimestamp: Schema.Number,
+	webhookTimestamp: LinearWebhookTimestamp,
 	agentSession: LinearAgentSessionWebhook,
 	guidance: Schema.optionalKey(Schema.NullOr(Schema.Array(LinearAgentGuidanceWebhook))),
 	previousComments: Schema.optionalKey(Schema.NullOr(Schema.Array(LinearNotificationComment))),
@@ -406,7 +409,7 @@ export const LinearIssueUpdatedFrom = Schema.Struct({
 	teamId: Schema.optionalKey(Schema.NullOr(LinearTeamId)),
 	previousIdentifiers: optionalNullableStrings,
 	parentId: issueField.parentId,
-	subIssueSortOrder: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+	subIssueSortOrder: Schema.optionalKey(Schema.NullOr(Schema.Finite)),
 	estimate: issueField.estimate,
 	dueDate: issueField.dueDate,
 	subscriberIds: optionalNullableStrings,
@@ -428,7 +431,7 @@ const relatedWebhookFields = {
 	createdAt: Schema.String,
 	url: Schema.optionalKey(Schema.NullOr(Schema.String)),
 	webhookId: Schema.NonEmptyString,
-	webhookTimestamp: Schema.Number,
+	webhookTimestamp: LinearWebhookTimestamp,
 }
 
 export const LinearIssueUpdateWebhook = Schema.Struct({
@@ -569,7 +572,7 @@ export const LinearTeamAccessChangedWebhook = Schema.Struct({
 	addedTeamIds: Schema.Array(LinearTeamId),
 	removedTeamIds: Schema.Array(LinearTeamId),
 	webhookId: Schema.NonEmptyString,
-	webhookTimestamp: Schema.Number,
+	webhookTimestamp: LinearWebhookTimestamp,
 })
 export const LinearInstallationRevokedWebhook = Schema.Struct({
 	type: Schema.Literal('OAuthApp'),
@@ -578,7 +581,7 @@ export const LinearInstallationRevokedWebhook = Schema.Struct({
 	oauthClientId: Schema.NonEmptyString,
 	createdAt: Schema.String,
 	webhookId: Schema.NonEmptyString,
-	webhookTimestamp: Schema.Number,
+	webhookTimestamp: LinearWebhookTimestamp,
 })
 export const LinearLifecycleWebhookEvent = Schema.Union([
 	LinearTeamAccessChangedWebhook,

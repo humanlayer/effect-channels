@@ -1,6 +1,6 @@
 import { layerMailboxStoreServices } from '@humanlayer/channels-delivery'
 import { layer as deliveryMemory } from '@humanlayer/channels-delivery/memory'
-import { Effect, Layer, Schema } from 'effect'
+import { Effect, Layer, MutableHashMap, Option, Schema } from 'effect'
 
 import {
 	GitHubSubscriptionError,
@@ -16,6 +16,8 @@ export interface GitHubSubscriptionsMemoryOptions {
 	readonly maxRoutes?: number
 }
 
+type RouteKey = readonly [subscription: string, deliveryId: string]
+
 export const subscriptionStore = (options: GitHubSubscriptionsMemoryOptions = {}) =>
 	Layer.effect(
 		GitHubSubscriptionStore,
@@ -24,8 +26,7 @@ export const subscriptionStore = (options: GitHubSubscriptionsMemoryOptions = {}
 			const maxSubscriptions = yield* positive.makeEffect(options.maxSubscriptions ?? 10_000)
 			const maxRoutes = yield* positive.makeEffect(options.maxRoutes ?? 50_000)
 			const subscriptions = new Set<string>()
-			const routes = new Map<string, string>()
-			const codec = Schema.fromJsonString(GitHubSubscriptionRoute)
+			const routes = MutableHashMap.empty<RouteKey, GitHubSubscriptionRoute>()
 			return GitHubSubscriptionStore.of({
 				isSubscribed: Effect.fn('github.memory.is_subscribed')((input) =>
 					Effect.sync(() => subscriptions.has(subscriptionKey(input))),
@@ -44,37 +45,27 @@ export const subscriptionStore = (options: GitHubSubscriptionsMemoryOptions = {}
 						subscriptions.delete(subscriptionKey(input))
 					}),
 				),
-				resolveRoute: Effect.fn('github.memory.resolve_route')((input) =>
-					Effect.suspend(() => {
-						return Schema.decodeUnknownEffect(GitHubSubscriptionRouteInput)(input).pipe(
-							Effect.flatMap((value) =>
-								Effect.suspend(
-									(): Effect.Effect<
-										GitHubSubscriptionRoute,
-										GitHubSubscriptionError | Schema.SchemaError
-									> => {
-										const key = JSON.stringify([subscriptionKey(value), value.deliveryId])
-										const existing = routes.get(key)
-										if (existing !== undefined) return Schema.decodeEffect(codec)(existing)
-										if (routes.size >= maxRoutes)
-											return Effect.fail(GitHubSubscriptionError.make({ reason: 'capacity' }))
-										const targets = [
-											...new Set([
-												...value.direct,
-												...(subscriptions.has(subscriptionKey(value)) ? value.followed : []),
-											]),
-										]
-										const route = GitHubSubscriptionRoute.make({ version: 1, targets })
-										routes.set(key, JSON.stringify(route))
-										return Effect.succeed(route)
-									},
-								),
-							),
-							Effect.catchTag('SchemaError', () =>
-								Effect.fail(GitHubSubscriptionError.make({ reason: 'storage' })),
-							),
-						)
-					}),
+				resolveRoute: Effect.fn('github.memory.resolve_route')(
+					function* (input) {
+						const value = yield* Schema.decodeEffect(GitHubSubscriptionRouteInput)(input)
+						const key: RouteKey = [subscriptionKey(value), value.deliveryId]
+						const existing = MutableHashMap.get(routes, key)
+						if (Option.isSome(existing)) return existing.value
+						if (MutableHashMap.size(routes) >= maxRoutes)
+							return yield* GitHubSubscriptionError.make({ reason: 'capacity' })
+						const targets = [
+							...new Set([
+								...value.direct,
+								...(subscriptions.has(subscriptionKey(value)) ? value.followed : []),
+							]),
+						]
+						const route = GitHubSubscriptionRoute.make({ version: 1, targets })
+						MutableHashMap.set(routes, key, route)
+						return route
+					},
+					Effect.catchTag('SchemaError', () =>
+						Effect.fail(GitHubSubscriptionError.make({ reason: 'invalid_input' })),
+					),
 				),
 			})
 		}),

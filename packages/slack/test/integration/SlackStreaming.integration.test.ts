@@ -10,18 +10,12 @@ import {
 	SlackThreadRef,
 	slackThreadRef,
 } from '@humanlayer/channels-slack'
-import { ConfigProvider, Deferred, Effect, Fiber, Layer, Option, Redacted, Stream } from 'effect'
+import { ConfigProvider, Deferred, Effect, Fiber, Layer, Redacted, Stream } from 'effect'
 import { TestClock } from 'effect/testing'
 import * as FetchHttpClient from 'effect/unstable/http/FetchHttpClient'
 
 import { testConnectionStoreLayer } from '../support'
-import {
-	HistoryResponse,
-	PostedMessageResponse,
-	SlackEmulator,
-	slackEmulatorAliceToken,
-	slackEmulatorBotToken,
-} from './support/SlackEmulator'
+import { SlackEmulator, slackEmulatorAliceToken, slackEmulatorBotToken } from './support/SlackEmulator'
 
 layer(SlackEmulator.layer, { timeout: '30 seconds' })('Slack streaming emulator integration', (it) => {
 	it.effect('falls back through production clients and finalizes one stable Slack reply', () =>
@@ -29,21 +23,17 @@ layer(SlackEmulator.layer, { timeout: '30 seconds' })('Slack streaming emulator 
 			const emulator = yield* SlackEmulator
 			const credentials = SlackTenantCredentials.make({
 				load: () =>
-					Effect.succeed(
-						Option.some({ botToken: Redacted.make(slackEmulatorBotToken), botUserId: 'U_CHANNELS_BOT' }),
-					),
+					Effect.succeedSome({ botToken: Redacted.make(slackEmulatorBotToken), botUserId: 'U_CHANNELS_BOT' }),
 				save: () => Effect.void,
 			})
 			const clientLayer = SlackClient.layerWith({ apiOrigin: new URL(`${emulator.emulator.url}/api`) }).pipe(
 				Layer.provide(Layer.merge(FetchHttpClient.layer, credentials)),
 				Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({}))),
 			)
-			const root = yield* emulator.call(
-				slackEmulatorAliceToken,
-				'chat.postMessage',
-				{ channel: emulator.publicChannelId, text: 'stream root' },
-				PostedMessageResponse,
-			)
+			const root = yield* emulator.call(slackEmulatorAliceToken, 'chat.postMessage', {
+				channel: emulator.publicChannelId,
+				text: 'stream root',
+			})
 			const thread = slackThreadRef(
 				SlackThreadRef.make({
 					teamId: SlackTeamId.make(emulator.teamId),
@@ -76,22 +66,18 @@ layer(SlackEmulator.layer, { timeout: '30 seconds' })('Slack streaming emulator 
 				Effect.forkChild,
 			)
 			yield* Deferred.await(waitingForSecond)
-			const intermediate = yield* emulator.call(
-				slackEmulatorBotToken,
-				'conversations.replies',
-				{ channel: emulator.publicChannelId, ts: root.ts },
-				HistoryResponse,
-			)
+			const intermediate = yield* emulator.call(slackEmulatorBotToken, 'conversations.replies', {
+				channel: emulator.publicChannelId,
+				ts: root.ts,
+			})
 			assert.strictEqual(intermediate.messages.filter((message) => message.text === 'one ').length, 1)
 			yield* Deferred.succeed(releaseSecond, undefined)
 			yield* TestClock.adjust('500 millis')
 			const sent = yield* Fiber.join(streamFiber)
-			const replies = yield* emulator.call(
-				slackEmulatorBotToken,
-				'conversations.replies',
-				{ channel: emulator.publicChannelId, ts: root.ts },
-				HistoryResponse,
-			)
+			const replies = yield* emulator.call(slackEmulatorBotToken, 'conversations.replies', {
+				channel: emulator.publicChannelId,
+				ts: root.ts,
+			})
 			const matching = replies.messages.filter((message) => message.ts === sent.ref.messageRef)
 			assert.strictEqual(matching.length, 1)
 			assert.strictEqual(matching[0]?.text, 'one complete streamed response')

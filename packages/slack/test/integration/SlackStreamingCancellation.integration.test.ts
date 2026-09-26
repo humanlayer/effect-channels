@@ -2,7 +2,7 @@ import { assert, layer } from '@effect/vitest'
 import { ConfigProvider, Deferred, Effect, Queue, Stream } from 'effect'
 import * as FetchHttpClient from 'effect/unstable/http/FetchHttpClient'
 
-import { PostedMessageResponse, SlackEmulator, slackEmulatorAliceToken } from './support/SlackEmulator'
+import { SlackEmulator, slackEmulatorAliceToken } from './support/SlackEmulator'
 import { ChannelsStorage, makeSlackTestHost, defaultDeliveryPolicy, slack } from './support/SlackTestHost'
 
 layer(SlackEmulator.layer, { timeout: '30 seconds' })('Slack stream cancellation integration', (it) => {
@@ -34,13 +34,11 @@ layer(SlackEmulator.layer, { timeout: '30 seconds' })('Slack stream cancellation
 				},
 			})
 			yield* Effect.addFinalizer(() => Effect.promise(() => app.close()))
-			const root = yield* emulator.call(
-				slackEmulatorAliceToken,
-				'chat.postMessage',
-				{ channel: emulator.publicChannelId, text: 'please stream' },
-				PostedMessageResponse,
-			)
-			const mention = emulator.signedWebhook({
+			const root = yield* emulator.call(slackEmulatorAliceToken, 'chat.postMessage', {
+				channel: emulator.publicChannelId,
+				text: 'please stream',
+			})
+			const mention = yield* emulator.signedWebhook({
 				type: 'event_callback',
 				team_id: emulator.teamId,
 				event_id: 'Ev_STREAM_START',
@@ -69,16 +67,13 @@ layer(SlackEmulator.layer, { timeout: '30 seconds' })('Slack stream cancellation
 					streaming_message_ts: [],
 				},
 			}
-			assert.strictEqual(
-				(yield* Effect.promise(() => app.handle(emulator.signedWebhook(stoppedEvent)))).status,
-				200,
-			)
+			const deliverStopped = emulator
+				.signedWebhook(stoppedEvent)
+				.pipe(Effect.flatMap((request) => Effect.promise(() => app.handle(request))))
+			assert.strictEqual((yield* deliverStopped).status, 200)
 			assert.strictEqual(yield* Queue.take(order), 'finalized')
 			assert.strictEqual(yield* Queue.take(order), 'stopped')
-			assert.strictEqual(
-				(yield* Effect.promise(() => app.handle(emulator.signedWebhook(stoppedEvent)))).status,
-				200,
-			)
+			assert.strictEqual((yield* deliverStopped).status, 200)
 			assert.strictEqual(yield* Queue.size(order), 0)
 		}),
 	)

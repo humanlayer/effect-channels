@@ -55,29 +55,27 @@ export const make = <E, R, ApiError = never, ApiRequirements = never>(
 	return {
 		providerName: 'github',
 		deliveryMode: options.deliveryMode,
-		webhookProvider: ({ namespace }) =>
-			Effect.gen(function* () {
-				const webhookSecret = yield* unavailable('read_webhook_secret', options.webhookSecret)
-				/**
-				 * Split hosts build only this half in the Worker construction phase. Resolve the callback half's
-				 * configuration here too, so Alchemy can discover and bind it for the Durable Object runtime.
-				 */
-				yield* readBotConfiguration
-				yield* buildGitHubApi
-				return makeGitHubWebhookProvider({ namespace, webhookSecret })
-			}).pipe(Effect.withSpan('github.bot.build_webhook_provider')),
-		eventProcessor: ({ namespace }) =>
-			Effect.gen(function* () {
-				const bot = yield* readBotConfiguration
-				const gitHubApi = yield* buildGitHubApi
-				const eventProcessor = makeGitHubEventProcessor({ namespace, bot })
-				return {
-					namespace: eventProcessor.namespace,
-					providerName: eventProcessor.providerName,
-					/** The callbacks are wrapped per batch because they read the services of the running batch. */
-					process: (admissions: DeliveryAdmissionBatch) =>
-						eventProcessor.process(admissions).pipe(Effect.provide(callbacks), Effect.provide(gitHubApi)),
-				}
-			}).pipe(Effect.withSpan('github.bot.build_event_processor')),
+		webhookProvider: Effect.fn('github.bot.build_webhook_provider')(function* ({ namespace }) {
+			const webhookSecret = yield* unavailable('read_webhook_secret', options.webhookSecret)
+			/**
+			 * Split hosts build only this half in the Worker construction phase. Resolve the callback half's
+			 * configuration here too, so Alchemy can discover and bind it for the Durable Object runtime.
+			 */
+			yield* readBotConfiguration
+			yield* buildGitHubApi
+			return makeGitHubWebhookProvider({ namespace, webhookSecret })
+		}),
+		eventProcessor: Effect.fn('github.bot.build_event_processor')(function* ({ namespace }) {
+			const bot = yield* readBotConfiguration
+			const gitHubApi = yield* buildGitHubApi
+			const eventProcessor = makeGitHubEventProcessor({ namespace, bot })
+			return {
+				namespace: eventProcessor.namespace,
+				providerName: eventProcessor.providerName,
+				/** The callbacks are wrapped per batch because they read the services of the running batch. */
+				process: (admissions: DeliveryAdmissionBatch) =>
+					eventProcessor.process(admissions).pipe(Effect.provide(callbacks), Effect.provide(gitHubApi)),
+			}
+		}),
 	}
 }

@@ -83,7 +83,7 @@ describe('Linear GraphQL procedures', () => {
 			yield* Schema.decodeUnknownEffect(LinearUpdateAttachmentInput)({ url: 'https://invalid.example' }).pipe(
 				Effect.flip,
 			)
-			expect(yield* Schema.decodeUnknownEffect(LinearUpdateAttachmentInput)({ title: 'Renamed' })).toEqual({
+			expect(yield* Schema.decodeEffect(LinearUpdateAttachmentInput)({ title: 'Renamed' })).toEqual({
 				title: 'Renamed',
 			})
 			let call = 0

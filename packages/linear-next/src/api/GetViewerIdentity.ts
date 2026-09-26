@@ -20,11 +20,10 @@ const query = `query LinearViewerIdentity {
   }
 }`
 
-export const getViewerIdentity = () =>
-	linearGraphql({
-		operation: 'viewer_identity',
-		query,
-		variables: GetViewerIdentityVariables,
-		input: {},
-		response: GetViewerIdentityResponse,
-	})
+export const getViewerIdentity = linearGraphql({
+	operation: 'viewer_identity',
+	query,
+	variables: GetViewerIdentityVariables,
+	input: {},
+	response: GetViewerIdentityResponse,
+})

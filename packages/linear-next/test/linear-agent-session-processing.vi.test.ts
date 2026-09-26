@@ -79,7 +79,7 @@ describe('Linear Agent Session processing', () => {
 					),
 			)
 			const result = yield* processor
-				.process([linearAgentSessionAdmission(agentSessionPayloads[0])])
+				.process([yield* linearAgentSessionAdmission(agentSessionPayloads[0])])
 				.pipe(Effect.provide(layer))
 			expect(result).toEqual(ProviderEventHandled.make({}))
 			expect(yield* Ref.get(order)).toEqual(['thought', 'callback'])
@@ -114,7 +114,7 @@ describe('Linear Agent Session processing', () => {
 						),
 					),
 			)
-			const admission = linearAgentSessionAdmission(agentSessionPayloads[0])
+			const admission = yield* linearAgentSessionAdmission(agentSessionPayloads[0])
 			yield* processor.process([admission]).pipe(Effect.provide(layer), Effect.flip)
 			const result = yield* processor.process([admission]).pipe(Effect.provide(layer))
 			expect(result).toEqual(ProviderEventHandled.make({}))
@@ -134,7 +134,7 @@ describe('Linear Agent Session processing', () => {
 				() => Effect.die('prompted must not create an automatic thought'),
 			)
 			const result = yield* processor
-				.process([linearAgentSessionAdmission(agentSessionPayloads[1])])
+				.process([yield* linearAgentSessionAdmission(agentSessionPayloads[1])])
 				.pipe(Effect.provide(layer))
 			expect(result).toEqual(ProviderEventHandled.make({}))
 			expect(yield* Ref.get(prompts)).toEqual(['Please include a regression test.'])
@@ -162,7 +162,7 @@ describe('Linear Agent Session processing', () => {
 				Effect.die('must not create an activity'),
 			)
 			const result = yield* processor
-				.process([linearAgentSessionAdmission(payload)])
+				.process([yield* linearAgentSessionAdmission(payload)])
 				.pipe(Effect.provide(layer), Effect.flip)
 			expect(result).toEqual(ProviderEventInvalid.make({ provider: 'linear', reason: 'identity_mismatch' }))
 		}),

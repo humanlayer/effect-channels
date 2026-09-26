@@ -10,26 +10,11 @@ import {
 	SlackThreadRef,
 	slackThreadRef,
 } from '@humanlayer/channels-slack'
-import { ConfigProvider, Effect, Layer, Option, Redacted, Schema } from 'effect'
+import { ConfigProvider, Effect, Layer, Redacted } from 'effect'
 import * as FetchHttpClient from 'effect/unstable/http/FetchHttpClient'
 
 import { testConnectionStoreLayer } from '../support'
-import {
-	HistoryResponse,
-	PostedMessageResponse,
-	SlackEmulator,
-	slackEmulatorAliceToken,
-	slackEmulatorBotToken,
-} from './support/SlackEmulator'
-
-const ReactionsResponse = Schema.Struct({
-	ok: Schema.Literal(true),
-	message: Schema.Struct({
-		reactions: Schema.optionalKey(
-			Schema.Array(Schema.Struct({ name: Schema.String, users: Schema.Array(Schema.String) })),
-		),
-	}),
-})
+import { SlackEmulator, slackEmulatorAliceToken, slackEmulatorBotToken } from './support/SlackEmulator'
 
 layer(SlackEmulator.layer, { timeout: '30 seconds' })('Slack lifecycle emulator integration', (it) => {
 	it.effect('edits, reacts to, and deletes a Slack reply through production clients', () =>
@@ -37,13 +22,11 @@ layer(SlackEmulator.layer, { timeout: '30 seconds' })('Slack lifecycle emulator 
 			const emulator = yield* SlackEmulator
 			const credentials = SlackTenantCredentials.make({
 				load: () =>
-					Effect.succeed(
-						Option.some({
-							botToken: Redacted.make(slackEmulatorBotToken),
-							botUserId: 'U_CHANNELS_BOT',
-							botId: 'B_CHANNELS_BOT',
-						}),
-					),
+					Effect.succeedSome({
+						botToken: Redacted.make(slackEmulatorBotToken),
+						botUserId: 'U_CHANNELS_BOT',
+						botId: 'B_CHANNELS_BOT',
+					}),
 				save: () => Effect.void,
 			})
 			const clientLayer = SlackClient.layerWith({ apiOrigin: new URL(`${emulator.emulator.url}/api`) }).pipe(
@@ -51,12 +34,10 @@ layer(SlackEmulator.layer, { timeout: '30 seconds' })('Slack lifecycle emulator 
 				Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({}))),
 			)
 			const providerLayer = Slack.layer.pipe(Layer.provide(testConnectionStoreLayer), Layer.provide(clientLayer))
-			const root = yield* emulator.call(
-				slackEmulatorAliceToken,
-				'chat.postMessage',
-				{ channel: emulator.publicChannelId, text: 'lifecycle root' },
-				PostedMessageResponse,
-			)
+			const root = yield* emulator.call(slackEmulatorAliceToken, 'chat.postMessage', {
+				channel: emulator.publicChannelId,
+				text: 'lifecycle root',
+			})
 			const thread = slackThreadRef(
 				SlackThreadRef.make({
 					teamId: SlackTeamId.make(emulator.teamId),
@@ -84,19 +65,15 @@ layer(SlackEmulator.layer, { timeout: '30 seconds' })('Slack lifecycle emulator 
 				return sent.ref.messageRef
 			}).pipe(Effect.provide(providerLayer))
 
-			const replies = yield* emulator.call(
-				slackEmulatorBotToken,
-				'conversations.replies',
-				{ channel: emulator.publicChannelId, ts: root.ts },
-				HistoryResponse,
-			)
+			const replies = yield* emulator.call(slackEmulatorBotToken, 'conversations.replies', {
+				channel: emulator.publicChannelId,
+				ts: root.ts,
+			})
 			assert.strictEqual(replies.messages.find((message) => message.ts === messageRef)?.text, 'after edit')
-			const reaction = yield* emulator.call(
-				slackEmulatorBotToken,
-				'reactions.get',
-				{ channel: emulator.publicChannelId, timestamp: messageRef },
-				ReactionsResponse,
-			)
+			const reaction = yield* emulator.call(slackEmulatorBotToken, 'reactions.get', {
+				channel: emulator.publicChannelId,
+				timestamp: messageRef,
+			})
 			assert.strictEqual(reaction.message.reactions?.[0]?.name, 'thumbsup')
 
 			yield* Effect.gen(function* () {
@@ -104,12 +81,10 @@ layer(SlackEmulator.layer, { timeout: '30 seconds' })('Slack lifecycle emulator 
 				yield* provider.removeReaction({ threadId: thread.id, messageRef, emoji: Emoji.ThumbsUp })
 				yield* provider.delete({ threadId: thread.id, messageRef })
 			}).pipe(Effect.provide(providerLayer))
-			const afterDelete = yield* emulator.call(
-				slackEmulatorBotToken,
-				'conversations.replies',
-				{ channel: emulator.publicChannelId, ts: root.ts },
-				HistoryResponse,
-			)
+			const afterDelete = yield* emulator.call(slackEmulatorBotToken, 'conversations.replies', {
+				channel: emulator.publicChannelId,
+				ts: root.ts,
+			})
 			assert.strictEqual(
 				afterDelete.messages.some((message) => message.ts === messageRef),
 				false,

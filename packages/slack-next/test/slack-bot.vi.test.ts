@@ -60,7 +60,10 @@ describe('SlackBot.make', () => {
 								Effect.gen(function* () {
 									yield* event.thread.subscribe()
 									const subscribed = yield* event.thread.isSubscribed()
-									yield* Deferred.succeed(mentioned, { threadTs: event.thread.ref.threadTs, subscribed })
+									yield* Deferred.succeed(mentioned, {
+										threadTs: event.thread.ref.threadTs,
+										subscribed,
+									})
 								}),
 						},
 					}),
@@ -69,7 +72,7 @@ describe('SlackBot.make', () => {
 				storage: ChannelsMemory.make({ polling: { intervalMs: 1_000 } }),
 			})
 			const fetch = yield* HttpRouter.toHttpEffect(bot.routes).pipe(Effect.provide(NodeCrypto.layer))
-			const signed = signedSlackInput(slackEmulatorSigningSecret, mention)
+			const signed = yield* signedSlackInput(slackEmulatorSigningSecret, mention)
 
 			const response = yield* fetch.pipe(
 				Effect.provideService(

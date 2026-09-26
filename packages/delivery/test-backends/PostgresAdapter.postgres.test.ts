@@ -58,7 +58,9 @@ it.effect(
 			yield* storageContract.pipe(Effect.provide(layer))
 			const rows =
 				yield* sql`SELECT revision::double precision AS revision, state_json, ready_at FROM humanlayer_delivery_v1_mailboxes WHERE key = ${'contract%_!\\:cas'}`
-			assert.deepStrictEqual(rows, [{ revision: 3, state_json: encodeState(emptyMailbox()), ready_at: null }])
+			assert.deepStrictEqual(rows, [
+				{ revision: 3, state_json: yield* encodeState(emptyMailbox()), ready_at: null },
+			])
 			yield* staleAttemptContract.pipe(Effect.provide(Layer.fresh(runtime)))
 			const receipt = yield* interruptForReconstruction.pipe(Effect.provide(Layer.fresh(runtime)))
 			yield* TestClock.adjust(policy.leaseMs)

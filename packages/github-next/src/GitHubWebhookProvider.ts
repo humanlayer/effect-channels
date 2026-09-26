@@ -126,7 +126,7 @@ export const makeGitHubWebhookProvider = (options: GitHubWebhookProviderOptions)
 			const event = headers['x-github-event']
 			if (!isSupportedEvent(event)) return ProviderWebhookIgnored.make({})
 
-			const unknownPayload = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))(
+			const unknownPayload = yield* Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown))(
 				new TextDecoder().decode(input.body),
 			).pipe(Effect.mapError(() => WebhookPayloadInvalidError.make({ reason: 'invalid_json' })))
 			const action = yield* Schema.decodeUnknownEffect(GitHubWebhookEnvelope)(unknownPayload).pipe(

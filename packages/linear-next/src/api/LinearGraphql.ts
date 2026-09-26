@@ -69,8 +69,8 @@ const LinearGraphqlErrorPayload = Schema.Struct({
 		Schema.Struct({
 			code: Schema.optionalKey(Schema.String),
 			statusCode: Schema.optionalKey(Schema.Int),
-			retryAfter: Schema.optionalKey(Schema.Number),
-			retryAfterMs: Schema.optionalKey(Schema.Number),
+			retryAfter: Schema.optionalKey(Schema.Finite),
+			retryAfterMs: Schema.optionalKey(Schema.Finite),
 		}),
 	),
 })

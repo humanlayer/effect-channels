@@ -139,7 +139,7 @@ export interface GitHubCommit extends Schema.Schema.Type<typeof GitHubCommit> {}
 export const GitHubDiffSide = Schema.Literals(['LEFT', 'RIGHT'])
 export type GitHubDiffSide = typeof GitHubDiffSide.Type
 
-const GitHubDiffLine = GitHubPositiveInt
+export const GitHubDiffLine = GitHubPositiveInt
 
 export const GitHubReviewCommentLocation = Schema.TaggedUnion({
 	Line: {

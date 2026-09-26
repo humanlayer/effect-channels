@@ -16,6 +16,10 @@ import {
 	GitHubCrypto,
 	GitHubIngress,
 	GitHubIssueData,
+	GitHubPullRequestData,
+	GitHubReviewCommentData,
+	GitHubReviewData,
+	GitHubWebhookPayload,
 	GitHubRoutes,
 	GitHubSubscriptions,
 	GitHubSubscriptionRoute,
@@ -25,16 +29,26 @@ import {
 } from '../src/index'
 import { layer as memory } from '../src/memory'
 import { event, policy, routeCredentials, user } from './fixtures'
-import { host, payloadFor, secret, signedRequest } from './support'
+import {
+	host,
+	payloadFor,
+	secret,
+	signedRequest,
+	webhookBase,
+	webhookLocation,
+	webhookRequest,
+	type WebhookFixture,
+} from './support'
 
 const base = payloadFor(event)
+const common = webhookBase(event)
 const pull_request = {
 	...event.issue,
 	merged: false,
 	draft: false,
 	head: { ref: 'feature', sha: 'after' },
 	base: { ref: 'main', sha: 'base' },
-}
+} satisfies GitHubPullRequestData
 const review = {
 	id: 50,
 	node_id: 'PRR_50',
@@ -43,7 +57,7 @@ const review = {
 	user,
 	commit_id: 'after',
 	html_url: 'https://github.test/review/50',
-}
+} satisfies GitHubReviewData
 const comment = {
 	id: 60,
 	node_id: 'PRRC_60',
@@ -58,7 +72,14 @@ const comment = {
 	pull_request_url: 'https://api.github.test/repos/alice/project/pulls/1',
 	line: 1,
 	side: 'RIGHT',
-}
+} satisfies GitHubReviewCommentData
+/** A review-thread body whose thread carries a numeric `id` instead of the required `node_id`. */
+const ThreadWithoutNodeIdBody = Schema.fromJsonString(
+	Schema.Struct({
+		...GitHubWebhookPayload.fields,
+		thread: Schema.Struct({ id: Schema.Int, comments: Schema.Array(GitHubReviewCommentData) }),
+	}),
+)
 const subscription = { namespace: 'activity-test', resource: event.resource }
 
 const setup = Effect.gen(function* () {
@@ -121,7 +142,7 @@ it.effect('signed complete direct trigger matrix; all lifecycle notifications su
 			...subscription,
 			resource: { ...event.resource, kind: 'github.pull-request' },
 		})
-		const matrix = [
+		const matrix: ReadonlyArray<WebhookFixture & { readonly pr: boolean }> = [
 			...['closed', 'reopened', 'edited', 'assigned', 'unassigned', 'labeled', 'unlabeled'].map((action) => ({
 				event: 'issues',
 				payload: { ...base, action, assignee: user, label: { id: 70, name: 'bug', color: 'ff0000' } },
@@ -157,8 +178,7 @@ it.effect('signed complete direct trigger matrix; all lifecycle notifications su
 			].map((action) => ({
 				event: 'pull_request',
 				payload: {
-					...base,
-					issue: undefined,
+					...common,
 					pull_request: { ...pull_request, draft: action === 'converted_to_draft' },
 					action,
 					before: 'before',
@@ -172,8 +192,7 @@ it.effect('signed complete direct trigger matrix; all lifecycle notifications su
 			{
 				event: 'pull_request',
 				payload: {
-					...base,
-					issue: undefined,
+					...common,
 					action: 'closed',
 					pull_request: { ...pull_request, merged: true },
 				},
@@ -182,36 +201,33 @@ it.effect('signed complete direct trigger matrix; all lifecycle notifications su
 			{
 				event: 'pull_request',
 				payload: {
-					...base,
-					issue: undefined,
+					...common,
 					action: 'review_requested',
 					pull_request,
 					requested_team: { id: 71, name: 'Maintainers', slug: 'maintainers' },
 				},
 				pr: true,
 			},
-			...['approved', 'changes_requested', 'commented'].map((state) => ({
+			...(['approved', 'changes_requested', 'commented'] as const).map((state) => ({
 				event: 'pull_request_review',
-				payload: { ...base, issue: undefined, pull_request, action: 'submitted', review: { ...review, state } },
+				payload: { ...common, pull_request, action: 'submitted', review: { ...review, state } },
 				pr: true,
 			})),
-			...['edited', 'dismissed'].map((action) => ({
+			...(
+				[
+					['edited', 'commented'],
+					['dismissed', 'dismissed'],
+				] as const
+			).map(([action, state]) => ({
 				event: 'pull_request_review',
-				payload: {
-					...base,
-					issue: undefined,
-					pull_request,
-					action,
-					review: { ...review, state: action === 'dismissed' ? 'dismissed' : 'commented' },
-				},
+				payload: { ...common, pull_request, action, review: { ...review, state } },
 				pr: true,
 			})),
 			...['created', 'edited', 'deleted'].flatMap((action) =>
 				[false, true].map((reply) => ({
 					event: 'pull_request_review_comment',
 					payload: {
-						...base,
-						issue: undefined,
+						...common,
 						pull_request,
 						action,
 						comment: reply ? { ...comment, id: 62, in_reply_to_id: 60 } : comment,
@@ -222,8 +238,7 @@ it.effect('signed complete direct trigger matrix; all lifecycle notifications su
 			...['resolved', 'unresolved'].map((action) => ({
 				event: 'pull_request_review_thread',
 				payload: {
-					...base,
-					issue: undefined,
+					...common,
 					pull_request,
 					action,
 					thread: { node_id: 'PRRT_native', comments: [comment, { ...comment, id: 62, in_reply_to_id: 60 }] },
@@ -234,8 +249,7 @@ it.effect('signed complete direct trigger matrix; all lifecycle notifications su
 		let id = 0
 		for (const fixture of matrix)
 			assert.equal(
-				(yield* test.send(signedRequest(fixture.event, JSON.stringify(fixture.payload), `matrix-${id++}`)))
-					.status,
+				(yield* test.send(yield* webhookRequest(fixture.event, fixture.payload, `matrix-${id++}`))).status,
 				200,
 				`${fixture.event}:${fixture.payload.action}`,
 			)
@@ -277,14 +291,13 @@ it.effect('signed native PR activity accepts null and minimal authors without we
 			]) {
 				assert.equal(
 					(yield* test.send(
-						signedRequest(
+						yield* webhookRequest(
 							fixture.event,
-							JSON.stringify({
-								...base,
-								issue: undefined,
+							{
+								...common,
 								...fixture,
 								pull_request: parent,
-							}),
+							},
 							`minimal-author-${id++}`,
 						),
 					)).status,
@@ -320,14 +333,13 @@ it.effect('signed review requests accept minimal reviewer and team targets throu
 			]) {
 				assert.equal(
 					(yield* test.send(
-						signedRequest(
+						yield* webhookRequest(
 							'pull_request',
-							JSON.stringify({
-								...base,
-								issue: undefined,
+							{
+								...common,
 								pull_request: { ...pull_request, user: author },
 								...target,
-							}),
+							},
 							`minimal-target-${id++}`,
 						),
 					)).status,
@@ -371,15 +383,14 @@ it.effect('nullable and minimal PR authors preserve mention and own-content supp
 		]) {
 			assert.equal(
 				(yield* test.send(
-					signedRequest(
+					yield* webhookRequest(
 						'pull_request',
-						JSON.stringify({
-							...base,
-							issue: undefined,
+						{
+							...common,
 							action: 'opened',
 							sender: fixture.sender,
 							pull_request: { ...pull_request, user: fixture.author, body: '@channels help' },
-						}),
+						},
 						`author-suppression-${id++}`,
 					),
 				)).status,
@@ -396,18 +407,12 @@ it.effect('creation independent of mention; per-consumer precedence, unsubscribe
 	Effect.gen(function* () {
 		const test = yield* setup
 		const send = (id: string, body: string, action = 'created') =>
-			test.send(
-				signedRequest(
-					'issue_comment',
-					JSON.stringify({
-						...base,
-						action,
-						comment: { id: 61, body, user, html_url: 'https://github.test/comment/61' },
-					}),
-					id,
-				),
-			)
-		assert.equal((yield* test.send(signedRequest('issues', JSON.stringify(base), 'created'))).status, 200)
+			webhookRequest(
+				'issue_comment',
+				{ ...base, action, comment: { id: 61, body, user, html_url: 'https://github.test/comment/61' } },
+				id,
+			).pipe(Effect.flatMap(test.send))
+		assert.equal((yield* test.send(yield* webhookRequest('issues', base, 'created'))).status, 200)
 		yield* test.drain(false)
 		assert.equal(yield* Queue.take(test.seen), 'creation')
 		assert.equal(yield* test.subscriptions.isSubscribed(subscription), false)
@@ -448,7 +453,7 @@ it.effect('partial fanout is frozen before admission and survives unsubscribe an
 		const keyForHandler = (id: string) =>
 			mailboxKey({
 				namespace: subscription.namespace,
-				handlerId: JSON.stringify([id, 'subscribed']),
+				handlerId: `["${id}","subscribed"]`,
 				provider: 'github',
 				installation: String(event.resource.repository.installationId),
 				resourceKey: issueResourceKey(event.resource),
@@ -495,7 +500,8 @@ it.effect('partial fanout is frozen before admission and survives unsubscribe an
 			),
 		)
 		yield* subscriptions.subscribe(subscription)
-		const request = () => send(signedRequest('issues', JSON.stringify({ ...base, action: 'closed' }), 'partial'))
+		const request = () =>
+			webhookRequest('issues', { ...base, action: 'closed' }, 'partial').pipe(Effect.flatMap(send))
 		assert.equal((yield* request()).status, 503)
 		assert.strictEqual(
 			(yield* store.loadMailbox({ key: keyForHandler('one') }))?.state.pending[0]?.eventId,
@@ -527,7 +533,7 @@ it.effect('signed mentions in every content family, edits, own actors and native
 			resource: { ...event.resource, kind: 'github.pull-request' },
 		})
 		const bot = { ...user, id: 99, login: 'channels[bot]', type: 'Bot' }
-		const cases = [
+		const cases: ReadonlyArray<WebhookFixture & { readonly expected: ReadonlyArray<string> }> = [
 			{
 				event: 'issues',
 				payload: { ...base, issue: { ...event.issue, body: '@channels help' } },
@@ -535,7 +541,7 @@ it.effect('signed mentions in every content family, edits, own actors and native
 			},
 			{
 				event: 'pull_request',
-				payload: { ...base, issue: undefined, pull_request: { ...pull_request, body: '@channels help' } },
+				payload: { ...common, pull_request: { ...pull_request, body: '@channels help' } },
 				expected: ['creation', 'mention'],
 			},
 			{
@@ -546,8 +552,7 @@ it.effect('signed mentions in every content family, edits, own actors and native
 			{
 				event: 'pull_request_review',
 				payload: {
-					...base,
-					issue: undefined,
+					...common,
 					pull_request,
 					action: 'submitted',
 					review: { ...review, body: '@channels help' },
@@ -557,8 +562,7 @@ it.effect('signed mentions in every content family, edits, own actors and native
 			{
 				event: 'pull_request_review_comment',
 				payload: {
-					...base,
-					issue: undefined,
+					...common,
 					pull_request,
 					action: 'created',
 					comment: { ...comment, id: 62, in_reply_to_id: 60, body: '@channels help' },
@@ -569,8 +573,7 @@ it.effect('signed mentions in every content family, edits, own actors and native
 				[true, false].map((fresh) => ({
 					event: family,
 					payload: {
-						...base,
-						issue: undefined,
+						...common,
 						pull_request,
 						action: 'edited',
 						review: { ...review, body: '@channels help' },
@@ -609,9 +612,7 @@ it.effect('signed mentions in every content family, edits, own actors and native
 			{
 				event: 'pull_request_review_thread',
 				payload: {
-					...base,
-					issue: undefined,
-					sender: undefined,
+					...webhookLocation(event),
 					pull_request,
 					action: 'resolved',
 					thread: { node_id: 'PRRT_native', comments: [comment] },
@@ -622,8 +623,7 @@ it.effect('signed mentions in every content family, edits, own actors and native
 		let id = 0
 		for (const fixture of cases) {
 			assert.equal(
-				(yield* test.send(signedRequest(fixture.event, JSON.stringify(fixture.payload), `content-${id++}`)))
-					.status,
+				(yield* test.send(yield* webhookRequest(fixture.event, fixture.payload, `content-${id++}`))).status,
 				200,
 			)
 			yield* test.drain(fixture.event.startsWith('pull_request'))
@@ -631,25 +631,26 @@ it.effect('signed mentions in every content family, edits, own actors and native
 			assert.equal(yield* Queue.size(test.seen), expected.length, fixture.event)
 			for (const name of expected) assert.equal(yield* Queue.take(test.seen), name)
 		}
-		const invalid = [
-			{ event: 'issues', payload: { ...base, sender: undefined } },
+		const invalid: ReadonlyArray<WebhookFixture> = [
+			{
+				event: 'issues',
+				payload: { ...webhookLocation(event), issue: event.issue },
+			},
 			{
 				event: 'pull_request',
 				payload: {
-					...base,
-					issue: undefined,
+					...common,
 					pull_request,
 					action: 'synchronize',
 					before: 'before',
 					after: 'wrong-head',
 				},
 			},
-			{ event: 'pull_request', payload: { ...base, issue: undefined, pull_request, number: 2 } },
+			{ event: 'pull_request', payload: { ...common, pull_request, number: 2 } },
 			{
 				event: 'pull_request_review',
 				payload: {
-					...base,
-					issue: undefined,
+					...common,
 					pull_request,
 					action: 'submitted',
 					review: { ...review, state: 'pending' },
@@ -658,30 +659,29 @@ it.effect('signed mentions in every content family, edits, own actors and native
 			{
 				event: 'pull_request_review_comment',
 				payload: {
-					...base,
-					issue: undefined,
+					...common,
 					pull_request,
 					action: 'created',
 					comment: { ...comment, pull_request_url: 'https://api.github.test/repos/other/repo/pulls/1' },
 				},
 			},
-			{
-				event: 'pull_request_review_thread',
-				payload: {
-					...base,
-					issue: undefined,
-					pull_request,
-					action: 'resolved',
-					thread: { id: 50, comments: [comment] },
-				},
-			},
 		]
 		for (const fixture of invalid)
 			assert.equal(
-				(yield* test.send(signedRequest(fixture.event, JSON.stringify(fixture.payload), `invalid-${id++}`)))
-					.status,
+				(yield* test.send(yield* webhookRequest(fixture.event, fixture.payload, `invalid-${id++}`))).status,
 				400,
 			)
+		const threadWithoutNodeId = yield* Schema.encodeEffect(ThreadWithoutNodeIdBody)({
+			...common,
+			pull_request,
+			action: 'resolved',
+			thread: { id: 50, comments: [comment] },
+		})
+		assert.equal(
+			(yield* test.send(signedRequest('pull_request_review_thread', threadWithoutNodeId, `invalid-${id++}`)))
+				.status,
+			400,
+		)
 		for (const family of ['check_run', 'check_suite', 'workflow_run', 'workflow_job', 'merge_group', 'push'])
 			assert.equal((yield* test.send(signedRequest(family, '{}', `excluded-${id++}`))).status, 200)
 		yield* test.drain(false)
@@ -784,13 +784,11 @@ it.effect('a first admitted mention may subscribe without adding new consumers d
 			),
 		)
 		const request = () =>
-			send(
-				signedRequest(
-					'issue_comment',
-					JSON.stringify({ ...base, action: 'created', comment: { ...comment, body: '@channels help' } }),
-					'partial-mention',
-				),
-			)
+			webhookRequest(
+				'issue_comment',
+				{ ...base, action: 'created', comment: { ...comment, body: '@channels help' } },
+				'partial-mention',
+			).pipe(Effect.flatMap(send))
 		assert.equal((yield* request()).status, 503)
 		yield* ingress.processActivity({ event }).pipe(Effect.provideService(MailboxStore, faultStore))
 		assert.equal(yield* Queue.take(seen), 'one')
@@ -838,10 +836,7 @@ it.effect('frozen handler retry survives unsubscribe and retains its native even
 			),
 		)
 		yield* subscriptions.subscribe(subscription)
-		assert.equal(
-			(yield* send(signedRequest('issues', JSON.stringify({ ...base, action: 'closed' }), 'retry'))).status,
-			200,
-		)
+		assert.equal((yield* send(yield* webhookRequest('issues', { ...base, action: 'closed' }, 'retry'))).status, 200)
 		assert.equal(
 			(yield* Context.get(storage, MailboxReadiness).scanReady({ prefix: '', now: 0, limit: 100 })).length,
 			1,

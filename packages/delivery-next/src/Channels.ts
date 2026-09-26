@@ -14,8 +14,8 @@ import { MailboxDelivery } from './MailboxDelivery'
 import { QueueDeliveryMode } from './MailboxPolicy'
 import type { DeliveryMode } from './MailboxPolicy'
 import { MailboxProcessingLive, ProviderEventDispatcherLive } from './MailboxProcessing'
-import type { MailboxSubscriptions } from './MailboxSubscriptions'
 import type { MailboxProcessingOptions } from './MailboxProcessing'
+import type { MailboxSubscriptions } from './MailboxSubscriptions'
 import { webhookRoutes } from './ProviderWebhooks'
 import type { WebhookRoutesOptions } from './ProviderWebhooks'
 
@@ -153,9 +153,10 @@ export const make = <
 					return Context.get(routerContext, HttpRouter.HttpRouter)
 				}).pipe(Effect.onError(() => Scope.close(scope, Exit.void)))
 				const handle = HttpEffect.toWebHandler(router.asHttpEffect())
+				const context = yield* Effect.context<never>()
 				return {
 					handle: (request: Request) => handle(request),
-					stop: () => Effect.runPromise(Scope.close(scope, Exit.void)),
+					stop: () => Effect.runPromiseWith(context)(Scope.close(scope, Exit.void)),
 				}
 			}),
 		)

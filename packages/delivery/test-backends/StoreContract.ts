@@ -117,8 +117,9 @@ export const storageContract = Effect.gen(function* () {
 	)
 	assert.deepStrictEqual(yield* readiness.scanReady({ prefix: outputKey, now: 25, limit: 1 }), [outputKey])
 	assert.deepStrictEqual((yield* store.loadMailbox({ key: outputKey }))?.state, acceptedOutput)
-	const claims = yield* Effect.all(
-		[1, 2].map((owner) =>
+	const claims = yield* Effect.forEach(
+		[1, 2],
+		(owner) =>
 			store.commitMailbox({
 				key: outputKey,
 				expectedRevision: 0,
@@ -139,7 +140,6 @@ export const storageContract = Effect.gen(function* () {
 					readyAt: 100,
 				},
 			}),
-		),
 		{ concurrency: 2 },
 	)
 	assert.deepStrictEqual([...claims].sort(), ['committed', 'conflict'])

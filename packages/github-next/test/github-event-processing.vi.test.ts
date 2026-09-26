@@ -11,7 +11,6 @@ import { Cause, Effect, Exit, Layer } from 'effect'
 import { vi } from 'vite-plus/test'
 
 import { GitHubApi } from '../src/GitHubApi'
-import type { GitHubIssueCreated, GitHubMentioned, GitHubSubscribedPrEvents } from '../src/GitHubCallbackEvents'
 import { GitHubCallbacks, type GitHubCallbackHandlers } from '../src/GitHubCallbacks'
 import { GitHubBotConfiguration, makeGitHubEventProcessor } from '../src/GitHubEventProcessor'
 import { GitHubId } from '../src/GitHubIdentity'
@@ -22,6 +21,10 @@ import {
 	pullRequestIssueCommentPayload,
 	pullRequestPayload,
 } from './fixtures'
+
+type Handler<K extends keyof GitHubCallbackHandlers<never, never>> = NonNullable<
+	GitHubCallbackHandlers<never, never>[K]
+>
 
 const namespace = 'github-processing-test'
 const bot = GitHubBotConfiguration.make({ mentionNames: ['agent'], botUserId: GitHubId.make(999) })
@@ -77,7 +80,7 @@ const process = <E, R>(
 describe('GitHub event batch processing', () => {
 	it.effect('routes an opened issue to onIssueCreated', ({ expect }) =>
 		Effect.gen(function* () {
-			const onIssueCreated = vi.fn((_event: GitHubIssueCreated) => Effect.void)
+			const onIssueCreated = vi.fn<Handler<'onIssueCreated'>>(() => Effect.void)
 			expect(yield* process({ onIssueCreated }, [admission('issues', issuePayload('opened'), 'opened')])).toEqual(
 				ProviderEventHandled.make({}),
 			)
@@ -88,8 +91,8 @@ describe('GitHub event batch processing', () => {
 
 	it.effect('lets a later mention beat opened and includes opened as a trailing event', ({ expect }) =>
 		Effect.gen(function* () {
-			const onIssueCreated = vi.fn(() => Effect.void)
-			const onMentioned = vi.fn((_event: GitHubMentioned) => Effect.void)
+			const onIssueCreated = vi.fn<Handler<'onIssueCreated'>>(() => Effect.void)
+			const onMentioned = vi.fn<Handler<'onMentioned'>>(() => Effect.void)
 			const mention = issueCommentPayload()
 			expect(
 				yield* process({ onIssueCreated, onMentioned }, [
@@ -106,7 +109,7 @@ describe('GitHub event batch processing', () => {
 
 	it.effect('delivers subscribed pull request events once and in mailbox order', ({ expect }) =>
 		Effect.gen(function* () {
-			const onSubscribedPrEvents = vi.fn((_event: GitHubSubscribedPrEvents) => Effect.void)
+			const onSubscribedPrEvents = vi.fn<Handler<'onSubscribedPrEvents'>>(() => Effect.void)
 			expect(
 				yield* process(
 					{ onSubscribedPrEvents },
@@ -129,7 +132,7 @@ describe('GitHub event batch processing', () => {
 
 	it.effect('normalizes completed checks into subscribed pull request events', ({ expect }) =>
 		Effect.gen(function* () {
-			const onSubscribedPrEvents = vi.fn((_event: GitHubSubscribedPrEvents) => Effect.void)
+			const onSubscribedPrEvents = vi.fn<Handler<'onSubscribedPrEvents'>>(() => Effect.void)
 			expect(
 				yield* process(
 					{ onSubscribedPrEvents },
@@ -151,7 +154,7 @@ describe('GitHub event batch processing', () => {
 
 	it.effect('normalizes a fanned-out check for the admission mailbox association', ({ expect }) =>
 		Effect.gen(function* () {
-			const onSubscribedPrEvents = vi.fn((_event: GitHubSubscribedPrEvents) => Effect.void)
+			const onSubscribedPrEvents = vi.fn<Handler<'onSubscribedPrEvents'>>(() => Effect.void)
 			yield* process(
 				{ onSubscribedPrEvents },
 				[pullRequestAdmission('check_run', checkRunPayload([42, 57]), 'check:pull-request:200:57', 57)],
@@ -165,7 +168,7 @@ describe('GitHub event batch processing', () => {
 
 	it.effect('does not suppress completed checks sent by the configured bot identity', ({ expect }) =>
 		Effect.gen(function* () {
-			const onSubscribedPrEvents = vi.fn((_event: GitHubSubscribedPrEvents) => Effect.void)
+			const onSubscribedPrEvents = vi.fn<Handler<'onSubscribedPrEvents'>>(() => Effect.void)
 			const payload = checkRunPayload([42])
 			payload.sender.id = 999
 			expect(
@@ -181,7 +184,7 @@ describe('GitHub event batch processing', () => {
 
 	it.effect('suppresses bot-authored events before routing', ({ expect }) =>
 		Effect.gen(function* () {
-			const onMentioned = vi.fn(() => Effect.void)
+			const onMentioned = vi.fn<Handler<'onMentioned'>>(() => Effect.void)
 			const payload = issueCommentPayload()
 			payload.sender.id = 999
 			payload.comment.user.id = 999

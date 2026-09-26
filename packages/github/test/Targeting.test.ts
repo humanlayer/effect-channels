@@ -4,7 +4,7 @@ import { Context, Effect, Layer, Queue, Redacted } from 'effect'
 
 import { GitHubCrypto, GitHubIngress, GitHubRoutes, type GitHubActivityEvent, issueResourceKey } from '../src/index'
 import { event, policy, routeCredentials, user } from './fixtures'
-import { host, payloadFor, secret, signedRequest } from './support'
+import { host, payloadFor, secret, webhookBase, webhookRequest, type WebhookFixture } from './support'
 
 it.live(
 	'targeted issue/PR bodies and discussion comments only; edits, boundaries, assignments and own-loop safety',
@@ -32,6 +32,7 @@ it.live(
 			)
 			const ingress = Context.get(environment, GitHubIngress)
 			const base = payloadFor(event)
+			const common = webhookBase(event)
 			const bot = { ...user, id: 99, login: 'channels[bot]', type: 'Bot' }
 			const issue = { ...event.issue, body: '@channels please help' }
 			const pull_request = {
@@ -42,7 +43,7 @@ it.live(
 				base: { ref: 'main', sha: 'base' },
 			}
 			const comment = { id: 60, body: '@channels[bot] help', html_url: 'https://test/comment', user }
-			const fixtures = [
+			const fixtures: ReadonlyArray<WebhookFixture & { readonly accepted: boolean; readonly status?: number }> = [
 				{ event: 'issues', payload: { ...base, issue }, accepted: true },
 				{
 					event: 'issues',
@@ -59,7 +60,7 @@ it.live(
 				},
 				{
 					event: 'issues',
-					payload: { ...base, issue: { ...issue, body: null, assignees: [bot] } },
+					payload: { ...base, issue: { ...issue, body: null }, assignee: bot },
 					accepted: false,
 				},
 				{ event: 'issues', payload: { ...base, action: 'assigned', issue, assignee: bot }, accepted: false },
@@ -109,18 +110,17 @@ it.live(
 					accepted: true,
 				},
 				{ event: 'issue_comment', payload: { ...base, action: 'deleted', issue, comment }, accepted: false },
-				{ event: 'pull_request', payload: { ...base, issue: undefined, pull_request }, accepted: true },
+				{ event: 'pull_request', payload: { ...common, pull_request }, accepted: true },
 				{
 					event: 'pull_request',
-					payload: { ...base, issue: undefined, pull_request: { ...pull_request, body: 'ordinary PR' } },
+					payload: { ...common, pull_request: { ...pull_request, body: 'ordinary PR' } },
 					accepted: false,
 				},
 				{
 					event: 'pull_request',
 					payload: {
-						...base,
+						...common,
 						action: 'edited',
-						issue: undefined,
 						pull_request,
 						changes: { body: { from: '' } },
 					},
@@ -193,9 +193,8 @@ it.live(
 				...['edited', 'reopened', 'closed', 'assigned', 'synchronize'].map((action) => ({
 					event: 'pull_request',
 					payload: {
-						...base,
+						...common,
 						action,
-						issue: undefined,
 						pull_request,
 						changes: { body: { from: '@channels existing' } },
 						before: 'before',
@@ -207,9 +206,9 @@ it.live(
 			let id = 0
 			for (const fixture of fixtures) {
 				const deliveryId = `target-${id++}`
-				const request = signedRequest(fixture.event, JSON.stringify(fixture.payload), deliveryId)
+				const request = yield* webhookRequest(fixture.event, fixture.payload, deliveryId)
 				const duplicate = request.clone()
-				assert.equal((yield* send(request)).status, ('status' in fixture ? fixture.status : undefined) ?? 200)
+				assert.equal((yield* send(request)).status, fixture.status ?? 200)
 				yield* ingress.processActivity({ event }).pipe(Effect.provide(storage))
 				const prEvent: GitHubActivityEvent = {
 					event: 'pull_request',
@@ -241,7 +240,7 @@ it.live(
 						assert.equal(received.resource.kind, 'github.pull-request')
 					}
 				}
-				assert.equal((yield* send(duplicate)).status, ('status' in fixture ? fixture.status : undefined) ?? 200)
+				assert.equal((yield* send(duplicate)).status, fixture.status ?? 200)
 				yield* ingress.processActivity({ event }).pipe(Effect.provide(storage))
 				yield* ingress.processActivity({ event: prEvent }).pipe(Effect.provide(storage))
 				assert.equal(yield* Queue.size(seen), 0)

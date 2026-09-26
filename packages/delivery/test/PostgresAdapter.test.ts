@@ -31,7 +31,12 @@ it.effect('Postgres fake command contract: lock precedes migrator creation; cond
 			)
 			assert.isDefined(insert)
 			assert.ok(insert.sql.includes('ON CONFLICT (key) DO NOTHING RETURNING key'))
-			assert.deepStrictEqual(insert.params, ['key', 0, encodeState({ ...emptyMailbox(), readyAt: 42 }), 42])
+			assert.deepStrictEqual(insert.params, [
+				'key',
+				0,
+				yield* encodeState({ ...emptyMailbox(), readyAt: 42 }),
+				42,
+			])
 			yield* Queue.offer(fake.replies, Effect.succeed([]))
 			assert.strictEqual(
 				yield* store.commitMailbox({ key: 'key', expectedRevision: 0, nextState: emptyMailbox() }),
@@ -42,7 +47,7 @@ it.effect('Postgres fake command contract: lock precedes migrator creation; cond
 			)
 			assert.isDefined(update)
 			assert.ok(update.sql.includes('WHERE key = $4 AND revision = $5 RETURNING key'))
-			assert.deepStrictEqual(update.params, [1, encodeState(emptyMailbox()), null, 'key', 0])
+			assert.deepStrictEqual(update.params, [1, yield* encodeState(emptyMailbox()), null, 'key', 0])
 		}).pipe(Effect.provide(layer.pipe(Layer.provide(fake.layer))))
 	}),
 )
@@ -111,13 +116,13 @@ it.effect('Postgres SQL seam decodes complete snapshots and rejects corruption w
 			for (const state of mailboxCodecCases) {
 				yield* Queue.offer(
 					fake.replies,
-					Effect.succeed([{ revision: 7, state_json: encodeState(state), ready_at: state.readyAt }]),
+					Effect.succeed([{ revision: 7, state_json: yield* encodeState(state), ready_at: state.readyAt }]),
 				)
 				assert.deepStrictEqual(yield* store.loadMailbox({ key: 'key' }), { revision: 7, state })
 			}
 			for (const state of [
 				'private-payload-sentinel',
-				encodeState(emptyMailbox()).replace('"version":5', '"version":99'),
+				(yield* encodeState(emptyMailbox())).replace('"version":5', '"version":99'),
 			]) {
 				yield* Queue.offer(fake.replies, Effect.succeed([{ revision: 7, state_json: state, ready_at: null }]))
 				assert.deepStrictEqual(
@@ -127,7 +132,7 @@ it.effect('Postgres SQL seam decodes complete snapshots and rejects corruption w
 			}
 			yield* Queue.offer(
 				fake.replies,
-				Effect.succeed([{ revision: 7, state_json: encodeState(emptyMailbox()), ready_at: 12 }]),
+				Effect.succeed([{ revision: 7, state_json: yield* encodeState(emptyMailbox()), ready_at: 12 }]),
 			)
 			assert.deepStrictEqual(
 				yield* store.loadMailbox({ key: 'key' }).pipe(Effect.flip),

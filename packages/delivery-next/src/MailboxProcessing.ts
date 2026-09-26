@@ -430,38 +430,37 @@ const claimedOrSkipped = (claimed: Option.Option<ClaimedMailboxBatch>) =>
  * Look at one ready mailbox and either take a batch from it or put it off until later.
  * A frozen batch is always taken as it is. For waiting events the delivery mode decides.
  */
-export const claimOrDeferReadyMailbox = (input: {
+export const claimOrDeferReadyMailbox = Effect.fn('delivery.claim_or_defer_ready_mailbox')(function* (input: {
 	readonly mailbox: ReadyMailbox
 	readonly leaseMs: number
 	readonly deliveryModeFor: (provider: string) => DeliveryMode
-}) =>
-	Effect.gen(function* () {
-		const mailboxProcessingBackend = yield* MailboxProcessingBackend
-		const { leaseMs } = input
-		return yield* Match.value(input.mailbox).pipe(
-			Match.tagsExhaustive({
-				RecoverableMailbox: ({ mailboxKey }) =>
-					mailboxProcessingBackend
-						.claimMailbox(ClaimFrozenBatch.make({ mailboxKey, leaseMs }))
-						.pipe(Effect.map(claimedOrSkipped)),
-				WaitingMailbox: ({ mailboxKey, provider, waiting }) =>
-					Effect.gen(function* () {
-						const now = Timestamp.make(yield* Clock.currentTimeMillis)
-						const decision = decideMailboxClaim({ waiting, mode: input.deliveryModeFor(provider), now })
-						return yield* MailboxClaimDecision.$match(decision, {
-							ClaimUpTo: ({ upToSequence }) =>
-								mailboxProcessingBackend
-									.claimMailbox(ClaimWaitingEvents.make({ mailboxKey, upToSequence, leaseMs }))
-									.pipe(Effect.map(claimedOrSkipped)),
-							WaitUntil: ({ until }) =>
-								mailboxProcessingBackend
-									.deferMailbox({ mailboxKey, until, lastSequenceSeen: waiting.lastSequence })
-									.pipe(Effect.as(ReadyMailboxOutcome.Deferred())),
-						})
-					}),
-			}),
-		)
-	}).pipe(Effect.withSpan('delivery.claim_or_defer_ready_mailbox'))
+}) {
+	const mailboxProcessingBackend = yield* MailboxProcessingBackend
+	const { leaseMs } = input
+	return yield* Match.value(input.mailbox).pipe(
+		Match.tagsExhaustive({
+			RecoverableMailbox: ({ mailboxKey }) =>
+				mailboxProcessingBackend
+					.claimMailbox(ClaimFrozenBatch.make({ mailboxKey, leaseMs }))
+					.pipe(Effect.map(claimedOrSkipped)),
+			WaitingMailbox: ({ mailboxKey, provider, waiting }) =>
+				Effect.gen(function* () {
+					const now = Timestamp.make(yield* Clock.currentTimeMillis)
+					const decision = decideMailboxClaim({ waiting, mode: input.deliveryModeFor(provider), now })
+					return yield* MailboxClaimDecision.$match(decision, {
+						ClaimUpTo: ({ upToSequence }) =>
+							mailboxProcessingBackend
+								.claimMailbox(ClaimWaitingEvents.make({ mailboxKey, upToSequence, leaseMs }))
+								.pipe(Effect.map(claimedOrSkipped)),
+						WaitUntil: ({ until }) =>
+							mailboxProcessingBackend
+								.deferMailbox({ mailboxKey, until, lastSequenceSeen: waiting.lastSequence })
+								.pipe(Effect.as(ReadyMailboxOutcome.Deferred())),
+					})
+				}),
+		}),
+	)
+})
 
 /** Construct the storage-agnostic mailbox processing service. */
 export const makeMailboxProcessing = (options: MailboxProcessingOptions) =>

@@ -1,5 +1,5 @@
 import { assert, it } from '@effect/vitest'
-import { Clock, Deferred, Effect, Fiber, Layer, Logger, Match, Predicate, Redacted, Schema } from 'effect'
+import { DateTime, Deferred, Effect, Fiber, Layer, Logger, Match, Predicate, Redacted, Schema } from 'effect'
 import {
 	FetchHttpClient,
 	HttpClient,
@@ -34,6 +34,7 @@ const targets: ReadonlyArray<GitHubReactionTarget> = [
 ]
 const reaction = { id: 70, node_id: 'REACTION_70', user, content: '+1', created_at: '2026-01-01T00:00:00Z' } as const
 const basePath = '/repos/alice/project'
+const ReactionRequestBody = Schema.fromJsonString(Schema.Struct({ content: GitHubReactionContent }))
 const reactionPath = (target: GitHubReactionTarget) =>
 	target.kind === 'github.issue-comment'
 		? `${basePath}/issues/comments/${target.id}/reactions`
@@ -42,7 +43,9 @@ const reactionPath = (target: GitHubReactionTarget) =>
 interface HarnessOptions {
 	readonly target: GitHubReactionTarget
 	readonly status?: number
+	/** Raw response text, for bodies that are not JSON. */
 	readonly body?: string
+	readonly json?: Schema.Json
 	readonly transportFailure?: boolean
 	readonly repositoryId?: number
 	readonly issueNumber?: number
@@ -102,19 +105,21 @@ const harness = (options: HarnessOptions) => {
 						Match.when('POST', () => 201),
 						Match.orElse(() => 200),
 					)
-				if (status >= 200 && status < 300 && options.body === undefined) {
+				if (status >= 200 && status < 300 && options.body === undefined && options.json === undefined) {
 					if (request.method === 'POST') visible.set(reaction.id, reaction)
 					if (request.method === 'DELETE') visible.delete(reaction.id)
 				}
+				const init = { status, headers: options.headers }
 				return HttpClientResponse.fromWeb(
 					request,
-					new Response(
-						status === 204
-							? null
-							: (options.body ??
-									JSON.stringify(request.method === 'GET' ? [...visible.values()] : reaction)),
-						{ status, headers: options.headers },
-					),
+					status === 204
+						? new Response(null, init)
+						: options.body !== undefined
+							? new Response(options.body, init)
+							: Response.json(
+									options.json ?? (request.method === 'GET' ? [...visible.values()] : reaction),
+									init,
+								),
 				)
 			}),
 		),
@@ -138,8 +143,8 @@ const harness = (options: HarnessOptions) => {
 for (const content of GitHubEmoji.literals) {
 	it.effect(`encodes named GitHub emoji ${content} in reaction requests and filters`, () => {
 		const data = { ...reaction, content }
-		const add = harness({ target: issue, body: JSON.stringify(data) })
-		const list = harness({ target: issue, body: JSON.stringify([data]) })
+		const add = harness({ target: issue, json: data })
+		const list = harness({ target: issue, json: [data] })
 		return Effect.gen(function* () {
 			const added = yield* Effect.flatMap(GitHub, (github) =>
 				github.addReaction({ target: issue, content }),
@@ -152,7 +157,12 @@ for (const content of GitHubEmoji.literals) {
 			const post = add.requests.find((request) => request.method === 'POST')
 			assert.ok(post)
 			assert.ok(Predicate.isTagged(post.body, 'Uint8Array'))
-			assert.strictEqual(new TextDecoder().decode(post.body.body), JSON.stringify({ content }))
+			assert.deepStrictEqual(
+				yield* Schema.decodeEffect(ReactionRequestBody, { onExcessProperty: 'error' })(
+					new TextDecoder().decode(post.body.body),
+				),
+				{ content },
+			)
 			assert.ok(
 				list.requests.some(
 					(request) =>
@@ -209,8 +219,8 @@ for (const target of targets) {
 it.effect(
 	'existing reaction 200 and deleted-user null are native success; bounded empty page is not an automatic traversal',
 	() => {
-		const h = harness({ target: issue, status: 200, body: JSON.stringify({ ...reaction, user: null }) })
-		const empty = harness({ target: issue, body: '[]', headers: { link: '<https://evil.test/next>; rel="next"' } })
+		const h = harness({ target: issue, status: 200, json: { ...reaction, user: null } })
+		const empty = harness({ target: issue, json: [], headers: { link: '<https://evil.test/next>; rel="next"' } })
 		return Effect.gen(function* () {
 			assert.equal(
 				(yield* Effect.flatMap(GitHub, (github) => github.addReaction({ target: issue, content: '+1' })).pipe(
@@ -233,6 +243,7 @@ interface FailureCase {
 	readonly status: number
 	readonly reason: GitHubError['reason']
 	readonly body?: string
+	readonly json?: Schema.Json
 	readonly headers?: Readonly<Record<string, string>>
 }
 const failures: ReadonlyArray<FailureCase> = [
@@ -245,12 +256,8 @@ const failures: ReadonlyArray<FailureCase> = [
 	{ status: 403, reason: 'unavailable', headers: { 'x-ratelimit-remaining': '0' } },
 	{ status: 500, reason: 'unavailable' },
 	{ status: 200, reason: 'response', body: 'not-json-never-log' },
-	{
-		status: 201,
-		reason: 'response',
-		body: JSON.stringify({ ...reaction, content: 'thumbsup', secret: 'never-log' }),
-	},
-	{ status: 201, reason: 'response', body: JSON.stringify({ ...reaction, content: 'heart' }) },
+	{ status: 201, reason: 'response', json: { ...reaction, content: 'thumbsup', secret: 'never-log' } },
+	{ status: 201, reason: 'response', json: { ...reaction, content: 'heart' } },
 	{ status: 202, reason: 'response' },
 	{ status: 204, reason: 'response' },
 ]
@@ -280,7 +287,7 @@ it.effect('transport, malformed list, overfull page and non-204 delete remain ty
 				target: issue,
 				transportFailure: operation === 'transport',
 				status: 200,
-				body: operation === 'overfull' ? JSON.stringify([reaction, reaction]) : '{}',
+				json: operation === 'overfull' ? [reaction, reaction] : {},
 			})
 			const error = yield* Effect.gen(function* () {
 				const github = yield* GitHub
@@ -464,7 +471,7 @@ it.effect(
 								request,
 								Response.json({
 									token,
-									expires_at: new Date((yield* Clock.currentTimeMillis) + 120_000).toISOString(),
+									expires_at: DateTime.formatIso(DateTime.add(yield* DateTime.now, { seconds: 120 })),
 								}),
 							)
 						}

@@ -2,7 +2,7 @@ import { emptyMailbox, MailboxReadiness, MailboxStore } from '@humanlayer/channe
 import * as DeliveryMemory from '@humanlayer/channels-delivery/memory'
 import { MarkdownContent, resolveSlackDelivery, Slack, SlackConnectionStore, SlackSubscriptions, SlackTeamId, ThreadId } from '@humanlayer/channels-slack'
 import * as SlackMemory from '@humanlayer/channels-slack/memory'
-import { Context, Effect, Layer, Redacted } from 'effect'
+import { Context, Effect, Layer, Redacted, Schema } from 'effect'
 import { GitHub, GitHubCredentials, GitHubCrypto, GitHubIssueRef, GitHubEmoji, GitHubReactionContent, resolveGitHubDelivery, type GitHubReaction, type GitHubReactionRef, type GitHubReactionTarget, type GitHubError, type AddReactionInput, type ListReactionsInput, type RemoveReactionInput } from '@humanlayer/channels-github'
 import { FetchHttpClient } from 'effect/unstable/http'
 import { GitHubSubscriptions } from '@humanlayer/channels-github'
@@ -124,6 +124,11 @@ export const githubSubscriptionRoundTrip = Effect.gen(function* () {
 	yield* subscriptions.unsubscribe(input)
 	return { subscribed, removed: !(yield* subscriptions.isSubscribed(input)) }
 }).pipe(Effect.provide(GitHubMemory.subscriptions()))
+
+export const githubEmojiRoundTrip = Effect.all({
+	decoded: Effect.forEach(GitHubEmoji.literals, (emoji) => Schema.decodeEffect(GitHubEmoji)(emoji)),
+	encoded: Effect.forEach(GitHubEmoji.literals, (emoji) => Schema.encodeEffect(GitHubEmoji)(emoji)),
+})
 
 const readyForHost = <A, E>(program: Effect.Effect<A, E>) => program
 const githubLayer = GitHub.layer.pipe(Layer.provide(GitHubCredentials.layer({ appId: 42, privateKey: Redacted.make('not-used-during-construction'), installationIds: [100], botUserId: 99, apiUrl: 'https://api.github.com' }).pipe(Layer.provide(GitHubCrypto.layerWebCrypto), Layer.provide(FetchHttpClient.layer))), Layer.provide(FetchHttpClient.layer))

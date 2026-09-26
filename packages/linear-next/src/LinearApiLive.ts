@@ -9,7 +9,7 @@ import {
 	narrowLinearProviderStreamErrors,
 } from './api/LinearApiErrors'
 import { projectLinearUploadedFile } from './api/LinearApiProjections'
-import { LinearHttpClient, LinearHttpClientLive } from './api/LinearHttpClient'
+import { LinearHttpClient, makeAuthenticatedLinearHttpClient } from './api/LinearHttpClient'
 import {
 	createAttachment,
 	createComment,
@@ -35,6 +35,7 @@ import { LinearApi, LinearApiError } from './LinearApi'
 import { LinearAuthenticationInput } from './LinearAuth'
 import * as LinearAuth from './LinearAuth'
 import {
+	LinearCredentialResolver,
 	LinearCredentialResolverClientCredentials,
 	LinearCredentialResolverDeveloperToken,
 } from './LinearCredentialResolver'
@@ -207,6 +208,13 @@ const apiService = (
 		},
 	})
 }
+
+const LinearHttpClientLive = Layer.effect(
+	LinearHttpClient,
+	Effect.gen(function* () {
+		return makeAuthenticatedLinearHttpClient(yield* HttpClient.HttpClient, yield* LinearCredentialResolver)
+	}),
+)
 
 const makeLinearApiServiceLive = (filePolicy: LinearFileTransferPolicy) =>
 	Layer.effect(

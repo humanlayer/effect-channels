@@ -16,7 +16,8 @@ import { GitHubCommentData, GitHubIssueData, GitHubUser } from './GitHubEvents'
 import { GitHubIngress } from './GitHubIngress'
 import { GitHubDiscussionRef, GitHubId } from './GitHubResource'
 
-const Payload = Schema.Struct({
+/** Subset of a GitHub webhook body that the webhook route decodes. */
+export const GitHubWebhookPayload = Schema.Struct({
 	action: Schema.String,
 	installation: Schema.Struct({ id: GitHubId }),
 	repository: Schema.Struct({
@@ -47,6 +48,7 @@ const Payload = Schema.Struct({
 		Schema.Struct({ body: Schema.optionalKey(Schema.Struct({ from: Schema.NullOr(Schema.String) })) }),
 	),
 })
+export interface GitHubWebhookPayload extends Schema.Schema.Type<typeof GitHubWebhookPayload> {}
 const optionsSchema = Schema.Struct({
 	signingSecret: Schema.Redacted(Schema.NonEmptyString),
 	maxBodyBytes: Schema.Int.check(Schema.isGreaterThan(0)),
@@ -82,7 +84,7 @@ const layer = (options: GitHubRoutesOptions, mountPath?: string) =>
 			const acceptActivity = Effect.fn('github.webhook.accept_activity')(function* (input: {
 				readonly event: string
 				readonly deliveryId: string
-				readonly payload: typeof Payload.Type
+				readonly payload: GitHubWebhookPayload
 				readonly issue: GitHubIssueData | GitHubPullRequestData
 			}) {
 				const { event, deliveryId, payload, issue } = input
@@ -186,7 +188,7 @@ const layer = (options: GitHubRoutesOptions, mountPath?: string) =>
 					try: () => new TextDecoder('utf-8', { fatal: true }).decode(bytes),
 					catch: () => GitHubWebhookError.make({ reason: 'decode' }),
 				})
-				const payload = yield* Schema.decodeEffect(Schema.fromJsonString(Payload))(text).pipe(
+				const payload = yield* Schema.decodeEffect(Schema.fromJsonString(GitHubWebhookPayload))(text).pipe(
 					Effect.mapError(() => GitHubWebhookError.make({ reason: 'decode' })),
 				)
 				if (!credentials.acceptsInstallation({ installationId: payload.installation.id }))

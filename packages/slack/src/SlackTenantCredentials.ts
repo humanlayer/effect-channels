@@ -97,7 +97,7 @@ export class SlackTenantCredentials extends Context.Service<
 		Effect.map(Config.redacted('SLACK_BOT_TOKEN'), (botToken) => {
 			const credentials = SlackTenantCredsSchema.make({ botToken })
 			return SlackTenantCredentials.of({
-				load: Effect.fn('slack.credentials.load')(() => Effect.succeed(Option.some(credentials))),
+				load: Effect.fn('slack.credentials.load')(() => Effect.succeedSome(credentials)),
 				save: Effect.fn('slack.credentials.save')((input) =>
 					Effect.fail(CredentialStoreError.make({ operation: 'save_not_supported', teamId: input.teamId })),
 				),

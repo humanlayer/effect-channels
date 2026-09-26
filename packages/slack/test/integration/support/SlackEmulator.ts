@@ -1,8 +1,10 @@
-import { createHmac } from 'node:crypto'
-import { createServer } from 'node:http'
-
-import { Context, Effect, Layer, Predicate, Schema } from 'effect'
+import { NodeCrypto, NodeSocketServer } from '@effect/platform-node'
+import { Clock, Context, Crypto, Effect, Layer, Match, Schema } from 'effect'
+import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http'
 import { createEmulator, type Emulator } from 'emulate'
+
+import { SlackEventCallback } from '../../../src/Schema'
+import { signSlackBody } from '../../support'
 
 const TeamResponse = Schema.Struct({ ok: Schema.Literal(true), team_id: Schema.String })
 const User = Schema.Struct({
@@ -19,7 +21,7 @@ const Conversation = Schema.Struct({
 	num_members: Schema.optionalKey(Schema.Finite),
 })
 const ConversationsResponse = Schema.Struct({ ok: Schema.Literal(true), channels: Schema.Array(Conversation) })
-export const PostedMessageResponse = Schema.Struct({
+const PostedMessageResponse = Schema.Struct({
 	ok: Schema.Literal(true),
 	channel: Schema.String,
 	ts: Schema.String,
@@ -29,17 +31,11 @@ export const PostedMessageResponse = Schema.Struct({
 		thread_ts: Schema.optionalKey(Schema.String),
 	}),
 })
-export const OpenConversationResponse = Schema.Struct({
+const OpenConversationResponse = Schema.Struct({
 	ok: Schema.Literal(true),
 	channel: Schema.Struct({ id: Schema.String }),
 })
-export const EphemeralMessageResponse = Schema.Struct({
-	ok: Schema.Literal(true),
-	channel: Schema.String,
-	message_ts: Schema.optionalKey(Schema.String),
-	ts: Schema.optionalKey(Schema.String),
-})
-export const HistoryResponse = Schema.Struct({
+const HistoryResponse = Schema.Struct({
 	ok: Schema.Literal(true),
 	messages: Schema.Array(
 		Schema.Struct({
@@ -67,7 +63,7 @@ export const HistoryResponse = Schema.Struct({
 })
 const OkResponse = Schema.Struct({ ok: Schema.Literal(true) })
 
-export const FileInfoResponse = Schema.Struct({
+const FileInfoResponse = Schema.Struct({
 	ok: Schema.Literal(true),
 	file: Schema.Struct({
 		id: Schema.String,
@@ -79,6 +75,56 @@ export const FileInfoResponse = Schema.Struct({
 	}),
 })
 
+const ReactionsResponse = Schema.Struct({
+	ok: Schema.Literal(true),
+	message: Schema.Struct({
+		reactions: Schema.optionalKey(
+			Schema.Array(Schema.Struct({ name: Schema.String, users: Schema.Array(Schema.String) })),
+		),
+	}),
+})
+
+const ChannelRequest = Schema.Struct({ channel: Schema.String })
+const ThreadRequest = Schema.Struct({ channel: Schema.String, ts: Schema.String })
+
+/** Request and response schemas for each Slack Web API method the emulator tests call directly. */
+const slackEmulatorMethods = {
+	'auth.test': { request: Schema.Struct({}), response: TeamResponse },
+	'users.list': { request: Schema.Struct({}), response: UsersResponse },
+	'conversations.list': { request: Schema.Struct({ types: Schema.String }), response: ConversationsResponse },
+	'conversations.join': { request: ChannelRequest, response: OkResponse },
+	'conversations.invite': {
+		request: Schema.Struct({ channel: Schema.String, users: Schema.String }),
+		response: OkResponse,
+	},
+	'conversations.open': { request: Schema.Struct({ users: Schema.String }), response: OpenConversationResponse },
+	'conversations.history': { request: ChannelRequest, response: HistoryResponse },
+	'conversations.replies': { request: ThreadRequest, response: HistoryResponse },
+	'chat.postMessage': {
+		request: Schema.Struct({
+			channel: Schema.String,
+			text: Schema.String,
+			thread_ts: Schema.optionalKey(Schema.String),
+		}),
+		response: PostedMessageResponse,
+	},
+	'files.info': { request: Schema.Struct({ file: Schema.String }), response: FileInfoResponse },
+	'reactions.get': {
+		request: Schema.Struct({ channel: Schema.String, timestamp: Schema.String }),
+		response: ReactionsResponse,
+	},
+}
+
+type SlackEmulatorMethods = typeof slackEmulatorMethods
+type SlackEmulatorMethod = keyof SlackEmulatorMethods
+type SlackEmulatorRequest<M extends SlackEmulatorMethod> = SlackEmulatorMethods[M]['request']['Type']
+type SlackEmulatorResponse<M extends SlackEmulatorMethod> = SlackEmulatorMethods[M]['response']['Type']
+
+export class SlackEmulatorError extends Schema.TaggedError<SlackEmulatorError>()('SlackEmulatorError', {
+	operation: Schema.String,
+	cause: Schema.optionalKey(Schema.Defect()),
+}) {}
+
 export const slackEmulatorBotToken = 'xoxb-channels-emulator'
 export const slackEmulatorAliceToken = 'xoxp-alice-emulator'
 export const slackEmulatorAdminToken = 'xoxp-admin-emulator'
@@ -89,80 +135,42 @@ export const slackEmulatorIntegrationUserId = 'U_INTEGRATION_BOT'
 export const slackEmulatorIntegrationBotId = 'B_INTEGRATION_BOT'
 export const slackEmulatorSigningSecret = 'channels-emulator-signing-secret'
 
-type SlackApiValue = string | number | boolean | ReadonlyArray<string>
-type SlackApiBody = Readonly<Record<string, SlackApiValue>>
+/** The host verifies signatures against its own runtime clock, so signing ignores any TestClock in scope. */
+const wallClock = Clock.Clock.defaultValue()
 
-export interface SignedSlackWebhookEvent {
-	readonly type: 'event_callback'
-	readonly team_id: string
-	readonly event_id: string
-	readonly event_time: number
-	readonly event:
-		| {
-				readonly type: 'app_mention' | 'message'
-				readonly channel: string
-				readonly ts: string
-				readonly text: string
-				readonly user: string
-				readonly thread_ts?: string
-				readonly bot_id?: string
-				readonly channel_type?: 'channel' | 'group' | 'im' | 'mpim'
-		  }
-		| {
-				readonly type: 'agent_session_stopped'
-				readonly channel: string
-				readonly thread_ts: string
-				readonly user: string
-				readonly event_ts: string
-				readonly streaming_message_ts: ReadonlyArray<string>
-		  }
-}
+const SlackEventCallbackJson = Schema.fromJsonString(Schema.toEncoded(SlackEventCallback))
 
-const availablePort = Effect.tryPromise({
-	try: () =>
-		new Promise<number>((resolve, reject) => {
-			const server = createServer()
-			server.once('error', reject)
-			server.listen(0, '127.0.0.1', () => {
-				server.unref()
-				const address = server.address()
-				if (address === null || !Predicate.hasProperty(address, 'port') || !Predicate.isNumber(address.port)) {
-					server.close(() => reject(new Error('Available-port probe did not bind a TCP address')))
-					return
-				}
-				const port = address.port
-				server.close((error) => (error === undefined ? resolve(port) : reject(error)))
-			})
-		}),
-	catch: (cause) => new Error('Could not allocate a port for the Slack emulator', { cause }),
-})
-
-const apiCall = <S extends Schema.Top>(
-	emulator: Emulator,
-	token: string,
-	method: string,
-	body: SlackApiBody,
-	schema: S,
-): Effect.Effect<S['Type'], Error, S['DecodingServices']> =>
-	Effect.tryPromise({
-		try: (signal) =>
-			fetch(`${emulator.url}/api/${method}`, {
-				method: 'POST',
-				signal,
-				headers: {
-					authorization: `Bearer ${token}`,
-					connection: 'close',
-					'content-type': 'application/json',
-				},
-				body: JSON.stringify(body),
-			}).then(async (response) => {
-				if (!response.ok) {
-					throw new Error(`Slack emulator ${method} returned HTTP ${response.status}`)
-				}
-				return response.json()
+const availablePort = Effect.scoped(
+	Effect.gen(function* () {
+		const server = yield* NodeSocketServer.make({ port: 0, host: '127.0.0.1' }).pipe(
+			Effect.mapError((cause) => SlackEmulatorError.make({ operation: 'allocate_port', cause })),
+		)
+		return yield* Match.value(server.address).pipe(
+			Match.tagsExhaustive({
+				TcpAddress: (address) => Effect.succeed(address.port),
+				UnixAddress: () => Effect.fail(SlackEmulatorError.make({ operation: 'allocate_port' })),
 			}),
-		catch: (cause) => new Error(`Slack emulator ${method} request failed`, { cause }),
-	}).pipe(Effect.flatMap(Schema.decodeUnknownEffect(schema)))
+		)
+	}),
+)
+
+const callSlackMethod =
+	(client: HttpClient.HttpClient, emulator: Emulator) =>
+	<Req extends Schema.Codec<unknown, unknown>, Res extends Schema.Codec<unknown, unknown>>(
+		token: string,
+		method: string,
+		endpoint: { readonly request: Req; readonly response: Res },
+		body: Req['Type'],
+	): Effect.Effect<Res['Type'], SlackEmulatorError> =>
+		HttpClientRequest.post(`${emulator.url}/api/${method}`).pipe(
+			HttpClientRequest.bearerToken(token),
+			HttpClientRequest.setHeader('connection', 'close'),
+			HttpClientRequest.schemaBodyJson(endpoint.request)(body),
+			Effect.flatMap(client.execute),
+			Effect.flatMap(HttpClientResponse.filterStatusOk),
+			Effect.flatMap(HttpClientResponse.schemaBodyJson(endpoint.response)),
+			Effect.mapError((cause) => SlackEmulatorError.make({ operation: method, cause })),
+		)
 
 export class SlackEmulator extends Context.Service<
 	SlackEmulator,
@@ -173,18 +181,20 @@ export class SlackEmulator extends Context.Service<
 		readonly adminUserId: string
 		readonly publicChannelId: string
 		readonly privateChannelId: string
-		readonly call: <S extends Schema.Top>(
+		readonly call: <M extends SlackEmulatorMethod>(
 			token: string,
-			method: string,
-			body: SlackApiBody,
-			schema: S,
-		) => Effect.Effect<S['Type'], Error, S['DecodingServices']>
-		readonly signedWebhook: (event: SignedSlackWebhookEvent) => Request
+			method: M,
+			body: SlackEmulatorRequest<M>,
+		) => Effect.Effect<SlackEmulatorResponse<M>, SlackEmulatorError>
+		/** Signs an Events API callback with the emulator signing secret at the live wall-clock time. */
+		readonly signedWebhook: (event: typeof SlackEventCallback.Encoded) => Effect.Effect<Request, SlackEmulatorError>
 	}
 >()('test/SlackEmulator') {
 	static readonly layer = Layer.effect(
 		SlackEmulator,
 		Effect.gen(function* () {
+			const client = yield* HttpClient.HttpClient
+			const crypto = yield* Crypto.Crypto
 			const acquireEmulator = Effect.gen(function* () {
 				const port = yield* availablePort
 				return yield* Effect.tryPromise({
@@ -250,23 +260,25 @@ export class SlackEmulator extends Context.Service<
 								},
 							},
 						}),
-					catch: (cause) => new Error(`Could not start Slack emulator on available port ${port}`, { cause }),
+					catch: (cause) => SlackEmulatorError.make({ operation: `start_emulator:${port}`, cause }),
 				})
 			})
 			const emulator = yield* Effect.acquireRelease(
 				acquireEmulator.pipe(Effect.retry({ times: 4 })),
 				(resource) => Effect.promise(() => resource.close()),
 			)
-			const call = <S extends Schema.Top>(token: string, method: string, body: SlackApiBody, schema: S) =>
-				apiCall(emulator, token, method, body, schema)
-			const team = yield* call(slackEmulatorBotToken, 'auth.test', {}, TeamResponse)
-			const users = yield* call(slackEmulatorBotToken, 'users.list', {}, UsersResponse)
-			const conversations = yield* call(
-				slackEmulatorAdminToken,
-				'conversations.list',
-				{ types: 'public_channel,private_channel' },
-				ConversationsResponse,
-			)
+			const execute = callSlackMethod(client, emulator)
+			const call = <M extends SlackEmulatorMethod>(
+				token: string,
+				method: M,
+				body: SlackEmulatorRequest<M>,
+			): Effect.Effect<SlackEmulatorResponse<M>, SlackEmulatorError> =>
+				execute(token, method, slackEmulatorMethods[method], body)
+			const team = yield* call(slackEmulatorBotToken, 'auth.test', {})
+			const users = yield* call(slackEmulatorBotToken, 'users.list', {})
+			const conversations = yield* call(slackEmulatorAdminToken, 'conversations.list', {
+				types: 'public_channel,private_channel',
+			})
 			const alice = users.members.find((user) => user.name === 'alice')
 			const admin = users.members.find((user) => user.name === 'admin')
 			const publicChannel = conversations.channels.find((channel) => channel.name === 'channels-public')
@@ -277,34 +289,33 @@ export class SlackEmulator extends Context.Service<
 				publicChannel === undefined ||
 				privateChannel === undefined
 			) {
-				return yield* Effect.fail(
-					new Error('Slack emulator seed did not expose the expected users and channels'),
+				return yield* SlackEmulatorError.make({ operation: 'seed' })
+			}
+			yield* call(slackEmulatorBotToken, 'conversations.join', { channel: publicChannel.id })
+			yield* call(slackEmulatorIntegrationToken, 'conversations.join', { channel: publicChannel.id })
+			yield* call(slackEmulatorAdminToken, 'conversations.invite', {
+				channel: privateChannel.id,
+				users: slackEmulatorBotUserId,
+			})
+			const signedWebhook = (event: typeof SlackEventCallback.Encoded) =>
+				Effect.gen(function* () {
+					const body = yield* Schema.encodeEffect(SlackEventCallbackJson)(event)
+					const now = yield* wallClock.currentTimeMillis
+					const timestamp = Math.floor(now / 1000).toString()
+					const signature = yield* signSlackBody(body, timestamp, slackEmulatorSigningSecret)
+					return new Request('http://channels.test/integrations/slack/webhook', {
+						method: 'POST',
+						headers: {
+							'content-type': 'application/json',
+							'x-slack-request-timestamp': timestamp,
+							'x-slack-signature': signature,
+						},
+						body,
+					})
+				}).pipe(
+					Effect.provideService(Crypto.Crypto, crypto),
+					Effect.mapError((cause) => SlackEmulatorError.make({ operation: 'sign_webhook', cause })),
 				)
-			}
-			yield* call(slackEmulatorBotToken, 'conversations.join', { channel: publicChannel.id }, OkResponse)
-			yield* call(slackEmulatorIntegrationToken, 'conversations.join', { channel: publicChannel.id }, OkResponse)
-			yield* call(
-				slackEmulatorAdminToken,
-				'conversations.invite',
-				{ channel: privateChannel.id, users: slackEmulatorBotUserId },
-				OkResponse,
-			)
-			const signedWebhook = (event: SignedSlackWebhookEvent) => {
-				const body = JSON.stringify(event)
-				const timestamp = Math.floor(Date.now() / 1000).toString()
-				const signature = `v0=${createHmac('sha256', slackEmulatorSigningSecret)
-					.update(`v0:${timestamp}:${body}`)
-					.digest('hex')}`
-				return new Request('http://channels.test/integrations/slack/webhook', {
-					method: 'POST',
-					headers: {
-						'content-type': 'application/json',
-						'x-slack-request-timestamp': timestamp,
-						'x-slack-signature': signature,
-					},
-					body,
-				})
-			}
 			return SlackEmulator.of({
 				emulator,
 				teamId: team.team_id,
@@ -316,5 +327,5 @@ export class SlackEmulator extends Context.Service<
 				signedWebhook,
 			})
 		}),
-	)
+	).pipe(Layer.provide([FetchHttpClient.layer, NodeCrypto.layer]))
 }

@@ -9,21 +9,19 @@ import { Deferred, Effect, Layer } from 'effect'
 import { vi } from 'vite-plus/test'
 
 import { GitHubApi } from '../src/GitHubApi'
-import { GitHubCallbacks } from '../src/GitHubCallbacks'
+import { GitHubCallbacks, type GitHubCallbackHandlers } from '../src/GitHubCallbacks'
 import { GitHubBotConfiguration, makeGitHubEventProcessor } from '../src/GitHubEventProcessor'
 import { GitHubId } from '../src/GitHubIdentity'
-import {
-	decodeGitHubIdentifiedResponse,
-	decodeGitHubNumberedResponse,
-	githubEmulatorRequest as request,
-	makeGitHubEmulatorFixture,
-	makeInMemoryMailboxFixture,
-} from './fixtures'
+import { githubEmulatorEndpoints, makeGitHubEmulatorFixture, makeInMemoryMailboxFixture } from './fixtures'
+
+type Handler<K extends keyof GitHubCallbackHandlers<never, never>> = NonNullable<
+	GitHubCallbackHandlers<never, never>[K]
+>
 
 describe('GitHub webhook routing', () => {
 	it.effect('processes an emulator issue through its keyed mailbox and calls onIssueCreated', ({ expect }) =>
 		Effect.gen(function* () {
-			const onIssueCreated = vi.fn(() => Effect.void)
+			const onIssueCreated = vi.fn<Handler<'onIssueCreated'>>(() => Effect.void)
 			const processor = makeGitHubEventProcessor({
 				namespace: 'github-emulator-test',
 				bot: GitHubBotConfiguration.make({ mentionNames: ['agent'], botUserId: GitHubId.make(999) }),
@@ -31,10 +29,11 @@ describe('GitHub webhook routing', () => {
 			const mailbox = yield* makeInMemoryMailboxFixture([processor])
 			const github = yield* makeGitHubEmulatorFixture({ mailboxDelivery: mailbox.mailboxDelivery })
 
-			const issueResponse = yield* request(github.url, '/repos/alice/project/issues', github.aliceToken, {
+			const { number: issueNumber } = yield* github.request(githubEmulatorEndpoints.createIssue, {
+				params: undefined,
+				token: github.aliceToken,
 				body: { title: 'Process this issue', body: 'Issue body' },
 			})
-			const issueNumber = (yield* decodeGitHubNumberedResponse(issueResponse)).number
 			const mailboxKey = yield* mailbox.awaitMailboxKey
 
 			expect(onIssueCreated).not.toHaveBeenCalled()
@@ -71,103 +70,132 @@ describe('GitHub webhook routing', () => {
 						}),
 				},
 			})
-			const repo = '/repos/alice/project'
-			const issueResponse = yield* request(fixture.url, `${repo}/issues`, fixture.aliceToken, {
+			const endpoints = githubEmulatorEndpoints
+			const alice = fixture.aliceToken
+			const reviewer = fixture.reviewerToken
+			const { number: issueNumber } = yield* fixture.request(endpoints.createIssue, {
+				params: undefined,
+				token: alice,
 				body: { title: 'Emulator issue', body: 'Issue body' },
 			})
-			const issueNumber = String((yield* decodeGitHubNumberedResponse(issueResponse)).number)
-			const issuePath = `${repo}/issues/${issueNumber}`
-
-			yield* request(fixture.url, issuePath, fixture.aliceToken, {
-				method: 'PATCH',
+			const issue = { issue: issueNumber }
+			yield* fixture.send(endpoints.editIssueTitle, {
+				params: issue,
+				token: alice,
 				body: { title: 'Edited emulator issue' },
 			})
-			yield* request(fixture.url, issuePath, fixture.aliceToken, {
-				method: 'PATCH',
-				body: { state: 'closed' },
+			yield* fixture.send(endpoints.closeIssue, {
+				params: issue,
+				token: alice,
+				body: { state: 'closed', state_reason: 'completed' },
 			})
-			yield* request(fixture.url, issuePath, fixture.aliceToken, {
-				method: 'PATCH',
-				body: { state: 'open' },
+			yield* fixture.send(endpoints.reopenIssue, {
+				params: issue,
+				token: alice,
+				body: { state: 'open', state_reason: 'reopened' },
 			})
-			yield* request(fixture.url, `${issuePath}/assignees`, fixture.aliceToken, {
+			yield* fixture.send(endpoints.addAssignees, {
+				params: issue,
+				token: alice,
 				body: { assignees: ['reviewer'] },
 			})
-			yield* request(fixture.url, `${issuePath}/assignees`, fixture.aliceToken, {
-				method: 'DELETE',
+			yield* fixture.send(endpoints.removeAssignees, {
+				params: issue,
+				token: alice,
 				body: { assignees: ['reviewer'] },
 			})
-			yield* request(fixture.url, `${repo}/labels`, fixture.aliceToken, {
+			yield* fixture.send(endpoints.createLabel, {
+				params: undefined,
+				token: alice,
 				body: { name: 'bug', color: 'ff0000' },
 			})
-			yield* request(fixture.url, `${issuePath}/labels`, fixture.aliceToken, {
-				body: { labels: ['bug'] },
+			yield* fixture.send(endpoints.addIssueLabels, { params: issue, token: alice, body: { labels: ['bug'] } })
+			yield* fixture.send(endpoints.removeIssueLabel, {
+				params: { ...issue, label: 'bug' },
+				token: alice,
+				body: undefined,
 			})
-			yield* request(fixture.url, `${issuePath}/labels/bug`, fixture.aliceToken, { method: 'DELETE' })
 
-			const issueCommentResponse = yield* request(fixture.url, `${issuePath}/comments`, fixture.aliceToken, {
+			const issueComment = yield* fixture.request(endpoints.postIssueComment, {
+				params: issue,
+				token: alice,
 				body: { body: '@agent please review' },
 			})
-			const issueCommentPath = `${repo}/issues/comments/${String((yield* decodeGitHubIdentifiedResponse(issueCommentResponse)).id)}`
-			yield* request(fixture.url, issueCommentPath, fixture.aliceToken, {
-				method: 'PATCH',
+			yield* fixture.send(endpoints.updateIssueComment, {
+				params: { comment: issueComment.id },
+				token: alice,
 				body: { body: '@agent please review this edit' },
 			})
-			yield* request(fixture.url, issueCommentPath, fixture.aliceToken, { method: 'DELETE' })
-
-			const pullRequestResponse = yield* request(fixture.url, `${repo}/pulls`, fixture.aliceToken, {
-				body: {
-					title: 'Emulator pull request',
-					body: 'Pull request body',
-					head: 'feature',
-					base: 'main',
-				},
+			yield* fixture.send(endpoints.deleteIssueComment, {
+				params: { comment: issueComment.id },
+				token: alice,
+				body: undefined,
 			})
-			const pullNumber = String((yield* decodeGitHubNumberedResponse(pullRequestResponse)).number)
-			const pullPath = `${repo}/pulls/${pullNumber}`
-			yield* request(fixture.url, pullPath, fixture.aliceToken, {
-				method: 'PATCH',
+
+			const pull = yield* fixture.request(endpoints.createPullRequest, {
+				params: undefined,
+				token: alice,
+				body: { title: 'Emulator pull request', body: 'Pull request body', head: 'feature', base: 'main' },
+			})
+			const pullRequest = { pullRequest: pull.number }
+			yield* fixture.send(endpoints.editPullRequestTitle, {
+				params: pullRequest,
+				token: alice,
 				body: { title: 'Edited emulator pull request' },
 			})
-			yield* request(fixture.url, pullPath, fixture.aliceToken, {
-				method: 'PATCH',
+			yield* fixture.send(endpoints.closePullRequest, {
+				params: pullRequest,
+				token: alice,
 				body: { state: 'closed' },
 			})
-			yield* request(fixture.url, pullPath, fixture.aliceToken, {
-				method: 'PATCH',
+			yield* fixture.send(endpoints.reopenPullRequest, {
+				params: pullRequest,
+				token: alice,
 				body: { state: 'open' },
 			})
-			yield* request(fixture.url, `${pullPath}/requested_reviewers`, fixture.aliceToken, {
+			yield* fixture.send(endpoints.requestReviewers, {
+				params: pullRequest,
+				token: alice,
 				body: { reviewers: ['reviewer'] },
 			})
 
-			const reviewResponse = yield* request(fixture.url, `${pullPath}/reviews`, fixture.reviewerToken, {
+			const review = yield* fixture.request(endpoints.createReview, {
+				params: pullRequest,
+				token: reviewer,
 				body: { body: 'Looks good', event: 'COMMENT' },
 			})
-			yield* request(
-				fixture.url,
-				`${pullPath}/reviews/${String((yield* decodeGitHubIdentifiedResponse(reviewResponse)).id)}/dismissals`,
-				fixture.aliceToken,
-				{
-					method: 'PUT',
-					body: { message: 'No longer current' },
-				},
-			)
-
-			const reviewCommentResponse = yield* request(fixture.url, `${pullPath}/comments`, fixture.reviewerToken, {
-				body: { body: 'Please change this line', path: 'README.md', line: 1, side: 'RIGHT' },
+			yield* fixture.send(endpoints.dismissReview, {
+				params: { ...pullRequest, review: review.id },
+				token: alice,
+				body: { message: 'No longer current' },
 			})
-			const reviewCommentPath = `${repo}/pulls/comments/${String((yield* decodeGitHubIdentifiedResponse(reviewCommentResponse)).id)}`
-			yield* request(fixture.url, reviewCommentPath, fixture.reviewerToken, {
-				method: 'PATCH',
+
+			const reviewComment = yield* fixture.request(endpoints.postReviewComment, {
+				params: pullRequest,
+				token: reviewer,
+				body: {
+					body: 'Please change this line',
+					commit_id: pull.head.sha,
+					path: 'README.md',
+					line: 1,
+					side: 'RIGHT',
+				},
+			})
+			yield* fixture.send(endpoints.updateReviewComment, {
+				params: { comment: reviewComment.id },
+				token: reviewer,
 				body: { body: 'Please change this edited line' },
 			})
-			yield* request(fixture.url, reviewCommentPath, fixture.reviewerToken, { method: 'DELETE' })
+			yield* fixture.send(endpoints.deleteReviewComment, {
+				params: { comment: reviewComment.id },
+				token: reviewer,
+				body: undefined,
+			})
 
 			yield* Deferred.await(allAdmissionsDelivered)
 			expect(admissions).toHaveLength(21)
 			const issueResourceId = `github:v1:${fixture.repositoryId}:issue:${issueNumber}`
-			const pullRequestResourceId = `github:v1:${fixture.repositoryId}:pull-request:${pullNumber}`
+			const pullRequestResourceId = `github:v1:${fixture.repositoryId}:pull-request:${pull.number}`
 			expect(admissions.filter((admission) => admission.resourceId === issueResourceId)).toHaveLength(11)
 			expect(admissions.filter((admission) => admission.resourceId === pullRequestResourceId)).toHaveLength(10)
 		}),

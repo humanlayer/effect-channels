@@ -27,7 +27,7 @@ export class WebhookPayloadInvalidError extends Schema.TaggedError<WebhookPayloa
 	{ reason: Schema.String },
 ) {}
 
-export type ProviderWebhookError = typeof WebhookAuthenticationError.Type | typeof WebhookPayloadInvalidError.Type
+export type ProviderWebhookError = WebhookAuthenticationError | WebhookPayloadInvalidError
 
 /**
  * Platform-agnostic thing that a request body can be translated to regardless of whether it's a node server or a Request object
@@ -63,7 +63,7 @@ export const ProviderWebhookIgnored = Schema.TaggedStruct('Ignored', {})
  * Slack URL verification challenges are one example.
  */
 export const ProviderWebhookResponse = Schema.TaggedStruct('Response', {
-	status: Schema.Number,
+	status: Schema.Int.check(Schema.isBetween({ minimum: 100, maximum: 599 })),
 	body: Schema.NullOr(Schema.Uint8Array),
 	headers: Schema.Record(Schema.String, Schema.String),
 })
@@ -100,7 +100,8 @@ class WebhookBodyTooLarge extends Schema.TaggedError<WebhookBodyTooLarge>()('Web
 const readBoundedBody = <E>(request: HttpIncomingMessage<E>, maxBodyBytes?: number) => {
 	if (maxBodyBytes === undefined) return Effect.map(request.arrayBuffer, (body) => new Uint8Array(body))
 	const declaredLength = Number(request.headers['content-length'])
-	if (Number.isFinite(declaredLength) && declaredLength > maxBodyBytes) return Effect.fail(WebhookBodyTooLarge.make({}))
+	if (Number.isFinite(declaredLength) && declaredLength > maxBodyBytes)
+		return Effect.fail(WebhookBodyTooLarge.make({}))
 	return request.stream.pipe(
 		Stream.runFoldEffect(
 			() => ({ chunks: Arr.empty<Uint8Array>(), size: 0 }),
@@ -158,7 +159,7 @@ export const webhookRoutes = <const Requirements extends ReadonlyArray<unknown>>
 				headers: request.headers,
 				body: yield* readBoundedBody(request, provider.maxBodyBytes),
 			})
-			const deliverAdmission = (event: typeof DeliveryAdmission.Type) =>
+			const deliverAdmission = (event: DeliveryAdmission) =>
 				mailbox.deliver(event).pipe(
 					Effect.tap((receipt) =>
 						Effect.logInfo('Mailbox admission recorded').pipe(

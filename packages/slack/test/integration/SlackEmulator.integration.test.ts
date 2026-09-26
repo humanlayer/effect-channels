@@ -8,11 +8,10 @@ import {
 	type Author,
 } from '@humanlayer/channels-slack'
 import { SlackConnection, SlackConnectionCredentials } from '@humanlayer/channels-slack'
-import { ConfigProvider, Context, Effect, Exit, Layer, Queue, Redacted, Ref, Scope, Stream } from 'effect'
+import { Clock, ConfigProvider, Context, Effect, Exit, Layer, Queue, Redacted, Ref, Scope, Stream } from 'effect'
+import { TestClock } from 'effect/testing'
 
 import {
-	HistoryResponse,
-	PostedMessageResponse,
 	SlackEmulator,
 	slackEmulatorAdminToken,
 	slackEmulatorAliceToken,
@@ -64,7 +63,7 @@ interface SlackCallbackPayload {
 	event: SlackInnerEventPayload
 }
 
-const eventCallback = (input: {
+interface EventCallbackInput {
 	readonly teamId: string
 	readonly eventId: string
 	readonly type: 'app_mention' | 'message'
@@ -74,7 +73,9 @@ const eventCallback = (input: {
 	readonly userId: string
 	readonly threadTs?: string
 	readonly botId?: string
-}) => {
+}
+
+const eventCallback = Effect.fnUntraced(function* (input: EventCallbackInput) {
 	const event: SlackInnerEventPayload = {
 		type: input.type,
 		channel: input.channelId,
@@ -92,11 +93,11 @@ const eventCallback = (input: {
 		type: 'event_callback',
 		team_id: input.teamId,
 		event_id: input.eventId,
-		event_time: Math.floor(Date.now() / 1000),
+		event_time: Math.floor((yield* Clock.currentTimeMillis.pipe(TestClock.withLive)) / 1000),
 		event,
 	}
 	return callback
-}
+})
 
 layer(SlackEmulator.layer, { timeout: '30 seconds' })('Slack emulator integration', (it) => {
 	it.effect(
@@ -184,43 +185,37 @@ layer(SlackEmulator.layer, { timeout: '30 seconds' })('Slack emulator integratio
 						}),
 					},
 				})
+				const deliver = (input: EventCallbackInput) =>
+					eventCallback(input).pipe(
+						Effect.flatMap(emulator.signedWebhook),
+						Effect.flatMap((request) => Effect.promise(() => app.handle(request))),
+					)
 				yield* Effect.addFinalizer(() => Effect.promise(() => app.close()))
 
-				const secondaryRoot = yield* emulator.call(
-					slackEmulatorAdminToken,
-					'chat.postMessage',
-					{ channel: emulator.publicChannelId, text: 'another public root' },
-					PostedMessageResponse,
-				)
+				const secondaryRoot = yield* emulator.call(slackEmulatorAdminToken, 'chat.postMessage', {
+					channel: emulator.publicChannelId,
+					text: 'another public root',
+				})
 				assert.strictEqual(secondaryRoot.message.user, emulator.adminUserId)
-				const publicRoot = yield* emulator.call(
-					slackEmulatorAliceToken,
-					'chat.postMessage',
-					{ channel: emulator.publicChannelId, text: `<@${slackEmulatorBotUserId}> public hello` },
-					PostedMessageResponse,
-				)
-				const publicPriorReply = yield* emulator.call(
-					slackEmulatorAdminToken,
-					'chat.postMessage',
-					{ channel: emulator.publicChannelId, thread_ts: publicRoot.ts, text: 'admin context' },
-					PostedMessageResponse,
-				)
+				const publicRoot = yield* emulator.call(slackEmulatorAliceToken, 'chat.postMessage', {
+					channel: emulator.publicChannelId,
+					text: `<@${slackEmulatorBotUserId}> public hello`,
+				})
+				const publicPriorReply = yield* emulator.call(slackEmulatorAdminToken, 'chat.postMessage', {
+					channel: emulator.publicChannelId,
+					thread_ts: publicRoot.ts,
+					text: 'admin context',
+				})
 				assert.strictEqual(publicPriorReply.message.thread_ts, publicRoot.ts)
-				const mentionResponse = yield* Effect.promise(() =>
-					app.handle(
-						emulator.signedWebhook(
-							eventCallback({
-								teamId: emulator.teamId,
-								eventId: 'Ev_public_mention',
-								type: 'app_mention',
-								channelId: publicRoot.channel,
-								ts: publicRoot.ts,
-								text: publicRoot.message.text,
-								userId: publicRoot.message.user ?? emulator.aliceUserId,
-							}),
-						),
-					),
-				)
+				const mentionResponse = yield* deliver({
+					teamId: emulator.teamId,
+					eventId: 'Ev_public_mention',
+					type: 'app_mention',
+					channelId: publicRoot.channel,
+					ts: publicRoot.ts,
+					text: publicRoot.message.text,
+					userId: publicRoot.message.user ?? emulator.aliceUserId,
+				})
 				assert.strictEqual(mentionResponse.status, 200)
 				const publicMention = yield* Queue.take(mentions)
 				assert.strictEqual(publicMention.author.userId, emulator.aliceUserId)
@@ -245,52 +240,41 @@ layer(SlackEmulator.layer, { timeout: '30 seconds' })('Slack emulator integratio
 					true,
 				)
 
-				const publicAfterMention = yield* emulator.call(
-					slackEmulatorBotToken,
-					'conversations.replies',
-					{ channel: emulator.publicChannelId, ts: publicRoot.ts },
-					HistoryResponse,
-				)
+				const publicAfterMention = yield* emulator.call(slackEmulatorBotToken, 'conversations.replies', {
+					channel: emulator.publicChannelId,
+					ts: publicRoot.ts,
+				})
 				const mentionEcho = publicAfterMention.messages.find((message) =>
 					message.text.startsWith('mention echo:'),
 				)
 				assert.strictEqual(mentionEcho?.user, slackEmulatorBotUserId)
 				assert.strictEqual(mentionEcho?.thread_ts, publicRoot.ts)
 
-				const followUp = yield* emulator.call(
-					slackEmulatorAliceToken,
-					'chat.postMessage',
-					{ channel: emulator.publicChannelId, thread_ts: publicRoot.ts, text: 'human follow-up' },
-					PostedMessageResponse,
-				)
-				const followUpResponse = yield* Effect.promise(() =>
-					app.handle(
-						emulator.signedWebhook(
-							eventCallback({
-								teamId: emulator.teamId,
-								eventId: 'Ev_public_followup',
-								type: 'message',
-								channelId: followUp.channel,
-								ts: followUp.ts,
-								threadTs: publicRoot.ts,
-								text: followUp.message.text,
-								userId: followUp.message.user ?? emulator.aliceUserId,
-							}),
-						),
-					),
-				)
+				const followUp = yield* emulator.call(slackEmulatorAliceToken, 'chat.postMessage', {
+					channel: emulator.publicChannelId,
+					thread_ts: publicRoot.ts,
+					text: 'human follow-up',
+				})
+				const followUpResponse = yield* deliver({
+					teamId: emulator.teamId,
+					eventId: 'Ev_public_followup',
+					type: 'message',
+					channelId: followUp.channel,
+					ts: followUp.ts,
+					threadTs: publicRoot.ts,
+					text: followUp.message.text,
+					userId: followUp.message.user ?? emulator.aliceUserId,
+				})
 				assert.strictEqual(followUpResponse.status, 200)
 				assert.deepStrictEqual(yield* Queue.take(followUps), {
 					channelId: publicMention.channelId,
 					text: 'human follow-up',
 					subscribed: true,
 				})
-				const publicAfterFollowUp = yield* emulator.call(
-					slackEmulatorBotToken,
-					'conversations.replies',
-					{ channel: emulator.publicChannelId, ts: publicRoot.ts },
-					HistoryResponse,
-				)
+				const publicAfterFollowUp = yield* emulator.call(slackEmulatorBotToken, 'conversations.replies', {
+					channel: emulator.publicChannelId,
+					ts: publicRoot.ts,
+				})
 				assert.strictEqual(
 					publicAfterFollowUp.messages.some(
 						(message) =>
@@ -300,75 +284,54 @@ layer(SlackEmulator.layer, { timeout: '30 seconds' })('Slack emulator integratio
 					true,
 				)
 
-				const selfResponse = yield* Effect.promise(() =>
-					app.handle(
-						emulator.signedWebhook(
-							eventCallback({
-								teamId: emulator.teamId,
-								eventId: 'Ev_bot_self_message',
-								type: 'message',
-								channelId: publicRoot.channel,
-								ts: mentionEcho?.ts ?? publicRoot.ts,
-								threadTs: publicRoot.ts,
-								text: mentionEcho?.text ?? 'mention echo',
-								userId: mentionEcho?.user ?? slackEmulatorBotUserId,
-								botId: slackEmulatorBotId,
-							}),
-						),
-					),
-				)
+				const selfResponse = yield* deliver({
+					teamId: emulator.teamId,
+					eventId: 'Ev_bot_self_message',
+					type: 'message',
+					channelId: publicRoot.channel,
+					ts: mentionEcho?.ts ?? publicRoot.ts,
+					threadTs: publicRoot.ts,
+					text: mentionEcho?.text ?? 'mention echo',
+					userId: mentionEcho?.user ?? slackEmulatorBotUserId,
+					botId: slackEmulatorBotId,
+				})
 				assert.strictEqual(selfResponse.status, 200)
 				assert.strictEqual(yield* Ref.get(mentionCount), 1)
 				assert.strictEqual(yield* Ref.get(followUpCount), 1)
 				assert.strictEqual(yield* Queue.size(mentions), 0)
 				assert.strictEqual(yield* Queue.size(followUps), 0)
 
-				const integrationRoot = yield* emulator.call(
-					slackEmulatorIntegrationToken,
-					'chat.postMessage',
-					{ channel: emulator.publicChannelId, text: 'integration-authored root' },
-					PostedMessageResponse,
-				)
+				const integrationRoot = yield* emulator.call(slackEmulatorIntegrationToken, 'chat.postMessage', {
+					channel: emulator.publicChannelId,
+					text: 'integration-authored root',
+				})
 				assert.strictEqual(integrationRoot.message.user, slackEmulatorIntegrationUserId)
-				const integrationMention = yield* emulator.call(
-					slackEmulatorAliceToken,
-					'chat.postMessage',
-					{
-						channel: emulator.publicChannelId,
-						thread_ts: integrationRoot.ts,
-						text: `<@${slackEmulatorBotUserId}> join this integration thread`,
-					},
-					PostedMessageResponse,
-				)
+				const integrationMention = yield* emulator.call(slackEmulatorAliceToken, 'chat.postMessage', {
+					channel: emulator.publicChannelId,
+					thread_ts: integrationRoot.ts,
+					text: `<@${slackEmulatorBotUserId}> join this integration thread`,
+				})
 				const countBeforeExistingThreadMention = yield* Ref.get(mentionCount)
-				const integrationMentionResponse = yield* Effect.promise(() =>
-					app.handle(
-						emulator.signedWebhook(
-							eventCallback({
-								teamId: emulator.teamId,
-								eventId: 'Ev_integration_thread_mention',
-								type: 'app_mention',
-								channelId: integrationMention.channel,
-								ts: integrationMention.ts,
-								threadTs: integrationRoot.ts,
-								text: integrationMention.message.text,
-								userId: integrationMention.message.user ?? emulator.aliceUserId,
-							}),
-						),
-					),
-				)
+				const integrationMentionResponse = yield* deliver({
+					teamId: emulator.teamId,
+					eventId: 'Ev_integration_thread_mention',
+					type: 'app_mention',
+					channelId: integrationMention.channel,
+					ts: integrationMention.ts,
+					threadTs: integrationRoot.ts,
+					text: integrationMention.message.text,
+					userId: integrationMention.message.user ?? emulator.aliceUserId,
+				})
 				assert.strictEqual(integrationMentionResponse.status, 200)
 				const existingThreadMention = yield* Queue.take(mentions)
 				assert.strictEqual(existingThreadMention.isNew, false)
 				assert.strictEqual(existingThreadMention.allTexts.includes('integration-authored root'), true)
 				assert.strictEqual(existingThreadMention.nonSelfBotTexts.includes('integration-authored root'), true)
 				assert.strictEqual(yield* Ref.get(mentionCount), countBeforeExistingThreadMention + 1)
-				const integrationReplies = yield* emulator.call(
-					slackEmulatorBotToken,
-					'conversations.replies',
-					{ channel: emulator.publicChannelId, ts: integrationRoot.ts },
-					HistoryResponse,
-				)
+				const integrationReplies = yield* emulator.call(slackEmulatorBotToken, 'conversations.replies', {
+					channel: emulator.publicChannelId,
+					ts: integrationRoot.ts,
+				})
 				assert.strictEqual(
 					integrationReplies.messages.some(
 						(message) =>
@@ -379,60 +342,43 @@ layer(SlackEmulator.layer, { timeout: '30 seconds' })('Slack emulator integratio
 					true,
 				)
 
-				const privateRoot = yield* emulator.call(
-					slackEmulatorAliceToken,
-					'chat.postMessage',
-					{ channel: emulator.privateChannelId, text: `<@${slackEmulatorBotUserId}> private hello` },
-					PostedMessageResponse,
-				)
-				const privateMentionResponse = yield* Effect.promise(() =>
-					app.handle(
-						emulator.signedWebhook(
-							eventCallback({
-								teamId: emulator.teamId,
-								eventId: 'Ev_private_mention',
-								type: 'app_mention',
-								channelId: privateRoot.channel,
-								ts: privateRoot.ts,
-								text: privateRoot.message.text,
-								userId: privateRoot.message.user ?? emulator.aliceUserId,
-							}),
-						),
-					),
-				)
+				const privateRoot = yield* emulator.call(slackEmulatorAliceToken, 'chat.postMessage', {
+					channel: emulator.privateChannelId,
+					text: `<@${slackEmulatorBotUserId}> private hello`,
+				})
+				const privateMentionResponse = yield* deliver({
+					teamId: emulator.teamId,
+					eventId: 'Ev_private_mention',
+					type: 'app_mention',
+					channelId: privateRoot.channel,
+					ts: privateRoot.ts,
+					text: privateRoot.message.text,
+					userId: privateRoot.message.user ?? emulator.aliceUserId,
+				})
 				assert.strictEqual(privateMentionResponse.status, 200)
 				const privateMention = yield* Queue.take(mentions)
 				assert.strictEqual(privateMention.channelInfo.name, 'channels-private')
 				assert.strictEqual(privateMention.channelInfo.channel.isDm, false)
-				const privateFollowUp = yield* emulator.call(
-					slackEmulatorAliceToken,
-					'chat.postMessage',
-					{ channel: emulator.privateChannelId, thread_ts: privateRoot.ts, text: 'private follow-up' },
-					PostedMessageResponse,
-				)
-				yield* Effect.promise(() =>
-					app.handle(
-						emulator.signedWebhook(
-							eventCallback({
-								teamId: emulator.teamId,
-								eventId: 'Ev_private_followup',
-								type: 'message',
-								channelId: privateFollowUp.channel,
-								ts: privateFollowUp.ts,
-								threadTs: privateRoot.ts,
-								text: privateFollowUp.message.text,
-								userId: privateFollowUp.message.user ?? emulator.aliceUserId,
-							}),
-						),
-					),
-				)
+				const privateFollowUp = yield* emulator.call(slackEmulatorAliceToken, 'chat.postMessage', {
+					channel: emulator.privateChannelId,
+					thread_ts: privateRoot.ts,
+					text: 'private follow-up',
+				})
+				yield* deliver({
+					teamId: emulator.teamId,
+					eventId: 'Ev_private_followup',
+					type: 'message',
+					channelId: privateFollowUp.channel,
+					ts: privateFollowUp.ts,
+					threadTs: privateRoot.ts,
+					text: privateFollowUp.message.text,
+					userId: privateFollowUp.message.user ?? emulator.aliceUserId,
+				})
 				assert.strictEqual((yield* Queue.take(followUps)).text, 'private follow-up')
-				const privateHistory = yield* emulator.call(
-					slackEmulatorBotToken,
-					'conversations.replies',
-					{ channel: emulator.privateChannelId, ts: privateRoot.ts },
-					HistoryResponse,
-				)
+				const privateHistory = yield* emulator.call(slackEmulatorBotToken, 'conversations.replies', {
+					channel: emulator.privateChannelId,
+					ts: privateRoot.ts,
+				})
 				assert.deepStrictEqual(
 					privateHistory.messages.map((message) => message.text),
 					[
@@ -444,21 +390,15 @@ layer(SlackEmulator.layer, { timeout: '30 seconds' })('Slack emulator integratio
 				)
 
 				for (const [teamId, eventId] of [['T_UNKNOWN', 'Ev_unknown_workspace']] as const) {
-					const response = yield* Effect.promise(() =>
-						app.handle(
-							emulator.signedWebhook(
-								eventCallback({
-									teamId,
-									eventId,
-									type: 'app_mention',
-									channelId: publicRoot.channel,
-									ts: publicRoot.ts,
-									text: publicRoot.message.text,
-									userId: publicRoot.message.user ?? emulator.aliceUserId,
-								}),
-							),
-						),
-					)
+					const response = yield* deliver({
+						teamId,
+						eventId,
+						type: 'app_mention',
+						channelId: publicRoot.channel,
+						ts: publicRoot.ts,
+						text: publicRoot.message.text,
+						userId: publicRoot.message.user ?? emulator.aliceUserId,
+					})
 					assert.strictEqual(response.status, 200)
 				}
 				assert.strictEqual(yield* Ref.get(mentionCount), 3)
@@ -468,21 +408,15 @@ layer(SlackEmulator.layer, { timeout: '30 seconds' })('Slack emulator integratio
 				assert.strictEqual(workspaces.includes('T_UNKNOWN'), true)
 				yield* Effect.promise(() => app.close())
 				yield* Effect.promise(() => app.close())
-				const lateRequest = yield* Effect.promise(() =>
-					app.handle(
-						emulator.signedWebhook(
-							eventCallback({
-								teamId: emulator.teamId,
-								eventId: 'Ev_after_app_close',
-								type: 'app_mention',
-								channelId: publicRoot.channel,
-								ts: publicRoot.ts,
-								text: publicRoot.message.text,
-								userId: publicRoot.message.user ?? emulator.aliceUserId,
-							}),
-						),
-					),
-				).pipe(Effect.exit)
+				const lateRequest = yield* deliver({
+					teamId: emulator.teamId,
+					eventId: 'Ev_after_app_close',
+					type: 'app_mention',
+					channelId: publicRoot.channel,
+					ts: publicRoot.ts,
+					text: publicRoot.message.text,
+					userId: publicRoot.message.user ?? emulator.aliceUserId,
+				}).pipe(Effect.exit)
 				assert.strictEqual(Exit.isFailure(lateRequest), true)
 				assert.strictEqual(yield* Ref.get(mentionCount), 3)
 			}),
@@ -499,10 +433,7 @@ it.effect(
 			const emulator = Context.get(context, SlackEmulator)
 			yield* Scope.close(scope, Exit.void)
 			yield* Scope.close(scope, Exit.void)
-			const requestAfterClose = yield* Effect.tryPromise({
-				try: (signal) => fetch(`${emulator.emulator.url}/api/auth.test`, { method: 'POST', signal }),
-				catch: (cause) => cause,
-			}).pipe(Effect.exit)
+			const requestAfterClose = yield* emulator.call(slackEmulatorBotToken, 'auth.test', {}).pipe(Effect.exit)
 			assert.strictEqual(Exit.isFailure(requestAfterClose), true)
 		}),
 	{ timeout: 10_000 },

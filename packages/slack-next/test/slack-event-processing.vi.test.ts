@@ -444,7 +444,7 @@ describe('Slack event batch processing', () => {
 				signingSecret: Redacted.make('file-share-secret'),
 			})
 			const outcome = yield* provider
-				.handle(signedSlackInput('file-share-secret', payload))
+				.handle(yield* signedSlackInput('file-share-secret', payload))
 				.pipe(Effect.provide(Layer.merge(NodeCrypto.layer, apiLayer)))
 			if (!Schema.is(ProviderWebhookEvent)(outcome)) return yield* Effect.die('expected an admitted event')
 			expect(outcome.event.resourceId).toBe(resourceId)

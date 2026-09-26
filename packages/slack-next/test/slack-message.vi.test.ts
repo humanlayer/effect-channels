@@ -26,20 +26,20 @@ const message = (channel: string, channelType: 'channel' | 'im' | 'mpim', thread
 	}
 }
 
+const provider = makeSlackWebhookProvider({ namespace: 'message-test', signingSecret: Redacted.make(signingSecret) })
+
 const handleMessage = (payload: Schema.Json) =>
-	makeSlackWebhookProvider({ namespace: 'message-test', signingSecret: Redacted.make(signingSecret) })
-		.handle(signedSlackInput(signingSecret, payload))
-		.pipe(
-			Effect.provide(
-				Layer.merge(
-					NodeCrypto.layer,
-					Layer.mock(SlackApi, {
-						resolveReactionThread: () =>
-							Effect.die(new Error('Messages must not resolve reaction threads')),
-					}),
-				),
+	signedSlackInput(signingSecret, payload).pipe(
+		Effect.flatMap(provider.handle),
+		Effect.provide(
+			Layer.merge(
+				NodeCrypto.layer,
+				Layer.mock(SlackApi, {
+					resolveReactionThread: () => Effect.die(new Error('Messages must not resolve reaction threads')),
+				}),
 			),
-		)
+		),
+	)
 
 const expectedEvent = (payload: ReturnType<typeof message>, resourceTs: string) =>
 	ProviderWebhookEvent.make({

@@ -4,8 +4,8 @@ import { Effect, Layer, Schema } from 'effect'
 import { vi } from 'vite-plus/test'
 
 import { LinearApi } from '../src/LinearApi'
-import { type LinearIssueAssigned, LinearIssueOpened, type LinearMentioned } from '../src/LinearCallbackEvents'
-import { LinearCallbacks, type LinearCallbackHandlers } from '../src/LinearCallbacks'
+import { LinearIssueOpened } from '../src/LinearCallbackEvents'
+import { type LinearCallbackHandler, LinearCallbacks, type LinearCallbackHandlers } from '../src/LinearCallbacks'
 import { makeLinearEventProcessor } from '../src/LinearEventProcessor'
 import { appUserNotificationPayloads, linearIssueCreateAdmission, linearNotificationAdmission } from './fixtures'
 
@@ -33,8 +33,8 @@ const process = (
 describe('Linear directed entry points', () => {
 	it.effect('routes issue mentions, comment mentions, and assignments', ({ expect }) =>
 		Effect.gen(function* () {
-			const onMentioned = vi.fn((_event: LinearMentioned) => Effect.void)
-			const onAssigned = vi.fn((_event: LinearIssueAssigned) => Effect.void)
+			const onMentioned = vi.fn<LinearCallbackHandler<'onMentioned'>>(() => Effect.void)
+			const onAssigned = vi.fn<LinearCallbackHandler<'onAssigned'>>(() => Effect.void)
 			for (const payload of appUserNotificationPayloads.slice(0, 3)) {
 				const result = yield* process({ onMentioned, onAssigned }, [linearNotificationAdmission(payload)])
 				expect(result).toEqual(ProviderEventHandled.make({}))
@@ -48,8 +48,8 @@ describe('Linear directed entry points', () => {
 
 	it.effect('acknowledges the five duplicate notification actions without a callback', ({ expect }) =>
 		Effect.gen(function* () {
-			const onMentioned = vi.fn((_event: LinearMentioned) => Effect.void)
-			const onAssigned = vi.fn((_event: LinearIssueAssigned) => Effect.void)
+			const onMentioned = vi.fn<LinearCallbackHandler<'onMentioned'>>(() => Effect.void)
+			const onAssigned = vi.fn<LinearCallbackHandler<'onAssigned'>>(() => Effect.void)
 			for (const payload of appUserNotificationPayloads.slice(3)) {
 				const result = yield* process({ onMentioned, onAssigned }, [linearNotificationAdmission(payload)])
 				expect(result).toEqual(ProviderEventIgnored.make({ reason: 'not_subscribed' }))
@@ -61,8 +61,8 @@ describe('Linear directed entry points', () => {
 
 	it.effect('lets a directed callback win while subscribed and preserves the rest of the batch', ({ expect }) =>
 		Effect.gen(function* () {
-			const onMentioned = vi.fn((_event: LinearMentioned) => Effect.void)
-			const onIssueCreated = vi.fn(() => Effect.void)
+			const onMentioned = vi.fn<LinearCallbackHandler<'onMentioned'>>(() => Effect.void)
+			const onIssueCreated = vi.fn<LinearCallbackHandler<'onIssueCreated'>>(() => Effect.void)
 			const mention = linearNotificationAdmission(appUserNotificationPayloads[0])
 			const result = yield* process(
 				{ onMentioned, onIssueCreated },
@@ -78,7 +78,7 @@ describe('Linear directed entry points', () => {
 
 	it.effect('selects the first configured directed trigger in admission order', ({ expect }) =>
 		Effect.gen(function* () {
-			const onAssigned = vi.fn((_event: LinearIssueAssigned) => Effect.void)
+			const onAssigned = vi.fn<LinearCallbackHandler<'onAssigned'>>(() => Effect.void)
 			const result = yield* process({ onAssigned }, [
 				linearNotificationAdmission(appUserNotificationPayloads[0]),
 				linearNotificationAdmission(appUserNotificationPayloads[2], 'assignment-delivery'),

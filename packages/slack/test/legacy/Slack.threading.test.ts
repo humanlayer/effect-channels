@@ -120,25 +120,21 @@ it.effect('routes the root mention once and every later reply through the subscr
 
 it.effect('renews the subscription TTL on accepted subscribed activity and expires idle threads', () =>
 	Effect.gen(function* () {
-		yield* Effect.gen(function* () {
-			const channels = yield* SlackSubscriptions
-			const ingress = yield* SlackIngress
+		const channels = yield* SlackSubscriptions
+		const ingress = yield* SlackIngress
 
-			yield* channels.subscribe({ threadId: rootThreadId })
-			yield* channels.subscribe({ threadId: otherThreadId })
+		yield* channels.subscribe({ threadId: rootThreadId })
+		yield* channels.subscribe({ threadId: otherThreadId })
 
-			yield* TestClock.adjust('20 days')
-			yield* expectAccepted(ingress, makeTestNormalizedMessage({ messageTs: '100.2', rootTs: '100.1' }))
+		yield* TestClock.adjust('20 days')
+		yield* expectAccepted(ingress, makeTestNormalizedMessage({ messageTs: '100.2', rootTs: '100.1' }))
 
-			yield* TestClock.adjust('15 days')
-			assert.strictEqual(yield* channels.isSubscribed({ threadId: rootThreadId }), true)
-			assert.strictEqual(yield* channels.isSubscribed({ threadId: otherThreadId }), false)
-			assert.deepStrictEqual(
-				yield* ingress.acceptMessage(makeTestNormalizedMessage({ messageTs: '200.2', rootTs: '200.1' })),
-				IngressDropped.make({ reason: 'irrelevant' }),
-			)
-		}).pipe(
-			Effect.provide(ingressLayer({ onSubscribedMessage: [{ id: 'subscribed', handler: () => Effect.void }] })),
+		yield* TestClock.adjust('15 days')
+		assert.strictEqual(yield* channels.isSubscribed({ threadId: rootThreadId }), true)
+		assert.strictEqual(yield* channels.isSubscribed({ threadId: otherThreadId }), false)
+		assert.deepStrictEqual(
+			yield* ingress.acceptMessage(makeTestNormalizedMessage({ messageTs: '200.2', rootTs: '200.1' })),
+			IngressDropped.make({ reason: 'irrelevant' }),
 		)
-	}),
+	}).pipe(Effect.provide(ingressLayer({ onSubscribedMessage: [{ id: 'subscribed', handler: () => Effect.void }] }))),
 )

@@ -7,7 +7,7 @@ import { LinearApiError } from '../LinearApi'
 const TokenResponse = Schema.Struct({
 	access_token: Schema.NonEmptyString,
 	token_type: Schema.optionalKey(Schema.String),
-	expires_in: Schema.Number,
+	expires_in: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
 	scope: Schema.optionalKey(Schema.Union([Schema.String, Schema.Array(Schema.String)])),
 })
 

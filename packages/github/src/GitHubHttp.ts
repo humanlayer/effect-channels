@@ -47,12 +47,12 @@ const hasRateLimitMessage = (response: HttpClientResponse.HttpClientResponse) =>
 		}),
 	)
 
-export const requestJson = <S extends Schema.Top>(
-	request: HttpClientRequest.HttpClientRequest,
-	schema: S,
-	statuses?: ReadonlyArray<number>,
-) =>
-	Effect.gen(function* () {
+export const requestJson = Effect.fn('github.http.request')(
+	function* <S extends Schema.Top>(
+		request: HttpClientRequest.HttpClientRequest,
+		schema: S,
+		statuses?: ReadonlyArray<number>,
+	) {
 		const client = yield* HttpClient.HttpClient
 		const response = yield* client
 			.execute(request)
@@ -85,38 +85,35 @@ export const requestJson = <S extends Schema.Top>(
 		if (statuses !== undefined && !statuses.includes(response.status))
 			return yield* GitHubHttpFailure.make({ stage: 'decode', status: response.status })
 		if (response.status === 204)
-			return yield* Schema.decodeUnknownEffect(schema)(undefined).pipe(
+			return yield* Schema.decodeEffect(schema)(undefined).pipe(
 				Effect.mapError(() => GitHubHttpFailure.make({ stage: 'decode', status: response.status })),
 			)
 		return yield* HttpClientResponse.schemaBodyJson(schema)(response).pipe(
 			Effect.mapError(() => GitHubHttpFailure.make({ stage: 'decode', status: response.status })),
 		)
-	}).pipe(
-		Effect.tapError((error) => Effect.logError('GitHub request failed', error)),
-		Effect.catchTag('GitHubHttpFailure', (error) => {
-			if (error.rateLimited === true)
-				return Effect.fail(
-					GitHubError.make({ reason: 'unavailable', retryAfterMs: error.retryAfterMs ?? 60_000 }),
-				)
-			return Effect.fail(
-				GitHubError.make({
-					reason:
-						error.status === 401
-							? 'authentication'
-							: error.status === 403
-								? 'forbidden'
-								: error.status === 404 || error.status === 410
-									? 'not_found'
-									: error.status === 422
-										? 'invalid_input'
-										: error.stage === 'decode'
-											? 'response'
-											: 'unavailable',
-				}),
-			)
-		}),
-		Effect.withSpan('github.http.request'),
-	)
+	},
+	Effect.tapError((error) => Effect.logError('GitHub request failed', error)),
+	Effect.catchTag('GitHubHttpFailure', (error) => {
+		if (error.rateLimited === true)
+			return Effect.fail(GitHubError.make({ reason: 'unavailable', retryAfterMs: error.retryAfterMs ?? 60_000 }))
+		return Effect.fail(
+			GitHubError.make({
+				reason:
+					error.status === 401
+						? 'authentication'
+						: error.status === 403
+							? 'forbidden'
+							: error.status === 404 || error.status === 410
+								? 'not_found'
+								: error.status === 422
+									? 'invalid_input'
+									: error.stage === 'decode'
+										? 'response'
+										: 'unavailable',
+			}),
+		)
+	}),
+)
 
 export const apiRequest = (input: {
 	readonly baseUrl: string

@@ -11,13 +11,12 @@ import { Effect, Layer } from 'effect'
 import { vi } from 'vite-plus/test'
 
 import { LinearApi } from '../src/LinearApi'
-import type { LinearIssueCreated } from '../src/LinearCallbackEvents'
-import { LinearCallbacks } from '../src/LinearCallbacks'
+import { type LinearCallbackHandler, LinearCallbacks } from '../src/LinearCallbacks'
 import { makeLinearEventProcessor } from '../src/LinearEventProcessor'
 import { linearIssueCreateAdmission } from './fixtures'
 
 const namespace = 'linear-processing-test'
-const services = <E, R>(handler?: (event: LinearIssueCreated) => Effect.Effect<void, E, R>) =>
+const services = <E, R>(handler?: LinearCallbackHandler<'onIssueCreated', E, R>) =>
 	Layer.mergeAll(
 		LinearCallbacks.layer(handler === undefined ? {} : { onIssueCreated: handler }),
 		Layer.mock(LinearApi, {}),
@@ -32,7 +31,7 @@ describe('Linear event processing', () => {
 	it.effect('decodes stored payloads and dispatches onIssueCreated', ({ expect }) =>
 		Effect.gen(function* () {
 			const admission = linearIssueCreateAdmission(namespace)
-			const callback = vi.fn((_event: LinearIssueCreated) => Effect.void)
+			const callback = vi.fn<LinearCallbackHandler<'onIssueCreated'>>(() => Effect.void)
 			const result = yield* makeLinearEventProcessor({ namespace })
 				.process([admission])
 				.pipe(Effect.provide(services(callback)))

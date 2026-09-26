@@ -1,4 +1,4 @@
-import { Config, Effect, Redacted, Ref } from 'effect'
+import { Config, Console, Effect, Redacted, Ref, Schema } from 'effect'
 
 import {
 	LinearApi,
@@ -39,6 +39,17 @@ const mutationInputs = () => {
 	}
 }
 
+const ReadSummary = Schema.Struct({
+	issue: Schema.String,
+	assignable: Schema.Int,
+	apps: Schema.Int,
+	comments: Schema.Int,
+	attachments: Schema.Int,
+	knownUser: LinearUserId,
+})
+
+const MutationSummary = Schema.Struct({ mutationMarker: Schema.String, completed: Schema.Boolean })
+
 const program = Effect.gen(function* () {
 	const api = yield* LinearApi
 	const issue = yield* api.getIssue({
@@ -56,16 +67,14 @@ const program = Effect.gen(function* () {
 	])
 	const knownUserId = LinearUserId.make(required('LINEAR_SMOKE_USER_ID'))
 	const knownUser = yield* api.getUser({ issue: issue.ref, userId: knownUserId })
-	console.info(
-		JSON.stringify({
-			issue: issue.identifier,
-			assignable: assignable.users.length,
-			apps: apps.users.length,
-			comments: comments.length,
-			attachments: attachments.length,
-			knownUser: knownUser.id,
-		}),
-	)
+	yield* Schema.encodeEffect(Schema.fromJsonString(ReadSummary))({
+		issue: issue.identifier,
+		assignable: assignable.users.length,
+		apps: apps.users.length,
+		comments: comments.length,
+		attachments: attachments.length,
+		knownUser: knownUser.id,
+	}).pipe(Effect.flatMap(Console.info))
 
 	const inputs = mutationInputs()
 	if (inputs === null) return
@@ -109,7 +118,10 @@ const program = Effect.gen(function* () {
 		})
 		yield* Ref.update(attachmentsToDelete, (refs) => [...refs, card.ref])
 		yield* api.updateAttachment({ attachment: card.ref, input: { title: `${inputs.marker} updated` } })
-		console.info(JSON.stringify({ mutationMarker: inputs.marker, completed: true }))
+		yield* Schema.encodeEffect(Schema.fromJsonString(MutationSummary))({
+			mutationMarker: inputs.marker,
+			completed: true,
+		}).pipe(Effect.flatMap(Console.info))
 	}).pipe(Effect.ensuring(cleanup))
 })
 

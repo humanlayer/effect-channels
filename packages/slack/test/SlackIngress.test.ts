@@ -70,9 +70,7 @@ it.effect('mounts webhook admission with addressed services and no mailbox proce
 					new Request('http://localhost/unrouted', { method: 'POST' }),
 					Context.make(Ingress, makeTestIngress({})),
 				),
-			).pipe(
-				Effect.map((response) => assert.strictEqual(response.status, 404)),
-			),
+			).pipe(Effect.map((response) => assert.strictEqual(response.status, 404))),
 		({ dispose }) => Effect.promise(dispose),
 	),
 )

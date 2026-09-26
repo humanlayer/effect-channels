@@ -14,7 +14,7 @@ import {
 	activityEventDefinition,
 } from '../src/index'
 import { policy } from './fixtures'
-import { adminCall, emulator, eventFor, host, payloadFor, secret, signedRequest } from './support'
+import { adminCall, emulator, eventFor, host, payloadFor, secret, webhookRequest } from './support'
 
 it.live('App-authenticated proactive create/read/update issue and comments without inbound services', () =>
 	Effect.gen(function* () {
@@ -91,7 +91,7 @@ it.live(
 					Layer.provide(Layer.succeedContext(environment)),
 				),
 			)
-			assert.equal((yield* request(signedRequest('issues', JSON.stringify(payloadFor(event))))).status, 200)
+			assert.equal((yield* request(yield* webhookRequest('issues', payloadFor(event)))).status, 200)
 			assert.deepEqual(
 				yield* adminCall(
 					em.resource.url,
@@ -102,7 +102,7 @@ it.live(
 			)
 			const ingress = Context.get(environment, GitHubIngress)
 			yield* ingress.processActivity({ event }).pipe(Effect.provide(environment))
-			assert.equal((yield* request(signedRequest('issues', JSON.stringify(payloadFor(event))))).status, 200)
+			assert.equal((yield* request(yield* webhookRequest('issues', payloadFor(event)))).status, 200)
 			yield* ingress.processActivity({ event }).pipe(Effect.provide(environment))
 			const binding = bind({
 				namespace: 'test',

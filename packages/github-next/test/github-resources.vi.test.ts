@@ -1,6 +1,5 @@
 import { describe, it } from '@effect/vitest'
 import { Effect, Layer, Queue } from 'effect'
-import { expect } from 'vite-plus/test'
 
 import { GitHubApi } from '../src/GitHubApi'
 import { GitHubId } from '../src/GitHubIdentity'
@@ -180,7 +179,7 @@ const jobInfo = GitHubActionsJobInfo.make({
 })
 
 describe('GitHub resource capability delegation', () => {
-	it.effect('delegates issue close, reopen, and every label operation to GitHubApi', () =>
+	it.effect('delegates issue close, reopen, and every label operation to GitHubApi', ({ expect }) =>
 		Effect.gen(function* () {
 			const calls = yield* Queue.unbounded<unknown>()
 			const layer = Layer.mock(GitHubApi, {
@@ -232,7 +231,7 @@ describe('GitHub resource capability delegation', () => {
 		}),
 	)
 
-	it.effect('delegates every new pull request capability and resolves current-head checks in order', () =>
+	it.effect('delegates every new pull request capability and resolves current-head checks in order', ({ expect }) =>
 		Effect.gen(function* () {
 			const calls = yield* Queue.unbounded<unknown>()
 			const layer = Layer.mock(GitHubApi, {
@@ -359,7 +358,7 @@ describe('GitHub resource capability delegation', () => {
 		}),
 	)
 
-	it.effect('delegates check-run and Actions-job resource operations to GitHubApi', () =>
+	it.effect('delegates check-run and Actions-job resource operations to GitHubApi', ({ expect }) =>
 		Effect.gen(function* () {
 			const calls = yield* Queue.unbounded<unknown>()
 			const layer = Layer.mock(GitHubApi, {

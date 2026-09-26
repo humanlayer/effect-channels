@@ -94,7 +94,7 @@ for (const fixture of cases) {
 				(yield* readiness.scanReady({
 					prefix: mailboxPrefix({
 						namespace: 'worker',
-						handlerId: JSON.stringify(['receive', 'creation']),
+						handlerId: '["receive","creation"]',
 						provider: 'github',
 					}),
 					now: 0,

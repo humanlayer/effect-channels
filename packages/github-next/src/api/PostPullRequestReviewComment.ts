@@ -13,7 +13,7 @@ const ReviewCommentTarget = {
 }
 
 /** Members run from most to least specific, because a union encodes with the first member that accepts the value. */
-const PostPullRequestReviewCommentBody = Schema.Union([
+export const PostPullRequestReviewCommentBody = Schema.Union([
 	Schema.Struct({
 		...ReviewCommentTarget,
 		start_line: Schema.Int,

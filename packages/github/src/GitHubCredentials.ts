@@ -1,4 +1,18 @@
-import { Cache, Clock, Config, Context, Duration, Effect, Encoding, Exit, Layer, Redacted, Schema } from 'effect'
+import {
+	Cache,
+	Clock,
+	Config,
+	Context,
+	DateTime,
+	Duration,
+	Effect,
+	Encoding,
+	Exit,
+	Layer,
+	Option,
+	Redacted,
+	Schema,
+} from 'effect'
 import { HttpClient, HttpClientRequest } from 'effect/unstable/http'
 
 import { GitHubCrypto } from './GitHubCrypto'
@@ -15,6 +29,10 @@ export const GitHubAppOptions = Schema.Struct({
 })
 export interface GitHubAppOptions extends Schema.Schema.Type<typeof GitHubAppOptions> {}
 const Token = Schema.Struct({ token: Schema.NonEmptyString, expires_at: Schema.String })
+
+const JwtHeader = Schema.fromJsonString(Schema.Struct({ alg: Schema.Literal('RS256'), typ: Schema.Literal('JWT') }))
+const JwtClaims = Schema.fromJsonString(Schema.Struct({ iss: Schema.String, iat: Schema.Int, exp: Schema.Int }))
+type CacheKey = readonly [installationId: number, repositoryId: number]
 
 class GitHubTokenFailure extends Schema.TaggedError<GitHubTokenFailure>()('GitHubTokenFailure', {
 	stage: Schema.Literal('expiry'),
@@ -55,21 +73,18 @@ export class GitHubCredentials extends Context.Service<
 				const crypto = yield* GitHubCrypto
 				const installations = new Set(config.installationIds)
 				const cache = yield* Cache.makeWith(
-					(key: string) =>
+					([installationId, repositoryId]: CacheKey) =>
 						Effect.gen(function* () {
-							const [installationId, repositoryId] = yield* Schema.decodeEffect(
-								Schema.fromJsonString(Schema.Tuple([GitHubId, GitHubId])),
-							)(key).pipe(Effect.mapError(() => GitHubError.make({ reason: 'invalid_input' })))
 							const now = yield* Clock.currentTimeMillis
-							const header = Encoding.encodeBase64Url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }))
-							const payload = Encoding.encodeBase64Url(
-								JSON.stringify({
+							const [header, payload] = yield* Effect.all([
+								Schema.encodeEffect(JwtHeader)({ alg: 'RS256', typ: 'JWT' }),
+								Schema.encodeEffect(JwtClaims)({
 									iss: String(config.appId),
 									iat: Math.floor(now / 1000) - 60,
 									exp: Math.floor(now / 1000) + 540,
 								}),
-							)
-							const data = `${header}.${payload}`
+							]).pipe(Effect.mapError(() => GitHubError.make({ reason: 'configuration' })))
+							const data = `${Encoding.encodeBase64Url(header)}.${Encoding.encodeBase64Url(payload)}`
 							const signature = yield* crypto.signApp({ privateKey: config.privateKey, data })
 							const request = yield* apiRequest({
 								baseUrl: apiUrl,
@@ -86,13 +101,13 @@ export class GitHubCredentials extends Context.Service<
 							const token = yield* requestJson(request, Token).pipe(
 								Effect.provideService(HttpClient.HttpClient, http),
 							)
-							const expiresAt = Date.parse(token.expires_at)
+							const expiresAt = Option.map(DateTime.make(token.expires_at), DateTime.toEpochMillis)
 							const receivedAt = yield* Clock.currentTimeMillis
-							if (!Number.isFinite(expiresAt) || expiresAt <= receivedAt + 60_000)
+							if (Option.isNone(expiresAt) || expiresAt.value <= receivedAt + 60_000)
 								return yield* GitHubTokenFailure.make({ stage: 'expiry' })
 							return {
 								token: Redacted.make(token.token),
-								ttl: Math.min(expiresAt - receivedAt - 60_000, 3_540_000),
+								ttl: Math.min(expiresAt.value - receivedAt - 60_000, 3_540_000),
 							}
 						}).pipe(
 							Effect.tapErrorTag('GitHubTokenFailure', (error) =>
@@ -107,7 +122,7 @@ export class GitHubCredentials extends Context.Service<
 						timeToLive: (exit) => (Exit.isSuccess(exit) ? Duration.millis(exit.value.ttl) : Duration.zero),
 					},
 				)
-				const key = (input: GitHubRepository) => JSON.stringify([input.installationId, input.id])
+				const key = (input: GitHubRepository): CacheKey => [input.installationId, input.id]
 				return GitHubCredentials.of({
 					apiUrl,
 					botUserId: config.botUserId,

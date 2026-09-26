@@ -5,7 +5,7 @@ import { GitHubApiClient } from './GitHubApiClient'
 import { label, repositoryPath } from './GitHubApiProjections'
 import { Label } from './GitHubApiSchemas'
 
-const AddIssueLabelsBody = Schema.Struct({ labels: GitHubLabels })
+export const AddIssueLabelsBody = Schema.Struct({ labels: GitHubLabels })
 
 export const addIssueLabels = Effect.fn('github.api.add_issue_labels')(function* (input: GitHubIssueLabelsRequest) {
 	const api = yield* GitHubApiClient

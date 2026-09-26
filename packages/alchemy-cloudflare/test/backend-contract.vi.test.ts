@@ -16,7 +16,6 @@ import {
 import { RuntimeContext } from 'alchemy/RuntimeContext'
 import { Clock, Effect, Layer, Option, Schema } from 'effect'
 import { TestClock } from 'effect/testing'
-import { expect } from 'vite-plus/test'
 
 import { mailboxBackendContract } from '../../delivery-next/test/backend-contract'
 import {
@@ -67,7 +66,7 @@ const event = (eventId: string) =>
 
 const mailboxKey = deliveryMailboxKey(event('any'))
 
-it.effect('Durable Object: keeps the alarm on the time the mailbox is next due', () =>
+it.effect('Durable Object: keeps the alarm on the time the mailbox is next due', ({ expect }) =>
 	Effect.gen(function* () {
 		const delivery = yield* MailboxDelivery
 		const backend = yield* MailboxProcessingBackend
@@ -112,7 +111,7 @@ it.effect('Durable Object: keeps the alarm on the time the mailbox is next due',
 
 it.effect(
 	'Durable Object: an event that arrives during a run leaves the lease alarm alone, then wakes the mailbox',
-	() =>
+	({ expect }) =>
 		Effect.gen(function* () {
 			const delivery = yield* MailboxDelivery
 			const backend = yield* MailboxProcessingBackend
@@ -154,9 +153,9 @@ const alarmHandlerOver = (processing: Layer.Layer<MailboxProcessing>) =>
 		const alarm = yield* DurableObjectFakeAlarm
 		const runMailboxAlarm = yield* makeMailboxAlarmHandler({ rearmAfterMs: 1_000 })
 		return { delivery, alarm, runMailboxAlarm }
-	}).pipe(Effect.provide(processing), Effect.provide(makeEmptyStore()))
+	}).pipe(Effect.provide(Layer.merge(processing, makeEmptyStore())))
 
-it.effect('Durable Object alarm: puts the alarm back when a due mailbox was not worked on', () =>
+it.effect('Durable Object alarm: puts the alarm back when a due mailbox was not worked on', ({ expect }) =>
 	Effect.gen(function* () {
 		const { delivery, alarm, runMailboxAlarm } = yield* alarmHandlerOver(processingThatSkipsEverything)
 		yield* delivery.deliver(event('a'))
@@ -167,7 +166,7 @@ it.effect('Durable Object alarm: puts the alarm back when a due mailbox was not 
 	}),
 )
 
-it.effect('Durable Object alarm: puts the alarm back when the pass fails, and does not fail itself', () =>
+it.effect('Durable Object alarm: puts the alarm back when the pass fails, and does not fail itself', ({ expect }) =>
 	Effect.gen(function* () {
 		const { delivery, alarm, runMailboxAlarm } = yield* alarmHandlerOver(processingThatFails)
 		yield* delivery.deliver(event('a'))
@@ -177,7 +176,7 @@ it.effect('Durable Object alarm: puts the alarm back when the pass fails, and do
 	}),
 )
 
-it.effect('Durable Object alarm: leaves a quiet mailbox, and an alarm the store already set, alone', () =>
+it.effect('Durable Object alarm: leaves a quiet mailbox, and an alarm the store already set, alone', ({ expect }) =>
 	Effect.gen(function* () {
 		const { delivery, alarm, runMailboxAlarm } = yield* alarmHandlerOver(processingThatSkipsEverything)
 		yield* runMailboxAlarm()

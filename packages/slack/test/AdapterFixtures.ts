@@ -31,4 +31,4 @@ export const routeInput = {
 	rootedThread,
 	proactiveThread,
 }
-export const encodeRoute = Schema.encodeSync(Schema.fromJsonString(SlackDirectMessageRoute))
+export const encodeRoute = Schema.encodeEffect(Schema.fromJsonString(SlackDirectMessageRoute))

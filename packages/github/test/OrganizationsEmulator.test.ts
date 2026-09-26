@@ -1,6 +1,6 @@
 import { assert, it } from '@effect/vitest'
 import { MailboxReadiness, MailboxStore } from '@humanlayer/channels-delivery'
-import { Context, Deferred, Effect, Fiber, Layer, Logger, Match, Redacted, Ref } from 'effect'
+import { Context, Deferred, Effect, Exit, Fiber, Layer, Logger, Match, Redacted, Ref, Schema, Scope } from 'effect'
 import { FetchHttpClient } from 'effect/unstable/http'
 
 import {
@@ -15,6 +15,10 @@ import {
 import { layer as memory } from '../src/memory'
 import { policy } from './fixtures'
 import { adminCall, captureWebhooks, emulator, eventFor, host, secret } from './support'
+
+class SynchronousLookupDefect extends Schema.TaggedError<SynchronousLookupDefect>()('SynchronousLookupDefect', {
+	detail: Schema.String,
+}) {}
 
 for (const callback of ['onCreation', 'onMention'] as const) {
 	it.live(
@@ -33,7 +37,7 @@ for (const callback of ['onCreation', 'onMention'] as const) {
 				])
 				let synchronousThrow = false
 				const organizations = GitHubOrganizations.layer(({ installationId }) => {
-					if (synchronousThrow) throw new Error('private-synchronous-sentinel')
+					if (synchronousThrow) throw SynchronousLookupDefect.make({ detail: 'private-synchronous-sentinel' })
 					return Effect.gen(function* () {
 						assert.strictEqual(installationId, 100)
 						yield* Ref.update(lookups, (count) => count + 1)
@@ -145,12 +149,13 @@ for (const callback of ['onCreation', 'onMention'] as const) {
 					title: 'Cancel',
 					body: '@channels[bot] please reply',
 				})
-				const abort = new AbortController()
-				const cancelRequest = new Request(yield* capture.take, { signal: abort.signal })
+				const cancellation = yield* Scope.make()
+				const signal = yield* Effect.abortSignal.pipe(Scope.provide(cancellation))
+				const cancelRequest = new Request(yield* capture.take, { signal })
 				const logCount = logs.length
 				const sending = yield* send(cancelRequest).pipe(Effect.forkChild)
 				yield* Deferred.await(entered)
-				abort.abort()
+				yield* Scope.close(cancellation, Exit.void)
 				assert.strictEqual((yield* Fiber.join(sending)).status, 499)
 				yield* Deferred.await(finalized)
 				assert.strictEqual(logs.length, logCount)

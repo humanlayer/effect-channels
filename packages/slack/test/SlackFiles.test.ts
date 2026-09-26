@@ -93,12 +93,12 @@ it.effect('normalizes queue-safe Slack attachment metadata and reconstructs Atta
 )
 
 it.effect('keeps inbound files in provider-backed history normalization', () =>
-	Effect.sync(() => {
+	Effect.gen(function* () {
 		const threadRef = slackThreadRef(
 			SlackThreadRef.make({ teamId: testTeamId, channelId: testChannelId, threadTs: testRootTs }),
 			false,
 		)
-		const message = normalizeSlackHistoryMessage({
+		const message = yield* normalizeSlackHistoryMessage({
 			teamId: testTeamId,
 			threadRef,
 			identity: { botUserId: 'U_BOT', botId: 'B_OURS' },
