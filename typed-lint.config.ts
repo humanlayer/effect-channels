@@ -1,0 +1,19 @@
+import { defineConfig } from './tools/typed/src/config'
+
+export default defineConfig({
+	projects: ['tsconfig.json'],
+	projectExcludes: ['**/node_modules/**', '**/dist/**', '**/build/**', '**/coverage/**'],
+	sourceExcludes: ['**/*.d.ts', '**/node_modules/**', '**/dist/**', '**/build/**', '**/coverage/**', 'tools/**'],
+	rules: {
+		'no-svg-files': [
+			'error',
+			{
+				include: ['**/*.svg'],
+				exclude: ['**/generated/**', '**/node_modules/**'],
+			},
+		],
+		'no-xstate-derived-boolean-context': 'error',
+		'prefer-effect-array-match': 'error',
+		'prefer-typed-schema-apis': 'error',
+	},
+})
