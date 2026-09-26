@@ -1,7 +1,7 @@
 import { describe, it } from '@effect/vitest'
 import { MailboxSubscriptionCreatedResult, MailboxSubscriptions } from '@humanlayer/channels-delivery-next'
 import { Effect, Layer, Predicate } from 'effect'
-import { vi } from 'vitest'
+import { vi } from 'vite-plus/test'
 
 import { LinearApi } from '../src/LinearApi'
 import type { LinearMentioned } from '../src/LinearCallbackEvents'

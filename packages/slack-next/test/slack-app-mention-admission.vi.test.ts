@@ -1,29 +1,30 @@
 import { NodeCrypto } from '@effect/platform-node'
 import { describe, it } from '@effect/vitest'
 import { DeliveryAdmission, ProviderWebhookEvent } from '@humanlayer/channels-delivery-next'
-import { Effect, Layer, Redacted } from 'effect'
+import { Effect, Layer, Predicate, Redacted, Schema } from 'effect'
 
 import { SlackApi } from '../src/SlackApi'
 import { makeSlackWebhookProvider } from '../src/SlackWebhookProvider'
 import { signedSlackInput } from './fixtures'
 
 const signingSecret = 'mention-test-secret'
+const rootMentionEvent = {
+	type: 'app_mention',
+	user: 'U_TEST',
+	text: '<@U_BOT> hello',
+	ts: '1700000001.000001',
+	channel: 'C_TEST',
+}
+
 const appMention = (threadTs?: string) => ({
 	type: 'event_callback',
 	team_id: 'T_TEST',
 	event_id: 'Ev_MENTION',
 	event_time: 1_700_000_000,
-	event: {
-		type: 'app_mention',
-		user: 'U_TEST',
-		text: '<@U_BOT> hello',
-		ts: '1700000001.000001',
-		...(threadTs === undefined ? {} : { thread_ts: threadTs }),
-		channel: 'C_TEST',
-	},
+	event: Predicate.isUndefined(threadTs) ? rootMentionEvent : { ...rootMentionEvent, thread_ts: threadTs },
 })
 
-const handleMention = (payload: unknown) =>
+const handleMention = (payload: Schema.Json) =>
 	makeSlackWebhookProvider({
 		namespace: 'mention-test',
 		signingSecret: Redacted.make(signingSecret),

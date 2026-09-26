@@ -5,10 +5,12 @@ import {
 	ProviderEventHandled,
 	MailboxSubscriptionsMemory,
 } from '@humanlayer/channels-delivery-next'
-import { Effect, Layer } from 'effect'
-import { vi } from 'vitest'
+import { Effect, Layer, Predicate } from 'effect'
+import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http'
+import { vi } from 'vite-plus/test'
 
 import { SlackApi } from '../src/SlackApi'
+import { SlackPostMessageRequest, SlackPostMessageResponse } from '../src/SlackApiLive'
 import type { SlackNewMention } from '../src/SlackCallbackEvents'
 import { SlackCallbacks } from '../src/SlackCallbacks'
 import { makeSlackEventProcessor } from '../src/SlackEventProcessor'
@@ -109,22 +111,24 @@ describe('Slack webhook routing', () => {
 				},
 				resolveReactionThread: ({ message }) => Effect.succeed(message.messageTs),
 			})
-			const postMessage = (body: Record<string, unknown>) =>
-				Effect.promise(async () => {
-					const response = await fetch(`${slack.url}/api/chat.postMessage`, {
-						method: 'POST',
-						headers: {
-							authorization: `Bearer ${slack.aliceToken}`,
-							'content-type': 'application/json',
-						},
-						body: JSON.stringify(body),
-					})
-					const result = (await response.json()) as { readonly ok: boolean; readonly ts?: string }
-					if (!result.ok || result.ts === undefined)
-						throw new Error('Slack emulator rejected chat.postMessage')
-					return result.ts
-				})
-			const rootTs = yield* postMessage({ channel: slack.channelId, text: 'Existing channel message' })
+			const postMessage = (body: typeof SlackPostMessageRequest.Type) =>
+				HttpClientRequest.post(`${slack.url}/api/chat.postMessage`).pipe(
+					HttpClientRequest.bearerToken(slack.aliceToken),
+					HttpClientRequest.schemaBodyJson(SlackPostMessageRequest)(body),
+					Effect.flatMap(HttpClient.execute),
+					Effect.flatMap(HttpClientResponse.schemaBodyJson(SlackPostMessageResponse)),
+					Effect.flatMap(({ ok, ts }) =>
+						ok && Predicate.isNotUndefined(ts)
+							? Effect.succeed(ts)
+							: Effect.die(new Error('Slack emulator rejected chat.postMessage')),
+					),
+					Effect.provide(FetchHttpClient.layer),
+				)
+			const rootTs = yield* postMessage({
+				channel: slack.channelId,
+				text: 'Existing channel message',
+				mrkdwn: false,
+			})
 
 			yield* Effect.promise(() =>
 				slack.webhooks.dispatch(
@@ -149,6 +153,7 @@ describe('Slack webhook routing', () => {
 			const replyTs = yield* postMessage({
 				channel: slack.channelId,
 				text: 'Existing threaded reply',
+				mrkdwn: false,
 				thread_ts: rootTs,
 			})
 			yield* Effect.promise(() =>

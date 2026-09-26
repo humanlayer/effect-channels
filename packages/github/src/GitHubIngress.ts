@@ -152,7 +152,7 @@ export class GitHubIngress extends Context.Service<
 												: true,
 										}),
 									),
-								) as Effect.Effect<void, HandlerFailure, never>
+								)
 							},
 							deliverFinalMessage: (operation) =>
 								Option.match(configuredGitHub, {

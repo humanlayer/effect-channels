@@ -3,6 +3,9 @@ import { Schema } from 'effect'
 import { LinearOrganizationId, LinearUserId } from '../LinearIdentity'
 import { linearGraphql } from './LinearGraphql'
 
+/** The viewer query takes no variables, so its variables object must be empty. */
+export const GetViewerIdentityVariables = Schema.Record(Schema.String, Schema.Never)
+
 const GetViewerIdentityResponse = Schema.Struct({
 	viewer: Schema.Struct({
 		id: LinearUserId,
@@ -21,6 +24,7 @@ export const getViewerIdentity = () =>
 	linearGraphql({
 		operation: 'viewer_identity',
 		query,
-		variables: {},
+		variables: GetViewerIdentityVariables,
+		input: {},
 		response: GetViewerIdentityResponse,
 	})

@@ -5,6 +5,9 @@ import { GitHubReviewCommentRef } from '../GitHubModels'
 import { GitHubApiClient } from './GitHubApiClient'
 import { commentPath, commentRepository, issueComment, reviewComment } from './GitHubApiProjections'
 import { IssueComment, ReviewComment } from './GitHubApiSchemas'
+
+const UpdateCommentBody = Schema.Struct({ body: Schema.String })
+
 export const updateComment = Effect.fn('github.api.update_comment')(function* (input: GitHubUpdateComment) {
 	const api = yield* GitHubApiClient
 	const ref = input.comment
@@ -16,7 +19,7 @@ export const updateComment = Effect.fn('github.api.update_comment')(function* (i
 			method: 'PATCH',
 			path: commentPath(ref),
 			schema: ReviewComment,
-			body: { body: input.content.markdown },
+			body: { schema: UpdateCommentBody, value: { body: input.content.markdown } },
 		})
 		return reviewComment(ref.pullRequest, value)
 	}
@@ -26,7 +29,7 @@ export const updateComment = Effect.fn('github.api.update_comment')(function* (i
 		method: 'PATCH',
 		path: commentPath(ref),
 		schema: IssueComment,
-		body: { body: input.content.markdown },
+		body: { schema: UpdateCommentBody, value: { body: input.content.markdown } },
 	})
 	return issueComment(ref.discussion, value)
 })

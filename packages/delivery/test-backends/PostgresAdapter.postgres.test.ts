@@ -3,6 +3,7 @@ import { Config, Effect, Layer, Redacted, Schema } from 'effect'
 import { TestClock } from 'effect/testing'
 import * as SqlClient from 'effect/unstable/sql/SqlClient'
 
+import { DeliveryQueue } from '../src/DeliveryQueue'
 import { emptyMailbox } from '../src/Mailbox'
 import { MailboxStore } from '../src/MailboxStore'
 import { layer, migrate } from '../src/postgres'
@@ -31,6 +32,8 @@ const client = Layer.unwrap(
 	}),
 )
 
+const runtime = DeliveryQueue.layerMailboxStore.pipe(Layer.provideMerge(layer))
+
 it.effect(
 	'isolated PostgreSQL: concurrent startup, atomic storage/readiness, stale attempts and fresh-layer recovery',
 	() =>
@@ -56,17 +59,17 @@ it.effect(
 			const rows =
 				yield* sql`SELECT revision::double precision AS revision, state_json, ready_at FROM humanlayer_delivery_v1_mailboxes WHERE key = ${'contract%_!\\:cas'}`
 			assert.deepStrictEqual(rows, [{ revision: 3, state_json: encodeState(emptyMailbox()), ready_at: null }])
-			yield* staleAttemptContract.pipe(Effect.provide(Layer.fresh(layer)))
-			const receipt = yield* interruptForReconstruction.pipe(Effect.provide(Layer.fresh(layer)))
+			yield* staleAttemptContract.pipe(Effect.provide(Layer.fresh(runtime)))
+			const receipt = yield* interruptForReconstruction.pipe(Effect.provide(Layer.fresh(runtime)))
 			yield* TestClock.adjust(policy.leaseMs)
-			yield* resumeAfterReconstruction(receipt).pipe(Effect.provide(Layer.fresh(layer)))
+			yield* resumeAfterReconstruction(receipt).pipe(Effect.provide(Layer.fresh(runtime)))
 			yield* Effect.gen(function* () {
 				const store = yield* MailboxStore
 				assert.deepStrictEqual(yield* store.loadMailbox({ key: 'contract%_!\\:cas' }), {
 					revision: 3,
 					state: emptyMailbox(),
 				})
-			}).pipe(Effect.provide(Layer.fresh(layer)))
+			}).pipe(Effect.provide(Layer.fresh(runtime)))
 		}).pipe(Effect.provide(client)),
 	{ timeout: 30_000 },
 )

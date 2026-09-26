@@ -34,7 +34,7 @@ export const make = <const Requirements extends ReadonlyArray<ChannelsProviderRe
 		Effect.gen(function* () {
 			const deliver = yield* makeDeliverFromDurableObjectStorage
 			const runMailboxAlarm = yield* makeMailboxAlarmHandler(alarmOptions)
-			return { deliver, alarm: () => runMailboxAlarm }
+			return { deliver, alarm: runMailboxAlarm }
 		}).pipe(
 			Effect.provide(
 				Channels.processingLayer(options, 'disabled').pipe(

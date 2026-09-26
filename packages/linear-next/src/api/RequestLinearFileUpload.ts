@@ -5,6 +5,11 @@ import { failLinearMutation } from './LinearApiErrors'
 import { linearGraphql } from './LinearGraphql'
 
 const document = `mutation LinearFileUpload($contentType: String!, $filename: String!, $size: Int!) { fileUpload(contentType: $contentType, filename: $filename, size: $size) { success uploadFile { assetUrl uploadUrl filename contentType size headers { key value } } } }`
+export const RequestLinearFileUploadVariables = Schema.Struct({
+	contentType: Schema.String,
+	filename: Schema.String,
+	size: Schema.Int,
+})
 
 const HttpsUrl = Schema.String.check(
 	Schema.makeFilter((value: string) =>
@@ -31,7 +36,8 @@ export const requestLinearFileUpload = Effect.fn('linear.api.request_file_upload
 	linearGraphql({
 		operation: 'request_file_upload',
 		query: document,
-		variables: {
+		variables: RequestLinearFileUploadVariables,
+		input: {
 			contentType: input.input.contentType,
 			filename: input.input.filename,
 			size: input.input.bytes.byteLength,

@@ -18,10 +18,10 @@ import { SlackSubscriptions } from '../src/SlackSubscriptions'
 import { nativePolicy } from './nativeSupport'
 import {
 	appMentionCallback,
+	makeTestIngress,
 	signSlackBody,
 	testCredentialsLayer,
 	testRouteSlackClientLayer,
-	unimplemented,
 } from './support'
 
 const routeLayer = SlackRoutes.layerMounted('/api/v1').pipe(
@@ -65,9 +65,14 @@ it.effect('mounts webhook admission with addressed services and no mailbox proce
 			return HttpRouter.toWebHandler(routeLayer.pipe(Layer.provide(admission)), { disableLogger: true })
 		}),
 		({ handler }) =>
-			Effect.sync(() => {
-				assert.strictEqual(typeof handler, 'function')
-			}),
+			Effect.promise(() =>
+				handler(
+					new Request('http://localhost/unrouted', { method: 'POST' }),
+					Context.make(Ingress, makeTestIngress({})),
+				),
+			).pipe(
+				Effect.map((response) => assert.strictEqual(response.status, 404)),
+			),
 		({ dispose }) => Effect.promise(dispose),
 	),
 )
@@ -75,16 +80,11 @@ it.effect('mounts webhook admission with addressed services and no mailbox proce
 it.effect('resolves MPIM reaction identities before ingress admission', () =>
 	Effect.gen(function* () {
 		const accepted = yield* Queue.unbounded<NormalizedReaction>()
-		const ingress = Ingress.of({
-			acceptMessage: () => unimplemented('test.acceptMessage'),
-			acceptMessageUpdated: () => unimplemented('test.acceptMessageUpdated'),
-			acceptMessageDeleted: () => unimplemented('test.acceptMessageDeleted'),
+		const ingress = makeTestIngress({
 			acceptReaction: (event) =>
 				Queue.offer(accepted, event).pipe(
 					Effect.as(IngressAccepted.make({ idempotencyKey: event.idempotencyKey })),
 				),
-			acceptConversationStopped: () => unimplemented('test.acceptConversationStopped'),
-			run: () => unimplemented('test.run'),
 		})
 		const callback = yield* Schema.decodeEffect(SlackEventCallback)({
 			type: 'event_callback',
@@ -130,16 +130,11 @@ const signedRequest = (callback: SlackEventCallback) =>
 it.effect('verifies and normalizes a signed Slack request through the Fetch handler', () =>
 	Effect.gen(function* () {
 		const accepted = yield* Queue.unbounded<NormalizedMessage>()
-		const ingress = Ingress.of({
+		const ingress = makeTestIngress({
 			acceptMessage: (message) =>
 				Queue.offer(accepted, message).pipe(
 					Effect.as(IngressAccepted.make({ idempotencyKey: message.idempotencyKey })),
 				),
-			acceptMessageUpdated: () => unimplemented('test.acceptMessageUpdated'),
-			acceptMessageDeleted: () => unimplemented('test.acceptMessageDeleted'),
-			acceptReaction: () => unimplemented('test.acceptReaction'),
-			acceptConversationStopped: () => unimplemented('test.acceptConversationStopped'),
-			run: () => unimplemented('test.run'),
 		})
 		const callback = yield* Schema.decodeEffect(SlackEventCallback)(appMentionCallback)
 		const request = yield* signedRequest(callback)
@@ -157,16 +152,11 @@ it.effect('verifies and normalizes a signed Slack request through the Fetch hand
 it.effect('normalizes and admits an agent session stop', () =>
 	Effect.gen(function* () {
 		const accepted = yield* Queue.unbounded<NormalizedConversationStopped>()
-		const ingress = Ingress.of({
-			acceptMessage: () => unimplemented('test.acceptMessage'),
-			acceptMessageUpdated: () => unimplemented('test.acceptMessageUpdated'),
-			acceptMessageDeleted: () => unimplemented('test.acceptMessageDeleted'),
-			acceptReaction: () => unimplemented('test.acceptReaction'),
+		const ingress = makeTestIngress({
 			acceptConversationStopped: (event) =>
 				Queue.offer(accepted, event).pipe(
 					Effect.as(IngressAccepted.make({ idempotencyKey: event.idempotencyKey })),
 				),
-			run: () => unimplemented('test.run'),
 		})
 		const callback = yield* Schema.decodeEffect(SlackEventCallback)({
 			type: 'event_callback',

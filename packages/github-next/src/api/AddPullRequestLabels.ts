@@ -1,9 +1,12 @@
 import { Effect, Schema } from 'effect'
 
-import type { GitHubPullRequestLabelsRequest } from '../GitHubApi'
+import { GitHubLabels, type GitHubPullRequestLabelsRequest } from '../GitHubApi'
 import { GitHubApiClient } from './GitHubApiClient'
 import { label, repositoryPath } from './GitHubApiProjections'
 import { Label } from './GitHubApiSchemas'
+
+const AddPullRequestLabelsBody = Schema.Struct({ labels: GitHubLabels })
+
 export const addPullRequestLabels = Effect.fn('github.api.add_pull_request_labels')(function* (
 	input: GitHubPullRequestLabelsRequest,
 ) {
@@ -14,7 +17,7 @@ export const addPullRequestLabels = Effect.fn('github.api.add_pull_request_label
 		method: 'POST',
 		path: `${repositoryPath(input.pullRequest)}/issues/${input.pullRequest.number}/labels`,
 		schema: Schema.Array(Label),
-		body: { labels: input.labels },
+		body: { schema: AddPullRequestLabelsBody, value: { labels: input.labels } },
 	})
 	return values.map(label)
 })

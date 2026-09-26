@@ -78,6 +78,7 @@ export const makeTestIngress = (overrides: Partial<Ingress['Service']>) =>
 		acceptReaction: () => unimplemented('test.Ingress.acceptReaction'),
 		acceptConversationStopped: () => unimplemented('test.Ingress.acceptConversationStopped'),
 		run: () => unimplemented('test.Ingress.run'),
+		processMailbox: () => unimplemented('test.Ingress.processMailbox'),
 		...overrides,
 	})
 

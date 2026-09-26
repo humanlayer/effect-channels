@@ -134,7 +134,10 @@ describe('Channels.make', () => {
 				},
 			})
 
-			yield* HttpRouter.toHttpEffect(Layer.merge(bot.routes, bot.layer)).pipe(Effect.provide(NodeCrypto.layer))
+			yield* HttpRouter.toHttpEffect(Layer.merge(bot.routes, bot.layer)).pipe(
+				Effect.provide(NodeCrypto.layer),
+				Effect.asVoid,
+			)
 
 			expect(yield* Ref.get(storageBuilds)).toBe(1)
 			expect(yield* Ref.get(processorBuilds)).toBe(1)

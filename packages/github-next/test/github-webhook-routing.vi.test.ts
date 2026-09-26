@@ -6,7 +6,7 @@ import {
 	ProviderEventHandled,
 } from '@humanlayer/channels-delivery-next'
 import { Deferred, Effect, Layer } from 'effect'
-import { vi } from 'vitest'
+import { vi } from 'vite-plus/test'
 
 import { GitHubApi } from '../src/GitHubApi'
 import { GitHubCallbacks } from '../src/GitHubCallbacks'

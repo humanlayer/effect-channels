@@ -13,7 +13,7 @@ import {
 	webhookRoutes,
 	type RawWebhookInput,
 } from '@humanlayer/channels-delivery-next'
-import { Context, Effect, Match, Queue, Redacted, Schema } from 'effect'
+import { Context, Effect, Match, Predicate, Queue, Redacted, Schema } from 'effect'
 import { Headers, HttpRouter } from 'effect/unstable/http'
 
 import { makeGitHubWebhookProvider } from '../src/GitHubWebhookProvider'
@@ -84,11 +84,8 @@ export const issueCommentPayload = (input?: {
 	readonly action?: string
 	readonly issueNumber?: number
 	readonly pullRequest?: boolean
-}) => ({
-	action: input?.action ?? 'created',
-	installation: { id: 100 },
-	repository: { id: 200, name: 'project', owner: { login: 'alice' } },
-	issue: {
+}) => {
+	const issue = {
 		id: 300,
 		number: input?.issueNumber ?? 42,
 		title: 'Test discussion',
@@ -96,18 +93,24 @@ export const issueCommentPayload = (input?: {
 		state: 'open',
 		html_url: 'https://github.com/alice/project/issues/42',
 		user: githubUser,
-		...(input?.pullRequest === true
-			? { pull_request: { url: 'https://api.github.com/repos/alice/project/pulls/42' } }
-			: {}),
-	},
-	comment: {
-		id: 500,
-		body: '@agent please review',
-		html_url: 'https://github.com/alice/project/issues/42#issuecomment-500',
-		user: { id: 401, login: 'bob', type: 'User' },
-	},
-	sender: { id: 401, login: 'bob', type: 'User' },
-})
+	}
+	return {
+		action: input?.action ?? 'created',
+		installation: { id: 100 },
+		repository: { id: 200, name: 'project', owner: { login: 'alice' } },
+		issue:
+			input?.pullRequest === true
+				? { ...issue, pull_request: { url: 'https://api.github.com/repos/alice/project/pulls/42' } }
+				: issue,
+		comment: {
+			id: 500,
+			body: '@agent please review',
+			html_url: 'https://github.com/alice/project/issues/42#issuecomment-500',
+			user: { id: 401, login: 'bob', type: 'User' },
+		},
+		sender: { id: 401, login: 'bob', type: 'User' },
+	}
+}
 
 export const pullRequestPayload = (action = 'opened') => ({
 	action,
@@ -242,7 +245,7 @@ const listen = (server: NodeHttp.Server) =>
 		server.once('error', (cause) => resume(Effect.fail(cause)))
 		server.listen(0, '127.0.0.1', () => {
 			const address = server.address()
-			if (address === null || typeof address === 'string') {
+			if (address === null || Predicate.isString(address)) {
 				resume(Effect.fail(new Error('GitHub emulator server did not expose a TCP port')))
 				return
 			}
@@ -375,7 +378,7 @@ export const makeGitHubEmulatorFixture = (options: GitHubEmulatorFixtureOptions)
 		}
 	})
 
-export const signedGitHubInput = (event: string, payload: unknown, deliveryId = 'delivery-1'): RawWebhookInput =>
+export const signedGitHubInput = (event: string, payload: Schema.Json, deliveryId = 'delivery-1'): RawWebhookInput =>
 	signedGitHubBody(event, new TextEncoder().encode(JSON.stringify(payload)), deliveryId)
 
 export const signedGitHubBody = (event: string, body: Uint8Array, deliveryId = 'delivery-1'): RawWebhookInput => {
@@ -390,7 +393,7 @@ export const signedGitHubBody = (event: string, body: Uint8Array, deliveryId = '
 	}
 }
 
-export const admitStoredGitHubWebhook = (namespace: string, event: string, payload: unknown) =>
+export const admitStoredGitHubWebhook = (namespace: string, event: string, payload: Schema.Json) =>
 	Effect.gen(function* () {
 		const outcome = yield* makeGitHubTestProvider(namespace).handle(signedGitHubInput(event, payload))
 		const admission = yield* Match.value(outcome).pipe(

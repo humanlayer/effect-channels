@@ -248,13 +248,20 @@ export class ProviderEventDispatcher extends Context.Service<
 >()('@humanlayer/channels-delivery-next/ProviderEventDispatcher') {}
 
 /**
+ * A list of event processors where each entry keeps its own requirements, so processors that need
+ * different services can share a list.
+ */
+export type ProviderEventProcessors<Requirements extends ReadonlyArray<unknown>> = {
+	readonly [Index in keyof Requirements]: ProviderEventProcessor<Requirements[Index]>
+}
+
+/**
  * Constructor for ProviderEventDispatcher live layer which accepts a set of processors
  * BUT this lets the MailboxProcessing layer stub/mock this out and not have to worry about the providers
  */
-export const ProviderEventDispatcherLive = <const Requirements extends ReadonlyArray<unknown>>(processors: {
-	// One type per processor, so processors that need different services can share a list.
-	readonly [Index in keyof Requirements]: ProviderEventProcessor<Requirements[Index]>
-}) =>
+export const ProviderEventDispatcherLive = <const Requirements extends ReadonlyArray<unknown>>(
+	processors: ProviderEventProcessors<Requirements>,
+) =>
 	Layer.effect(
 		ProviderEventDispatcher,
 		Effect.gen(function* () {

@@ -1,6 +1,6 @@
 import { describe, it } from '@effect/vitest'
 import { Effect, Layer, Queue } from 'effect'
-import { expect } from 'vitest'
+import { expect } from 'vite-plus/test'
 
 import { GitHubApi } from '../src/GitHubApi'
 import { GitHubId } from '../src/GitHubIdentity'

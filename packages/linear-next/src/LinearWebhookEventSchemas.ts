@@ -15,7 +15,6 @@ import {
 
 const optionalNullableString = Schema.optionalKey(Schema.NullOr(Schema.String))
 const optionalNullableJson = Schema.optionalKey(Schema.NullOr(Schema.Json))
-const WebhookUpdatedFrom = Schema.Record(Schema.String, Schema.Json)
 
 export const LinearWebhookActor = Schema.Struct({
 	__typename: Schema.optionalKey(Schema.Literal('UserChildWebhookPayload')),
@@ -223,9 +222,7 @@ const appUserNotificationFields = {
 	organizationId: LinearOrganizationId,
 	oauthClientId: Schema.NonEmptyString,
 	appUserId: LinearUserId,
-	// The current webhook SDL includes these fields, while Linear's agent guide and
-	// observed Inbox Notification deliveries omit them. Linear-Delivery and
-	// Linear-Timestamp remain the authoritative ingress values either way.
+	/** Linear's webhook SDL includes `webhookId` and `webhookTimestamp`, but its agent guide and observed Inbox Notification deliveries omit them. The `Linear-Delivery` and `Linear-Timestamp` headers remain the authoritative ingress values either way. */
 	webhookId: Schema.optionalKey(Schema.NonEmptyString),
 	webhookTimestamp: Schema.optionalKey(Schema.Number),
 	createdAt: Schema.String,
@@ -291,7 +288,6 @@ export const LinearIssueCreateWebhook = Schema.Struct({
 	data: LinearWebhookIssue,
 	actor: Schema.optionalKey(Schema.NullOr(LinearEntityWebhookActor)),
 	url: Schema.optionalKey(Schema.NullOr(Schema.String)),
-	updatedFrom: Schema.optionalKey(Schema.NullOr(WebhookUpdatedFrom)),
 	webhookId: Schema.NonEmptyString,
 	webhookTimestamp: Schema.Number,
 	createdAt: Schema.String,
@@ -379,16 +375,58 @@ export const LinearAgentSessionEventWebhook = Schema.Union([
 ])
 export type LinearAgentSessionEventWebhook = typeof LinearAgentSessionEventWebhook.Type
 
-// Linear sends only changed keys and uses null when the previous value was unset.
-// Keep this open so new provider fields survive into bounded `otherChanges`.
-const IssueUpdatedFrom = WebhookUpdatedFrom
+const issueField = LinearWebhookIssue.fields
+const optionalNullableStrings = Schema.optionalKey(Schema.NullOr(Schema.Array(Schema.String)))
+
+/** The previous value of each issue field an update changed. Linear sends only changed keys and uses `null` when the previous value was unset. */
+export const LinearIssueUpdatedFrom = Schema.Struct({
+	title: optionalNullableString,
+	description: issueField.description,
+	descriptionData: optionalNullableJson,
+	state: issueField.state,
+	stateId: issueField.stateId,
+	startedAt: issueField.startedAt,
+	completedAt: issueField.completedAt,
+	canceledAt: issueField.canceledAt,
+	priority: Schema.optionalKey(Schema.NullOr(Schema.Int)),
+	priorityLabel: optionalNullableString,
+	labels: issueField.labels,
+	labelIds: optionalNullableStrings,
+	assignee: issueField.assignee,
+	assigneeId: issueField.assigneeId,
+	delegate: issueField.delegate,
+	delegateId: issueField.delegateId,
+	project: issueField.project,
+	projectId: issueField.projectId,
+	projectMilestone: issueField.projectMilestone,
+	projectMilestoneId: issueField.projectMilestoneId,
+	cycle: issueField.cycle,
+	cycleId: issueField.cycleId,
+	team: Schema.optionalKey(Schema.NullOr(LinearWebhookTeam)),
+	teamId: Schema.optionalKey(Schema.NullOr(LinearTeamId)),
+	previousIdentifiers: optionalNullableStrings,
+	parentId: issueField.parentId,
+	subIssueSortOrder: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+	estimate: issueField.estimate,
+	dueDate: issueField.dueDate,
+	subscriberIds: optionalNullableStrings,
+	archivedAt: issueField.archivedAt,
+	trashed: Schema.optionalKey(Schema.NullOr(Schema.Boolean)),
+	triagedAt: issueField.triagedAt,
+	startedTriageAt: issueField.startedTriageAt,
+	snoozedUntilAt: issueField.snoozedUntilAt,
+	releases: issueField.releases,
+	slaStartedAt: issueField.slaStartedAt,
+	slaBreachesAt: issueField.slaBreachesAt,
+	slaType: issueField.slaType,
+})
+export type LinearIssueUpdatedFrom = typeof LinearIssueUpdatedFrom.Type
 
 const relatedWebhookFields = {
 	organizationId: LinearOrganizationId,
 	actor: Schema.optionalKey(Schema.NullOr(LinearEntityWebhookActor)),
 	createdAt: Schema.String,
 	url: Schema.optionalKey(Schema.NullOr(Schema.String)),
-	updatedFrom: Schema.optionalKey(Schema.NullOr(WebhookUpdatedFrom)),
 	webhookId: Schema.NonEmptyString,
 	webhookTimestamp: Schema.Number,
 }
@@ -398,7 +436,7 @@ export const LinearIssueUpdateWebhook = Schema.Struct({
 	type: Schema.Literal('Issue'),
 	action: Schema.Literal('update'),
 	data: LinearWebhookIssue,
-	updatedFrom: IssueUpdatedFrom,
+	updatedFrom: LinearIssueUpdatedFrom,
 })
 export const LinearIssueRemoveWebhook = Schema.Struct({
 	...relatedWebhookFields,
@@ -425,7 +463,7 @@ export const LinearWebhookCommentChild = Schema.Struct({
 	issueId: Schema.optionalKey(Schema.NullOr(LinearIssueId)),
 	userId: Schema.optionalKey(Schema.NullOr(LinearUserId)),
 })
-const CommentUpdatedFrom = WebhookUpdatedFrom
+const CommentUpdatedFrom = Schema.Struct({ body: Schema.optionalKey(Schema.NullOr(Schema.String)) })
 const commentWebhook = <Action extends 'create' | 'remove'>(action: Action) =>
 	Schema.Struct({
 		...relatedWebhookFields,

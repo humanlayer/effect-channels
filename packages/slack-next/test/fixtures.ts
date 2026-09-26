@@ -2,7 +2,7 @@ import { createHmac } from 'node:crypto'
 import * as NodeHttp from 'node:http'
 
 import { NodeCrypto } from '@effect/platform-node'
-import { createServer, serve } from '@emulators/core'
+import { createServer, serve, type WebhookDispatcher } from '@emulators/core'
 import { getSlackStore, seedFromConfig, slackPlugin, type SlackSeedConfig } from '@emulators/slack'
 import {
 	type DeliveryAdmission,
@@ -13,7 +13,7 @@ import {
 	webhookRoutes,
 	type RawWebhookInput,
 } from '@humanlayer/channels-delivery-next'
-import { Clock, Context, Effect, Layer, Queue, Redacted } from 'effect'
+import { Clock, Context, Effect, Layer, Predicate, Queue, Redacted, Schema } from 'effect'
 import { Headers, HttpRouter } from 'effect/unstable/http'
 
 import { SlackApi } from '../src/SlackApi'
@@ -80,7 +80,7 @@ export const makeInMemoryMailboxFixture = <R>(processors: ReadonlyArray<Provider
 		}
 	})
 
-export const signedSlackInput = (signingSecret: string, payload: unknown, timestamp = '0'): RawWebhookInput => {
+export const signedSlackInput = (signingSecret: string, payload: Schema.Json, timestamp = '0'): RawWebhookInput => {
 	const bodyText = JSON.stringify(payload)
 	const body = new TextEncoder().encode(bodyText)
 	const signature = createHmac('sha256', signingSecret).update(`v0:${timestamp}:${bodyText}`).digest('hex')
@@ -155,7 +155,7 @@ const listen = (server: NodeHttp.Server) =>
 		server.once('error', (cause) => resume(Effect.fail(cause)))
 		server.listen(0, '127.0.0.1', () => {
 			const address = server.address()
-			if (address === null || typeof address === 'string') {
+			if (address === null || Predicate.isString(address)) {
 				resume(Effect.fail(new Error('Emulator server did not expose a TCP port')))
 				return
 			}
@@ -201,6 +201,20 @@ const requestListener =
 	}
 
 /**
+ * `@emulators/core` defaults to GitHub webhook headers. `@emulators/slack` stores `signing_secret` but does not
+ * install a Slack signature header factory, so the fixture must sign callbacks before exercising production ingress.
+ */
+const signEmulatorCallbacks = (webhooks: WebhookDispatcher, timestamp: string) =>
+	webhooks.setHeaderFactory(({ body }) => {
+		const signature = createHmac('sha256', slackEmulatorSigningSecret).update(`v0:${timestamp}:${body}`).digest('hex')
+		return {
+			'content-type': 'application/json',
+			'x-slack-request-timestamp': timestamp,
+			'x-slack-signature': `v0=${signature}`,
+		}
+	})
+
+/**
  * Scoped Slack emulator fixture with seeded users, an app, a channel, and a real callback URL wired to the
  * delivery HttpRouter and SlackWebhookProvider.
  */
@@ -233,18 +247,7 @@ export const makeSlackEmulatorFixture = (options: SlackEmulatorFixtureOptions) =
 		slackPlugin.seed?.(emulator.store, emulator.baseUrl)
 		seedFromConfig(emulator.store, emulator.baseUrl, slackSeed)
 
-		// @emulators/core defaults to GitHub webhook headers. @emulators/slack stores signing_secret but does not
-		// install a Slack signature header factory, so the fixture must sign callbacks before exercising production ingress.
-		emulator.webhooks.setHeaderFactory(({ body }) => {
-			const signature = createHmac('sha256', slackEmulatorSigningSecret)
-				.update(`v0:${webhookTimestamp}:${body}`)
-				.digest('hex')
-			return {
-				'content-type': 'application/json',
-				'x-slack-request-timestamp': webhookTimestamp,
-				'x-slack-signature': `v0=${signature}`,
-			}
-		})
+		signEmulatorCallbacks(emulator.webhooks, webhookTimestamp)
 		emulator.webhooks.register({
 			owner: 'slack',
 			url: `http://127.0.0.1:${callbackPort}/integrations/slack/webhook`,

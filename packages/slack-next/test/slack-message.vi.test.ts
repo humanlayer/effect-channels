@@ -1,30 +1,32 @@
 import { NodeCrypto } from '@effect/platform-node'
 import { describe, it } from '@effect/vitest'
 import { DeliveryAdmission, ProviderWebhookEvent, ProviderWebhookIgnored } from '@humanlayer/channels-delivery-next'
-import { Effect, Layer, Redacted } from 'effect'
+import { Effect, Layer, Predicate, Redacted, Schema } from 'effect'
 
 import { SlackApi } from '../src/SlackApi'
 import { makeSlackWebhookProvider } from '../src/SlackWebhookProvider'
 import { signedSlackInput } from './fixtures'
 
 const signingSecret = 'message-test-secret'
-const message = (channel: string, channelType: 'channel' | 'im' | 'mpim', threadTs?: string) => ({
-	type: 'event_callback',
-	team_id: 'T_TEST',
-	event_id: `Ev_${channelType}`,
-	event_time: 1_700_000_000,
-	event: {
+const message = (channel: string, channelType: 'channel' | 'im' | 'mpim', threadTs?: string) => {
+	const event = {
 		type: 'message',
 		user: 'U_TEST',
 		text: 'hello agent',
 		ts: '1700000001.000001',
-		...(threadTs === undefined ? {} : { thread_ts: threadTs }),
 		channel,
 		channel_type: channelType,
-	},
-})
+	}
+	return {
+		type: 'event_callback',
+		team_id: 'T_TEST',
+		event_id: `Ev_${channelType}`,
+		event_time: 1_700_000_000,
+		event: Predicate.isUndefined(threadTs) ? event : { ...event, thread_ts: threadTs },
+	}
+}
 
-const handleMessage = (payload: unknown) =>
+const handleMessage = (payload: Schema.Json) =>
 	makeSlackWebhookProvider({ namespace: 'message-test', signingSecret: Redacted.make(signingSecret) })
 		.handle(signedSlackInput(signingSecret, payload))
 		.pipe(

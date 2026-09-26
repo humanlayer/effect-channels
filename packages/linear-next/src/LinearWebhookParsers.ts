@@ -5,9 +5,9 @@ import {
 	LinearAgentPromptActivityWebhook,
 	LinearAgentSessionEventWebhook,
 	type LinearAgentSessionEventWebhook as LinearAgentSessionEventWebhookType,
-	LinearAppUserNotificationWebhook,
 	type LinearAppUserNotificationWebhook as LinearAppUserNotificationWebhookType,
 	LinearNotificationIssue,
+	type LinearResourceWebhookEvent,
 	LinearWebhookActor,
 } from './LinearWebhookEventSchemas'
 
@@ -167,14 +167,10 @@ export const normalizeLinearAgentSessionWebhook = (webhook: LinearAgentSessionEv
 		return normalizeAgentSession(webhook, issue)
 	})
 
-/** Decodes and normalizes one Agent Session provider payload at a trust boundary. */
-export const parseLinearAgentSessionWebhook = (input: unknown) =>
-	Schema.decodeUnknownEffect(LinearAgentSessionEventWebhook)(input, { onExcessProperty: 'preserve' }).pipe(
-		Effect.flatMap(normalizeLinearAgentSessionWebhook),
-	)
-
-/** Decodes and verifies one Inbox Notification provider payload at a trust boundary. */
-export const parseLinearAppUserNotificationWebhook = (input: unknown) =>
-	Schema.decodeUnknownEffect(LinearAppUserNotificationWebhook)(input, { onExcessProperty: 'preserve' }).pipe(
-		Effect.flatMap(normalizeLinearAppUserNotificationWebhook),
-	)
+/** The issue whose mailbox receives a resource webhook, when the payload names one. */
+export const resourceIssueId = (webhook: LinearResourceWebhookEvent): LinearIssueId | undefined => {
+	if (webhook.type === 'Issue') return webhook.data.id
+	if (webhook.type === 'Attachment') return webhook.data.issueId
+	if (webhook.type === 'Comment') return webhook.data.issueId ?? webhook.data.issue?.id
+	return webhook.data.issueId ?? webhook.data.issue?.id ?? webhook.data.comment?.issueId ?? undefined
+}

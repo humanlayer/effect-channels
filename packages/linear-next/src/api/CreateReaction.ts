@@ -1,6 +1,7 @@
 import { Effect, Match, Schema } from 'effect'
 
-import type { LinearCreateReactionRequest } from '../LinearApi'
+import { LinearCreateReactionRequest } from '../LinearApi'
+import { LinearCommentId, LinearIssueId } from '../LinearIdentity'
 import { LinearReaction } from '../LinearResources'
 import { failLinearMutation } from './LinearApiErrors'
 import { projectLinearParticipant } from './LinearApiProjections'
@@ -8,6 +9,13 @@ import { LinearApiReaction } from './LinearApiSchemas'
 import { linearGraphql } from './LinearGraphql'
 
 const document = `mutation LinearReactionCreate($input: ReactionCreateInput!) { reactionCreate(input: $input) { success reaction { id emoji user { id name email } } } }`
+const emoji = LinearCreateReactionRequest.fields.emoji
+export const CreateReactionVariables = Schema.Struct({
+	input: Schema.Union([
+		Schema.Struct({ emoji, issueId: LinearIssueId }),
+		Schema.Struct({ emoji, commentId: LinearCommentId }),
+	]),
+})
 const CreateReactionResponse = Schema.Struct({
 	reactionCreate: Schema.Struct({ success: Schema.Boolean, reaction: LinearApiReaction }),
 })
@@ -30,7 +38,8 @@ export const createReaction = Effect.fn('linear.api.create_reaction')((input: Li
 	return linearGraphql({
 		operation: 'create_reaction',
 		query: document,
-		variables: { input: target.variables },
+		variables: CreateReactionVariables,
+		input: { input: target.variables },
 		response: CreateReactionResponse,
 	}).pipe(
 		Effect.flatMap(({ reactionCreate }) => {

@@ -9,6 +9,19 @@ import {
 import { failLinearMutation } from './LinearApiErrors'
 import { linearGraphql } from './LinearGraphql'
 
+const AgentActivityContentInput = Schema.Struct({
+	type: Schema.Literals(['thought', 'response']),
+	body: Schema.String,
+})
+
+export const CreateAgentActivityVariables = Schema.Struct({
+	input: Schema.Struct({
+		agentSessionId: LinearAgentSessionId,
+		content: AgentActivityContentInput,
+		ephemeral: Schema.Boolean,
+	}),
+})
+
 const CreateAgentActivityResponse = Schema.Struct({
 	agentActivityCreate: Schema.Struct({
 		success: Schema.Boolean,
@@ -31,13 +44,14 @@ const mutation = `mutation LinearAgentActivityCreate($input: AgentActivityCreate
 
 export const createAgentActivity = (request: LinearCreateAgentActivityRequest) => {
 	const content = LinearActivityContent.match(request.content, {
-		Thought: ({ body }) => ({ type: 'thought', body }),
-		Response: ({ body }) => ({ type: 'response', body }),
+		Thought: ({ body }) => AgentActivityContentInput.make({ type: 'thought', body }),
+		Response: ({ body }) => AgentActivityContentInput.make({ type: 'response', body }),
 	})
 	return linearGraphql({
 		operation: 'create_agent_activity',
 		query: mutation,
-		variables: {
+		variables: CreateAgentActivityVariables,
+		input: {
 			input: {
 				agentSessionId: request.sessionId,
 				content,

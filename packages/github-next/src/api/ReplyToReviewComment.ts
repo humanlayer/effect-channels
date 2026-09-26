@@ -1,9 +1,12 @@
-import { Effect } from 'effect'
+import { Effect, Schema } from 'effect'
 
 import type { GitHubReplyToReviewComment } from '../GitHubApi'
 import { GitHubApiClient } from './GitHubApiClient'
 import { repositoryPath, reviewComment } from './GitHubApiProjections'
 import { ReviewComment } from './GitHubApiSchemas'
+
+const ReplyToReviewCommentBody = Schema.Struct({ body: Schema.String })
+
 export const replyToReviewComment = Effect.fn('github.api.reply_to_review_comment')(function* (
 	input: GitHubReplyToReviewComment,
 ) {
@@ -14,7 +17,7 @@ export const replyToReviewComment = Effect.fn('github.api.reply_to_review_commen
 		method: 'POST',
 		path: `${repositoryPath(input.pullRequest)}/pulls/${input.pullRequest.number}/comments/${input.comment.id}/replies`,
 		schema: ReviewComment,
-		body: { body: input.content.markdown },
+		body: { schema: ReplyToReviewCommentBody, value: { body: input.content.markdown } },
 	})
 	return reviewComment(input.pullRequest, value)
 })

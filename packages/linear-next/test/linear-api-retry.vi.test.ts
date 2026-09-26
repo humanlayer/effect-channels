@@ -1,10 +1,17 @@
 import { describe, it } from '@effect/vitest'
-import { Effect, Fiber, Ref } from 'effect'
+import { Effect, Fiber, Ref, Schema } from 'effect'
 import { TestClock } from 'effect/testing'
-import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http'
+import { HttpClient, HttpClientResponse } from 'effect/unstable/http'
 
+import { GetIssueVariables } from '../src/api/GetIssue'
+import { GetViewerIdentityVariables } from '../src/api/GetViewerIdentity'
+import { UpdateIssueVariables } from '../src/api/UpdateIssue'
 import { LinearApi } from '../src/LinearApi'
-import { apiLayer, issue, issueJson, viewer } from './api-test-fixtures'
+import { apiLayer, decodeGraphqlRequest, issue, issueJson, viewer } from './api-test-fixtures'
+
+const decodeRequest = decodeGraphqlRequest(
+	Schema.Union([UpdateIssueVariables, GetIssueVariables, GetViewerIdentityVariables]),
+)
 
 describe('Linear API retry policy', () => {
 	it.effect('retries reads but never blanket-retries ambiguous mutations', ({ expect }) =>
@@ -13,8 +20,7 @@ describe('Linear API retry policy', () => {
 			const mutations = yield* Ref.make(0)
 			const http = HttpClient.make((request) =>
 				Effect.gen(function* () {
-					const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie)
-					const body = (yield* Effect.promise(() => web.json())) as { query: string }
+					const body = yield* decodeRequest(request)
 					if (body.query.includes('viewer')) return HttpClientResponse.fromWeb(request, Response.json(viewer))
 					if (body.query.includes('mutation')) {
 						yield* Ref.update(mutations, (n) => n + 1)
@@ -48,8 +54,7 @@ describe('Linear API retry policy', () => {
 			const reads = yield* Ref.make(0)
 			const http = HttpClient.make((request) =>
 				Effect.gen(function* () {
-					const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie)
-					const body = (yield* Effect.promise(() => web.json())) as { query: string }
+					const body = yield* decodeRequest(request)
 					if (body.query.includes('viewer')) return HttpClientResponse.fromWeb(request, Response.json(viewer))
 					const count = yield* Ref.updateAndGet(reads, (n) => n + 1)
 					return HttpClientResponse.fromWeb(

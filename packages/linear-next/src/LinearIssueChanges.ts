@@ -1,4 +1,4 @@
-import { Schema } from 'effect'
+import { Array as Arr, Option, type Schema, Struct } from 'effect'
 
 import {
 	LinearIssueArchiveChanged,
@@ -22,36 +22,42 @@ import {
 	LinearIssueTitleChanged,
 	type LinearIssueChange,
 } from './LinearCallbackEvents'
+import type { LinearIssueUpdatedFrom } from './LinearWebhookEventSchemas'
 
-const families = [
-	[['title'], LinearIssueTitleChanged],
-	[['description', 'descriptionData'], LinearIssueDescriptionChanged],
-	[['state', 'stateId', 'startedAt', 'completedAt', 'canceledAt'], LinearIssueStatusChange],
-	[['priority', 'priorityLabel'], LinearIssuePriorityChanged],
-	[['labels', 'labelIds'], LinearIssueLabelsChanged],
-	[['assignee', 'assigneeId'], LinearIssueAssigneeChanged],
-	[['delegate', 'delegateId'], LinearIssueDelegateChanged],
-	[['project', 'projectId'], LinearIssueProjectChanged],
-	[['projectMilestone', 'projectMilestoneId'], LinearIssueMilestoneChanged],
-	[['cycle', 'cycleId'], LinearIssueCycleChanged],
-	[['team', 'teamId', 'previousIdentifiers'], LinearIssueTeamChanged],
-	[['parentId', 'subIssueSortOrder'], LinearIssueParentChanged],
-	[['estimate'], LinearIssueEstimateChanged],
-	[['dueDate'], LinearIssueDueDateChanged],
-	[['subscriberIds'], LinearIssueSubscribersChanged],
-	[['archivedAt', 'trashed'], LinearIssueArchiveChanged],
-	[['triagedAt', 'startedTriageAt', 'snoozedUntilAt'], LinearIssueLifecycleChanged],
-	[['releases'], LinearIssueReleasesChanged],
-	[['slaStartedAt', 'slaBreachesAt', 'slaType'], LinearIssueSlaChanged],
-] as const
-
-export const normalizeLinearIssueChanges = (updatedFrom: Readonly<Record<string, unknown>>) => {
-	const changes: Array<LinearIssueChange> = []
-	const otherChanges: Record<string, Schema.Json> = {}
-	for (const [field, previous] of Object.entries(updatedFrom)) {
-		const family = families.find(([fields]) => (fields as ReadonlyArray<string>).includes(field))
-		if (family === undefined) otherChanges[field] = previous as Schema.Json
-		else changes.push(family[1].make({ previous: previous as Schema.Json }) as LinearIssueChange)
-	}
-	return { changes, otherChanges }
+type IssueChangeEvent<Key extends keyof LinearIssueUpdatedFrom> = {
+	readonly fields: { readonly previous: { readonly fields: { readonly [K in Key]: Schema.Top } } }
+	readonly make: (input: { readonly previous: Pick<LinearIssueUpdatedFrom, Key> }) => LinearIssueChange
 }
+
+const issueChange =
+	<Key extends keyof LinearIssueUpdatedFrom>(event: IssueChangeEvent<Key>) =>
+	(updatedFrom: LinearIssueUpdatedFrom) => {
+		const previous = Struct.pick(updatedFrom, Struct.keys(event.fields.previous.fields))
+		return Struct.keys(previous).length === 0 ? Option.none() : Option.some(event.make({ previous }))
+	}
+
+const issueChanges = [
+	issueChange(LinearIssueTitleChanged),
+	issueChange(LinearIssueDescriptionChanged),
+	issueChange(LinearIssueStatusChange),
+	issueChange(LinearIssuePriorityChanged),
+	issueChange(LinearIssueLabelsChanged),
+	issueChange(LinearIssueAssigneeChanged),
+	issueChange(LinearIssueDelegateChanged),
+	issueChange(LinearIssueProjectChanged),
+	issueChange(LinearIssueMilestoneChanged),
+	issueChange(LinearIssueCycleChanged),
+	issueChange(LinearIssueTeamChanged),
+	issueChange(LinearIssueParentChanged),
+	issueChange(LinearIssueEstimateChanged),
+	issueChange(LinearIssueDueDateChanged),
+	issueChange(LinearIssueSubscribersChanged),
+	issueChange(LinearIssueArchiveChanged),
+	issueChange(LinearIssueLifecycleChanged),
+	issueChange(LinearIssueReleasesChanged),
+	issueChange(LinearIssueSlaChanged),
+]
+
+/** One change event per field group that the update touched, each carrying the previous values Linear sent for that group. */
+export const normalizeLinearIssueChanges = (updatedFrom: LinearIssueUpdatedFrom): Array<LinearIssueChange> =>
+	Arr.getSomes(issueChanges.map((change) => change(updatedFrom)))

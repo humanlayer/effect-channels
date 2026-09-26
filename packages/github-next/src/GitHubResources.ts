@@ -3,7 +3,7 @@ import {
 	type MailboxSubscriptionResult,
 	MailboxSubscriptions,
 } from '@humanlayer/channels-delivery-next'
-import { Effect, Predicate, Schema } from 'effect'
+import { Effect, Schema } from 'effect'
 
 import type {
 	GitHubApiError,
@@ -301,15 +301,9 @@ export class GitHubPullRequest extends Schema.TaggedClass<GitHubPullRequest>()('
 	}
 
 	merge(options: GitHubMergeOptions): Effect.Effect<GitHubMergeResult, GitHubApiError, GitHubApi> {
-		return Effect.flatMap(GitHubApi, (api) =>
-			api.mergePullRequest({
-				pullRequest: this.ref,
-				method: options.method,
-				expectedHeadSha: options.expectedHeadSha,
-				...(Predicate.isUndefined(options.commitTitle) ? {} : { commitTitle: options.commitTitle }),
-				...(Predicate.isUndefined(options.commitMessage) ? {} : { commitMessage: options.commitMessage }),
-			}),
-		).pipe(Effect.withSpan('github.pull_request.merge', { attributes: pullRequestSpanAttributes(this.ref) }))
+		return Effect.flatMap(GitHubApi, (api) => api.mergePullRequest({ pullRequest: this.ref, ...options })).pipe(
+			Effect.withSpan('github.pull_request.merge', { attributes: pullRequestSpanAttributes(this.ref) }),
+		)
 	}
 }
 

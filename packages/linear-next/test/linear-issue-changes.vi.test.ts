@@ -4,20 +4,26 @@ import { Effect } from 'effect'
 import { normalizeLinearIssueChanges } from '../src/LinearIssueChanges'
 
 describe('Linear issue changes', () => {
-	it.effect('keeps one typed change per changed field and bounds unknown fields', ({ expect }) =>
+	it.effect('emits one typed change per changed field group with its previous values', ({ expect }) =>
 		Effect.sync(() => {
-			const normalized = normalizeLinearIssueChanges({
-				title: 'Old title',
-				stateId: 'old-state',
-				labelIds: ['old-label'],
-				futureProviderField: { old: true },
-			})
-			expect(normalized.changes.map((change) => change._tag)).toEqual([
-				'LinearIssueTitleChanged',
-				'LinearIssueStatusChanged',
-				'LinearIssueLabelsChanged',
+			expect(
+				normalizeLinearIssueChanges({
+					title: 'Old title',
+					stateId: 'old-state',
+					startedAt: null,
+					labelIds: ['old-label'],
+				}),
+			).toEqual([
+				{ _tag: 'LinearIssueTitleChanged', previous: { title: 'Old title' } },
+				{ _tag: 'LinearIssueStatusChanged', previous: { stateId: 'old-state', startedAt: null } },
+				{ _tag: 'LinearIssueLabelsChanged', previous: { labelIds: ['old-label'] } },
 			])
-			expect(normalized.otherChanges).toEqual({ futureProviderField: { old: true } })
+		}),
+	)
+
+	it.effect('emits no change when no modeled field changed', ({ expect }) =>
+		Effect.sync(() => {
+			expect(normalizeLinearIssueChanges({})).toEqual([])
 		}),
 	)
 })

@@ -24,7 +24,7 @@ export const makeWebhookTestApp = (
 	Effect.gen(function* () {
 		const provider: WebhookProvider<never> = {
 			providerName: 'example',
-			...(maxBodyBytes === undefined ? {} : { maxBodyBytes }),
+			maxBodyBytes,
 			handle,
 		}
 		const web = HttpRouter.toWebHandler(webhookRoutes([provider]), { disableLogger: true })

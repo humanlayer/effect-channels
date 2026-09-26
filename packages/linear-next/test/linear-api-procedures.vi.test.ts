@@ -1,10 +1,19 @@
 import { describe, it } from '@effect/vitest'
 import { Effect, Layer, Redacted, Schema } from 'effect'
-import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http'
+import { HttpClient, HttpClientResponse } from 'effect/unstable/http'
 
-import { getIssue } from '../src/api/GetIssue'
+import { CreateAttachmentVariables } from '../src/api/CreateAttachment'
+import { CreateCommentVariables } from '../src/api/CreateComment'
+import { CreateReactionVariables } from '../src/api/CreateReaction'
+import { DeleteAttachmentVariables } from '../src/api/DeleteAttachment'
+import { DeleteCommentVariables } from '../src/api/DeleteComment'
+import { DeleteReactionVariables } from '../src/api/DeleteReaction'
+import { getIssue, GetIssueVariables } from '../src/api/GetIssue'
+import { GetUserVariables } from '../src/api/GetUser'
 import { narrowLinearProviderErrors } from '../src/api/LinearApiErrors'
 import { LinearHttpClient, makeFixedCredentialLinearHttpClient } from '../src/api/LinearHttpClient'
+import { ListIssueAttachmentsVariables } from '../src/api/ListIssueAttachments'
+import { ListIssueCommentsVariables } from '../src/api/ListIssueComments'
 import {
 	createAttachment,
 	createComment,
@@ -19,7 +28,10 @@ import {
 	updateComment,
 	updateIssue,
 } from '../src/api/Operations'
-import { LinearUpdateAttachmentInput } from '../src/LinearApi'
+import { UpdateAttachmentVariables } from '../src/api/UpdateAttachment'
+import { UpdateCommentVariables } from '../src/api/UpdateComment'
+import { UpdateIssueVariables } from '../src/api/UpdateIssue'
+import { LinearReactionTarget, LinearUpdateAttachmentInput } from '../src/LinearApi'
 import {
 	LinearAttachmentId,
 	LinearCommentId,
@@ -27,7 +39,22 @@ import {
 	LinearReactionId,
 	LinearUserId,
 } from '../src/LinearIdentity'
-import { issue, issueJson } from './api-test-fixtures'
+import { decodeGraphqlRequest, issue, issueJson } from './api-test-fixtures'
+
+const decodeProcedureRequest = decodeGraphqlRequest(
+	Schema.Union([
+		GetUserVariables,
+		ListIssueCommentsVariables,
+		ListIssueAttachmentsVariables,
+		CreateCommentVariables,
+		UpdateCommentVariables,
+		DeleteCommentVariables,
+		CreateReactionVariables,
+		DeleteReactionVariables,
+		CreateAttachmentVariables,
+		DeleteAttachmentVariables,
+	]),
+)
 
 const procedureLayer = (http: HttpClient.HttpClient) =>
 	Layer.succeed(
@@ -40,8 +67,7 @@ describe('Linear GraphQL procedures', () => {
 		Effect.gen(function* () {
 			const http = HttpClient.make((request) =>
 				Effect.gen(function* () {
-					const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie)
-					const body = (yield* Effect.promise(() => web.json())) as { query: string; variables: unknown }
+					const body = yield* decodeGraphqlRequest(GetIssueVariables)(request)
 					expect(body.query).toContain('query LinearIssue')
 					expect(body.variables).toEqual({ id: issue.issueId })
 					return HttpClientResponse.fromWeb(request, Response.json({ data: { issue: issueJson } }))
@@ -63,14 +89,13 @@ describe('Linear GraphQL procedures', () => {
 			let call = 0
 			const http = HttpClient.make((request) =>
 				Effect.gen(function* () {
-					const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie)
-					const body = (yield* Effect.promise(() => web.json())) as { query: string; variables: unknown }
 					call += 1
 					if (call === 1) {
+						const body = yield* decodeGraphqlRequest(UpdateIssueVariables)(request)
 						expect(body.query).toContain('mutation LinearIssueUpdate')
 						expect(body.variables).toEqual({
 							id: issue.issueId,
-							input: { priority: 3, addedLabelIds: ['label-1'], removedLabelIds: ['label-2'] },
+							input: { priority: 3, addLabelIds: ['label-1'], removeLabelIds: ['label-2'] },
 						})
 						return HttpClientResponse.fromWeb(
 							request,
@@ -79,9 +104,9 @@ describe('Linear GraphQL procedures', () => {
 							}),
 						)
 					}
+					const body = yield* decodeGraphqlRequest(UpdateAttachmentVariables)(request)
 					expect(body.query).toContain('$input: AttachmentUpdateInput!')
 					expect(body.variables).toEqual({ id: 'attachment-1', input: { title: 'Renamed', subtitle: null } })
-					expect(body.variables).not.toHaveProperty('input.url')
 					return HttpClientResponse.fromWeb(
 						request,
 						Response.json({
@@ -205,8 +230,7 @@ describe('Linear GraphQL procedures', () => {
 			const seen: string[] = []
 			const http = HttpClient.make((request) =>
 				Effect.gen(function* () {
-					const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie)
-					const body = (yield* Effect.promise(() => web.json())) as { query: string; variables: unknown }
+					const body = yield* decodeProcedureRequest(request)
 					const operation = /(?:query|mutation) (Linear\w+)/.exec(body.query)?.[1]
 					if (operation === undefined) return yield* Effect.die('missing operation name')
 					seen.push(operation)
@@ -375,7 +399,7 @@ describe('Linear GraphQL procedures', () => {
 			}).pipe(Effect.provide(layer))
 			yield* deleteComment({ comment: edited.ref }).pipe(Effect.provide(layer))
 			const reaction = yield* createReaction({
-				target: { _tag: 'Comment', comment: edited.ref },
+				target: LinearReactionTarget.cases.Comment.make({ comment: edited.ref }),
 				emoji: 'eyes',
 			}).pipe(Effect.provide(layer))
 			yield* deleteReaction({ issue, reactionId: LinearReactionId.make('reaction-1') }).pipe(

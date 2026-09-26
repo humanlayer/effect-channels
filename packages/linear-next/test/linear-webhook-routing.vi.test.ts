@@ -51,20 +51,22 @@ describe('Linear webhook routing', () => {
 	it.effect('maps accepted, unauthenticated, mismatched, and oversized requests', ({ expect }) =>
 		Effect.gen(function* () {
 			const request = yield* makeApp
-			expect((yield* request(signedLinearInput(issueCreatePayload, undefined, Date.now()))).status).toBe(200)
+			expect((yield* request(signedLinearInput(issueCreatePayload, 'Issue', undefined, Date.now()))).status).toBe(
+				200,
+			)
 
-			const signed = signedLinearInput(issueCreatePayload, undefined, Date.now())
+			const signed = signedLinearInput(issueCreatePayload, 'Issue', undefined, Date.now())
 			const invalid = {
 				...signed,
 				headers: { ...signed.headers, 'linear-signature': '0'.repeat(64) },
 			}
 			expect((yield* request(invalid)).status).toBe(401)
 
-			const mismatch = { ...(issueCreatePayload as Record<string, unknown>), organizationId: 'another-workspace' }
-			expect((yield* request(signedLinearInput(mismatch, undefined, Date.now()))).status).toBe(403)
+			const mismatch = { ...issueCreatePayload, organizationId: 'another-workspace' }
+			expect((yield* request(signedLinearInput(mismatch, 'Issue', undefined, Date.now()))).status).toBe(403)
 
-			const oversized = { ...(issueCreatePayload as Record<string, unknown>), padding: 'x'.repeat(8192) }
-			expect((yield* request(signedLinearInput(oversized, undefined, Date.now()))).status).toBe(413)
+			const oversized = { ...issueCreatePayload, padding: 'x'.repeat(8192) }
+			expect((yield* request(signedLinearInput(oversized, 'Issue', undefined, Date.now()))).status).toBe(413)
 		}),
 	)
 })

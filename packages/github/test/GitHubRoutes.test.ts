@@ -62,9 +62,9 @@ it.effect('mounts webhook admission with addressed services and no mailbox proce
 			return HttpRouter.toWebHandler(routes, { disableLogger: true })
 		}),
 		({ handler }) =>
-			Effect.sync(() => {
-				assert.strictEqual(typeof handler, 'function')
-			}),
+			Effect.promise(() => handler(new Request('http://localhost/unrouted', { method: 'POST' }))).pipe(
+				Effect.map((response) => assert.strictEqual(response.status, 404)),
+			),
 		({ dispose }) => Effect.promise(dispose),
 	),
 )

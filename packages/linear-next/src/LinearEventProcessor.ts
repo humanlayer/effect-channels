@@ -9,7 +9,7 @@ import {
 	ProviderEventInvalid,
 	type ProviderEventProcessor,
 } from '@humanlayer/channels-delivery-next'
-import { Array as Arr, Effect, Match, Predicate, Schema } from 'effect'
+import { Array as Arr, Effect, Match, Predicate, Schema, Struct } from 'effect'
 
 import { LinearApi } from './LinearApi'
 import {
@@ -81,6 +81,7 @@ import type {
 import {
 	normalizeLinearAgentSessionWebhook,
 	normalizeLinearAppUserNotificationWebhook,
+	resourceIssueId,
 	type LinearNormalizedAgentSessionWebhook,
 } from './LinearWebhookParsers'
 import { LinearStoredAgentSessionWebhook, LinearStoredWebhook, LinearSupportedWebhook } from './LinearWebhookSchemas'
@@ -384,13 +385,6 @@ const normalizeWebhook = (
 	}
 }
 
-const resourceIssueId = (webhook: LinearResourceWebhookEvent): LinearIssueId | undefined => {
-	if (webhook.type === 'Issue') return webhook.data.id
-	if (webhook.type === 'Attachment') return webhook.data.issueId
-	if (webhook.type === 'Comment') return webhook.data.issueId ?? webhook.data.issue?.id
-	return webhook.data.issueId ?? webhook.data.issue?.id ?? webhook.data.comment?.issueId ?? undefined
-}
-
 const isSelfAuthoredResource = (webhook: LinearResourceWebhookEvent, options: LinearEventProcessorOptions) =>
 	(Predicate.isNotUndefined(options.bot) && webhook.actor?.id === options.bot.appUserId) ||
 	(Predicate.isNotUndefined(options.oauthClientId) && webhook.actor?.id === options.oauthClientId)
@@ -502,14 +496,11 @@ const normalizeResourceWebhook = (
 	const actor = participantOrNull(webhook.actor)
 	if (webhook.type === 'Issue') {
 		if (webhook.action === 'update') {
-			const { changes, otherChanges } = normalizeLinearIssueChanges(webhook.updatedFrom)
-			if (changes.length === 0 && Object.keys(otherChanges).length === 0) return undefined
 			return LinearIssueUpdated.make({
 				eventId,
 				actor,
 				issue: webhook.data,
-				changes,
-				otherChanges,
+				changes: normalizeLinearIssueChanges(webhook.updatedFrom),
 			})
 		}
 		return LinearIssueRemoved.make({ eventId, actor, issue: webhook.data })
@@ -518,11 +509,12 @@ const normalizeResourceWebhook = (
 		const comment = commentFromResource(webhook, issueId)
 		if (webhook.action === 'create') return LinearCommentCreated.make({ eventId, actor, comment })
 		if (webhook.action === 'remove') return LinearCommentRemoved.make({ eventId, actor, comment })
-		const { body, ...otherChanges } = webhook.updatedFrom
-		const fields = { eventId, actor, comment, otherChanges }
-		if (Predicate.isString(body) || Predicate.isNull(body))
-			return LinearCommentUpdated.make({ ...fields, previousBody: body })
-		return LinearCommentUpdated.make(fields)
+		return LinearCommentUpdated.make({
+			eventId,
+			actor,
+			comment,
+			...Struct.renameKeys(Struct.pick(webhook.updatedFrom, ['body']), { body: 'previousBody' }),
+		})
 	}
 	if (webhook.type === 'Reaction') {
 		const reaction = reactionFromResource(webhook, issueId)
@@ -533,12 +525,7 @@ const normalizeResourceWebhook = (
 	const attachment = attachmentFromResource(webhook)
 	if (webhook.action === 'create') return LinearIssueAttachmentCreated.make({ eventId, actor, attachment })
 	if (webhook.action === 'remove') return LinearIssueAttachmentRemoved.make({ eventId, actor, attachment })
-	return LinearIssueAttachmentUpdated.make({
-		eventId,
-		actor,
-		attachment,
-		otherChanges: webhook.updatedFrom,
-	})
+	return LinearIssueAttachmentUpdated.make({ eventId, actor, attachment })
 }
 
 const runCallback = (effect: Effect.Effect<void, { readonly retryable: boolean }>) =>

@@ -1,7 +1,7 @@
 import { describe, it } from '@effect/vitest'
 import { MailboxSubscriptions, ProviderEventHandled, ProviderEventIgnored } from '@humanlayer/channels-delivery-next'
 import { Effect, Layer, Schema } from 'effect'
-import { vi } from 'vitest'
+import { vi } from 'vite-plus/test'
 
 import { LinearApi } from '../src/LinearApi'
 import { type LinearIssueAssigned, LinearIssueOpened, type LinearMentioned } from '../src/LinearCallbackEvents'

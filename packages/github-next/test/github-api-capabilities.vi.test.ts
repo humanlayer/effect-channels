@@ -1,7 +1,7 @@
 import { describe, it } from '@effect/vitest'
 import { ConfigProvider, Effect, Layer, Queue, Ref } from 'effect'
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http'
-import { expect } from 'vitest'
+import { expect } from 'vite-plus/test'
 
 import { GitHubApi } from '../src/GitHubApi'
 import { GitHubApiLiveBase, GitHubAppSigner } from '../src/GitHubApiLive'

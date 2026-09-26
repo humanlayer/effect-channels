@@ -8,7 +8,7 @@ import {
 	ProviderEventInvalid,
 } from '@humanlayer/channels-delivery-next'
 import { Effect, Layer } from 'effect'
-import { vi } from 'vitest'
+import { vi } from 'vite-plus/test'
 
 import { LinearApi } from '../src/LinearApi'
 import type { LinearIssueCreated } from '../src/LinearCallbackEvents'

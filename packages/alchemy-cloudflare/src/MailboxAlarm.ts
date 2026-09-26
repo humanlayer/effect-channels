@@ -38,13 +38,14 @@ export const makeMailboxAlarmHandler = (options: MailboxAlarmHandlerOptions) =>
 			)
 		}).pipe(Effect.provideService(RuntimeContext, runtimeContext))
 
-		return processing.processReady.pipe(
-			Effect.asVoid,
-			Effect.catchCauseIf(
-				(cause) => !Cause.hasInterruptsOnly(cause),
-				(cause) => Effect.logError('Mailbox alarm pass failed', cause),
-			),
-			Effect.andThen(rearmWhenDueWithoutAlarm),
-			Effect.withSpan('delivery.cloudflare.mailbox_alarm'),
-		)
+		return Effect.fn('delivery.cloudflare.mailbox_alarm')(function* () {
+			yield* processing.processReady.pipe(
+				Effect.asVoid,
+				Effect.catchCauseIf(
+					(cause) => !Cause.hasInterruptsOnly(cause),
+					(cause) => Effect.logError('Mailbox alarm pass failed', cause),
+				),
+			)
+			yield* rearmWhenDueWithoutAlarm
+		})
 	})

@@ -162,7 +162,7 @@ it.effect('Durable Object alarm: puts the alarm back when a due mailbox was not 
 		yield* delivery.deliver(event('a'))
 		yield* TestClock.adjust(5_000)
 		yield* alarm.clearAsCloudflareDoesBeforeTheHandler
-		yield* runMailboxAlarm
+		yield* runMailboxAlarm()
 		expect(yield* alarm.scheduledAt).toBe(6_000)
 	}),
 )
@@ -172,7 +172,7 @@ it.effect('Durable Object alarm: puts the alarm back when the pass fails, and do
 		const { delivery, alarm, runMailboxAlarm } = yield* alarmHandlerOver(processingThatFails)
 		yield* delivery.deliver(event('a'))
 		yield* alarm.clearAsCloudflareDoesBeforeTheHandler
-		yield* runMailboxAlarm
+		yield* runMailboxAlarm()
 		expect(yield* alarm.scheduledAt).toBe(1_000)
 	}),
 )
@@ -180,10 +180,10 @@ it.effect('Durable Object alarm: puts the alarm back when the pass fails, and do
 it.effect('Durable Object alarm: leaves a quiet mailbox, and an alarm the store already set, alone', () =>
 	Effect.gen(function* () {
 		const { delivery, alarm, runMailboxAlarm } = yield* alarmHandlerOver(processingThatSkipsEverything)
-		yield* runMailboxAlarm
+		yield* runMailboxAlarm()
 		expect(yield* alarm.scheduledAt).toBe(null)
 		yield* delivery.deliver(event('a'))
-		yield* runMailboxAlarm
+		yield* runMailboxAlarm()
 		expect(yield* alarm.scheduledAt).toBe(0)
 	}),
 )

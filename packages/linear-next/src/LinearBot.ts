@@ -67,30 +67,27 @@ export const make = <E, R, ApiError = never, ApiRequirements = never>(
 	const buildLinearApi = Predicate.isUndefined(options.linearApi)
 		? unavailable('build_linear_api', Layer.build(defaultApi))
 		: unavailable('build_linear_api', Layer.build(options.linearApi))
+	/** Builds the API layer so the host discovers its configuration; the live layer makes no requests until an operation runs. */
+	const discoverLinearApiConfiguration = Effect.asVoid(buildLinearApi)
 
 	return {
 		providerName: 'linear',
-		// Agent Session events must begin processing immediately and one at a time so
-		// the automatic acknowledgement can satisfy Linear's ten-second deadline.
+		/** Agent Session events must begin processing immediately and one at a time so the automatic acknowledgement can satisfy Linear's ten-second deadline. */
 		deliveryMode: SerialDeliveryMode.make({}),
 		webhookProvider: ({ namespace }) =>
 			Effect.gen(function* () {
 				const webhookSecret = yield* unavailable('read_webhook_secret', options.webhookSecret)
 				const bot = yield* readBotConfiguration
 				const oauthClientId = yield* unavailable('read_client_id', readOauthClientId)
-				// Build this half's API context for host configuration discovery only.
-				// The live layer performs no network I/O until an API operation runs.
-				yield* buildLinearApi
+				yield* discoverLinearApiConfiguration
 				return makeLinearWebhookProvider({
 					namespace,
 					webhookSecret,
 					organizationId: bot.organizationId,
 					appUserId: bot.appUserId,
-					...(Option.isNone(oauthClientId) ? {} : { oauthClientId: oauthClientId.value }),
-					...(Predicate.isUndefined(options.maxBodyBytes) ? {} : { maxBodyBytes: options.maxBodyBytes }),
-					...(Predicate.isUndefined(options.maxTimestampAgeMs)
-						? {}
-						: { maxTimestampAgeMs: options.maxTimestampAgeMs }),
+					oauthClientId: Option.getOrUndefined(oauthClientId),
+					maxBodyBytes: options.maxBodyBytes,
+					maxTimestampAgeMs: options.maxTimestampAgeMs,
 				})
 			}).pipe(Effect.withSpan('linear.bot.build_webhook_provider')),
 		eventProcessor: ({ namespace }) =>
@@ -101,7 +98,7 @@ export const make = <E, R, ApiError = never, ApiRequirements = never>(
 				const processor = makeLinearEventProcessor({
 					namespace,
 					bot,
-					...(Option.isNone(oauthClientId) ? {} : { oauthClientId: oauthClientId.value }),
+					oauthClientId: Option.getOrUndefined(oauthClientId),
 				})
 				return {
 					namespace: processor.namespace,

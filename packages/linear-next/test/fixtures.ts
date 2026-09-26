@@ -13,7 +13,7 @@ import { Effect, Match, Queue, Redacted, Schema } from 'effect'
 import { Headers } from 'effect/unstable/http'
 
 import { LinearOrganizationId, LinearUserId, LinearWebhookDeliveryId } from '../src/LinearIdentity'
-import { LinearAgentSessionEventWebhook } from '../src/LinearWebhookEventSchemas'
+import { LinearAgentSessionEventWebhook, type LinearIssueCreateWebhook } from '../src/LinearWebhookEventSchemas'
 import { makeLinearWebhookProvider } from '../src/LinearWebhookProvider'
 import { LinearStoredAgentSessionWebhook } from '../src/LinearWebhookSchemas'
 import agentSessionCreatedJson from './fixtures/agent-session-events/created.json' with { type: 'json' }
@@ -26,13 +26,47 @@ import issueMentionJson from './fixtures/app-user-notifications/issue-mention.js
 import issueNewCommentJson from './fixtures/app-user-notifications/issue-new-comment.json' with { type: 'json' }
 import issueStatusChangedJson from './fixtures/app-user-notifications/issue-status-changed.json' with { type: 'json' }
 import issueUnassignedJson from './fixtures/app-user-notifications/issue-unassigned-from-you.json' with { type: 'json' }
-import issueCreateJson from './fixtures/issue-create.json' with { type: 'json' }
+
+export const issueCreatePayload = {
+	action: 'create',
+	type: 'Issue',
+	organizationId: '6c5940f1-4f77-4f0b-8517-45b58f3c7d21',
+	webhookId: '0b94c84e-c824-4d4a-bbbc-55c42a42f82a',
+	webhookTimestamp: 1767225600000,
+	createdAt: '2026-01-01T00:00:00.000Z',
+	actor: {
+		id: 'fd4b9f3e-7d77-4f20-a306-c84dfabf5ca8',
+		name: 'Example User',
+		email: 'user@example.invalid',
+		type: 'user',
+	},
+	data: {
+		id: 'b33fb278-fbe0-45e4-b4eb-94b0839f51b9',
+		identifier: 'ENG-123',
+		number: 123,
+		title: 'channels-live-p1-sanitized',
+		description: 'Sanitized fixture for provider contract tests.',
+		priority: 2,
+		url: 'https://linear.app/example/issue/ENG-123/channels-live-p1-sanitized',
+		teamId: 'd75080e3-d632-4a33-92c6-e64252220306',
+		team: {
+			id: 'd75080e3-d632-4a33-92c6-e64252220306',
+			key: 'ENG',
+			name: 'Engineering',
+		},
+		creator: {
+			id: 'fd4b9f3e-7d77-4f20-a306-c84dfabf5ca8',
+			name: 'Example User',
+			email: 'user@example.invalid',
+			type: 'user',
+		},
+	},
+} satisfies typeof LinearIssueCreateWebhook.Encoded
 
 export const linearWebhookSecret = 'linear-next-test-secret'
-export const linearOrganizationId = LinearOrganizationId.make(issueCreateJson.organizationId)
+export const linearOrganizationId = LinearOrganizationId.make(issueCreatePayload.organizationId)
 export const linearAppUserId = LinearUserId.make('a75b41db-2746-4c05-a792-31535319f512')
 export const linearOauthClientId = 'linear-test-client'
-export const issueCreatePayload: unknown = issueCreateJson
 export const agentSessionCreatedPayload: unknown = agentSessionCreatedJson
 export const agentSessionPromptedPayload: unknown = agentSessionPromptedJson
 export const agentSessionPayloads = [agentSessionCreatedJson, agentSessionPromptedJson] as const
@@ -85,10 +119,10 @@ export const linearIssueCreateAdmission = (namespace = 'linear-processing-test')
 	DeliveryAdmission.make({
 		namespace,
 		provider: 'linear',
-		installationId: issueCreateJson.organizationId,
-		resourceId: `linear:v1:issue:${issueCreateJson.data.id}`,
+		installationId: issueCreatePayload.organizationId,
+		resourceId: `linear:v1:issue:${issueCreatePayload.data.id}`,
 		eventId: '6d601ea0-cafe-4e33-8db1-d7c21fc6a773',
-		payload: issueCreateJson,
+		payload: issueCreatePayload,
 	})
 
 export const signedLinearBody = (
@@ -106,15 +140,12 @@ export const signedLinearBody = (
 	body,
 })
 
-export const signedLinearInput = (payload: unknown = issueCreatePayload, deliveryId?: string, timestamp?: number) =>
-	signedLinearBody(
-		new TextEncoder().encode(JSON.stringify(payload)),
-		deliveryId,
-		timestamp,
-		typeof payload === 'object' && payload !== null && 'type' in payload && typeof payload.type === 'string'
-			? payload.type
-			: 'Issue',
-	)
+export const signedLinearInput = (
+	payload: Schema.Json = issueCreatePayload,
+	eventType = 'Issue',
+	deliveryId?: string,
+	timestamp?: number,
+) => signedLinearBody(new TextEncoder().encode(JSON.stringify(payload)), deliveryId, timestamp, eventType)
 
 export const makeLinearTestProvider = (namespace = 'linear-test') => {
 	const provider = makeLinearWebhookProvider({

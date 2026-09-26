@@ -1,12 +1,24 @@
 import { describe, it } from '@effect/vitest'
-import { Config, Effect, Layer, Redacted, Ref } from 'effect'
+import { Config, Effect, Layer, Predicate, Redacted, Ref, Schema } from 'effect'
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http'
 
+import { GetIssueVariables } from '../src/api/GetIssue'
+import { GetViewerIdentityVariables } from '../src/api/GetViewerIdentity'
 import { LinearAuth } from '../src/index'
 import { LinearApi } from '../src/LinearApi'
 import { LinearApiLiveOptions, makeLinearApiLiveBase } from '../src/LinearApiLive'
 import { LinearOrganizationId } from '../src/LinearIdentity'
-import { apiLayer, appUserId, issue, issueJson, organizationId, viewer } from './api-test-fixtures'
+import {
+	apiLayer,
+	appUserId,
+	decodeGraphqlRequest,
+	issue,
+	issueJson,
+	organizationId,
+	viewer,
+} from './api-test-fixtures'
+
+const decodeRequest = decodeGraphqlRequest(Schema.Union([GetIssueVariables, GetViewerIdentityVariables]))
 
 describe('LinearApiLive', () => {
 	it.effect('verifies identity then executes named reads and mutations', ({ expect }) =>
@@ -16,7 +28,7 @@ describe('LinearApiLive', () => {
 				Effect.gen(function* () {
 					const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie)
 					expect(web.headers.get('authorization')).toBe('Bearer token-never-log')
-					const body = (yield* Effect.promise(() => web.json())) as { query: string }
+					const body = yield* decodeRequest(request)
 					yield* Ref.update(calls, (values) => [...values, body.query])
 					if (body.query.includes('viewer')) return HttpClientResponse.fromWeb(request, Response.json(viewer))
 					return HttpClientResponse.fromWeb(request, Response.json({ data: { issue: issueJson } }))
@@ -44,7 +56,7 @@ describe('LinearApiLive', () => {
 							Response.json({ access_token: `token-${count}`, expires_in: 3600 }),
 						)
 					}
-					const body = (yield* Effect.promise(() => web.json())) as { query: string }
+					const body = yield* decodeRequest(request)
 					if (body.query.includes('viewer')) return HttpClientResponse.fromWeb(request, Response.json(viewer))
 					const count = yield* Ref.updateAndGet(issueCalls, (n) => n + 1)
 					return HttpClientResponse.fromWeb(
@@ -85,8 +97,11 @@ describe('LinearApiLive', () => {
 			const error = yield* Effect.flatMap(LinearApi, (api) => api.getIssue({ issue: mismatchedIssue })).pipe(
 				Effect.provide(apiLayer(http)),
 				Effect.flip,
+				Effect.filterOrElse(
+					(error) => Predicate.isTagged(error, 'LinearApiError'),
+					() => Effect.die(new Error('expected LinearApiError')),
+				),
 			)
-			if (error._tag !== 'LinearApiError') return yield* Effect.die('expected LinearApiError')
 			expect(error.reason).toBe('identity_mismatch')
 			expect(yield* Ref.get(calls)).toBe(0)
 		}),

@@ -12,6 +12,7 @@ import {
 } from '@humanlayer/channels-delivery-next'
 import { Effect, Match, Predicate, Schema } from 'effect'
 
+import { reviewComment } from './api/GitHubApiProjections'
 import { GitHubApi } from './GitHubApi'
 import {
 	GitHubIssueAssigned,
@@ -76,7 +77,7 @@ import {
 	GitHubReviewThread,
 	GitHubTeam,
 } from './GitHubModels'
-import { GitHubIssue, GitHubIssueComment, GitHubPullRequest, GitHubReviewComment } from './GitHubResources'
+import { GitHubIssue, GitHubIssueComment, GitHubPullRequest } from './GitHubResources'
 import type {
 	GitHubIssueCommentWebhook,
 	GitHubIssuesWebhook,
@@ -227,24 +228,6 @@ const makeIssueComment = (payload: GitHubIssueCommentWebhook, discussion: GitHub
 		body: payload.comment.body,
 		url: payload.comment.html_url,
 		author: payload.comment.user === null ? null : participant(payload.comment.user),
-	})
-
-const makeReviewComment = (payload: GitHubPullRequestReviewCommentWebhook, ref: GitHubPullRequestRef) =>
-	GitHubReviewComment.make({
-		ref: GitHubReviewCommentRef.make({ pullRequest: ref, id: payload.comment.id }),
-		nodeId: payload.comment.node_id,
-		body: payload.comment.body,
-		url: payload.comment.html_url,
-		author: payload.comment.user === null ? null : participant(payload.comment.user),
-		reviewId: payload.comment.pull_request_review_id,
-		path: payload.comment.path,
-		commitId: payload.comment.commit_id,
-		originalCommitId: payload.comment.original_commit_id,
-		diffHunk: payload.comment.diff_hunk,
-		...(payload.comment.in_reply_to_id === undefined ? {} : { inReplyToId: payload.comment.in_reply_to_id }),
-		...(payload.comment.line === undefined ? {} : { line: payload.comment.line }),
-		...(payload.comment.start_line === undefined ? {} : { startLine: payload.comment.start_line }),
-		...(payload.comment.side === undefined ? {} : { side: payload.comment.side }),
 	})
 
 const normalizeReviewState = (state: GitHubPullRequestReviewWebhook['review']['state']) =>
@@ -499,7 +482,7 @@ const normalizeWebhook = (
 			const ref = pullRequestRef(payload)
 			const pullRequest = GitHubPullRequest.make({ ref, mailboxKey })
 			const actor = participant(payload.sender)
-			const comment = makeReviewComment(payload, ref)
+			const comment = reviewComment(ref, payload.comment)
 			const event = Match.value(payload.action).pipe(
 				Match.when('created', () =>
 					GitHubPrReviewCommentCreated.make({ eventId, pullRequest, actor, comment }),
@@ -588,39 +571,162 @@ const runCallback = (effect: Effect.Effect<void, { readonly retryable: boolean }
 		Effect.as(ProviderEventHandled.make({})),
 	)
 
+const isIssueMentionTrigger = Schema.is(Schema.Union([GitHubIssueOpened, GitHubIssueCommentCreated]))
+const isPrMentionTrigger = Schema.is(
+	Schema.Union([GitHubPrOpened, GitHubPrCommentCreated, GitHubPrReviewCommentCreated]),
+)
+
+const decodeGitHubBatch = Effect.fn('github.decode_event_batch')(function* (
+	options: GitHubEventProcessorOptions,
+	admissions: DeliveryAdmissionBatch,
+) {
+	const first = admissions[0]
+	const address = yield* parseResourceAddress(first.resourceId)
+	const webhooks = yield* Effect.forEach(admissions, decodeGitHubWebhook)
+
+	for (let index = 0; index < admissions.length; index += 1) {
+		const admission = admissions[index]
+		const webhook = webhooks[index]
+		if (admission === undefined || webhook === undefined) return yield* identityMismatch()
+		if (
+			webhook.event === 'check_run' &&
+			!webhook.payload.check_run.pull_requests.some(({ number }) => number === address.number)
+		) {
+			return yield* invalidPayload()
+		}
+		const actual = webhookAddress(webhook, address)
+		if (
+			admission.namespace !== options.namespace ||
+			admission.provider !== 'github' ||
+			admission.installationId !== first.installationId ||
+			admission.resourceId !== first.resourceId ||
+			githubDiscussionResourceId(address) !== admission.resourceId ||
+			admission.installationId !== String(webhook.payload.installation.id) ||
+			actual.repositoryId !== address.repositoryId ||
+			actual.kind !== address.kind ||
+			actual.number !== address.number
+		)
+			return yield* identityMismatch()
+	}
+	return { first, address, webhooks }
+})
+
+const dispatchIssueEvents = Effect.fn('github.dispatch_issue_events')(function* (
+	issueEvents: ReadonlyArray<NormalizedIssueEvent>,
+	subscribed: boolean,
+) {
+	const callbacks = yield* GitHubCallbacks
+	const issue = issueEvents[0]?.event.issue
+	if (issue === undefined) return ProviderEventIgnored.make({ reason: 'no_relevant_event' })
+	if (subscribed) {
+		if (Predicate.isUndefined(callbacks.onSubscribedIssueEvents))
+			return ProviderEventIgnored.make({ reason: 'callback_not_configured' })
+		const events = issueEvents
+			.map(({ event }) => event)
+			.filter((event): event is GitHubIssueEvent => !Schema.is(GitHubIssueOpened)(event))
+		const firstEvent = events[0]
+		if (firstEvent === undefined) return ProviderEventIgnored.make({ reason: 'no_relevant_event' })
+		return yield* runCallback(
+			callbacks.onSubscribedIssueEvents(
+				GitHubSubscribedIssueEvents.make({ issue, events: [firstEvent, ...events.slice(1)] }),
+			),
+		)
+	}
+
+	const actualMentionIndex = issueEvents.findIndex(({ mentionsBot: mentioned }) => mentioned)
+	const actualOpenedIndex = issueEvents.findIndex(({ event }) => Schema.is(GitHubIssueOpened)(event))
+	const mentionIndex = Predicate.isUndefined(callbacks.onMentioned) ? -1 : actualMentionIndex
+	const openedIndex = Predicate.isUndefined(callbacks.onIssueCreated) ? -1 : actualOpenedIndex
+	if (mentionIndex >= 0 && !Predicate.isUndefined(callbacks.onMentioned)) {
+		const trigger = issueEvents[mentionIndex]
+		if (trigger === undefined || !isIssueMentionTrigger(trigger.event))
+			return ProviderEventIgnored.make({ reason: 'no_activation_event' })
+		const start = openedIndex >= 0 ? Math.min(openedIndex, mentionIndex) : mentionIndex
+		const events = issueEvents
+			.slice(start)
+			.filter((_, index) => start + index !== mentionIndex)
+			.map(({ event }) => event)
+		return yield* runCallback(
+			callbacks.onMentioned(GitHubIssueMentioned.make({ issue, trigger: trigger.event, events })),
+		)
+	}
+	if (openedIndex >= 0 && !Predicate.isUndefined(callbacks.onIssueCreated)) {
+		const trigger = issueEvents[openedIndex]
+		if (trigger === undefined || !Schema.is(GitHubIssueOpened)(trigger.event))
+			return ProviderEventIgnored.make({ reason: 'no_activation_event' })
+		const events = issueEvents
+			.slice(openedIndex + 1)
+			.map(({ event }) => event)
+			.filter((event): event is GitHubIssueEvent => !Schema.is(GitHubIssueOpened)(event))
+		return yield* runCallback(
+			callbacks.onIssueCreated(GitHubIssueCreated.make({ issue, trigger: trigger.event, events })),
+		)
+	}
+	return ProviderEventIgnored.make({
+		reason: actualOpenedIndex < 0 && actualMentionIndex < 0 ? 'no_activation_event' : 'callback_not_configured',
+	})
+})
+
+const dispatchPullRequestEvents = Effect.fn('github.dispatch_pull_request_events')(function* (
+	prEvents: ReadonlyArray<NormalizedPrEvent>,
+	subscribed: boolean,
+) {
+	const callbacks = yield* GitHubCallbacks
+	const pullRequest = prEvents[0]?.event.pullRequest
+	if (pullRequest === undefined) return ProviderEventIgnored.make({ reason: 'no_relevant_event' })
+	if (subscribed) {
+		if (Predicate.isUndefined(callbacks.onSubscribedPrEvents))
+			return ProviderEventIgnored.make({ reason: 'callback_not_configured' })
+		const events = prEvents
+			.map(({ event }) => event)
+			.filter((event): event is GitHubPrEvent => !Schema.is(GitHubPrOpened)(event))
+		const firstEvent = events[0]
+		if (firstEvent === undefined) return ProviderEventIgnored.make({ reason: 'no_relevant_event' })
+		return yield* runCallback(
+			callbacks.onSubscribedPrEvents(
+				GitHubSubscribedPrEvents.make({ pullRequest, events: [firstEvent, ...events.slice(1)] }),
+			),
+		)
+	}
+
+	const actualMentionIndex = prEvents.findIndex(({ mentionsBot: mentioned }) => mentioned)
+	const actualOpenedIndex = prEvents.findIndex(({ event }) => Schema.is(GitHubPrOpened)(event))
+	const mentionIndex = Predicate.isUndefined(callbacks.onMentioned) ? -1 : actualMentionIndex
+	const openedIndex = Predicate.isUndefined(callbacks.onPrCreated) ? -1 : actualOpenedIndex
+	if (mentionIndex >= 0 && !Predicate.isUndefined(callbacks.onMentioned)) {
+		const trigger = prEvents[mentionIndex]
+		if (trigger === undefined || !isPrMentionTrigger(trigger.event))
+			return ProviderEventIgnored.make({ reason: 'no_activation_event' })
+		const start = openedIndex >= 0 ? Math.min(openedIndex, mentionIndex) : mentionIndex
+		const events = prEvents
+			.slice(start)
+			.filter((_, index) => start + index !== mentionIndex)
+			.map(({ event }) => event)
+		return yield* runCallback(
+			callbacks.onMentioned(GitHubPrMentioned.make({ pullRequest, trigger: trigger.event, events })),
+		)
+	}
+	if (openedIndex >= 0 && !Predicate.isUndefined(callbacks.onPrCreated)) {
+		const trigger = prEvents[openedIndex]
+		if (trigger === undefined || !Schema.is(GitHubPrOpened)(trigger.event))
+			return ProviderEventIgnored.make({ reason: 'no_activation_event' })
+		const events = prEvents
+			.slice(openedIndex + 1)
+			.map(({ event }) => event)
+			.filter((event): event is GitHubPrEvent => !Schema.is(GitHubPrOpened)(event))
+		return yield* runCallback(
+			callbacks.onPrCreated(GitHubPrCreated.make({ pullRequest, trigger: trigger.event, events })),
+		)
+	}
+	return ProviderEventIgnored.make({
+		reason: actualOpenedIndex < 0 && actualMentionIndex < 0 ? 'no_activation_event' : 'callback_not_configured',
+	})
+})
+
 const processGitHubBatch = (options: GitHubEventProcessorOptions) =>
 	Effect.fn('github.process_event_batch')(function* (admissions: DeliveryAdmissionBatch) {
-		const callbacks = yield* GitHubCallbacks
 		yield* GitHubApi
-		const first = admissions[0]
-		const address = yield* parseResourceAddress(first.resourceId)
-		const webhooks = yield* Effect.forEach(admissions, decodeGitHubWebhook)
-
-		for (let index = 0; index < admissions.length; index += 1) {
-			const admission = admissions[index]
-			const webhook = webhooks[index]
-			if (admission === undefined || webhook === undefined) return yield* identityMismatch()
-			if (
-				webhook.event === 'check_run' &&
-				!webhook.payload.check_run.pull_requests.some(({ number }) => number === address.number)
-			) {
-				return yield* invalidPayload()
-			}
-			const actual = webhookAddress(webhook, address)
-			if (
-				admission.namespace !== options.namespace ||
-				admission.provider !== 'github' ||
-				admission.installationId !== first.installationId ||
-				admission.resourceId !== first.resourceId ||
-				githubDiscussionResourceId(address) !== admission.resourceId ||
-				admission.installationId !== String(webhook.payload.installation.id) ||
-				actual.repositoryId !== address.repositoryId ||
-				actual.kind !== address.kind ||
-				actual.number !== address.number
-			)
-				return yield* identityMismatch()
-		}
-
+		const { first, address, webhooks } = yield* decodeGitHubBatch(options, admissions)
 		const mailboxKey = deliveryMailboxKey(first)
 		const normalized = webhooks
 			.map((webhook, index) => {
@@ -640,122 +746,15 @@ const processGitHubBatch = (options: GitHubEventProcessorOptions) =>
 		)
 
 		if (address.kind === 'issue') {
-			const issueEvents = normalized.filter((entry): entry is NormalizedIssueEvent => entry.kind === 'issue')
-			const issue = issueEvents[0]?.event.issue
-			if (issue === undefined) return ProviderEventIgnored.make({ reason: 'no_relevant_event' })
-			if (subscribed) {
-				if (Predicate.isUndefined(callbacks.onSubscribedIssueEvents))
-					return ProviderEventIgnored.make({ reason: 'callback_not_configured' })
-				const events = issueEvents
-					.map(({ event }) => event)
-					.filter((event): event is GitHubIssueEvent => !Schema.is(GitHubIssueOpened)(event))
-				const firstEvent = events[0]
-				if (firstEvent === undefined) return ProviderEventIgnored.make({ reason: 'no_relevant_event' })
-				return yield* runCallback(
-					callbacks.onSubscribedIssueEvents(
-						GitHubSubscribedIssueEvents.make({ issue, events: [firstEvent, ...events.slice(1)] }),
-					),
-				)
-			}
-
-			const actualMentionIndex = issueEvents.findIndex(({ mentionsBot: mentioned }) => mentioned)
-			const actualOpenedIndex = issueEvents.findIndex(({ event }) => Schema.is(GitHubIssueOpened)(event))
-			const mentionIndex = Predicate.isUndefined(callbacks.onMentioned) ? -1 : actualMentionIndex
-			const openedIndex = Predicate.isUndefined(callbacks.onIssueCreated) ? -1 : actualOpenedIndex
-			if (mentionIndex >= 0 && !Predicate.isUndefined(callbacks.onMentioned)) {
-				const trigger = issueEvents[mentionIndex]
-				if (
-					trigger === undefined ||
-					!(
-						Schema.is(GitHubIssueOpened)(trigger.event) ||
-						Schema.is(GitHubIssueCommentCreated)(trigger.event)
-					)
-				)
-					return ProviderEventIgnored.make({ reason: 'no_activation_event' })
-				const start = openedIndex >= 0 ? Math.min(openedIndex, mentionIndex) : mentionIndex
-				const events = issueEvents
-					.slice(start)
-					.filter((_, index) => start + index !== mentionIndex)
-					.map(({ event }) => event)
-				return yield* runCallback(
-					callbacks.onMentioned(GitHubIssueMentioned.make({ issue, trigger: trigger.event, events })),
-				)
-			}
-			if (openedIndex >= 0 && !Predicate.isUndefined(callbacks.onIssueCreated)) {
-				const trigger = issueEvents[openedIndex]
-				if (trigger === undefined || !Schema.is(GitHubIssueOpened)(trigger.event))
-					return ProviderEventIgnored.make({ reason: 'no_activation_event' })
-				const events = issueEvents
-					.slice(openedIndex + 1)
-					.map(({ event }) => event)
-					.filter((event): event is GitHubIssueEvent => !Schema.is(GitHubIssueOpened)(event))
-				return yield* runCallback(
-					callbacks.onIssueCreated(GitHubIssueCreated.make({ issue, trigger: trigger.event, events })),
-				)
-			}
-			return ProviderEventIgnored.make({
-				reason:
-					actualOpenedIndex < 0 && actualMentionIndex < 0 ? 'no_activation_event' : 'callback_not_configured',
-			})
-		}
-
-		const prEvents = normalized.filter((entry): entry is NormalizedPrEvent => entry.kind === 'pull-request')
-		const pullRequest = prEvents[0]?.event.pullRequest
-		if (pullRequest === undefined) return ProviderEventIgnored.make({ reason: 'no_relevant_event' })
-		if (subscribed) {
-			if (Predicate.isUndefined(callbacks.onSubscribedPrEvents))
-				return ProviderEventIgnored.make({ reason: 'callback_not_configured' })
-			const events = prEvents
-				.map(({ event }) => event)
-				.filter((event): event is GitHubPrEvent => !Schema.is(GitHubPrOpened)(event))
-			const firstEvent = events[0]
-			if (firstEvent === undefined) return ProviderEventIgnored.make({ reason: 'no_relevant_event' })
-			return yield* runCallback(
-				callbacks.onSubscribedPrEvents(
-					GitHubSubscribedPrEvents.make({ pullRequest, events: [firstEvent, ...events.slice(1)] }),
-				),
+			return yield* dispatchIssueEvents(
+				normalized.filter((entry): entry is NormalizedIssueEvent => entry.kind === 'issue'),
+				subscribed,
 			)
 		}
-
-		const actualMentionIndex = prEvents.findIndex(({ mentionsBot: mentioned }) => mentioned)
-		const actualOpenedIndex = prEvents.findIndex(({ event }) => Schema.is(GitHubPrOpened)(event))
-		const mentionIndex = Predicate.isUndefined(callbacks.onMentioned) ? -1 : actualMentionIndex
-		const openedIndex = Predicate.isUndefined(callbacks.onPrCreated) ? -1 : actualOpenedIndex
-		if (mentionIndex >= 0 && !Predicate.isUndefined(callbacks.onMentioned)) {
-			const trigger = prEvents[mentionIndex]
-			if (
-				trigger === undefined ||
-				!(
-					Schema.is(GitHubPrOpened)(trigger.event) ||
-					Schema.is(GitHubPrCommentCreated)(trigger.event) ||
-					Schema.is(GitHubPrReviewCommentCreated)(trigger.event)
-				)
-			)
-				return ProviderEventIgnored.make({ reason: 'no_activation_event' })
-			const start = openedIndex >= 0 ? Math.min(openedIndex, mentionIndex) : mentionIndex
-			const events = prEvents
-				.slice(start)
-				.filter((_, index) => start + index !== mentionIndex)
-				.map(({ event }) => event)
-			return yield* runCallback(
-				callbacks.onMentioned(GitHubPrMentioned.make({ pullRequest, trigger: trigger.event, events })),
-			)
-		}
-		if (openedIndex >= 0 && !Predicate.isUndefined(callbacks.onPrCreated)) {
-			const trigger = prEvents[openedIndex]
-			if (trigger === undefined || !Schema.is(GitHubPrOpened)(trigger.event))
-				return ProviderEventIgnored.make({ reason: 'no_activation_event' })
-			const events = prEvents
-				.slice(openedIndex + 1)
-				.map(({ event }) => event)
-				.filter((event): event is GitHubPrEvent => !Schema.is(GitHubPrOpened)(event))
-			return yield* runCallback(
-				callbacks.onPrCreated(GitHubPrCreated.make({ pullRequest, trigger: trigger.event, events })),
-			)
-		}
-		return ProviderEventIgnored.make({
-			reason: actualOpenedIndex < 0 && actualMentionIndex < 0 ? 'no_activation_event' : 'callback_not_configured',
-		})
+		return yield* dispatchPullRequestEvents(
+			normalized.filter((entry): entry is NormalizedPrEvent => entry.kind === 'pull-request'),
+			subscribed,
+		)
 	})
 
 export const makeGitHubEventProcessor = (

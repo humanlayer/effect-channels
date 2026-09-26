@@ -1,9 +1,13 @@
-import { Effect } from 'effect'
+import { Effect, Schema } from 'effect'
 
 import type { GitHubPostIssueComment } from '../GitHubApi'
+import { GitHubDiscussionRef } from '../GitHubModels'
 import { GitHubApiClient } from './GitHubApiClient'
 import { issueComment, repositoryPath } from './GitHubApiProjections'
 import { IssueComment } from './GitHubApiSchemas'
+
+const PostIssueCommentBody = Schema.Struct({ body: Schema.String })
+
 export const postIssueComment = Effect.fn('github.api.post_issue_comment')(function* (input: GitHubPostIssueComment) {
 	const api = yield* GitHubApiClient
 	const value = yield* api.call({
@@ -12,7 +16,7 @@ export const postIssueComment = Effect.fn('github.api.post_issue_comment')(funct
 		method: 'POST',
 		path: `${repositoryPath(input.issue)}/issues/${input.issue.number}/comments`,
 		schema: IssueComment,
-		body: { body: input.content.markdown },
+		body: { schema: PostIssueCommentBody, value: { body: input.content.markdown } },
 	})
-	return issueComment({ _tag: 'Issue', ref: input.issue }, value)
+	return issueComment(GitHubDiscussionRef.cases.Issue.make({ ref: input.issue }), value)
 })

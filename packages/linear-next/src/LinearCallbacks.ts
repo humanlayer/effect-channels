@@ -66,14 +66,16 @@ const narrowCause = (callback: LinearCallbackName, cause: Cause.Cause<unknown>) 
 const wrapCallback = <Name extends keyof LinearCallbackEventMap, E, R>(
 	context: Context.Context<R>,
 	callback: Name,
-	handler: (event: LinearCallbackEventMap[Name]) => Effect.Effect<void, E, R>,
+	handler: ((event: LinearCallbackEventMap[Name]) => Effect.Effect<void, E, R>) | undefined,
 ) =>
-	Effect.fn(`linear.callbacks.${callback}`)((event: LinearCallbackEventMap[Name]) =>
-		Effect.suspend(() => handler(event)).pipe(
-			Effect.provide(context),
-			Effect.catchCause((cause) => narrowCause(callback, cause)),
-		),
-	)
+	Predicate.isUndefined(handler)
+		? undefined
+		: Effect.fn(`linear.callbacks.${callback}`)((event: LinearCallbackEventMap[Name]) =>
+				Effect.suspend(() => handler(event)).pipe(
+					Effect.provide(context),
+					Effect.catchCause((cause) => narrowCause(callback, cause)),
+				),
+			)
 
 export class LinearCallbacks extends Context.Service<
 	LinearCallbacks,
@@ -85,42 +87,20 @@ export class LinearCallbacks extends Context.Service<
 			Effect.gen(function* () {
 				const context = yield* Effect.context<R>()
 				return LinearCallbacks.of({
-					...(Predicate.isUndefined(handlers.onAgentSessionCreated)
-						? {}
-						: {
-								onAgentSessionCreated: wrapCallback(
-									context,
-									'onAgentSessionCreated',
-									handlers.onAgentSessionCreated,
-								),
-							}),
-					...(Predicate.isUndefined(handlers.onAgentSessionPrompted)
-						? {}
-						: {
-								onAgentSessionPrompted: wrapCallback(
-									context,
-									'onAgentSessionPrompted',
-									handlers.onAgentSessionPrompted,
-								),
-							}),
-					...(Predicate.isUndefined(handlers.onIssueCreated)
-						? {}
-						: { onIssueCreated: wrapCallback(context, 'onIssueCreated', handlers.onIssueCreated) }),
-					...(Predicate.isUndefined(handlers.onMentioned)
-						? {}
-						: { onMentioned: wrapCallback(context, 'onMentioned', handlers.onMentioned) }),
-					...(Predicate.isUndefined(handlers.onAssigned)
-						? {}
-						: { onAssigned: wrapCallback(context, 'onAssigned', handlers.onAssigned) }),
-					...(Predicate.isUndefined(handlers.onSubscribedEvent)
-						? {}
-						: {
-								onSubscribedEvent: wrapCallback(
-									context,
-									'onSubscribedEvent',
-									handlers.onSubscribedEvent,
-								),
-							}),
+					onAgentSessionCreated: wrapCallback(
+						context,
+						'onAgentSessionCreated',
+						handlers.onAgentSessionCreated,
+					),
+					onAgentSessionPrompted: wrapCallback(
+						context,
+						'onAgentSessionPrompted',
+						handlers.onAgentSessionPrompted,
+					),
+					onIssueCreated: wrapCallback(context, 'onIssueCreated', handlers.onIssueCreated),
+					onMentioned: wrapCallback(context, 'onMentioned', handlers.onMentioned),
+					onAssigned: wrapCallback(context, 'onAssigned', handlers.onAssigned),
+					onSubscribedEvent: wrapCallback(context, 'onSubscribedEvent', handlers.onSubscribedEvent),
 				})
 			}),
 		)

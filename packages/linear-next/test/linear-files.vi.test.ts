@@ -17,8 +17,7 @@ import {
 import { LinearAttachmentId } from '../src/LinearIdentity'
 import { LinearIssueAttachment, LinearIssue } from '../src/LinearResources'
 import { issue } from './api-test-fixtures'
-import { linearAppUserId, linearOrganizationId } from './fixtures'
-import issueCreateJson from './fixtures/issue-create.json' with { type: 'json' }
+import { issueCreatePayload, linearAppUserId, linearOrganizationId } from './fixtures'
 
 const workspace = '8f1d3c4e-1111-4222-8333-944455556666'
 const upload = (asset: string) =>
@@ -85,7 +84,7 @@ describe('Linear file discovery', () => {
 	it.effect('discovers files while normalizing issue descriptions and comment bodies', ({ expect }) =>
 		Effect.gen(function* () {
 			const namespace = 'linear-files-test'
-			const created = issueCreateJson
+			const created = issueCreatePayload
 			const description = `Spec ![diagram.png](${imageUrl}) and [site](https://example.com)`
 			const createdEvents = yield* Queue.unbounded<LinearIssueCreated>()
 			const subscribedEvents = yield* Queue.unbounded<LinearSubscribedEvents>()

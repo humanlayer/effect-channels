@@ -1,9 +1,12 @@
 import { Effect, Schema } from 'effect'
 
-import type { GitHubIssueLabelsRequest } from '../GitHubApi'
+import { GitHubLabels, type GitHubIssueLabelsRequest } from '../GitHubApi'
 import { GitHubApiClient } from './GitHubApiClient'
 import { label, repositoryPath } from './GitHubApiProjections'
 import { Label } from './GitHubApiSchemas'
+
+const AddIssueLabelsBody = Schema.Struct({ labels: GitHubLabels })
+
 export const addIssueLabels = Effect.fn('github.api.add_issue_labels')(function* (input: GitHubIssueLabelsRequest) {
 	const api = yield* GitHubApiClient
 	const values = yield* api.call({
@@ -12,7 +15,7 @@ export const addIssueLabels = Effect.fn('github.api.add_issue_labels')(function*
 		method: 'POST',
 		path: `${repositoryPath(input.issue)}/issues/${input.issue.number}/labels`,
 		schema: Schema.Array(Label),
-		body: { labels: input.labels },
+		body: { schema: AddIssueLabelsBody, value: { labels: input.labels } },
 	})
 	return values.map(label)
 })

@@ -13,10 +13,10 @@ describe('Linear Agent Session webhook admission', () => {
 	it.effect('admits created and prompted events to one session mailbox with logical event IDs', ({ expect }) =>
 		Effect.gen(function* () {
 			const created = yield* makeLinearTestProvider().handle(
-				signedLinearInput(agentSessionPayloads[0], 'delivery-created'),
+				signedLinearInput(agentSessionPayloads[0], 'AgentSessionEvent', 'delivery-created'),
 			)
 			const prompted = yield* makeLinearTestProvider().handle(
-				signedLinearInput(agentSessionPayloads[1], 'delivery-prompted'),
+				signedLinearInput(agentSessionPayloads[1], 'AgentSessionEvent', 'delivery-prompted'),
 			)
 			expect(Schema.is(ProviderWebhookEvent)(created)).toBe(true)
 			expect(Schema.is(ProviderWebhookEvent)(prompted)).toBe(true)
@@ -38,10 +38,10 @@ describe('Linear Agent Session webhook admission', () => {
 	it.effect('keeps logical admission identity stable across transport delivery IDs', ({ expect }) =>
 		Effect.gen(function* () {
 			const first = yield* makeLinearTestProvider().handle(
-				signedLinearInput(agentSessionPayloads[0], 'transport-one'),
+				signedLinearInput(agentSessionPayloads[0], 'AgentSessionEvent', 'transport-one'),
 			)
 			const replay = yield* makeLinearTestProvider().handle(
-				signedLinearInput(agentSessionPayloads[0], 'transport-two'),
+				signedLinearInput(agentSessionPayloads[0], 'AgentSessionEvent', 'transport-two'),
 			)
 			expect(Schema.is(ProviderWebhookEvent)(first)).toBe(true)
 			expect(Schema.is(ProviderWebhookEvent)(replay)).toBe(true)
@@ -64,11 +64,13 @@ describe('Linear Agent Session webhook admission', () => {
 		Effect.gen(function* () {
 			const payload = structuredClone(agentSessionPayloads[0])
 			payload.agentSession.appUserId = 'different-app-user'
-			const outcome = yield* makeLinearTestProvider().handle(signedLinearInput(payload)).pipe(Effect.flip)
+			const outcome = yield* makeLinearTestProvider()
+				.handle(signedLinearInput(payload, payload.type))
+				.pipe(Effect.flip)
 			expect(outcome).toEqual(WebhookPayloadInvalidError.make({ reason: 'session_identity_mismatch' }))
 			const foreign = structuredClone(agentSessionPayloads[0])
 			foreign.appUserId = 'different-app-user'
-			const response = yield* makeLinearTestProvider().handle(signedLinearInput(foreign))
+			const response = yield* makeLinearTestProvider().handle(signedLinearInput(foreign, foreign.type))
 			expect(response).toEqual(ProviderWebhookResponse.make({ status: 403, body: null, headers: {} }))
 		}),
 	)

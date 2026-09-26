@@ -3,6 +3,7 @@ import { Config, Effect, Layer, Schema } from 'effect'
 import { TestClock } from 'effect/testing'
 import * as Redis from 'effect/unstable/persistence/Redis'
 
+import { DeliveryQueue } from '../src/DeliveryQueue'
 import { emptyMailbox } from '../src/Mailbox'
 import { MailboxReadiness, MailboxStore, MailboxStoreError } from '../src/MailboxStore'
 import { layer } from '../src/redis'
@@ -26,6 +27,8 @@ const client = Layer.unwrap(
 		})
 	}),
 )
+
+const runtime = DeliveryQueue.layerMailboxStore.pipe(Layer.provideMerge(layer))
 
 it.effect(
 	'isolated Redis: atomic CAS/index, no expiry, wrong-type preflight, script reload and fresh-layer recovery',
@@ -88,10 +91,10 @@ it.effect(
 				for (const index of readyKeys({ key }))
 					assert.strictEqual(yield* redis.send('ZSCORE', index, encodeKey(key)), null)
 			}).pipe(Effect.provide(layer))
-			yield* staleAttemptContract.pipe(Effect.provide(Layer.fresh(layer)))
-			const receipt = yield* interruptForReconstruction.pipe(Effect.provide(Layer.fresh(layer)))
+			yield* staleAttemptContract.pipe(Effect.provide(Layer.fresh(runtime)))
+			const receipt = yield* interruptForReconstruction.pipe(Effect.provide(Layer.fresh(runtime)))
 			yield* TestClock.adjust(policy.leaseMs)
-			yield* resumeAfterReconstruction(receipt).pipe(Effect.provide(Layer.fresh(layer)))
+			yield* resumeAfterReconstruction(receipt).pipe(Effect.provide(Layer.fresh(runtime)))
 		}).pipe(Effect.provide(client)),
 	{ timeout: 30_000 },
 )

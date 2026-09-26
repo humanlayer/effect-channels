@@ -8,6 +8,7 @@ import {
 	LinearIssueLabelId,
 	LinearIssueRef,
 	LinearOrganizationId,
+	LinearReactionTarget,
 	LinearTeamId,
 	LinearUserId,
 	LinearWorkflowStateId,
@@ -97,7 +98,10 @@ const program = Effect.gen(function* () {
 			content: { markdown: `${inputs.marker} reply` },
 		})
 		yield* Ref.update(commentsToDelete, (refs) => [...refs, reply.ref])
-		const reaction = yield* api.createReaction({ target: { _tag: 'Comment', comment: reply.ref }, emoji: 'eyes' })
+		const reaction = yield* api.createReaction({
+			target: LinearReactionTarget.cases.Comment.make({ comment: reply.ref }),
+			emoji: 'eyes',
+		})
 		yield* api.deleteReaction({ issue: issue.ref, reactionId: reaction.ref.reactionId })
 		const card = yield* api.createAttachment({
 			issue: issue.ref,

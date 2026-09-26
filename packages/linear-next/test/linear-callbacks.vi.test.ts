@@ -21,12 +21,13 @@ describe('Linear callbacks', () => {
 			const admission = linearIssueCreateAdmission(namespace)
 			const error = yield* makeLinearEventProcessor({ namespace })
 				.process([admission])
-				.pipe(
-					Effect.provide(layer(() => Effect.fail({ retryability: 'non_retryable' as const }))),
-					Effect.flip,
-				)
+				.pipe(Effect.provide(layer(() => Effect.fail({ retryability: 'non_retryable' as const }))), Effect.flip)
 			expect(error).toEqual(
-				ProviderEventExecutionFailed.make({ provider: 'linear', retryable: false, safeCode: 'callback_failed' }),
+				ProviderEventExecutionFailed.make({
+					provider: 'linear',
+					retryable: false,
+					safeCode: 'callback_failed',
+				}),
 			)
 		}),
 	)

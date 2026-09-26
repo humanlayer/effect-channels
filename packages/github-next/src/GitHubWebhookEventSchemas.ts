@@ -62,23 +62,17 @@ export const GitHubPullRequest = Schema.Struct({
 	base: Schema.optionalKey(Schema.Struct({ ref: Schema.String, sha: Schema.NonEmptyString })),
 })
 
+/** `@emulators/github` emits its internal upper-case enum casing for review states in webhook payloads. */
+const EmulatorReviewState = Schema.Literals(['APPROVED', 'CHANGES_REQUESTED', 'COMMENTED', 'DISMISSED', 'PENDING'])
+
 export const GitHubReview = Schema.Struct({
 	id: GitHubId,
 	node_id: Schema.NonEmptyString,
 	body: Schema.NullOr(Schema.String),
 	user: Schema.NullOr(GitHubUser),
-	state: Schema.Literals([
-		'approved',
-		'changes_requested',
-		'commented',
-		'dismissed',
-		'pending',
-		// @emulators/github currently emits its internal enum casing in webhook payloads.
-		'APPROVED',
-		'CHANGES_REQUESTED',
-		'COMMENTED',
-		'DISMISSED',
-		'PENDING',
+	state: Schema.Union([
+		Schema.Literals(['approved', 'changes_requested', 'commented', 'dismissed', 'pending']),
+		EmulatorReviewState,
 	]),
 	commit_id: Schema.String,
 	html_url: Schema.String,

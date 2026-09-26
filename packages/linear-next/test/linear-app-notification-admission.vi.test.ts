@@ -9,7 +9,7 @@ describe('Linear app notification admission', () => {
 		Effect.gen(function* () {
 			for (const [index, payload] of appUserNotificationPayloads.entries()) {
 				const result = yield* makeLinearTestProvider().handle(
-					signedLinearInput(payload, `notification-delivery-${index}`),
+					signedLinearInput(payload, payload.type, `notification-delivery-${index}`),
 				)
 				expect(Schema.is(ProviderWebhookEvent)(result)).toBe(true)
 				if (Schema.is(ProviderWebhookEvent)(result)) {
@@ -30,7 +30,9 @@ describe('Linear app notification admission', () => {
 				...fixture,
 				notification: { ...fixture.notification, issue },
 			}
-			const result = yield* makeLinearTestProvider().handle(signedLinearInput(payload, 'agent-guide-delivery'))
+			const result = yield* makeLinearTestProvider().handle(
+				signedLinearInput(payload, payload.type, 'agent-guide-delivery'),
+			)
 			expect(Schema.is(ProviderWebhookEvent)(result)).toBe(true)
 		}),
 	)
@@ -38,7 +40,7 @@ describe('Linear app notification admission', () => {
 	it.effect('rejects a notification for another app user', ({ expect }) =>
 		Effect.gen(function* () {
 			const payload = { ...appUserNotificationPayloads[0], appUserId: 'another-app-user' }
-			const result = yield* makeLinearTestProvider().handle(signedLinearInput(payload))
+			const result = yield* makeLinearTestProvider().handle(signedLinearInput(payload, payload.type))
 			expect(result).toEqual(ProviderWebhookResponse.make({ status: 403, body: null, headers: {} }))
 		}),
 	)

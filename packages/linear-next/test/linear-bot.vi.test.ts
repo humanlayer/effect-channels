@@ -4,6 +4,7 @@ import { Config, ConfigProvider, Effect, Layer, Redacted, Schema } from 'effect'
 
 import { LinearAuth, LinearBot, LinearOrganizationId, LinearUserId } from '../src'
 import { LinearApi } from '../src/LinearApi'
+import { unusedLinearApi } from './api-test-fixtures'
 import { linearWebhookSecret } from './fixtures'
 
 const providerOptions = () => ({
@@ -108,9 +109,7 @@ describe('LinearBot.make', () => {
 					LinearApi,
 					Effect.gen(function* () {
 						yield* Config.string('CUSTOM_LINEAR_API_CONFIGURATION')
-						return LinearApi.of({
-							createAgentActivity: () => Effect.die('not used'),
-						} as unknown as Parameters<typeof LinearApi.of>[0])
+						return LinearApi.of(unusedLinearApi)
 					}),
 				),
 				handlers: {},

@@ -6,7 +6,7 @@ import {
 	ProviderEventIgnored,
 } from '@humanlayer/channels-delivery-next'
 import { Effect, Layer } from 'effect'
-import { vi } from 'vitest'
+import { vi } from 'vite-plus/test'
 
 import { LinearApi } from '../src/LinearApi'
 import type { LinearMentioned, LinearSubscribedEvents } from '../src/LinearCallbackEvents'
@@ -21,8 +21,9 @@ import {
 } from './fixtures'
 
 const namespace = 'linear-subscribed-test'
-const created = issueCreatePayload as { readonly organizationId: string; readonly data: Record<string, unknown> }
-const issueId = created.data.id as string
+const created = issueCreatePayload
+const issueId = created.data.id
+const { number: _number, ...issueWithoutNumber } = created.data
 const timestamp = '2026-01-01T00:00:00.000Z'
 
 describe('Linear subscribed events', () => {
@@ -41,7 +42,7 @@ describe('Linear subscribed events', () => {
 						id: 'comment-1',
 						body: 'one',
 						issueId,
-						issue: Object.fromEntries(Object.entries(created.data).filter(([key]) => key !== 'number')),
+						issue: issueWithoutNumber,
 						createdAt: timestamp,
 						updatedAt: timestamp,
 						reactionData: {},
@@ -142,7 +143,7 @@ describe('Linear subscribed events', () => {
 		}),
 	)
 
-	it.effect('retains unknown issue and comment changes and honest reduced issue context', ({ expect }) =>
+	it.effect('delivers updates with unmodeled changes and keeps honest reduced issue context', ({ expect }) =>
 		Effect.gen(function* () {
 			const callback = vi.fn((_event: LinearSubscribedEvents) => Effect.void)
 			const payloads = [
@@ -193,16 +194,9 @@ describe('Linear subscribed events', () => {
 				.process([admissions[0]!, admissions[1]!])
 				.pipe(Effect.provide(services))
 			const event = callback.mock.calls[0]?.[0]
-			expect(event?.events[0]).toMatchObject({
-				_tag: 'LinearIssueUpdated',
-				changes: [],
-				otherChanges: { futureProviderField: null },
-			})
-			expect(event?.events[1]).toMatchObject({
-				_tag: 'LinearCommentUpdated',
-				previousBody: 'before',
-				otherChanges: { resolvedAt: null },
-			})
+			expect(event?.events).toHaveLength(2)
+			expect(event?.events[0]).toMatchObject({ _tag: 'LinearIssueUpdated', changes: [] })
+			expect(event?.events[1]).toMatchObject({ _tag: 'LinearCommentUpdated', previousBody: 'before' })
 			const attachmentAdmission = DeliveryAdmission.make({
 				namespace,
 				provider: 'linear',
@@ -346,7 +340,7 @@ describe('Linear subscribed events', () => {
 			const createdCallback = vi.fn(() => Effect.void)
 			const unsubscribe = vi.fn(() => Effect.void)
 			const selfCreate = {
-				...(issueCreatePayload as Record<string, unknown>),
+				...issueCreatePayload,
 				actor: { id: linearAppUserId, name: 'App', type: 'user' },
 			}
 			const selfCreateAdmission = DeliveryAdmission.make({
@@ -364,7 +358,7 @@ describe('Linear subscribed events', () => {
 				resourceId: `linear:v1:issue:${issueId}`,
 				eventId: 'self-remove',
 				payload: {
-					...(issueCreatePayload as Record<string, unknown>),
+					...issueCreatePayload,
 					action: 'remove',
 					actor: { id: linearAppUserId, name: 'App', type: 'user' },
 				},

@@ -4,7 +4,7 @@
  * It receives a list of providers at construction time, and then at execution time when it receives a webhook
  * it looks up the provider, processes the event through the provider, and then hands it off for Delivery
  */
-import { Match, Schema, Stream } from 'effect'
+import { Array as Arr, Match, Schema, Stream } from 'effect'
 import * as Effect from 'effect/Effect'
 import { HttpRouter, HttpServerResponse } from 'effect/unstable/http'
 import type { HttpIncomingMessage } from 'effect/unstable/http/HttpIncomingMessage'
@@ -87,6 +87,14 @@ export type WebhookProvider<R = never> = {
 	readonly handle: (input: RawWebhookInput) => Effect.Effect<ProviderWebhookOutcome, ProviderWebhookError, R>
 }
 
+/**
+ * A list of webhook providers where each entry keeps its own requirements, so providers that need
+ * different services can share a list.
+ */
+export type WebhookProviders<Requirements extends ReadonlyArray<unknown>> = {
+	readonly [Index in keyof Requirements]: WebhookProvider<Requirements[Index]>
+}
+
 class WebhookBodyTooLarge extends Schema.TaggedError<WebhookBodyTooLarge>()('WebhookBodyTooLarge', {}) {}
 
 const readBoundedBody = <E>(request: HttpIncomingMessage<E>, maxBodyBytes?: number) => {
@@ -95,7 +103,7 @@ const readBoundedBody = <E>(request: HttpIncomingMessage<E>, maxBodyBytes?: numb
 	if (Number.isFinite(declaredLength) && declaredLength > maxBodyBytes) return Effect.fail(WebhookBodyTooLarge.make({}))
 	return request.stream.pipe(
 		Stream.runFoldEffect(
-			() => ({ chunks: [] as Array<Uint8Array>, size: 0 }),
+			() => ({ chunks: Arr.empty<Uint8Array>(), size: 0 }),
 			(state, chunk) => {
 				const size = state.size + chunk.byteLength
 				return size > maxBodyBytes
@@ -133,16 +141,12 @@ export const webhookRoutePath = (options?: WebhookRoutesOptions): `/${string}` =
  * Http Router
  */
 export const webhookRoutes = <const Requirements extends ReadonlyArray<unknown>>(
-	webhookProviders: {
-		// One type per provider, so providers that need different services can share a list.
-		readonly [Index in keyof Requirements]: WebhookProvider<Requirements[Index]>
-	},
+	webhookProviders: WebhookProviders<Requirements>,
 	options?: WebhookRoutesOptions,
 ) =>
 	HttpRouter.add('POST', webhookRoutePath(options), (request) =>
 		Effect.gen(function* () {
 			const providers: ReadonlyArray<WebhookProvider<Requirements[number]>> = webhookProviders
-			// Get the mailbox delivery service.
 			const mailbox = yield* MailboxDelivery
 			const { integration } = yield* HttpRouter.schemaPathParams(
 				Schema.Struct({ integration: Schema.NonEmptyString }),
@@ -180,8 +184,6 @@ export const webhookRoutes = <const Requirements extends ReadonlyArray<unknown>>
 							Effect.as(HttpServerResponse.empty({ status: 200 })),
 						),
 					Ignored: () => Effect.succeed(HttpServerResponse.empty({ status: 200 })),
-					// Return the provider-indicated response to the webhook - most LIKELY a 200 but depends
-					// is provider-specific so there is not a generic case
 					Response: ({ body, headers, status }) =>
 						Effect.succeed(HttpServerResponse.raw(body, { status, headers })),
 				}),

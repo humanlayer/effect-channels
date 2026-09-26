@@ -1,7 +1,6 @@
-import { Match, Predicate, Schema } from 'effect'
+import { Match, Predicate, Schema, Struct, type Types } from 'effect'
 
 import type { GitHubPostPullRequestReviewComment } from '../GitHubApi'
-import type { GitHubId } from '../GitHubIdentity'
 import {
 	GitHubActionsJobInfo,
 	type GitHubActionsJobRef,
@@ -81,23 +80,8 @@ export const review = (pullRequest: GitHubPullRequestRef, value: typeof Api.Revi
 		commitId: value.commit_id,
 		url: value.html_url,
 	})
-export const reviewComment = (pullRequest: GitHubPullRequestRef, value: typeof Api.ReviewComment.Type) => {
-	const result: {
-		ref: { pullRequest: GitHubPullRequestRef; id: GitHubId }
-		nodeId: string
-		body: string
-		url: string
-		author: ReturnType<typeof participant> | null
-		reviewId: GitHubId | null
-		path: string
-		commitId: string
-		originalCommitId: string
-		diffHunk: string
-		inReplyToId?: GitHubId | null
-		line?: number | null
-		startLine?: number | null
-		side?: 'LEFT' | 'RIGHT'
-	} = {
+export const reviewComment = (pullRequest: GitHubPullRequestRef, value: typeof Api.ReviewComment.Type) =>
+	GitHubReviewComment.make({
 		ref: { pullRequest, id: value.id },
 		nodeId: value.node_id,
 		body: value.body,
@@ -108,45 +92,29 @@ export const reviewComment = (pullRequest: GitHubPullRequestRef, value: typeof A
 		commitId: value.commit_id,
 		originalCommitId: value.original_commit_id,
 		diffHunk: value.diff_hunk,
-	}
-	if (Predicate.isNotUndefined(value.in_reply_to_id)) result.inReplyToId = value.in_reply_to_id
-	if (Predicate.isNotUndefined(value.line)) result.line = value.line
-	if (Predicate.isNotUndefined(value.start_line)) result.startLine = value.start_line
-	if (Predicate.isNotUndefined(value.side)) result.side = value.side
-	return GitHubReviewComment.make(result)
-}
-export const pullRequestFile = (value: typeof Api.PullRequestFile.Type) => {
-	const status = Match.value(value.status).pipe(
-		Match.when('removed', () => 'deleted' as const),
-		Match.orElse((other) => other),
-	)
-	const result: {
-		sha: string | null
-		filename: string
-		previousFilename?: string
-		status: typeof status
-		additions: number
-		deletions: number
-		changes: number
-		blobUrl: string | null
-		rawUrl: string | null
-		contentsUrl: string
-		patch?: string
-	} = {
+		...Struct.renameKeys(Struct.pick(value, ['in_reply_to_id', 'line', 'start_line', 'side']), {
+			in_reply_to_id: 'inReplyToId',
+			start_line: 'startLine',
+		}),
+	})
+export const pullRequestFile = (value: typeof Api.PullRequestFile.Type) =>
+	GitHubPullRequestFile.make({
 		sha: value.sha,
 		filename: value.filename,
-		status,
+		status: Match.value(value.status).pipe(
+			Match.when('removed', () => 'deleted' as const),
+			Match.orElse((other) => other),
+		),
 		additions: value.additions,
 		deletions: value.deletions,
 		changes: value.changes,
 		blobUrl: value.blob_url,
 		rawUrl: value.raw_url,
 		contentsUrl: value.contents_url,
-	}
-	if (Predicate.isNotUndefined(value.previous_filename)) result.previousFilename = value.previous_filename
-	if (Predicate.isNotUndefined(value.patch)) result.patch = value.patch
-	return GitHubPullRequestFile.make(result)
-}
+		...Struct.renameKeys(Struct.pick(value, ['previous_filename', 'patch']), {
+			previous_filename: 'previousFilename',
+		}),
+	})
 const commitParticipant = (value: typeof Api.CommitParticipant.Type) => {
 	if (value === null || !Schema.is(Api.Participant)(value)) return null
 	return participant(value)
@@ -160,15 +128,13 @@ export const commit = (value: typeof Api.Commit.Type) =>
 		author: commitParticipant(value.author),
 		committer: commitParticipant(value.committer),
 	})
-export const label = (value: typeof Api.Label.Type) => {
-	const result: { id?: GitHubId; name: string; color: string; description: string | null } = {
+export const label = (value: typeof Api.Label.Type) =>
+	GitHubLabel.make({
 		name: value.name,
 		color: value.color,
 		description: value.description,
-	}
-	if (Predicate.isNotUndefined(value.id)) result.id = value.id
-	return GitHubLabel.make(result)
-}
+		...Struct.pick(value, ['id']),
+	})
 export const checkRunInfo = (ref: GitHubCheckRunRef, value: typeof Api.CheckRun.Type) =>
 	GitHubCheckRunInfo.make({
 		ref,
@@ -211,29 +177,7 @@ export const checkAnnotation = (value: typeof Api.CheckAnnotation.Type) =>
 		blobUrl: value.blob_href,
 	})
 export const actionsJobInfo = (ref: GitHubActionsJobRef, value: typeof Api.ActionsJob.Type) => {
-	const result: {
-		ref: GitHubActionsJobRef
-		runId: GitHubId
-		name: string
-		status: typeof value.status
-		conclusion: typeof value.conclusion
-		headSha: string
-		apiUrl: string
-		url: string | null
-		startedAt: string | null
-		completedAt: string | null
-		checkRunUrl: string
-		workflowName?: string
-		headBranch?: string | null
-		steps: ReadonlyArray<{
-			name: string
-			status: typeof value.status
-			conclusion: typeof value.conclusion
-			number: number
-			startedAt: string | null
-			completedAt: string | null
-		}>
-	} = {
+	const info: Types.Mutable<GitHubActionsJobInfo> = {
 		ref,
 		runId: value.run_id,
 		name: value.name,
@@ -253,11 +197,10 @@ export const actionsJobInfo = (ref: GitHubActionsJobRef, value: typeof Api.Actio
 			startedAt: step.started_at ?? null,
 			completedAt: step.completed_at ?? null,
 		})),
+		...Struct.renameKeys(Struct.pick(value, ['head_branch']), { head_branch: 'headBranch' }),
 	}
-	if (Predicate.isNotUndefined(value.workflow_name) && value.workflow_name !== null)
-		result.workflowName = value.workflow_name
-	if (Predicate.isNotUndefined(value.head_branch)) result.headBranch = value.head_branch
-	return GitHubActionsJobInfo.make(result)
+	if (Predicate.isNotNullish(value.workflow_name)) info.workflowName = value.workflow_name
+	return GitHubActionsJobInfo.make(info)
 }
 export const actionsJob = (repository: GitHubRepositoryRef, value: typeof Api.ActionsJob.Type) =>
 	GitHubActionsJob.make({

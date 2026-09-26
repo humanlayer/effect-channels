@@ -35,7 +35,7 @@ const SupportedGitHubEvent = Schema.Literals([
 ])
 type SupportedGitHubEvent = typeof SupportedGitHubEvent.Type
 
-const actionsByEvent: Record<SupportedGitHubEvent, ReadonlyArray<string>> = {
+const actionsByEvent = {
 	issues: ['opened', 'edited', 'closed', 'reopened', 'assigned', 'unassigned', 'labeled', 'unlabeled'],
 	issue_comment: ['created', 'edited', 'deleted'],
 	pull_request: [
@@ -57,7 +57,7 @@ const actionsByEvent: Record<SupportedGitHubEvent, ReadonlyArray<string>> = {
 	pull_request_review_comment: ['created', 'edited', 'deleted'],
 	pull_request_review_thread: ['resolved', 'unresolved'],
 	check_run: ['completed'],
-}
+} satisfies Record<SupportedGitHubEvent, ReadonlyArray<string>>
 
 const isSupportedEvent = Schema.is(SupportedGitHubEvent)
 

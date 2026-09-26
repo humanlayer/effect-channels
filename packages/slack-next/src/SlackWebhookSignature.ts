@@ -75,6 +75,13 @@ const decodeSignature = (signature: string) => {
 	return bytes
 }
 
+/**
+ * Slack signs the UTF-8 bytes for `v0:<timestamp>:` followed by the exact request body bytes.
+ * Encoding the body through string interpolation would instead sign its comma-separated numbers.
+ */
+const slackSignatureBase = (timestamp: string, body: Uint8Array): Uint8Array =>
+	concatenateBytes(textEncoder.encode(`v0:${timestamp}:`), body)
+
 export const verifySlackSignature = Effect.fn('slack.signature.verify')(function* (input: SlackSignatureInput) {
 	const timestamp = Number(input.timestamp)
 	if (!Number.isFinite(timestamp)) {
@@ -90,9 +97,7 @@ export const verifySlackSignature = Effect.fn('slack.signature.verify')(function
 	}
 	const actual = yield* hmacSha256({
 		secret: input.signingSecret,
-		// Slack signs the UTF-8 bytes for `v0:<timestamp>:` followed by the exact request body bytes.
-		// Encoding the Uint8Array through string interpolation would instead sign its comma-separated numbers.
-		data: concatenateBytes(textEncoder.encode(`v0:${input.timestamp}:`), input.body),
+		data: slackSignatureBase(input.timestamp, input.body),
 	}).pipe(
 		Effect.tapError((error) => Effect.logError('Slack HMAC calculation failed', error)),
 		Effect.mapError(() => WebhookAuthenticationError.make({ reason: 'crypto' })),

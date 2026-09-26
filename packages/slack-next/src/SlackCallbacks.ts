@@ -1,4 +1,4 @@
-import { Cause, Context, Effect, Layer, Option, Schema } from 'effect'
+import { Cause, Context, Effect, Layer, Option, Predicate, Schema } from 'effect'
 
 import type { SlackNewMention, SlackSubscribedThreadEvents } from './SlackCallbackEvents'
 
@@ -66,14 +66,16 @@ const narrowSlackCallbackCause = (input: {
 const wrapCallback = <A, E, R>(
 	context: Context.Context<R>,
 	callback: SlackCallbackName,
-	handler: (event: A) => Effect.Effect<void, E, R>,
-) =>
-	Effect.fn(`slack.callbacks.${callback}`)((event: A) =>
+	handler: ((event: A) => Effect.Effect<void, E, R>) | undefined,
+) => {
+	if (Predicate.isUndefined(handler)) return undefined
+	return Effect.fn(`slack.callbacks.${callback}`)((event: A) =>
 		Effect.suspend(() => handler(event)).pipe(
 			Effect.provide(context),
 			Effect.catchCause((cause) => narrowSlackCallbackCause({ callback, cause })),
 		),
 	)
+}
 
 export class SlackCallbacks extends Context.Service<SlackCallbacks, SlackCallbackHandlers<SlackCallbackError, never>>()(
 	'@humanlayer/channels-slack-next/SlackCallbacks',
@@ -84,18 +86,12 @@ export class SlackCallbacks extends Context.Service<SlackCallbacks, SlackCallbac
 			Effect.gen(function* () {
 				const context = yield* Effect.context<R>()
 				return SlackCallbacks.of({
-					...(handlers.onNewMention === undefined
-						? {}
-						: { onNewMention: wrapCallback(context, 'onNewMention', handlers.onNewMention) }),
-					...(handlers.onSubscribedThreadEvents === undefined
-						? {}
-						: {
-								onSubscribedThreadEvents: wrapCallback(
-									context,
-									'onSubscribedThreadEvents',
-									handlers.onSubscribedThreadEvents,
-								),
-							}),
+					onNewMention: wrapCallback(context, 'onNewMention', handlers.onNewMention),
+					onSubscribedThreadEvents: wrapCallback(
+						context,
+						'onSubscribedThreadEvents',
+						handlers.onSubscribedThreadEvents,
+					),
 				})
 			}),
 		)

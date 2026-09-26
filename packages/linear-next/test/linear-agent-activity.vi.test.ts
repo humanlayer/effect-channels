@@ -3,11 +3,18 @@ import { Config, Effect, Layer, Redacted, Ref, Schema } from 'effect'
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http'
 
 import { LinearAuth } from '../src'
+import { CreateAgentActivityVariables } from '../src/api/CreateAgentActivity'
+import { GetViewerIdentityVariables } from '../src/api/GetViewerIdentity'
 import { LinearApi, LinearApiError } from '../src/LinearApi'
 import { LinearApiLiveOptions, makeLinearApiLiveBase } from '../src/LinearApiLive'
 import { LinearAgentActivityId, LinearAgentSessionId, LinearWebhookDeliveryId } from '../src/LinearIdentity'
 import { LinearActivityContent, LinearCreateAgentActivityRequest } from '../src/LinearModels'
+import { decodeGraphqlRequest } from './api-test-fixtures'
 import { linearAppUserId, linearOrganizationId } from './fixtures'
+
+const decodeAgentActivityRequest = decodeGraphqlRequest(
+	Schema.Union([GetViewerIdentityVariables, CreateAgentActivityVariables]),
+)
 
 const sessionId = LinearAgentSessionId.make('71000000-0000-4000-8000-000000000001')
 const activityId = LinearAgentActivityId.make('74000000-0000-4000-8000-000000000001')
@@ -46,13 +53,8 @@ describe('Linear Agent Activity API', () => {
 					const web = yield* HttpClientRequest.toWeb(httpRequest).pipe(Effect.orDie)
 					yield* Ref.update(calls, (values) => [...values, new URL(web.url).pathname])
 					expect(web.headers.get('authorization')).toBe('Bearer developer-token-never-log')
-					const body = yield* Effect.promise(() => web.json())
-					if (
-						typeof body === 'object' &&
-						body !== null &&
-						'query' in body &&
-						String(body.query).includes('viewer')
-					)
+					const body = yield* decodeAgentActivityRequest(httpRequest)
+					if (body.query.includes('viewer'))
 						return HttpClientResponse.fromWeb(
 							httpRequest,
 							Response.json({
@@ -103,29 +105,21 @@ describe('Linear Agent Activity API', () => {
 						)
 					}
 					expect(web.headers.get('authorization')).toBe('Bearer access-token-never-log')
-					const body = yield* Effect.promise(() => web.json())
-					if (
-						typeof body === 'object' &&
-						body !== null &&
-						'query' in body &&
-						String(body.query).includes('viewer')
-					)
+					const body = yield* decodeAgentActivityRequest(httpRequest)
+					if (body.query.includes('viewer'))
 						return HttpClientResponse.fromWeb(
 							httpRequest,
 							Response.json({
 								data: { viewer: { id: linearAppUserId, organization: { id: linearOrganizationId } } },
 							}),
 						)
-					expect(body).toMatchObject({ variables: { input: { agentSessionId: sessionId } } })
-					if (
-						typeof body === 'object' &&
-						body !== null &&
-						'variables' in body &&
-						typeof body.variables === 'object' &&
-						body.variables !== null &&
-						'input' in body.variables
-					)
-						expect(body.variables.input).not.toHaveProperty('id')
+					expect(body.variables).toEqual({
+						input: {
+							agentSessionId: sessionId,
+							content: { type: 'response', body: 'Completed.' },
+							ephemeral: false,
+						},
+					})
 					return HttpClientResponse.fromWeb(
 						httpRequest,
 						Response.json({

@@ -8,7 +8,7 @@ import {
 	ProviderEventInvalid,
 } from '@humanlayer/channels-delivery-next'
 import { Cause, Effect, Exit, Layer } from 'effect'
-import { vi } from 'vitest'
+import { vi } from 'vite-plus/test'
 
 import { GitHubApi } from '../src/GitHubApi'
 import type { GitHubIssueCreated, GitHubMentioned, GitHubSubscribedPrEvents } from '../src/GitHubCallbackEvents'

@@ -1,4 +1,4 @@
-import { Config, Effect, Layer, Match, Option, Predicate, Schema, Stream } from 'effect'
+import { Config, Effect, Layer, Match, Option, Predicate, Schema, Stream, type Types } from 'effect'
 import * as FetchHttpClient from 'effect/unstable/http/FetchHttpClient'
 import * as HttpClient from 'effect/unstable/http/HttpClient'
 import type * as UrlParams from 'effect/unstable/http/UrlParams'
@@ -99,7 +99,8 @@ const SlackAuthResponse = Schema.Struct({
 	user_id: Schema.optionalKey(Schema.NonEmptyString),
 })
 
-const SlackPostMessageResponse = Schema.Struct({
+/** Response of Slack's `chat.postMessage` Web API method. */
+export const SlackPostMessageResponse = Schema.Struct({
 	ok: Schema.Boolean,
 	error: Schema.optionalKey(Schema.String),
 	channel: Schema.optionalKey(Schema.NonEmptyString),
@@ -144,12 +145,13 @@ type SlackRepliesBody = {
 	cursor?: string
 }
 
-type SlackPostBody = {
-	channel: string
-	text: string
-	mrkdwn: boolean
-	thread_ts?: string
-}
+/** Body of Slack's `chat.postMessage` Web API method. */
+export const SlackPostMessageRequest = Schema.Struct({
+	channel: Schema.String,
+	text: Schema.String,
+	mrkdwn: Schema.Boolean,
+	thread_ts: Schema.optionalKey(Schema.String),
+})
 
 type SlackHistoryBody = {
 	channel: string
@@ -477,7 +479,7 @@ const SlackApiService = Layer.effect(
 			readonly channel: SlackChannelRef
 			readonly content: SlackContent
 		}) {
-			const body: SlackPostBody = {
+			const body: Types.Mutable<typeof SlackPostMessageRequest.Type> = {
 				channel: input.channel.channelId,
 				text: contentText(input.content),
 				mrkdwn: Match.value(input.content).pipe(

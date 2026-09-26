@@ -13,6 +13,7 @@ import {
 	Redacted,
 	Schema,
 	Stream,
+	type Types,
 } from 'effect'
 import * as HttpClient from 'effect/unstable/http/HttpClient'
 import * as HttpClientRequest from 'effect/unstable/http/HttpClientRequest'
@@ -21,7 +22,7 @@ import type * as HttpClientResponse from 'effect/unstable/http/HttpClientRespons
 import { type GitHubApiOperation, GitHubApiError } from '../GitHubApi'
 import { GitHubId } from '../GitHubIdentity'
 import type { GitHubRepositoryRef } from '../GitHubModels'
-import { GitHubTransportError, narrowGitHubTransportError } from './GitHubApiErrors'
+import { GitHubTransportError, GitHubTransportErrorFields, narrowGitHubTransportError } from './GitHubApiErrors'
 import { Participant } from './GitHubApiSchemas'
 import { GitHubAppSigner } from './GitHubAppSigner'
 
@@ -35,15 +36,23 @@ const GitHubApiConfig = Config.all({
 const InstallationTokenResponse = Schema.Struct({ token: Schema.NonEmptyString, expires_at: Schema.String })
 const AppResponse = Schema.Struct({ slug: Schema.NonEmptyString })
 const ErrorBody = Schema.Struct({ message: Schema.String })
+const InstallationTokenRequestBody = Schema.Struct({ repository_ids: Schema.Array(GitHubId) })
 
 type ApiMethod = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'
-type CallInput<A> = {
+type RequestInput = {
 	readonly operation: GitHubApiOperation
 	readonly ref: GitHubRepositoryRef
 	readonly method: ApiMethod
 	readonly path: string
+}
+/** A JSON request body and the operation's Schema that encodes it. */
+type RequestBody<B> = {
+	readonly schema: Schema.Codec<B, unknown, never, never>
+	readonly value: B
+}
+type CallInput<A, B> = RequestInput & {
 	readonly schema: Schema.Codec<A, unknown, never, never>
-	readonly body?: Schema.Json
+	readonly body?: RequestBody<B>
 }
 type PageInput<Page, A> = {
 	readonly operation: GitHubApiOperation
@@ -57,8 +66,8 @@ type PageInput<Page, A> = {
 export class GitHubApiClient extends Context.Service<
 	GitHubApiClient,
 	{
-		readonly call: <A>(input: CallInput<A>) => Effect.Effect<A, GitHubApiError>
-		readonly callVoid: (input: Omit<CallInput<never>, 'schema' | 'body'>) => Effect.Effect<void, GitHubApiError>
+		readonly call: <A, B>(input: CallInput<A, B>) => Effect.Effect<A, GitHubApiError>
+		readonly callVoid: (input: RequestInput) => Effect.Effect<void, GitHubApiError>
 		readonly list: <A>(
 			input: Omit<PageInput<ReadonlyArray<A>, A>, 'items' | 'schema'> & {
 				readonly schema: Schema.Codec<A, unknown, never, never>
@@ -66,7 +75,7 @@ export class GitHubApiClient extends Context.Service<
 		) => Effect.Effect<ReadonlyArray<A>, GitHubApiError>
 		readonly paginate: <Page, A>(input: PageInput<Page, A>) => Effect.Effect<ReadonlyArray<A>, GitHubApiError>
 		readonly text: (
-			input: Omit<CallInput<never>, 'schema' | 'body'> & {
+			input: RequestInput & {
 				readonly followRedirects?: boolean
 				readonly accept?: string
 			},
@@ -148,14 +157,11 @@ export const GitHubApiClientLive = Layer.effect(
 			let retryAfterMs = retryAfterHeaderMs
 			if (Predicate.isUndefined(retryAfterMs) && rateLimited)
 				retryAfterMs = epochSecondsToDelayMillis(response.headers['x-ratelimit-reset'], now)
-			const error: {
-				stage: 'status'
-				status: number
-				message?: string
-				rateLimited?: boolean
-				retryAfterMs?: number
-			} = { stage: 'status', status: response.status }
-			if (Predicate.isNotUndefined(decoded) && decoded.length > 0) error.message = decoded
+			const error: Types.Mutable<typeof GitHubTransportErrorFields.Type> = {
+				stage: 'status',
+				status: response.status,
+			}
+			if (Predicate.isNotUndefined(decoded) && decoded.length > 0) error.responseMessage = decoded
 			if (rateLimited) error.rateLimited = true
 			if (Predicate.isNotUndefined(retryAfterMs)) error.retryAfterMs = retryAfterMs
 			return yield* GitHubTransportError.make(error)
@@ -210,7 +216,9 @@ export const GitHubApiClientLive = Layer.effect(
 						HttpClientRequest.setHeader('x-github-api-version', '2022-11-28'),
 						HttpClientRequest.setHeader('user-agent', 'humanlayer-channels-github-next'),
 						HttpClientRequest.bearerToken(jwt),
-						HttpClientRequest.schemaBodyJson(Schema.Json)({ repository_ids: [repositoryId] }),
+						HttpClientRequest.schemaBodyJson(InstallationTokenRequestBody)({
+							repository_ids: [repositoryId],
+						}),
 						Effect.mapError(() => GitHubTransportError.make({ stage: 'decode' })),
 					)
 					const response = yield* client.execute(request).pipe(
@@ -241,22 +249,24 @@ export const GitHubApiClientLive = Layer.effect(
 			},
 		)
 
-		const authenticatedRequest = Effect.fn('github.api.authenticated_request')(function* (
-			input: Omit<CallInput<never>, 'schema'>,
-		) {
+		const authenticatedRequest = Effect.fn('github.api.authenticated_request')(function* (input: RequestInput) {
 			const token = yield* Cache.get(tokenCache, cacheKey(input.ref)).pipe(
 				Effect.catchTag('GitHubTransportError', (error) =>
 					Effect.fail(narrowGitHubTransportError(input.operation, error)),
 				),
 			)
-			const request = baseRequest(input.method, input.path).pipe(HttpClientRequest.bearerToken(token.token))
-			if (Predicate.isUndefined(input.body)) return request
-			return yield* HttpClientRequest.schemaBodyJson(Schema.Json)(request, input.body).pipe(
-				Effect.mapError(() =>
-					GitHubApiError.make({ operation: input.operation, reason: 'invalid_response', retryable: false }),
-				),
-			)
+			return baseRequest(input.method, input.path).pipe(HttpClientRequest.bearerToken(token.token))
 		})
+		const withBody = <B>(
+			operation: GitHubApiOperation,
+			request: HttpClientRequest.HttpClientRequest,
+			body: RequestBody<B> | undefined,
+		) => {
+			if (Predicate.isUndefined(body)) return Effect.succeed(request)
+			return HttpClientRequest.schemaBodyJson(body.schema)(request, body.value).pipe(
+				Effect.mapError(() => GitHubApiError.make({ operation, reason: 'invalid_response', retryable: false })),
+			)
+		}
 
 		const retryWithFreshToken = <A>(ref: GitHubRepositoryRef, operation: Effect.Effect<A, GitHubApiError>) =>
 			operation.pipe(
@@ -271,22 +281,20 @@ export const GitHubApiClientLive = Layer.effect(
 			return url.toString()
 		}
 
-		const call = <A>(input: CallInput<A>) => {
-			let requestInput: Omit<CallInput<never>, 'schema'> = {
-				operation: input.operation,
-				ref: input.ref,
-				method: input.method,
-				path: urlWithQuery(input.path),
-			}
-			if (Predicate.isNotUndefined(input.body)) requestInput = { ...requestInput, body: input.body }
-			return retryWithFreshToken(
+		const call = <A, B>(input: CallInput<A, B>) =>
+			retryWithFreshToken(
 				input.ref,
-				authenticatedRequest(requestInput).pipe(
+				authenticatedRequest({
+					operation: input.operation,
+					ref: input.ref,
+					method: input.method,
+					path: urlWithQuery(input.path),
+				}).pipe(
+					Effect.flatMap((request) => withBody(input.operation, request, input.body)),
 					Effect.flatMap((request) => execute(input.operation, request, input.schema)),
 				),
 			)
-		}
-		const callVoid = (input: Omit<CallInput<never>, 'schema' | 'body'>) =>
+		const callVoid = (input: RequestInput) =>
 			retryWithFreshToken(
 				input.ref,
 				authenticatedRequest({ ...input, path: urlWithQuery(input.path) }).pipe(
@@ -351,7 +359,7 @@ export const GitHubApiClientLive = Layer.effect(
 			},
 		) => paginate({ ...input, schema: Schema.Array(input.schema), items: (page) => page })
 		const text = (
-			input: Omit<CallInput<never>, 'schema' | 'body'> & {
+			input: RequestInput & {
 				readonly followRedirects?: boolean
 				readonly accept?: string
 			},

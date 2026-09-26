@@ -1,5 +1,5 @@
 import { describe, it } from '@effect/vitest'
-import { Clock, ConfigProvider, Effect, Layer, Queue, Ref } from 'effect'
+import { Clock, ConfigProvider, Effect, Layer, Match, Queue, Ref } from 'effect'
 import { TestClock } from 'effect/testing'
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http'
 
@@ -42,6 +42,12 @@ const reviewCommentJson = (id: number, body: string) => ({
 	side: 'RIGHT',
 })
 
+const baseConfig = {
+	GITHUB_APP_ID: 1,
+	GITHUB_PRIVATE_KEY: 'private-key-never-log',
+	GITHUB_API_ORIGIN: 'https://api.github.test',
+}
+
 const makeLayer = (httpClient: HttpClient.HttpClient, botUserId: number | null = 999) =>
 	GitHubApiLiveBase.pipe(
 		Layer.provide(
@@ -49,12 +55,9 @@ const makeLayer = (httpClient: HttpClient.HttpClient, botUserId: number | null =
 				Layer.succeed(HttpClient.HttpClient, httpClient),
 				Layer.succeed(GitHubAppSigner, GitHubAppSigner.of({ sign: () => Effect.succeed('test-signature') })),
 				ConfigProvider.layer(
-					ConfigProvider.fromUnknown({
-						GITHUB_APP_ID: 1,
-						GITHUB_PRIVATE_KEY: 'private-key-never-log',
-						GITHUB_API_ORIGIN: 'https://api.github.test',
-						...(botUserId === null ? {} : { GITHUB_BOT_USER_ID: botUserId }),
-					}),
+					ConfigProvider.fromUnknown(
+						botUserId === null ? baseConfig : { ...baseConfig, GITHUB_BOT_USER_ID: botUserId },
+					),
 				),
 			),
 		),
@@ -308,13 +311,17 @@ describe('GitHubApiLive', () => {
 					if (new URL(web.url).pathname.startsWith('/app/installations/')) {
 						return HttpClientResponse.fromWeb(request, tokenResponse())
 					}
+					const current = yield* Ref.get(mode)
 					return HttpClientResponse.fromWeb(
 						request,
-						(yield* Ref.get(mode)) === 'rate'
-							? Response.json({}, { status: 429, headers: { 'retry-after': '3' } })
-							: (yield* Ref.get(mode)) === 'validation'
-								? Response.json({}, { status: 422 })
-								: Response.json({ number: 'not-a-number' }),
+						Match.value(current).pipe(
+							Match.when('rate', () =>
+								Response.json({}, { status: 429, headers: { 'retry-after': '3' } }),
+							),
+							Match.when('validation', () => Response.json({}, { status: 422 })),
+							Match.when('decode', () => Response.json({ number: 'not-a-number' })),
+							Match.exhaustive,
+						),
 					)
 				}),
 			)

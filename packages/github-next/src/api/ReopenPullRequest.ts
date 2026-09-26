@@ -1,9 +1,12 @@
-import { Effect } from 'effect'
+import { Effect, Schema } from 'effect'
 
 import type { GitHubPullRequestRequest } from '../GitHubApi'
 import { GitHubApiClient } from './GitHubApiClient'
 import { pullRequestInfo, repositoryPath } from './GitHubApiProjections'
 import { PullRequest } from './GitHubApiSchemas'
+
+const ReopenPullRequestBody = Schema.Struct({ state: Schema.Literal('open') })
+
 export const reopenPullRequest = Effect.fn('github.api.reopen_pull_request')(function* (
 	input: GitHubPullRequestRequest,
 ) {
@@ -14,7 +17,7 @@ export const reopenPullRequest = Effect.fn('github.api.reopen_pull_request')(fun
 		method: 'PATCH',
 		path: `${repositoryPath(input.pullRequest)}/pulls/${input.pullRequest.number}`,
 		schema: PullRequest,
-		body: { state: 'open' },
+		body: { schema: ReopenPullRequestBody, value: { state: 'open' } },
 	})
 	return pullRequestInfo(input.pullRequest, value)
 })

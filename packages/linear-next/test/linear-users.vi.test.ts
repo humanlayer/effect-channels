@@ -1,10 +1,22 @@
 import { describe, it } from '@effect/vitest'
-import { Effect, Ref } from 'effect'
-import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http'
+import { Effect, Ref, Schema } from 'effect'
+import { HttpClient, HttpClientResponse } from 'effect/unstable/http'
 
+import { GetIssueVariables } from '../src/api/GetIssue'
+import { GetViewerIdentityVariables } from '../src/api/GetViewerIdentity'
+import { linearGraphqlRequest } from '../src/api/LinearGraphql'
+import { ListAppUsersVariables } from '../src/api/ListAppUsers'
+import { ListAssignableUsersVariables } from '../src/api/ListAssignableUsers'
 import { LinearApi } from '../src/LinearApi'
 import { LinearIssueRef } from '../src/LinearModels'
-import { apiLayer, issue, issueJson, viewer } from './api-test-fixtures'
+import { apiLayer, decodeGraphqlRequest, issue, issueJson, viewer } from './api-test-fixtures'
+
+const AppUsersVariables = Schema.Union([ListAppUsersVariables, GetIssueVariables, GetViewerIdentityVariables])
+const AppUsersRequest = linearGraphqlRequest(AppUsersVariables)
+const decodeAppUsersRequest = decodeGraphqlRequest(AppUsersVariables)
+const decodeAssignableUsersRequest = decodeGraphqlRequest(
+	Schema.Union([ListAssignableUsersVariables, GetViewerIdentityVariables]),
+)
 
 const app = (id: string, direct: boolean, publicAccess = false) => ({
 	id,
@@ -20,14 +32,10 @@ const app = (id: string, direct: boolean, publicAccess = false) => ({
 describe('Linear user directories', () => {
 	it.effect('uses root users, explicit visibility, and a bounded membership lookup', ({ expect }) =>
 		Effect.gen(function* () {
-			const appQuery = yield* Ref.make<{ query: string; variables: Record<string, unknown> } | null>(null)
+			const appQuery = yield* Ref.make<typeof AppUsersRequest.Type | null>(null)
 			const http = HttpClient.make((request) =>
 				Effect.gen(function* () {
-					const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie)
-					const body = (yield* Effect.promise(() => web.json())) as {
-						query: string
-						variables: Record<string, unknown>
-					}
+					const body = yield* decodeAppUsersRequest(request)
 					if (body.query.includes('viewer')) return HttpClientResponse.fromWeb(request, Response.json(viewer))
 					if (body.query.includes('query LinearIssue('))
 						return HttpClientResponse.fromWeb(request, Response.json({ data: { issue: issueJson } }))
@@ -70,8 +78,7 @@ describe('Linear user directories', () => {
 		Effect.gen(function* () {
 			const http = HttpClient.make((request) =>
 				Effect.gen(function* () {
-					const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie)
-					const body = (yield* Effect.promise(() => web.json())) as { query: string }
+					const body = yield* decodeAppUsersRequest(request)
 					if (body.query.includes('viewer')) return HttpClientResponse.fromWeb(request, Response.json(viewer))
 					if (body.query.includes('query LinearIssue('))
 						return HttpClientResponse.fromWeb(request, Response.json({ data: { issue: issueJson } }))
@@ -100,8 +107,7 @@ describe('Linear user directories', () => {
 		Effect.gen(function* () {
 			const http = HttpClient.make((request) =>
 				Effect.gen(function* () {
-					const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie)
-					const body = (yield* Effect.promise(() => web.json())) as { query: string; variables: unknown }
+					const body = yield* decodeAssignableUsersRequest(request)
 					if (body.query.includes('viewer')) return HttpClientResponse.fromWeb(request, Response.json(viewer))
 					expect(body.query).toContain('issue(id: $issueId)')
 					expect(body.query).not.toContain('$teamId')

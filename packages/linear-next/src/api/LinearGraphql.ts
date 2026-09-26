@@ -50,7 +50,7 @@ const LinearGraphqlErrorCategory = Schema.Literals([
 ])
 type LinearGraphqlErrorCategory = typeof LinearGraphqlErrorCategory.Type
 
-const graphqlErrorCategoryByCode: Record<LinearKnownGraphqlCode, LinearGraphqlErrorCategory> = {
+const graphqlErrorCategoryByCode = {
 	RATELIMITED: 'rate_limited',
 	RATE_LIMITED: 'rate_limited',
 	FORBIDDEN: 'forbidden',
@@ -61,7 +61,7 @@ const graphqlErrorCategoryByCode: Record<LinearKnownGraphqlCode, LinearGraphqlEr
 	BAD_USER_INPUT: 'validation',
 	GRAPHQL_VALIDATION_FAILED: 'validation',
 	VALIDATION_ERROR: 'validation',
-}
+} satisfies Record<LinearKnownGraphqlCode, LinearGraphqlErrorCategory>
 
 const LinearGraphqlErrorPayload = Schema.Struct({
 	message: Schema.optionalKey(Schema.String),
@@ -77,10 +77,15 @@ const LinearGraphqlErrorPayload = Schema.Struct({
 
 const LinearGraphqlErrorResponse = Schema.Struct({ errors: Schema.Array(LinearGraphqlErrorPayload) })
 
-export type LinearGraphqlInput<A> = {
+/** The JSON body of a Linear GraphQL request whose variables follow the operation's own Schema. */
+export const linearGraphqlRequest = <Variables extends Schema.Constraint>(variables: Variables) =>
+	Schema.Struct({ query: Schema.String, variables })
+
+export type LinearGraphqlInput<V, A> = {
 	readonly operation: LinearApiOperation
 	readonly query: string
-	readonly variables: Schema.Json
+	readonly variables: Schema.Codec<V, unknown, never, never>
+	readonly input: NoInfer<V>
 	readonly response: Schema.Codec<A, unknown, never, never>
 }
 
@@ -133,13 +138,16 @@ const failGraphqlResponseError = (
 }
 
 /** Executes one schema-decoded Linear GraphQL request without retrying or resolving public API policy. */
-export const linearGraphql = <A>(
-	input: LinearGraphqlInput<A>,
+export const linearGraphql = <V, A>(
+	input: LinearGraphqlInput<V, A>,
 ): Effect.Effect<A, LinearProviderError | LinearApiError, LinearHttpClient> =>
 	Effect.gen(function* () {
 		const client = yield* LinearHttpClient
 		const request = yield* HttpClientRequest.post('/graphql').pipe(
-			HttpClientRequest.schemaBodyJson(Schema.Json)({ query: input.query, variables: input.variables }),
+			HttpClientRequest.schemaBodyJson(linearGraphqlRequest(input.variables))({
+				query: input.query,
+				variables: input.input,
+			}),
 			Effect.mapError(
 				() =>
 					new LinearResponseDecodeError(

@@ -31,7 +31,7 @@ describe('Linear webhook handling', () => {
 
 	it.effect('acknowledges authenticated unsupported actions', ({ expect }) =>
 		Effect.gen(function* () {
-			const payload = { ...(issueCreatePayload as Record<string, unknown>), action: 'unsupported' }
+			const payload = { ...issueCreatePayload, action: 'unsupported' }
 			const outcome = yield* makeLinearTestProvider().handle(signedLinearInput(payload))
 			expect(outcome).toEqual(ProviderWebhookIgnored.make({}))
 		}),
@@ -39,8 +39,8 @@ describe('Linear webhook handling', () => {
 
 	it.effect('keeps Document callbacks as authenticated unsupported ignores', ({ expect }) =>
 		Effect.gen(function* () {
-			const payload = { ...(issueCreatePayload as Record<string, unknown>), type: 'Document' }
-			const outcome = yield* makeLinearTestProvider().handle(signedLinearInput(payload))
+			const payload = { ...issueCreatePayload, type: 'Document' }
+			const outcome = yield* makeLinearTestProvider().handle(signedLinearInput(payload, payload.type))
 			expect(outcome).toEqual(ProviderWebhookIgnored.make({}))
 		}),
 	)
@@ -92,12 +92,32 @@ describe('Linear webhook handling', () => {
 			expect(output).toContain('"decode_stage":"json"')
 			expect(output).toContain(`"body_byte_length":${invalidJson.byteLength}`)
 			expect(output).toContain('"decode_stage":"event_envelope"')
-			expect(output).toContain('"has_type":true')
-			expect(output).toContain('"has_action":false')
-			expect(output).toContain('"has_organization_id":false')
+			expect(output).toContain('"issue_paths":["/action","/organizationId"]')
 			expect(output).not.toContain('private-header-boundary-sentinel')
 			expect(output).not.toContain('private-json-boundary-sentinel')
 			expect(output).not.toContain('private-envelope-boundary-sentinel')
+		}),
+	)
+
+	it.effect('logs supported payload decode failures as issue paths without payload values', ({ expect }) =>
+		Effect.gen(function* () {
+			const logs: Array<string> = []
+			const logger = Logger.layer([
+				Logger.make((entry) => logs.push(JSON.stringify(Logger.formatStructured.log(entry)))),
+			])
+			const payload = {
+				...issueCreatePayload,
+				data: { ...issueCreatePayload.data, number: 'private-supported-boundary-sentinel' },
+			}
+			const error = yield* makeLinearTestProvider()
+				.handle(signedLinearInput(payload))
+				.pipe(Effect.flip, Effect.provide(logger))
+			expect(error).toEqual(WebhookPayloadInvalidError.make({ reason: 'invalid_supported_event' }))
+
+			const output = logs.join('\n')
+			expect(output).toContain('"decode_stage":"supported_event"')
+			expect(output).toContain('"/data/number"')
+			expect(output).not.toContain('private-supported-boundary-sentinel')
 		}),
 	)
 })

@@ -47,7 +47,7 @@ describe('Linear installation events', () => {
 					oauthClientId: 'linear-test-client',
 				},
 			]) {
-				const outcome = yield* makeLinearTestProvider().handle(signedLinearInput(payload))
+				const outcome = yield* makeLinearTestProvider().handle(signedLinearInput(payload, payload.type))
 				expect(Schema.is(ProviderWebhookEvent)(outcome)).toBe(true)
 				if (Schema.is(ProviderWebhookEvent)(outcome))
 					expect(outcome.event.resourceId).toBe('linear:v1:installation')
@@ -75,7 +75,7 @@ describe('Linear installation events', () => {
 					oauthClientId: 'different-client',
 				},
 			]) {
-				const outcome = yield* makeLinearTestProvider().handle(signedLinearInput(payload))
+				const outcome = yield* makeLinearTestProvider().handle(signedLinearInput(payload, payload.type))
 				expect(outcome).toEqual(ProviderWebhookResponse.make({ status: 403, body: null, headers: {} }))
 			}
 		}),
