@@ -1,5 +1,5 @@
 import { NodeCrypto, NodeRuntime } from '@effect/platform-node'
-import { Clock, Config, Crypto, Data, Effect, Encoding, Layer, Option, Schema, Stream } from 'effect'
+import { Array as Arr, Clock, Config, Crypto, Data, Effect, Encoding, Layer, Option, Schema, Stream } from 'effect'
 
 import { SlackApi } from '../src/SlackApi'
 import { SlackApiLive } from '../src/SlackApiLive'
@@ -133,7 +133,7 @@ const program = Effect.gen(function* () {
 	const threadInfo = yield* api.getThreadInfo({ thread })
 	const messagesBefore = yield* api.listThreadMessages({ thread })
 	const participants = yield* api.listParticipants({ thread })
-	if (participants.length === 0) {
+	if (Arr.isReadonlyArrayEmpty(participants)) {
 		return yield* new SlackLiveSmokeError({
 			message: 'The smoke-test thread must contain at least one message written by a human Slack user.',
 		})

@@ -1,5 +1,5 @@
 import { describe, it } from '@effect/vitest'
-import { ConfigProvider, Effect, Layer, Match, Predicate, Queue, Schema } from 'effect'
+import { Array as Arr, ConfigProvider, Effect, Layer, Match, Predicate, Queue, Schema } from 'effect'
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http'
 
 import { SlackApi } from '../src/SlackApi'
@@ -118,7 +118,7 @@ const makeHarness = Effect.fn('test.makeSlackApiHarness')(function* () {
 					),
 					ts: item.ref.messageTs,
 					thread_ts: item.thread.threadTs,
-					files: item.files.length === 0 ? undefined : [slackFileObject],
+					files: Arr.isReadonlyArrayEmpty(item.files) ? undefined : [slackFileObject],
 				})),
 				response_metadata: { next_cursor: page.nextCursor ?? '' },
 			}),

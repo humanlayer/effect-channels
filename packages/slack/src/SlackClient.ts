@@ -1,4 +1,4 @@
-import { Config, Context, Effect, Layer, Match, Option, Predicate, Schema, Stream } from 'effect'
+import { Array as Arr, Config, Context, Effect, Layer, Match, Option, Predicate, Schema, Stream } from 'effect'
 import type { DateTime, Redacted } from 'effect'
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http'
 import type { UrlParams } from 'effect/unstable/http'
@@ -585,7 +585,7 @@ const makeReplies = (fallback: SlackBotIdentityType, origin: URL) =>
 			const page = decoded.messages ?? []
 			buffer = [...buffer, ...page].slice(-(limit + 1))
 			const next = cursorFromMetadata(decoded.response_metadata)
-			if (next === undefined || page.length === 0) {
+			if (next === undefined || Arr.isReadonlyArrayEmpty(page)) {
 				break
 			}
 			pageCursor = next
@@ -810,7 +810,7 @@ const fileLimitError = (operation: string, code: string) => SlackApiError.make({
 
 const validateUploadFiles = (input: SlackFileUploadInput) =>
 	Effect.gen(function* () {
-		if (input.files.length === 0) {
+		if (Arr.isReadonlyArrayEmpty(input.files)) {
 			return yield* fileLimitError('files.uploadV2', 'no_files')
 		}
 		if (input.files.length > slackFileLimits.maxFilesPerMessage) {

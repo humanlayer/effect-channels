@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema } from 'effect'
+import { Array as Arr, Context, Effect, Layer, Schema } from 'effect'
 import * as SqlClient from 'effect/unstable/sql/SqlClient'
 
 import { deliveryIds, MailboxState } from '../Mailbox'
@@ -55,9 +55,9 @@ const commitMailbox = Effect.fn('delivery.postgres.commit')(
 			SET revision = ${revision}, state_json = ${json}, ready_at = ${input.nextState.readyAt}
 			WHERE key = ${input.key} AND revision = ${input.expectedRevision} RETURNING key`
 			const changed = yield* Schema.decodeUnknownEffect(changedRows)(rows)
-			if (changed.length === 0) return 'conflict' as const
+			if (Arr.isReadonlyArrayEmpty(changed)) return 'conflict' as const
 			const opaqueIds = deliveryIds(input.nextState).filter((deliveryId) => deliveryId.startsWith('delivery:v2:'))
-			if (opaqueIds.length > 0) {
+			if (Arr.isReadonlyArrayNonEmpty(opaqueIds)) {
 				const encodedIds = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Array(DeliveryId)))(
 					opaqueIds,
 				)

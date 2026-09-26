@@ -1,4 +1,4 @@
-import { Clock, Context, Effect, Layer, Predicate, Schema } from 'effect'
+import { Array as Arr, Clock, Context, Effect, Layer, Predicate, Schema } from 'effect'
 
 import { DeliveryPolicy } from './DeliveryPolicy'
 import {
@@ -40,7 +40,7 @@ const scheduled = (state: CurrentMailboxState, policy: DeliveryPolicy): CurrentM
 			return batch.stage.cleanupLeaseUntil === null ? [] : [batch.stage.cleanupLeaseUntil]
 		return [batch.stage?.leaseUntil ?? batch.leaseUntil]
 	})
-	if (state.pending.length > 0 && batches.length < concurrency && state.pendingReadyAt !== null)
+	if (Arr.isReadonlyArrayNonEmpty(state.pending) && batches.length < concurrency && state.pendingReadyAt !== null)
 		deadlines.push(state.pendingReadyAt)
 	for (const operation of state.operations ?? []) {
 		if (Predicate.isTagged('Pending')(operation.state)) deadlines.push(operation.state.readyAt)
@@ -48,8 +48,9 @@ const scheduled = (state: CurrentMailboxState, policy: DeliveryPolicy): CurrentM
 	}
 	return {
 		...state,
-		readyAt: deadlines.length === 0 ? null : Math.min(...deadlines),
-		burstDraining: state.burstDraining && (batches.length > 0 || state.pending.length > 0),
+		readyAt: Arr.isReadonlyArrayEmpty(deadlines) ? null : Math.min(...deadlines),
+		burstDraining:
+			state.burstDraining && (Arr.isReadonlyArrayNonEmpty(batches) || Arr.isReadonlyArrayNonEmpty(state.pending)),
 	}
 }
 
@@ -76,7 +77,10 @@ export const enqueueDelivery = Effect.fn('delivery.queue.enqueue')(function* (in
 		let next: CurrentMailboxState
 		if (duplicate) {
 			next = state
-		} else if (policy.mode === 'drop' && (state.pending.length > 0 || activeBatches(state).length > 0)) {
+		} else if (
+			policy.mode === 'drop' &&
+			(Arr.isReadonlyArrayNonEmpty(state.pending) || Arr.isReadonlyArrayNonEmpty(activeBatches(state)))
+		) {
 			if (mailboxCapacityUsage(state) >= policy.maxOutcomes)
 				return yield* DeliveryQueueError.make({ reason: 'capacity' })
 			next = {

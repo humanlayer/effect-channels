@@ -178,6 +178,22 @@ export default defineConfig({
 				},
 			},
 			{
+				files: ['packages/github/src/GitHubCrypto.ts', 'packages/github-next/src/api/GitHubAppSigner.ts'],
+				rules: {
+					'automation/no-ambient-nondeterminism': 'off',
+				},
+			},
+			{
+				files: [
+					'packages/github/src/GitHubIngress.ts',
+					'packages/slack/src/SlackIngressBindings.ts',
+					'packages/slack/src/SlackTenantCredentials.ts',
+				],
+				rules: {
+					'automation/no-service-option': 'off',
+				},
+			},
+			{
 				files: ['packages/delivery-next/src/Channels.ts'],
 				rules: {
 					'effecttsgo/any-unknown-in-error-context': 'off',

@@ -1,4 +1,5 @@
 import {
+	Array as Arr,
 	Cause,
 	Clock,
 	Data,
@@ -152,7 +153,7 @@ const redactDecodeIssues = (
 			Filter: () => [{ category: 'Filter' as const, path }],
 			Composite: (issue) => issue.issues.flatMap((child) => redactDecodeIssues(child, path)),
 			AnyOf: (issue) =>
-				issue.issues.length === 0
+				Arr.isReadonlyArrayEmpty(issue.issues)
 					? [{ category: 'AnyOf' as const, path }]
 					: issue.issues.flatMap((child) => redactDecodeIssues(child, path)),
 		}),
@@ -177,7 +178,7 @@ export const bind = <Event extends Schema.Constraint, Resource extends Schema.Co
 				return batch.stage.cleanupLeaseUntil === null ? [] : [batch.stage.cleanupLeaseUntil]
 			return [batch.stage?.leaseUntil ?? batch.leaseUntil]
 		})
-		if (state.pending.length > 0 && batches.length < concurrency && state.pendingReadyAt !== null)
+		if (Arr.isReadonlyArrayNonEmpty(state.pending) && batches.length < concurrency && state.pendingReadyAt !== null)
 			deadlines.push(state.pendingReadyAt)
 		for (const operation of state.operations ?? []) {
 			if (Predicate.isTagged('Pending')(operation.state)) deadlines.push(operation.state.readyAt)
@@ -185,8 +186,10 @@ export const bind = <Event extends Schema.Constraint, Resource extends Schema.Co
 		}
 		return {
 			...state,
-			readyAt: deadlines.length === 0 ? null : Math.min(...deadlines),
-			burstDraining: state.burstDraining && (batches.length > 0 || state.pending.length > 0),
+			readyAt: Arr.isReadonlyArrayEmpty(deadlines) ? null : Math.min(...deadlines),
+			burstDraining:
+				state.burstDraining &&
+				(Arr.isReadonlyArrayNonEmpty(batches) || Arr.isReadonlyArrayNonEmpty(state.pending)),
 		}
 	}
 	const eventCodec = Schema.fromJsonString(Schema.toCodecJson(definition.event))
@@ -381,7 +384,9 @@ export const bind = <Event extends Schema.Constraint, Resource extends Schema.Co
 										{
 											...state,
 											pending,
-											pendingReadyAt: pending.length === 0 ? null : state.pendingReadyAt,
+											pendingReadyAt: Arr.isReadonlyArrayEmpty(pending)
+												? null
+												: state.pendingReadyAt,
 											burstDraining: policy.mode === 'burst' || state.burstDraining,
 										},
 										batch === undefined
@@ -988,7 +993,9 @@ export const bind = <Event extends Schema.Constraint, Resource extends Schema.Co
 		if (!input.key.startsWith(prefix)) return yield* DeliveryError.make({ reason: 'definition' })
 		const store = yield* MailboxStore
 		yield* store.loadMailbox(input).pipe(
-			Effect.map((snapshot) => snapshot !== undefined && activeBatches(snapshot.state).length > 0),
+			Effect.map(
+				(snapshot) => snapshot !== undefined && Arr.isReadonlyArrayNonEmpty(activeBatches(snapshot.state)),
+			),
 			Effect.repeat({ while: (active) => active, schedule: Schedule.spaced(policy.heartbeatMs) }),
 		)
 	})

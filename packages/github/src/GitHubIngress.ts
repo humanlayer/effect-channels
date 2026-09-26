@@ -11,7 +11,7 @@ import {
 	type HandlerContext,
 	type RunnerOptions,
 } from '@humanlayer/channels-delivery'
-import { Context, Effect, Layer, Logger, Match, Option, Schema } from 'effect'
+import { Array as Arr, Context, Effect, Layer, Logger, Match, Option, Schema } from 'effect'
 
 import { GitHub } from './GitHub'
 import { GitHubActivityEvent, GitHubCreationEvent, GitHubMentionEvent, activityEventDefinition } from './GitHubActivity'
@@ -204,7 +204,7 @@ export class GitHubIngress extends Context.Service<
 									direct,
 									followed,
 								})
-								if (decision.targets.length === 0) return
+								if (Arr.isReadonlyArrayEmpty(decision.targets)) return
 								const organization = yield* organizationFor(event)
 								if (organization === null) return
 								for (const target of decision.targets) {

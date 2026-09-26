@@ -8,7 +8,7 @@ import {
 	type ProviderWebhookOutcome,
 	type WebhookProvider,
 } from '@humanlayer/channels-delivery-next'
-import { Crypto, Effect, Match, Redacted, Schema } from 'effect'
+import { Array as Arr, Crypto, Effect, Match, Redacted, Schema } from 'effect'
 
 import { githubDiscussionResourceId, type GitHubId } from './GitHubIdentity'
 import {
@@ -104,7 +104,7 @@ const makeGitHubWebhookEvent = (
 				})
 			const first = makeAdmission(pullRequest)
 			const rest = payload.check_run.pull_requests.slice(1).map(makeAdmission)
-			return rest.length === 0
+			return Arr.isReadonlyArrayEmpty(rest)
 				? ProviderWebhookEvent.make({ event: first })
 				: ProviderWebhookEvents.make({ events: [first, ...rest] })
 		}),
@@ -163,7 +163,7 @@ export const makeGitHubWebhookProvider = (options: GitHubWebhookProviderOptions)
 				},
 				{ onExcessProperty: 'preserve' },
 			).pipe(Effect.mapError(() => WebhookPayloadInvalidError.make({ reason: `invalid_${event}` })))
-			if (decoded.event === 'check_run' && decoded.payload.check_run.pull_requests.length === 0) {
+			if (decoded.event === 'check_run' && Arr.isReadonlyArrayEmpty(decoded.payload.check_run.pull_requests)) {
 				yield* Effect.logInfo('GitHub check run has no pull request association').pipe(
 					Effect.annotateLogs({
 						reason: 'no_pull_request_association',

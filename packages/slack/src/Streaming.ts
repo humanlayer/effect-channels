@@ -1,3 +1,5 @@
+import { Array as Arr } from 'effect'
+
 /** Default cadence for provider post-and-edit streaming fallbacks. */
 export const streamEditIntervalMs = 500
 
@@ -21,12 +23,12 @@ const hasOpenFence = (markdown: string) => {
 export const renderStreamingMarkdown = (markdown: string): string => {
 	let rendered = markdown
 	const lines = rendered.split('\n')
-	if (!rendered.endsWith('\n') && lines.length > 0) {
+	if (!rendered.endsWith('\n') && Arr.isReadonlyArrayNonEmpty(lines)) {
 		const last = lines.at(-1)
 		const previous = lines.at(-2)
 		if (last !== undefined && tableRow.test(last) && (previous === undefined || !tableSeparator.test(previous))) {
 			lines.pop()
-			rendered = lines.length === 0 ? '' : `${lines.join('\n')}\n`
+			rendered = Arr.isReadonlyArrayEmpty(lines) ? '' : `${lines.join('\n')}\n`
 		}
 	}
 	if (hasOpenFence(rendered)) rendered += '\n```'

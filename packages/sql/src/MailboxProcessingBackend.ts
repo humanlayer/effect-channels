@@ -25,7 +25,7 @@ import {
 	type RecordProcessingAttemptResult,
 	type RenewMailboxClaim,
 } from '@humanlayer/channels-delivery-next'
-import { Clock, Effect, Layer, Match, Option, Predicate, Random, Schema } from 'effect'
+import { Array as Arr, Clock, Effect, Layer, Match, Option, Predicate, Random, Schema } from 'effect'
 import * as SqlClient from 'effect/unstable/sql/SqlClient'
 import * as SqlError from 'effect/unstable/sql/SqlError'
 
@@ -283,7 +283,7 @@ const deferMailbox = (input: DeferMailbox) =>
 					yield* sql`SELECT mailbox_key FROM delivery_next_mailboxes
 						WHERE mailbox_key = ${input.mailboxKey} AND status = 'idle' FOR UPDATE`,
 				)
-				if (locked.length === 0) return
+				if (Arr.isReadonlyArrayEmpty(locked)) return
 				yield* sql`UPDATE delivery_next_mailboxes SET ready_at = ${input.until}
 					WHERE mailbox_key = ${input.mailboxKey} AND (
 						SELECT max(sequence_id) FROM delivery_next_admissions
@@ -316,7 +316,7 @@ const renewClaim = (input: RenewMailboxClaim) =>
 							WHERE claim_id = ${input.claimId} AND mailbox_key = ${input.mailboxKey} AND status = 'active'
 							RETURNING claim_id`,
 					)
-					if (renewed.length === 0) return false
+					if (Arr.isReadonlyArrayEmpty(renewed)) return false
 					yield* sql`UPDATE delivery_next_mailboxes SET ready_at = ${leaseExpiresAt}
 						WHERE mailbox_key = ${input.mailboxKey}`
 					return true
@@ -356,7 +356,7 @@ const recordProcessingAttemptResult = (input: RecordProcessingAttemptResult) =>
 				Effect.gen(function* () {
 					yield* sql`SELECT mailbox_key FROM delivery_next_mailboxes WHERE mailbox_key = ${mailboxKey} FOR UPDATE`
 					const owned = yield* Schema.decodeUnknownEffect(claimIdRows)(yield* ownedClaim)
-					if (owned.length === 0) return false
+					if (Arr.isReadonlyArrayEmpty(owned)) return false
 					yield* Match.value(input.result).pipe(
 						Match.tagsExhaustive({
 							RetryableFailure: ({ retryAfterMs }) =>

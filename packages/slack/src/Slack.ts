@@ -1,4 +1,18 @@
-import { Clock, Context, DateTime, Effect, Exit, HashSet, Layer, Match, Option, Ref, Schema, Stream } from 'effect'
+import {
+	Array as Arr,
+	Clock,
+	Context,
+	DateTime,
+	Effect,
+	Exit,
+	HashSet,
+	Layer,
+	Match,
+	Option,
+	Ref,
+	Schema,
+	Stream,
+} from 'effect'
 
 import { Attachment } from './Attachment'
 import type { Content, InlineContentNode } from './Content'
@@ -124,12 +138,12 @@ const renderContent = Match.type<Content>().pipe(
 		}),
 		MarkdownContent: (content) => {
 			const degraded: Array<string> = []
-			if (content.actions !== undefined && content.actions.length > 0) degraded.push('actions')
+			if (content.actions !== undefined && Arr.isReadonlyArrayNonEmpty(content.actions)) degraded.push('actions')
 			return { text: content.markdown, files: content.files ?? [], degraded }
 		},
 		StructuredContent: (content) => {
 			const degraded = ['structured_content']
-			if (content.actions !== undefined && content.actions.length > 0) degraded.push('actions')
+			if (content.actions !== undefined && Arr.isReadonlyArrayNonEmpty(content.actions)) degraded.push('actions')
 			return {
 				text: content.blocks
 					.map(
@@ -390,7 +404,7 @@ export class Slack extends Context.Service<Slack, SlackService>()('slack/Slack')
 					)
 					const rendered = renderContent(input.content)
 					const send = Effect.gen(function* () {
-						if (rendered.files.length > 0) {
+						if (Arr.isReadonlyArrayNonEmpty(rendered.files)) {
 							const uploaded = yield* client
 								.uploadFiles(slackUploadInput({ ref, text: rendered.text, files: rendered.files }))
 								.pipe(
@@ -505,7 +519,7 @@ export class Slack extends Context.Service<Slack, SlackService>()('slack/Slack')
 						),
 					)
 					const rendered = renderContent(input.content)
-					if (rendered.files.length > 0) {
+					if (Arr.isReadonlyArrayNonEmpty(rendered.files)) {
 						const uploaded = yield* client
 							.uploadFiles(
 								SlackFileUploadInput.make({
@@ -935,7 +949,7 @@ export class Slack extends Context.Service<Slack, SlackService>()('slack/Slack')
 						),
 					)
 					const rendered = renderContent(input.content)
-					if (rendered.files.length > 0) {
+					if (Arr.isReadonlyArrayNonEmpty(rendered.files)) {
 						return yield* EditFailed.make({
 							provider: 'slack',
 							threadId: input.threadId,
@@ -1407,7 +1421,7 @@ export class Slack extends Context.Service<Slack, SlackService>()('slack/Slack')
 					if (result.fallback) return EphemeralResult.make({ sent: result.sent, usedFallback: true })
 					const sent = result.sent
 					const degraded = [...rendered.degraded]
-					if (rendered.files.length > 0) degraded.push('files')
+					if (Arr.isReadonlyArrayNonEmpty(rendered.files)) degraded.push('files')
 					const delivered = yield* sentFromSlack({
 						threadRef: slackThreadRef(ref, false),
 						sentThreadId: input.threadId,

@@ -1,5 +1,17 @@
 import { assert, it } from '@effect/vitest'
-import { DateTime, Deferred, Effect, Fiber, Layer, Logger, Match, Predicate, Redacted, Schema } from 'effect'
+import {
+	Array as Arr,
+	DateTime,
+	Deferred,
+	Effect,
+	Fiber,
+	Layer,
+	Logger,
+	Match,
+	Predicate,
+	Redacted,
+	Schema,
+} from 'effect'
 import {
 	FetchHttpClient,
 	HttpClient,
@@ -273,7 +285,7 @@ for (const fixture of failures) {
 				if (fixture.status === 429) assert.equal(error.retryAfterMs, 2_000)
 				assert.equal(h.requests.filter((r) => r.method === 'POST').length, 1)
 				assert.deepEqual(h.invalidated, fixture.status === 401 ? [repository.id] : [])
-				assert.ok(h.logs.length > 0)
+				assert.ok(Arr.isReadonlyArrayNonEmpty(h.logs))
 				assert.ok(!h.logs.join('').includes('never-log'))
 			}).pipe(Effect.provide(h.layer))
 		},

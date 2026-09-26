@@ -10,7 +10,7 @@ import {
 	ProviderEventInvalid,
 	type ProviderEventProcessor,
 } from '@humanlayer/channels-delivery-next'
-import { Effect, Match, Option, Predicate, Schema } from 'effect'
+import { Array as Arr, Effect, Match, Option, Predicate, Schema } from 'effect'
 
 import { SlackApi } from './SlackApi'
 import {
@@ -488,7 +488,7 @@ const processSlackBatch = (options: SlackEventProcessorOptions) =>
 			),
 		)
 		const normalized = normalizedOptions.flatMap(Option.toArray)
-		if (normalized.length === 0) return ProviderEventIgnored.make({ reason: 'no_relevant_event' })
+		if (Arr.isReadonlyArrayEmpty(normalized)) return ProviderEventIgnored.make({ reason: 'no_relevant_event' })
 
 		const subscribed = yield* Effect.flatMap(MailboxSubscriptions, (subscriptions) =>
 			subscriptions.isSubscribed({ mailboxKey }),

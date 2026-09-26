@@ -1,5 +1,5 @@
 import { assert, it } from '@effect/vitest'
-import { Effect, Layer, Queue } from 'effect'
+import { Array as Arr, Effect, Layer, Queue } from 'effect'
 
 import { MessageRef, ThreadId } from '../src/index'
 import { SlackHistoryInput, SlackRepliesInput } from '../src/Schema'
@@ -287,7 +287,7 @@ it.effect('maps provider history calls onto replies and history and narrows fail
 			})
 
 			const profileRequests = yield* Queue.takeAll(harness.requests)
-			assert.ok(profileRequests.length > 0)
+			assert.ok(Arr.isReadonlyArrayNonEmpty(profileRequests))
 			assert.ok(profileRequests.every((request) => request.url.pathname === '/api/users.info'))
 
 			const error = yield* expectTaggedFailure('HistoryFailed')(

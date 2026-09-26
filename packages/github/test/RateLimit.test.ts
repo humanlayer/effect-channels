@@ -1,6 +1,6 @@
 import { assert, it } from '@effect/vitest'
 import { layer as memory } from '@humanlayer/channels-github/memory'
-import { Context, Deferred, Effect, Fiber, Layer, Logger, Redacted, Ref } from 'effect'
+import { Array as Arr, Context, Deferred, Effect, Fiber, Layer, Logger, Redacted, Ref } from 'effect'
 import { TestClock } from 'effect/testing'
 import { HttpClient, HttpClientResponse } from 'effect/unstable/http'
 
@@ -99,7 +99,7 @@ for (const fixture of cases) {
 			assert.equal(error.reason, fixture.delay === undefined ? 'forbidden' : 'unavailable')
 			assert.equal(error.retryAfterMs, fixture.delay)
 			assert.equal(yield* Ref.get(calls), 1)
-			assert.ok(logs.length > 0)
+			assert.ok(Arr.isReadonlyArrayNonEmpty(logs))
 			assert.ok(!logs.join('').includes('never-log'))
 		}),
 	)

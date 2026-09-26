@@ -7,7 +7,7 @@ import {
 	MailboxStoreError,
 	mailboxKey,
 } from '@humanlayer/channels-delivery'
-import { Clock, Context, Effect, Layer, Queue, Redacted, Ref, Schema } from 'effect'
+import { Array as Arr, Clock, Context, Effect, Layer, Queue, Redacted, Ref, Schema } from 'effect'
 import { TestClock } from 'effect/testing'
 
 import {
@@ -400,7 +400,8 @@ it.effect('nullable and minimal PR authors preserve mention and own-content supp
 			)
 			yield* test.drain(true)
 			assert.equal(yield* Queue.size(test.seen), fixture.expected.length)
-			if (fixture.expected.length > 0) assert.deepEqual(yield* Queue.takeAll(test.seen), fixture.expected)
+			if (Arr.isReadonlyArrayNonEmpty(fixture.expected))
+				assert.deepEqual(yield* Queue.takeAll(test.seen), fixture.expected)
 		}
 	}),
 )
@@ -629,7 +630,7 @@ it.effect('signed mentions in every content family, edits, own actors and native
 				200,
 			)
 			yield* test.drain(fixture.event.startsWith('pull_request'))
-			const expected = fixture.expected.length === 0 ? [] : [...fixture.expected, 'observer']
+			const expected = Arr.isReadonlyArrayEmpty(fixture.expected) ? [] : [...fixture.expected, 'observer']
 			assert.equal(yield* Queue.size(test.seen), expected.length, fixture.event)
 			for (const name of expected) assert.equal(yield* Queue.take(test.seen), name)
 		}

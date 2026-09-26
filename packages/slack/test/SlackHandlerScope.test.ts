@@ -6,7 +6,7 @@ import {
 	MailboxStore,
 } from '@humanlayer/channels-delivery'
 import { layer as deliveryMemory } from '@humanlayer/channels-delivery/memory'
-import { Effect, Exit, Fiber, Layer, Queue } from 'effect'
+import { Array as Arr, Effect, Exit, Fiber, Layer, Queue } from 'effect'
 
 import { PostFailed, SlackIngress, SlackSubscriptions } from '../src/index'
 import { nativeIngressLayer, nativeMessage, nativePolicy, nativeRunner } from './nativeSupport'
@@ -28,7 +28,7 @@ for (const failure of [false, true]) {
 								.commitMailbox(input)
 								.pipe(
 									Effect.tap((result) =>
-										result === 'committed' && input.nextState.outcomes.length > 0
+										result === 'committed' && Arr.isReadonlyArrayNonEmpty(input.nextState.outcomes)
 											? Queue.offer(observed, cleaned)
 											: Effect.void,
 									),

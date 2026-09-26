@@ -1,5 +1,5 @@
 import { assert, it } from '@effect/vitest'
-import { Context, DateTime, Deferred, Effect, Fiber, Layer, Logger, Redacted, Ref } from 'effect'
+import { Array as Arr, Context, DateTime, Deferred, Effect, Fiber, Layer, Logger, Redacted, Ref } from 'effect'
 import { TestClock } from 'effect/testing'
 import { HttpClient, HttpClientResponse } from 'effect/unstable/http'
 
@@ -116,7 +116,7 @@ for (const status of [401, 403, 404, 422, 429, 500, 200]) {
 			assert.ok(SchemaCheck(result))
 			assert.equal(yield* Ref.get(calls), 1)
 			assert.equal(yield* Ref.get(invalidations), status === 401 ? 1 : 0)
-			assert.ok(logs.length > 0)
+			assert.ok(Arr.isReadonlyArrayNonEmpty(logs))
 			assert.ok(!logs.join('').includes('never-log'))
 		}),
 	)

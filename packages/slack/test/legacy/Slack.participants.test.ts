@@ -1,5 +1,5 @@
 import { assert, it } from '@effect/vitest'
-import { Effect, Layer, Ref } from 'effect'
+import { Array as Arr, Effect, Layer, Ref } from 'effect'
 
 import { Slack, SlackApiError, Thread, type MessageHistoryOptions, type MessagePage } from '../../src/index'
 import { stubSlackClientLayer } from '../support'
@@ -81,5 +81,5 @@ const historyOptions = (input: MessageHistoryOptions): MessageHistoryOptions | u
 	if (input.limit !== undefined) options.limit = input.limit
 	if (input.cursor !== undefined) options.cursor = input.cursor
 	if (input.direction !== undefined) options.direction = input.direction
-	return Object.keys(options).length === 0 ? undefined : options
+	return Arr.isReadonlyArrayEmpty(Object.keys(options)) ? undefined : options
 }

@@ -1,4 +1,4 @@
-import { Effect, Option, Stream } from 'effect'
+import { Array as Arr, Effect, Option, Stream } from 'effect'
 
 import { HistoryFailed, UnsupportedContextScope } from './DomainErrors'
 import type { Message } from './Message'
@@ -55,7 +55,7 @@ export const messagePageStream = <E, R>(
 			(result) =>
 				[
 					result.messages,
-					result.nextCursor === undefined || result.messages.length === 0
+					result.nextCursor === undefined || Arr.isReadonlyArrayEmpty(result.messages)
 						? Option.none<string | undefined>()
 						: Option.some(result.nextCursor),
 				] as const,
@@ -72,7 +72,7 @@ export const threadSummaryPageStream = <E, R>(
 			(result) =>
 				[
 					result.threads,
-					result.nextCursor === undefined || result.threads.length === 0
+					result.nextCursor === undefined || Arr.isReadonlyArrayEmpty(result.threads)
 						? Option.none<string | undefined>()
 						: Option.some(result.nextCursor),
 				] as const,

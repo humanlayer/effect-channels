@@ -1,5 +1,5 @@
 import { NodeCrypto, NodeRuntime } from '@effect/platform-node'
-import { Config, Crypto, Effect, Encoding, Layer, Ref, Schema, Stream } from 'effect'
+import { Array as Arr, Config, Crypto, Effect, Encoding, Layer, Ref, Schema, Stream } from 'effect'
 
 import {
 	discoverLinearFiles,
@@ -124,7 +124,7 @@ const program = Effect.gen(function* () {
 				lookalike_files: lookalikes.length,
 			}),
 		)
-		if (comment.files.length !== 2 || lookalikes.length !== 0)
+		if (comment.files.length !== 2 || !Arr.isReadonlyArrayEmpty(lookalikes))
 			return yield* Effect.die('Markdown discovery did not return exactly the uploaded Linear files')
 		yield* verifyDownload(text, textBytes)
 		yield* verifyDownload(image, pngBytes)

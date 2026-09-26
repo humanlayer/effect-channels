@@ -33,7 +33,7 @@ const issueChange =
 	<Key extends keyof LinearIssueUpdatedFrom>(event: IssueChangeEvent<Key>) =>
 	(updatedFrom: LinearIssueUpdatedFrom) => {
 		const previous = Struct.pick(updatedFrom, Struct.keys(event.fields.previous.fields))
-		return Struct.keys(previous).length === 0 ? Option.none() : Option.some(event.make({ previous }))
+		return Arr.isReadonlyArrayEmpty(Struct.keys(previous)) ? Option.none() : Option.some(event.make({ previous }))
 	}
 
 const issueChanges = [

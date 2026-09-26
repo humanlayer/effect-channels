@@ -19,7 +19,7 @@ import {
 	type EventDefinition,
 	type RunnerOptions,
 } from '@humanlayer/channels-delivery'
-import { Context, Data, Effect, Layer, Match, Option, Schema } from 'effect'
+import { Array as Arr, Context, Data, Effect, Layer, Match, Option, Schema } from 'effect'
 
 import { RetryabilityMetadata, SlackIngressError } from './DomainErrors'
 import { ThreadId } from './Model'
@@ -409,7 +409,7 @@ const makeBindings = <E, R>(options: SlackIngressOptions<E, R>) =>
 			event: A,
 		) =>
 			Effect.gen(function* () {
-				if (bindings.length === 0) return
+				if (Arr.isReadonlyArrayEmpty(bindings)) return
 				const organization = yield* organizationFor(event)
 				if (organization === null) return
 				yield* Effect.forEach(
@@ -475,7 +475,7 @@ const makeBindings = <E, R>(options: SlackIngressOptions<E, R>) =>
 				yield* entry.binding.processMailbox({ key }).pipe(mapIngressError('delivery_run'), Effect.asVoid)
 			}),
 			run: (input) =>
-				(allBindings.length === 0
+				(Arr.isReadonlyArrayEmpty(allBindings)
 					? Effect.never
 					: Effect.forEach(allBindings, (binding) => binding.run(input), {
 							concurrency: 'unbounded',

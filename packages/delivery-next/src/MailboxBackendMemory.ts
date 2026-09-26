@@ -5,7 +5,7 @@
  * MailboxProcessingBackend) and must pass the same backend contract, so the shared processing
  * code can run against realistic mailbox behaviour without a database.
  */
-import { Clock, Context, Effect, Layer, Match, Option, Ref } from 'effect'
+import { Array as Arr, Clock, Context, Effect, Layer, Match, Option, Ref } from 'effect'
 
 import { DeliveryReceipt, MailboxDelivery, deliveryMailboxKey, type DeliveryAdmission } from './MailboxDelivery'
 import { Timestamp } from './MailboxPolicy'
@@ -209,7 +209,7 @@ export const MailboxBackendMemory = Layer.effectContext(
 									claimId: null,
 									frozenBatch: null,
 									attempt: 0,
-									readyAt: current.waiting.length > 0 ? input.finishedAt : null,
+									readyAt: Arr.isReadonlyArrayNonEmpty(current.waiting) ? input.finishedAt : null,
 								}
 								const next = Match.value(input.result).pipe(
 									Match.tag('RetryableFailure', ({ retryAfterMs }): MemoryMailbox => ({

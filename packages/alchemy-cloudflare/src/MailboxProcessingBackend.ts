@@ -13,7 +13,7 @@ import {
 	type RecordProcessingAttemptResult,
 	type RenewMailboxClaim,
 } from '@humanlayer/channels-delivery-next'
-import { Clock, Effect, Exit, Layer, Match, Option, Predicate, Random, Schema } from 'effect'
+import { Array as Arr, Clock, Effect, Exit, Layer, Match, Option, Predicate, Random, Schema } from 'effect'
 
 import { DurableMailboxState, mailboxStateKey, type WaitingAdmission } from './MailboxState'
 import { MailboxStorage } from './MailboxStorage'
@@ -181,7 +181,7 @@ const recordTransition = (
 				status: 'idle',
 				activeBatch: null,
 				attempt: 0,
-				readyAt: current.waiting.length > 0 ? input.finishedAt : null,
+				readyAt: Arr.isReadonlyArrayNonEmpty(current.waiting) ? input.finishedAt : null,
 			}),
 		),
 	)
