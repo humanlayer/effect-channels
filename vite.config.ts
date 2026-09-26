@@ -83,6 +83,16 @@ export default defineConfig({
 				files: ['**/test/**', '**/test-backends/**', '**/*.test.ts'],
 				rules: {
 					'anti-slop-effect/no-manual-tagged-construction': 'off',
+					'effecttsgo/node-builtin-import': 'off',
+					'effecttsgo/run-effect-inside-effect': 'off',
+					'effecttsgo/effect-succeed-with-void': 'off',
+					'typescript/no-misused-spread': 'off',
+				},
+			},
+			{
+				files: ['packages/delivery-next/src/Channels.ts'],
+				rules: {
+					'effecttsgo/any-unknown-in-error-context': 'off',
 				},
 			},
 		],
