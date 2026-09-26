@@ -1,7 +1,7 @@
 import { DeliveryPolicy } from '@humanlayer/channels-delivery'
 import { Layer } from 'effect'
 
-import { GitHubCredentials, GitHubActivityEvent } from '../src/index'
+import { GitHub, GitHubCredentials, GitHubActivityEvent } from '../src/index'
 
 export const policy = DeliveryPolicy.make({
 	mode: 'queue',
@@ -43,3 +43,6 @@ export const routeCredentials = Layer.mock(GitHubCredentials, {
 	botUserId: 99,
 	acceptsInstallation: ({ installationId }) => installationId === 100,
 })
+
+/** A GitHub client for tests that never call GitHub. */
+export const unusedGitHub = Layer.mock(GitHub, {})

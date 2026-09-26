@@ -1,5 +1,5 @@
 import { describe, it } from '@effect/vitest'
-import { Effect, Queue, Schema } from 'effect'
+import { Effect, Match, Queue, Schema } from 'effect'
 
 import { SlackApi, SlackApiError, SlackFileAuthorizationError, type SlackFileUploadError } from '../src/SlackApi'
 import { SlackFile, SlackFileId, SlackFileRef, type SlackUploadFileInput } from '../src/SlackModels'
@@ -32,14 +32,15 @@ type UploadScript = {
 const respond = (script: UploadScript) => (request: RecordedSlackRequest) => {
 	if (request.url === uploadUrl)
 		return new Response(`OK - ${bytes.byteLength}`, { status: script.uploadStatus ?? 200 })
-	switch (slackMethod(request)) {
-		case 'files.getUploadURLExternal':
-			return Response.json(script.uploadUrlResponse ?? { ok: true, upload_url: uploadUrl, file_id: fileId })
-		case 'files.completeUploadExternal':
-			return Response.json(script.completeResponse ?? { ok: true, files: [slackFileObject] })
-		default:
-			return Response.json({ ok: false, error: 'unknown_method' }, { status: 404 })
-	}
+	return Match.value(slackMethod(request)).pipe(
+		Match.when('files.getUploadURLExternal', () =>
+			Response.json(script.uploadUrlResponse ?? { ok: true, upload_url: uploadUrl, file_id: fileId }),
+		),
+		Match.when('files.completeUploadExternal', () =>
+			Response.json(script.completeResponse ?? { ok: true, files: [slackFileObject] }),
+		),
+		Match.orElse(() => Response.json({ ok: false, error: 'unknown_method' }, { status: 404 })),
+	)
 }
 
 type UploadTarget = 'channel' | 'thread'

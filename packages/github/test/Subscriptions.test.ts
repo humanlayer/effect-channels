@@ -28,7 +28,7 @@ import {
 	reviewCommentRootId,
 } from '../src/index'
 import { layer as memory } from '../src/memory'
-import { event, policy, routeCredentials, user } from './fixtures'
+import { event, policy, routeCredentials, user, unusedGitHub } from './fixtures'
 import {
 	host,
 	payloadFor,
@@ -101,7 +101,7 @@ const setup = Effect.gen(function* () {
 				},
 				{ id: 'observer', onSubscribedEvent: record('observer') },
 			],
-		}).pipe(Layer.provide(Layer.succeedContext(storage))),
+		}).pipe(Layer.provide(unusedGitHub), Layer.provide(Layer.succeedContext(storage))),
 	)
 	const ingress = Context.get(services, GitHubIngress)
 	const subscriptions = Context.get(storage, GitHubSubscriptions)
@@ -307,8 +307,10 @@ it.effect('signed native PR activity accepts null and minimal authors without we
 				assert.deepEqual(yield* Queue.takeAll(test.seen), ['followed', 'observer'])
 				assert.equal(yield* Queue.size(test.values), 2)
 				for (const value of yield* Queue.takeAll(test.values)) {
-					assert.ok('pull_request' in value)
-					if ('pull_request' in value) assert.deepEqual(value.pull_request.user, author)
+					const { pull_request } = yield* Schema.decodeUnknownEffect(
+						Schema.Struct({ pull_request: GitHubPullRequestData }),
+					)(value)
+					assert.deepEqual(pull_request.user, author)
 					assert.deepEqual(yield* Schema.decodeEffect(codec)(yield* Schema.encodeEffect(codec)(value)), value)
 				}
 			}
@@ -486,7 +488,7 @@ it.effect('partial fanout is frozen before admission and survives unsubscribe an
 					id,
 					onSubscribedEvent: () => Queue.offer(seen, id).pipe(Effect.asVoid),
 				})),
-			}).pipe(Layer.provide(fault), Layer.provide(Layer.succeedContext(storage)))
+			}).pipe(Layer.provide(unusedGitHub), Layer.provide(fault), Layer.provide(Layer.succeedContext(storage)))
 		const first = yield* Layer.build(make())
 		const send = yield* host(
 			GitHubRoutes.layer({
@@ -769,7 +771,7 @@ it.effect('a first admitted mention may subscribe without adding new consumers d
 						onSubscribedEvent: () => Queue.offer(seen, 'unexpected').pipe(Effect.asVoid),
 					},
 				],
-			}).pipe(Layer.provide(fault), Layer.provide(Layer.succeedContext(storage))),
+			}).pipe(Layer.provide(unusedGitHub), Layer.provide(fault), Layer.provide(Layer.succeedContext(storage))),
 		)
 		const ingress = Context.get(services, GitHubIngress)
 		const send = yield* host(
@@ -821,7 +823,7 @@ it.effect('frozen handler retry survives unsubscribe and retains its native even
 							}),
 					},
 				],
-			}).pipe(Layer.provide(Layer.succeedContext(storage))),
+			}).pipe(Layer.provide(unusedGitHub), Layer.provide(Layer.succeedContext(storage))),
 		)
 		const ingress = Context.get(services, GitHubIngress)
 		const send = yield* host(

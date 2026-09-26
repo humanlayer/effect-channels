@@ -10,6 +10,7 @@ import { Effect, Exit, Fiber, Layer, Queue } from 'effect'
 
 import { PostFailed, SlackIngress, SlackSubscriptions } from '../src/index'
 import { nativeIngressLayer, nativeMessage, nativePolicy, nativeRunner } from './nativeSupport'
+import { unusedSlack } from './support'
 
 for (const failure of [false, true]) {
 	it.effect(`closes the handler scope before recording ${failure ? 'failure' : 'success'}`, () =>
@@ -78,6 +79,7 @@ it.effect('rejects an invalid delivery policy during ingress Layer acquisition',
 			policy: { ...nativePolicy, heartbeatMs: nativePolicy.leaseMs },
 			handlers: {},
 		}).pipe(
+			Layer.provide(unusedSlack),
 			Layer.provide(
 				Layer.mergeAll(
 					Layer.mock(DeliveryQueue, {}),

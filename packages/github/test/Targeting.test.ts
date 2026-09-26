@@ -3,7 +3,7 @@ import { layer as memory } from '@humanlayer/channels-github/memory'
 import { Context, Effect, Layer, Queue, Redacted } from 'effect'
 
 import { GitHubCrypto, GitHubIngress, GitHubRoutes, type GitHubActivityEvent, issueResourceKey } from '../src/index'
-import { event, policy, routeCredentials, user } from './fixtures'
+import { event, policy, routeCredentials, user, unusedGitHub } from './fixtures'
 import { host, payloadFor, secret, webhookBase, webhookRequest, type WebhookFixture } from './support'
 
 it.live(
@@ -17,7 +17,7 @@ it.live(
 					namespace: 'mentions',
 					policy,
 					handlers: [{ id: 'receive', onMention: (value) => Queue.offer(seen, value).pipe(Effect.asVoid) }],
-				}).pipe(Layer.provide(Layer.succeedContext(storage))),
+				}).pipe(Layer.provide(unusedGitHub), Layer.provide(Layer.succeedContext(storage))),
 			)
 			const send = yield* host(
 				GitHubRoutes.layer({

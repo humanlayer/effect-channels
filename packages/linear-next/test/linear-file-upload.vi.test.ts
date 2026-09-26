@@ -1,5 +1,5 @@
 import { describe, it } from '@effect/vitest'
-import { Effect, Layer, Queue, Redacted, Schema } from 'effect'
+import { Effect, Layer, Match, Queue, Redacted, Schema } from 'effect'
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http'
 
 import { narrowLinearProviderErrors } from '../src/api/LinearApiErrors'
@@ -69,19 +69,17 @@ const makeHttp = (requests: Queue.Queue<RecordedRequest>, script: UploadScript =
 			})
 			if (web.url.startsWith('https://storage.googleapis.com/'))
 				return HttpClientResponse.fromWeb(request, new Response(null, { status: script.putStatus ?? 200 }))
-			switch (operation) {
-				case 'LinearViewerIdentity':
-					return HttpClientResponse.fromWeb(request, Response.json(viewer))
-				case 'LinearFileUpload':
-					return HttpClientResponse.fromWeb(
-						request,
+			const response = yield* Match.value(operation).pipe(
+				Match.when('LinearViewerIdentity', () => Effect.succeed(Response.json(viewer))),
+				Match.when('LinearFileUpload', () =>
+					Effect.succeed(
 						Response.json(
 							script.fileUpload ?? { data: { fileUpload: { success: true, uploadFile: uploadTarget } } },
 						),
-					)
-				case 'LinearAttachmentCreate':
-					return HttpClientResponse.fromWeb(
-						request,
+					),
+				),
+				Match.when('LinearAttachmentCreate', () =>
+					Effect.succeed(
 						Response.json({
 							data: {
 								attachmentCreate: {
@@ -96,10 +94,11 @@ const makeHttp = (requests: Queue.Queue<RecordedRequest>, script: UploadScript =
 								},
 							},
 						}),
-					)
-				default:
-					return yield* Effect.die(`unexpected request ${web.method} ${web.url}`)
-			}
+					),
+				),
+				Match.orElse(() => Effect.die(`unexpected request ${web.method} ${web.url}`)),
+			)
+			return HttpClientResponse.fromWeb(request, response)
 		}),
 	)
 

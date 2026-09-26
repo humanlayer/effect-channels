@@ -10,7 +10,7 @@ import {
 } from '@humanlayer/channels-delivery-next'
 import { Crypto, Effect, Match, Redacted, Schema } from 'effect'
 
-import { githubDiscussionResourceId } from './GitHubIdentity'
+import { githubDiscussionResourceId, type GitHubId } from './GitHubIdentity'
 import {
 	GitHubSupportedWebhook,
 	type GitHubSupportedWebhook as GitHubSupportedWebhookType,
@@ -61,6 +61,23 @@ const actionsByEvent = {
 
 const isSupportedEvent = Schema.is(SupportedGitHubEvent)
 
+const admitDiscussion = (
+	options: GitHubWebhookProviderOptions,
+	deliveryId: string,
+	webhook: GitHubSupportedWebhookType,
+	discussion: { readonly kind: 'issue' | 'pull-request'; readonly number: GitHubId },
+) =>
+	ProviderWebhookEvent.make({
+		event: DeliveryAdmission.make({
+			namespace: options.namespace,
+			provider: 'github',
+			installationId: String(webhook.payload.installation.id),
+			resourceId: githubDiscussionResourceId({ repositoryId: webhook.payload.repository.id, ...discussion }),
+			eventId: deliveryId,
+			payload: webhook,
+		}),
+	})
+
 const makeGitHubWebhookEvent = (
 	options: GitHubWebhookProviderOptions,
 	deliveryId: string,
@@ -91,24 +108,28 @@ const makeGitHubWebhookEvent = (
 				? ProviderWebhookEvent.make({ event: first })
 				: ProviderWebhookEvents.make({ events: [first, ...rest] })
 		}),
-		Match.orElse(({ payload }): ProviderWebhookOutcome => {
-			const discussion = 'pull_request' in payload ? payload.pull_request : payload.issue
-			const kind = 'pull_request' in payload || discussion.pull_request !== undefined ? 'pull-request' : 'issue'
-			return ProviderWebhookEvent.make({
-				event: DeliveryAdmission.make({
-					namespace: options.namespace,
-					provider: 'github',
-					installationId: String(payload.installation.id),
-					resourceId: githubDiscussionResourceId({
-						repositoryId: payload.repository.id,
-						kind,
-						number: discussion.number,
-					}),
-					eventId: deliveryId,
-					payload: webhook,
+		Match.when({ event: Match.is('issues', 'issue_comment') }, ({ payload }): ProviderWebhookOutcome =>
+			admitDiscussion(options, deliveryId, webhook, {
+				kind: payload.issue.pull_request === undefined ? 'issue' : 'pull-request',
+				number: payload.issue.number,
+			}),
+		),
+		Match.when(
+			{
+				event: Match.is(
+					'pull_request',
+					'pull_request_review',
+					'pull_request_review_comment',
+					'pull_request_review_thread',
+				),
+			},
+			({ payload }): ProviderWebhookOutcome =>
+				admitDiscussion(options, deliveryId, webhook, {
+					kind: 'pull-request',
+					number: payload.pull_request.number,
 				}),
-			})
-		}),
+		),
+		Match.exhaustive,
 	)
 
 export const makeGitHubWebhookProvider = (options: GitHubWebhookProviderOptions): WebhookProvider<Crypto.Crypto> => ({

@@ -5,7 +5,7 @@ import * as Redis from 'effect/unstable/persistence/Redis'
 import { emptyMailbox, MailboxSnapshot, mailboxKey, mailboxPrefix } from '../src/Mailbox'
 import { MailboxReadiness, MailboxStore, MailboxStoreError } from '../src/MailboxStore'
 import { layer } from '../src/redis'
-import { readyKey, readyKeys, recordKey } from '../src/redis/keys'
+import { deliveryLocatorKey, readyKey, readyKeys, recordKey } from '../src/redis/keys'
 import { encodeKey, encodeSnapshot, mailboxCodecCases, redisCommands } from './AdapterCommands'
 
 it.effect(
@@ -34,12 +34,12 @@ it.effect(
 				)
 				const script = yield* Queue.take(fake.commands)
 				assert.strictEqual(script.command, 'EVAL')
-				assert.strictEqual(script.args[1], String(key.length + 2))
-				const keys = script.args.slice(2, key.length + 4)
-				assert.deepStrictEqual(keys, [recordKey({ key }), ...readyKeys({ key })])
+				assert.strictEqual(script.args[1], String(key.length + 3))
+				const keys = script.args.slice(2, key.length + 5)
+				assert.deepStrictEqual(keys, [recordKey({ key }), ...readyKeys({ key }), deliveryLocatorKey])
 				assert.ok(keys.every((entry) => entry.match(/\{([^}]+)\}/u)?.[1] === 'mailboxes'))
 				assert.ok(keys.includes(readyKey({ prefix: mailboxPrefix(address) })))
-				const args = script.args.slice(key.length + 4)
+				const args = script.args.slice(key.length + 5)
 				assert.strictEqual(args[0], '')
 				assert.strictEqual(args[1], '0')
 				assert.deepStrictEqual(

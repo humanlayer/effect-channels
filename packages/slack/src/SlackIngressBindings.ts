@@ -4,7 +4,7 @@ import {
 	DeliveryQueue,
 	parseMailboxAddress,
 	type DeliveryQueueError,
-	DeliveryOutputError,
+	type DeliveryOutputError,
 	HandlerFailure,
 	IngressAttributionStore,
 	DeliveryInterruption,
@@ -130,20 +130,14 @@ export type SlackResolvedDelivery =
 
 export const resolveSlackDelivery = (
 	delivery: ResolvedDelivery,
-): Effect.Effect<SlackResolvedDelivery, DeliveryDefinitionMismatch | Schema.SchemaError> => {
-	switch (delivery.definition) {
-		case updatedDefinition.name:
-			return resolveDeliveryFor(delivery, updatedDefinition)
-		case deletedDefinition.name:
-			return resolveDeliveryFor(delivery, deletedDefinition)
-		case reactionDefinition.name:
-			return resolveDeliveryFor(delivery, reactionDefinition)
-		case stoppedDefinition.name:
-			return resolveDeliveryFor(delivery, stoppedDefinition)
-		default:
-			return resolveDeliveryFor(delivery, messageDefinition)
-	}
-}
+): Effect.Effect<SlackResolvedDelivery, DeliveryDefinitionMismatch | Schema.SchemaError> =>
+	Match.value(delivery.definition).pipe(
+		Match.when(updatedDefinition.name, () => resolveDeliveryFor(delivery, updatedDefinition)),
+		Match.when(deletedDefinition.name, () => resolveDeliveryFor(delivery, deletedDefinition)),
+		Match.when(reactionDefinition.name, () => resolveDeliveryFor(delivery, reactionDefinition)),
+		Match.when(stoppedDefinition.name, () => resolveDeliveryFor(delivery, stoppedDefinition)),
+		Match.orElse(() => resolveDeliveryFor(delivery, messageDefinition)),
+	)
 
 const mapIngressError =
 	(operation: string) =>
@@ -313,7 +307,7 @@ const makeBindings = <E, R>(options: SlackIngressOptions<E, R>) =>
 			return yield* SlackIngressError.make({ operation: 'duplicate_or_empty_handler_id' })
 		}
 		const handlerContext = yield* Effect.context<R>()
-		const configuredSlack = yield* Effect.serviceOption(Slack)
+		const slack = yield* Slack
 		const configuredOrganizations = yield* Effect.serviceOption(SlackOrganizations)
 		const organizations = Option.getOrElse(configuredOrganizations, () =>
 			SlackOrganizations.of({
@@ -349,14 +343,7 @@ const makeBindings = <E, R>(options: SlackIngressOptions<E, R>) =>
 							.pipe(Effect.scoped, Effect.provide(handlerContext))
 					}).pipe(handlerFailure),
 				deliverFinalMessage: (operation) =>
-					Option.match(configuredSlack, {
-						onNone: () =>
-							Effect.fail(
-								DeliveryOutputError.make({ retryable: false, safeCode: 'provider_unavailable' }),
-							),
-						onSome: (slack) =>
-							deliverSlackFinalMessage(operation).pipe(Effect.provideService(Slack, slack)),
-					}),
+					deliverSlackFinalMessage(operation).pipe(Effect.provideService(Slack, slack)),
 			})
 			return delivery
 		}
@@ -408,14 +395,7 @@ const makeBindings = <E, R>(options: SlackIngressOptions<E, R>) =>
 						Effect.withSpan('slack.ingress.execute_stopped'),
 					),
 				deliverFinalMessage: (operation) =>
-					Option.match(configuredSlack, {
-						onNone: () =>
-							Effect.fail(
-								DeliveryOutputError.make({ retryable: false, safeCode: 'provider_unavailable' }),
-							),
-						onSome: (slack) =>
-							deliverSlackFinalMessage(operation).pipe(Effect.provideService(Slack, slack)),
-					}),
+					deliverSlackFinalMessage(operation).pipe(Effect.provideService(Slack, slack)),
 			}),
 		)
 		const allBindings = [...messageBindings, ...updated, ...deleted, ...reactions, ...stopped]

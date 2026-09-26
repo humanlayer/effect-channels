@@ -15,7 +15,7 @@ export const commit = Redis.script(
 	(input: CommitScriptInput) => [
 		recordKey(input),
 		...readyKeys(input),
-		...(input.deliveryIds.length === 0 ? [] : [deliveryLocatorKey]),
+		deliveryLocatorKey,
 		input.expectedRevision === null ? '' : String(input.expectedRevision),
 		String(input.revision),
 		input.json,
@@ -24,7 +24,7 @@ export const commit = Redis.script(
 		JSON.stringify(input.deliveryIds),
 	],
 	{
-		numberOfKeys: (input) => input.key.length + 2 + (input.deliveryIds.length === 0 ? 0 : 1),
+		numberOfKeys: (input) => input.key.length + 3,
 		lua: `
 local record_type = redis.call('TYPE', KEYS[1]).ok
 if record_type ~= 'none' and record_type ~= 'hash' then
@@ -39,9 +39,8 @@ if ARGV[1] == '' then
 elseif current ~= ARGV[1] then
   return 0
 end
-local ready_end = #KEYS
+local ready_end = #KEYS - 1
 if ARGV[6] ~= '[]' then
-  ready_end = #KEYS - 1
   local locator_type = redis.call('TYPE', KEYS[#KEYS]).ok
   if locator_type ~= 'none' and locator_type ~= 'hash' then
     return redis.error_reply('DELIVERY_LOCATOR_TYPE')

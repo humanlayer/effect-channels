@@ -7,11 +7,10 @@
  * that fired a moment early. The handler therefore checks the alarm after every pass.
  */
 import { MailboxProcessing } from '@humanlayer/channels-delivery-next'
-import * as Cloudflare from 'alchemy/Cloudflare'
-import { RuntimeContext } from 'alchemy/RuntimeContext'
 import { Cause, Clock, Effect, Predicate, Schema } from 'effect'
 
 import { DurableMailboxState, mailboxStateKey } from './MailboxState'
+import { MailboxStorage } from './MailboxStorage'
 
 export type MailboxAlarmHandlerOptions = {
 	/** How soon to look again at a mailbox that was due but could not be worked on. */
@@ -22,21 +21,20 @@ export type MailboxAlarmHandlerOptions = {
 export const makeMailboxAlarmHandler = (options: MailboxAlarmHandlerOptions) =>
 	Effect.gen(function* () {
 		const processing = yield* MailboxProcessing
-		const durableObject = yield* Cloudflare.DurableObjectState
-		const runtimeContext = yield* RuntimeContext
+		const storage = yield* MailboxStorage
 
 		const rearmWhenDueWithoutAlarm = Effect.gen(function* () {
-			const stored = yield* durableObject.storage.get(mailboxStateKey)
+			const stored = yield* storage.get(mailboxStateKey)
 			if (Predicate.isUndefined(stored)) return
 			const { readyAt } = yield* Schema.decodeUnknownEffect(DurableMailboxState)(stored)
 			if (Predicate.isNull(readyAt)) return
-			if (Predicate.isNotNull(yield* durableObject.storage.getAlarm())) return
+			if (Predicate.isNotNull(yield* storage.getAlarm)) return
 			const now = yield* Clock.currentTimeMillis
-			yield* durableObject.storage.setAlarm(Math.max(readyAt, now + options.rearmAfterMs))
+			yield* storage.setAlarm(Math.max(readyAt, now + options.rearmAfterMs))
 			yield* Effect.logWarning('Mailbox was due with no alarm set; alarm put back').pipe(
 				Effect.annotateLogs({ ready_at: readyAt }),
 			)
-		}).pipe(Effect.provideService(RuntimeContext, runtimeContext))
+		})
 
 		return Effect.fn('delivery.cloudflare.mailbox_alarm')(function* () {
 			yield* processing.processReady.pipe(

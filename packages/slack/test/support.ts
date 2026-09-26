@@ -3,7 +3,7 @@ import { Clock, ConfigProvider, Effect, Layer, Queue, Redacted, Schema } from 'e
 import { TestClock } from 'effect/testing'
 import { HttpClient, HttpClientRequest, HttpClientResponse, HttpRouter } from 'effect/unstable/http'
 
-import { ChannelInfo, MessagePage, SlackIngress as Ingress } from '../src/index'
+import { ChannelInfo, MessagePage, Slack, SlackCapabilities, SlackIngress as Ingress } from '../src/index'
 import { SlackChannelId, SlackEventCallback, SlackMessageTs, SlackTeamId } from '../src/Schema'
 import { SlackClient } from '../src/SlackClient'
 import { SlackConnectionStore } from '../src/SlackConnectionStore'
@@ -39,6 +39,9 @@ export const testConnectionStoreLayer = Layer.succeed(
 		remove: () => Effect.die(new Error('unexpected test connection remove')),
 	}),
 )
+
+/** A Slack service for tests that never call Slack. */
+export const unusedSlack = Layer.mock(Slack, { capabilities: SlackCapabilities })
 
 export const unimplemented = (operation: string): Effect.Effect<never> =>
 	Effect.die(new Error(operation + ' is intentionally unimplemented'))

@@ -25,7 +25,7 @@ const deliveryRuntime = () => {
 	return layerMailboxStoreServices.pipe(Layer.provide(storage))
 }
 import { nativeMailbox, nativeMessage, nativePolicy, nativeRunner, testAuthor, testMessage } from './nativeSupport'
-import { stubSlackClientLayer, testRootTs, testTeamId } from './support'
+import { stubSlackClientLayer, testRootTs, testTeamId, unusedSlack } from './support'
 
 it.effect('enriches an update and its previous message with only the author dependency graph', () =>
 	Effect.gen(function* () {
@@ -126,7 +126,7 @@ it.effect('fans out and dedupes with real bindings and only admission dependenci
 						})),
 						onSubscribedMessage: [{ id: 'subscribed', handler: () => Effect.die('wrong route') }],
 					},
-				}),
+				}).pipe(Layer.provide(unusedSlack)),
 				SlackSubscriptions.layerMemory(),
 				deliveryRuntime(),
 			),
@@ -174,7 +174,7 @@ it.effect('pins Stop cancellation and its barrier to the same real DM targets wi
 						onSubscribedMessage: [{ id: 'subscribed', handler: () => Effect.void }],
 						onConversationStopped: [{ id: 'stop', handler: () => Effect.void }],
 					},
-				}),
+				}).pipe(Layer.provide(unusedSlack)),
 				SlackSubscriptions.layerMemory(),
 				deliveryRuntime(),
 			),
@@ -214,7 +214,7 @@ it.effect('real operations wait for every fan-out finalizer before invoking the 
 					},
 				],
 			},
-		})
+		}).pipe(Layer.provide(unusedSlack))
 		yield* Effect.gen(function* () {
 			const event = nativeMessage('6')
 			const stop = NormalizedConversationStopped.make({
@@ -313,7 +313,7 @@ for (const empty of [true, false]) {
 											},
 										],
 							},
-						}),
+						}).pipe(Layer.provide(unusedSlack)),
 						SlackSubscriptions.layerMemory(),
 						deliveryRuntime(),
 						SlackAuthors.layer.pipe(

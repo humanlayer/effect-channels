@@ -1,5 +1,5 @@
 import { describe, it } from '@effect/vitest'
-import { Effect, Layer, Redacted, Schema } from 'effect'
+import { Effect, Layer, Match, Redacted, Schema } from 'effect'
 import { HttpClient, HttpClientResponse } from 'effect/unstable/http'
 
 import { CreateAttachmentVariables } from '../src/api/CreateAttachment'
@@ -234,11 +234,10 @@ describe('Linear GraphQL procedures', () => {
 					const operation = /(?:query|mutation) (Linear\w+)/.exec(body.query)?.[1]
 					if (operation === undefined) return yield* Effect.die('missing operation name')
 					seen.push(operation)
-					switch (operation) {
-						case 'LinearUser':
+					const response = yield* Match.value(operation).pipe(
+						Match.when('LinearUser', () => {
 							expect(body.variables).toEqual({ id: 'user-1', teamId: 'team-1' })
-							return HttpClientResponse.fromWeb(
-								request,
+							return Effect.succeed(
 								Response.json({
 									data: {
 										user: {
@@ -254,10 +253,10 @@ describe('Linear GraphQL procedures', () => {
 									},
 								}),
 							)
-						case 'LinearIssueComments':
+						}),
+						Match.when('LinearIssueComments', () => {
 							expect(body.variables).toEqual({ id: issue.issueId })
-							return HttpClientResponse.fromWeb(
-								request,
+							return Effect.succeed(
 								Response.json({
 									data: {
 										issue: {
@@ -269,9 +268,9 @@ describe('Linear GraphQL procedures', () => {
 									},
 								}),
 							)
-						case 'LinearIssueAttachments':
-							return HttpClientResponse.fromWeb(
-								request,
+						}),
+						Match.when('LinearIssueAttachments', () =>
+							Effect.succeed(
 								Response.json({
 									data: {
 										issue: {
@@ -289,13 +288,13 @@ describe('Linear GraphQL procedures', () => {
 										},
 									},
 								}),
-							)
-						case 'LinearCommentCreate':
+							),
+						),
+						Match.when('LinearCommentCreate', () => {
 							expect(body.variables).toEqual({
 								input: { issueId: issue.issueId, body: 'reply', parentId: 'comment-1' },
 							})
-							return HttpClientResponse.fromWeb(
-								request,
+							return Effect.succeed(
 								Response.json({
 									data: {
 										commentCreate: {
@@ -310,10 +309,10 @@ describe('Linear GraphQL procedures', () => {
 									},
 								}),
 							)
-						case 'LinearCommentUpdate':
+						}),
+						Match.when('LinearCommentUpdate', () => {
 							expect(body.variables).toEqual({ id: 'comment-2', input: { body: 'edited' } })
-							return HttpClientResponse.fromWeb(
-								request,
+							return Effect.succeed(
 								Response.json({
 									data: {
 										commentUpdate: {
@@ -328,15 +327,13 @@ describe('Linear GraphQL procedures', () => {
 									},
 								}),
 							)
-						case 'LinearCommentDelete':
-							return HttpClientResponse.fromWeb(
-								request,
-								Response.json({ data: { commentDelete: { success: true } } }),
-							)
-						case 'LinearReactionCreate':
+						}),
+						Match.when('LinearCommentDelete', () =>
+							Effect.succeed(Response.json({ data: { commentDelete: { success: true } } })),
+						),
+						Match.when('LinearReactionCreate', () => {
 							expect(body.variables).toEqual({ input: { emoji: 'eyes', commentId: 'comment-2' } })
-							return HttpClientResponse.fromWeb(
-								request,
+							return Effect.succeed(
 								Response.json({
 									data: {
 										reactionCreate: {
@@ -346,17 +343,15 @@ describe('Linear GraphQL procedures', () => {
 									},
 								}),
 							)
-						case 'LinearReactionDelete':
-							return HttpClientResponse.fromWeb(
-								request,
-								Response.json({ data: { reactionDelete: { success: true } } }),
-							)
-						case 'LinearAttachmentCreate':
+						}),
+						Match.when('LinearReactionDelete', () =>
+							Effect.succeed(Response.json({ data: { reactionDelete: { success: true } } })),
+						),
+						Match.when('LinearAttachmentCreate', () => {
 							expect(body.variables).toEqual({
 								input: { issueId: issue.issueId, url: 'https://example.com', title: 'Card' },
 							})
-							return HttpClientResponse.fromWeb(
-								request,
+							return Effect.succeed(
 								Response.json({
 									data: {
 										attachmentCreate: {
@@ -371,14 +366,13 @@ describe('Linear GraphQL procedures', () => {
 									},
 								}),
 							)
-						case 'LinearAttachmentDelete':
-							return HttpClientResponse.fromWeb(
-								request,
-								Response.json({ data: { attachmentDelete: { success: true } } }),
-							)
-						default:
-							return yield* Effect.die(`unexpected ${operation}`)
-					}
+						}),
+						Match.when('LinearAttachmentDelete', () =>
+							Effect.succeed(Response.json({ data: { attachmentDelete: { success: true } } })),
+						),
+						Match.orElse(() => Effect.die(`unexpected ${operation}`)),
+					)
+					return HttpClientResponse.fromWeb(request, response)
 				}),
 			)
 			const layer = procedureLayer(http)

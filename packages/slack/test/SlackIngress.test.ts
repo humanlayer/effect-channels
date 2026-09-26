@@ -22,6 +22,7 @@ import {
 	signSlackBody,
 	testCredentialsLayer,
 	testRouteSlackClientLayer,
+	unusedSlack,
 } from './support'
 
 const routeLayer = SlackRoutes.layerMounted('/api/v1').pipe(
@@ -53,6 +54,7 @@ it.effect('mounts webhook admission with addressed services and no mailbox proce
 				policy: nativePolicy,
 				handlers: {},
 			}).pipe(
+				Layer.provide(unusedSlack),
 				Layer.provide(
 					Layer.mergeAll(
 						Layer.mock(DeliveryQueue, {}),

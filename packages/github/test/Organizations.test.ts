@@ -18,7 +18,7 @@ import {
 	type GitHubOrganizationLookup,
 } from '../src/index'
 import { layer as memory } from '../src/memory'
-import { event, policy } from './fixtures'
+import { event, policy, unusedGitHub } from './fixtures'
 
 const lookupBoundary: Context.Key<
 	GitHubOrganizations,
@@ -87,7 +87,12 @@ it.effect('custom GitHub lookup results are decoded before writes and failures l
 						namespace: 'invalid',
 						policy,
 						handlers: [{ id: 'reply', onCreation: () => Effect.die('Unexpected handler') }],
-					}).pipe(Layer.provide(storage), Layer.provide(lookup), Layer.provide(logger)),
+					}).pipe(
+						Layer.provide(storage),
+						Layer.provide(lookup),
+						Layer.provide(unusedGitHub),
+						Layer.provide(logger),
+					),
 				),
 			)
 		}
@@ -111,7 +116,7 @@ for (const organizationId of ['default', 'fixed']) {
 						onCreation: (_, context) => Queue.offer(observed, context.organizationId).pipe(Effect.asVoid),
 					},
 				],
-			}).pipe(Layer.provideMerge(memory()))
+			}).pipe(Layer.provide(unusedGitHub), Layer.provideMerge(memory()))
 			const environment = yield* Layer.build(
 				organizationId === 'default'
 					? ingressLayer
@@ -181,6 +186,7 @@ for (const callback of ['onCreation', 'onMention'] as const) {
 				GitHubIngress.layer({ namespace: 'org', policy, ...registration }).pipe(
 					Layer.provide(dependencies),
 					Layer.provide(organizations),
+					Layer.provide(unusedGitHub),
 				)
 			const accept = Effect.flatMap(GitHubIngress, (ingress) =>
 				ingress.acceptActivity({ event, mentioned: true, own: false }),
@@ -221,7 +227,7 @@ it.effect('overlapping installations in one acquired ingress retain isolated han
 							).pipe(Effect.asVoid),
 					},
 				],
-			}).pipe(Layer.provideMerge(memory()), Layer.provide(organizations)),
+			}).pipe(Layer.provideMerge(memory()), Layer.provide(organizations), Layer.provide(unusedGitHub)),
 		)
 		const ingress = Context.get(environment, GitHubIngress)
 		const other = {

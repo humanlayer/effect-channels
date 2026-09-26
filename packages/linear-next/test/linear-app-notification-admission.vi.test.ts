@@ -23,8 +23,8 @@ describe('Linear app notification admission', () => {
 	it.effect('admits the agent-guide shape without webhook metadata or omitted nullable issue fields', ({ expect }) =>
 		Effect.gen(function* () {
 			const fixture = appUserNotificationPayloads[0]
-			expect('webhookId' in fixture).toBe(false)
-			expect('webhookTimestamp' in fixture).toBe(false)
+			expect(fixture).not.toHaveProperty('webhookId')
+			expect(fixture).not.toHaveProperty('webhookTimestamp')
 			const { description: _description, ...issue } = fixture.notification.issue
 			const payload = {
 				...fixture,

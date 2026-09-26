@@ -1,6 +1,7 @@
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto'
 import { it } from '@effect/vitest'
 import {
+	type Channels,
 	DeliveryAdmission,
 	ProviderEventHandled,
 	ProviderWebhookEvent,
@@ -8,8 +9,7 @@ import {
 	type ChannelsProvider,
 	type DeliveryAdmissionBatch,
 } from '@humanlayer/channels-delivery-next'
-import { RuntimeContext } from 'alchemy/RuntimeContext'
-import { Effect, Layer, Ref } from 'effect'
+import { Context, Effect, Layer, Ref } from 'effect'
 import { HttpServerRequest, HttpServerResponse } from 'effect/unstable/http'
 
 import { ChannelsCloudflare } from '../src'
@@ -45,20 +45,25 @@ const makeExampleProvider = (batchSizes: Ref.Ref<ReadonlyArray<number>>): Channe
 		}),
 })
 
-const makeBot = (batchSizes: Ref.Ref<ReadonlyArray<number>>) =>
-	ChannelsCloudflare.make({
-		namespace: 'channels-cloudflare-test',
-		basePath: '/api/channels',
-		providers: [makeExampleProvider(batchSizes)],
-		eventProcessing: { concurrency: 1, leaseMs: 30_000 },
-	})
+const makeOptions = (
+	batchSizes: Ref.Ref<ReadonlyArray<number>>,
+): Channels.Options<ReadonlyArray<{ readonly build: never; readonly process: never }>> => ({
+	namespace: 'channels-cloudflare-test',
+	basePath: '/api/channels',
+	providers: [makeExampleProvider(batchSizes)],
+	eventProcessing: { concurrency: 1, leaseMs: 30_000 },
+})
 
 it.effect('ChannelsCloudflare mailbox: deliver sets the alarm and the alarm runs the provider callback', ({ expect }) =>
 	Effect.gen(function* () {
 		const batchSizes = yield* Ref.make<ReadonlyArray<number>>([])
-		const bot = makeBot(batchSizes)
-		const mailbox = yield* bot.mailbox({ rearmAfterMs: 1_000 })
-		const alarm = yield* DurableObjectFakeAlarm
+		const durableObject = yield* Layer.build(DurableObjectFake)
+		const mailbox = yield* ChannelsCloudflare.makeMailbox(
+			makeOptions(batchSizes),
+			{ rearmAfterMs: 1_000 },
+			Layer.succeedContext(durableObject),
+		)
+		const alarm = Context.get(durableObject, DurableObjectFakeAlarm)
 
 		const receipt = yield* mailbox.deliver(admission('channels-cloudflare-test'))
 		expect(receipt).toEqual({ accepted: true })
@@ -68,7 +73,7 @@ it.effect('ChannelsCloudflare mailbox: deliver sets the alarm and the alarm runs
 
 		expect(yield* Ref.get(batchSizes)).toEqual([1])
 		expect(yield* alarm.scheduledAt).toEqual(null)
-	}).pipe(Effect.provide(Layer.merge(DurableObjectFake, RuntimeContext.phantom))),
+	}),
 )
 
 it.effect(
@@ -76,7 +81,7 @@ it.effect(
 	({ expect }) =>
 		Effect.gen(function* () {
 			const delivered = yield* Ref.make<ReadonlyArray<string>>([])
-			const bot = makeBot(yield* Ref.make<ReadonlyArray<number>>([]))
+			const bot = ChannelsCloudflare.make(makeOptions(yield* Ref.make<ReadonlyArray<number>>([])))
 			const fetch = yield* bot
 				.ingress({
 					getByName: (mailboxKey) => ({

@@ -60,7 +60,7 @@ export type DeliveryApiOptionsWithContext<C, RC, RM> = Omit<DeliveryApiOptions<C
 }
 
 const makeEndpoint = <C, RC, RM>(
-	options: DeliveryApiOptions<C, RC, RM>,
+	options: DeliveryApiOptionsWithContext<C, RC, RM>,
 	control: DeliveryControlService,
 	runtime: Context.Context<RC | RM>,
 	outcome: DeliveryTerminalOutcome,
@@ -76,24 +76,16 @@ const makeEndpoint = <C, RC, RM>(
 		readonly request: HttpServerRequest.HttpServerRequest
 	}) {
 		const delivery = yield* control.resolve({ deliveryId: request.params.deliveryId })
-		const context =
-			options.context === undefined
-				? null
-				: yield* options.context({ request: request.request, delivery }).pipe(Effect.provide(runtime))
+		const context = yield* options.context({ request: request.request, delivery }).pipe(Effect.provide(runtime))
 		const input = { deliveryId: request.params.deliveryId, ...request.payload }
 		const next = yield* Effect.cached(control.finish({ ...input, outcome }))
 		if (middleware === undefined) return yield* next
-		// SAFETY: the overload fixes C to null without context; otherwise this value came from the context callback.
-		return yield* middleware({
-			input,
-			request: request.request,
-			delivery,
-			context: context as C,
-			next,
-		}).pipe(Effect.provide(runtime))
+		return yield* middleware({ input, request: request.request, delivery, context, next }).pipe(
+			Effect.provide(runtime),
+		)
 	})
 
-const makeDeliveryApiServerLayer = <C = null, RC = never, RM = never>(options: DeliveryApiOptions<C, RC, RM> = {}) => {
+const makeDeliveryApiServerLayer = <C, RC, RM>(options: DeliveryApiOptionsWithContext<C, RC, RM>) => {
 	const layer =
 		options.mountPath === undefined
 			? HttpApiBuilder.group(DeliveryContract, 'deliveries', (handlers) =>
@@ -143,6 +135,10 @@ export function deliveryApiServerLayer<RM = never>(
 export function deliveryApiServerLayer<C, RC = never, RM = never>(
 	options: DeliveryApiOptionsWithContext<C, RC, RM>,
 ): ReturnType<typeof makeDeliveryApiServerLayer<C, RC, RM>>
-export function deliveryApiServerLayer<C = null, RC = never, RM = never>(options: DeliveryApiOptions<C, RC, RM> = {}) {
-	return makeDeliveryApiServerLayer(options)
+export function deliveryApiServerLayer<C, RC, RM>(
+	options: DeliveryApiOptionsWithoutContext<RM> | DeliveryApiOptionsWithContext<C, RC, RM> = {},
+) {
+	return options.context === undefined
+		? makeDeliveryApiServerLayer<null, never, RM>({ ...options, context: () => Effect.succeed(null) })
+		: makeDeliveryApiServerLayer(options)
 }

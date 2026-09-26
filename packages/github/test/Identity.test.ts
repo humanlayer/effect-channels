@@ -12,7 +12,7 @@ import {
 	GitHubIngressError,
 	activityEventDefinition,
 } from '../src/index'
-import { event, policy, user } from './fixtures'
+import { event, policy, user, unusedGitHub } from './fixtures'
 
 it.effect('comment updates reject mismatched native identities before issuing a mutation', () =>
 	Effect.gen(function* () {
@@ -101,7 +101,7 @@ it.effect('rejects contradictory persisted event identities before mailbox admis
 				namespace: 'identity',
 				policy,
 				handlers: [{ id: 'receive', onCreation: () => Effect.die('Invalid events must not execute') }],
-			}).pipe(Layer.provideMerge(memory({ maxMailboxes: 10 }))),
+			}).pipe(Layer.provide(unusedGitHub), Layer.provideMerge(memory({ maxMailboxes: 10 }))),
 		),
 	),
 )

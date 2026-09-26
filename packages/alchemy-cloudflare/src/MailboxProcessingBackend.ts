@@ -13,11 +13,10 @@ import {
 	type RecordProcessingAttemptResult,
 	type RenewMailboxClaim,
 } from '@humanlayer/channels-delivery-next'
-import * as Cloudflare from 'alchemy/Cloudflare'
-import { RuntimeContext } from 'alchemy/RuntimeContext'
 import { Clock, Effect, Exit, Layer, Match, Option, Predicate, Random, Schema } from 'effect'
 
 import { DurableMailboxState, mailboxStateKey, type WaitingAdmission } from './MailboxState'
+import { MailboxStorage } from './MailboxStorage'
 
 const makeClaimId = Effect.gen(function* () {
 	const now = yield* Clock.currentTimeMillis
@@ -196,8 +195,7 @@ const recordTransition = (
  * so the host's alarm handler wakes processing exactly when the mailbox is next due.
  */
 export const makeMailboxProcessingBackendFromDurableObjectStorage = Effect.gen(function* () {
-	const durableObject = yield* Cloudflare.DurableObjectState
-	const runtimeContext = yield* RuntimeContext
+	const storage = yield* MailboxStorage
 
 	const decodeStored = Schema.decodeUnknownEffect(DurableMailboxState)
 
@@ -209,7 +207,7 @@ export const makeMailboxProcessingBackendFromDurableObjectStorage = Effect.gen(f
 		readonly whenNothingStored: A
 		readonly transition: (current: DurableMailboxState) => MailboxTransition<A>
 	}) =>
-		durableObject.storage
+		storage
 			.transaction((transaction) =>
 				Effect.gen(function* () {
 					const stored = yield* transaction.get(mailboxStateKey)
@@ -219,13 +217,13 @@ export const makeMailboxProcessingBackendFromDurableObjectStorage = Effect.gen(f
 					const { result, next } = input.transition(decoded.value)
 					if (Option.isSome(next)) {
 						yield* transaction.put(mailboxStateKey, next.value)
-						if (Predicate.isNull(next.value.readyAt)) yield* transaction.deleteAlarm()
+						if (Predicate.isNull(next.value.readyAt)) yield* transaction.deleteAlarm
 						else yield* transaction.setAlarm(next.value.readyAt)
 					}
 					return Exit.succeed(result)
 				}),
 			)
-			.pipe(Effect.flatten, Effect.provideService(RuntimeContext, runtimeContext))
+			.pipe(Effect.flatten)
 
 	const claimLostUnless = (owned: boolean, claim: { readonly mailboxKey: string; readonly claimId: string }) =>
 		owned
@@ -235,11 +233,10 @@ export const makeMailboxProcessingBackendFromDurableObjectStorage = Effect.gen(f
 	return MailboxProcessingBackend.of({
 		findReadyMailboxes: Effect.gen(function* () {
 			const now = yield* Clock.currentTimeMillis
-			const stored = yield* durableObject.storage.get(mailboxStateKey)
+			const stored = yield* storage.get(mailboxStateKey)
 			if (Predicate.isUndefined(stored)) return []
 			return describeReadyMailbox(yield* decodeStored(stored), now)
 		}).pipe(
-			Effect.provideService(RuntimeContext, runtimeContext),
 			narrowToUnavailable('Cloudflare mailbox look failed'),
 			Effect.withSpan('delivery.cloudflare.find_ready_mailboxes'),
 		),

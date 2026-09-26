@@ -53,12 +53,10 @@ export const subscriptionStore = (options: GitHubSubscriptionsMemoryOptions = {}
 						if (Option.isSome(existing)) return existing.value
 						if (MutableHashMap.size(routes) >= maxRoutes)
 							return yield* GitHubSubscriptionError.make({ reason: 'capacity' })
-						const targets = [
-							...new Set([
-								...value.direct,
-								...(subscriptions.has(subscriptionKey(value)) ? value.followed : []),
-							]),
-						]
+						const recipients = new Set(value.direct)
+						if (subscriptions.has(subscriptionKey(value)))
+							for (const target of value.followed) recipients.add(target)
+						const targets = [...recipients]
 						const route = GitHubSubscriptionRoute.make({ version: 1, targets })
 						MutableHashMap.set(routes, key, route)
 						return route

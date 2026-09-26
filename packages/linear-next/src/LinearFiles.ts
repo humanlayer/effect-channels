@@ -1,4 +1,4 @@
-import { Effect, Predicate, Schema, type Stream } from 'effect'
+import { Effect, Match, Predicate, Schema, type Stream } from 'effect'
 import type { Nodes } from 'mdast'
 import { fromMarkdown } from 'mdast-util-from-markdown'
 import { gfmFromMarkdown } from 'mdast-util-gfm'
@@ -156,17 +156,18 @@ type LinearFileCandidate = {
 	readonly label: string | null
 }
 
-const textOf = (node: Nodes): string => {
-	switch (node.type) {
-		case 'text':
-		case 'inlineCode':
-			return node.value
-		case 'image':
-			return node.alt ?? ''
-		default:
-			return 'children' in node ? node.children.map(textOf).join('') : ''
-	}
-}
+const childrenOf = (node: Nodes): ReadonlyArray<Nodes> =>
+	Match.value<Nodes>(node).pipe(
+		Match.when({ children: Match.defined }, (parent) => parent.children),
+		Match.orElse(() => []),
+	)
+
+const textOf = (node: Nodes): string =>
+	Match.value(node).pipe(
+		Match.discriminator('type')('text', 'inlineCode', (literal) => literal.value),
+		Match.discriminator('type')('image', (image) => image.alt ?? ''),
+		Match.orElse((other) => childrenOf(other).map(textOf).join('')),
+	)
 
 const safeLabel = (label: string | null | undefined, url: string) => {
 	const trimmed = label?.trim() ?? ''
@@ -176,31 +177,27 @@ const safeLabel = (label: string | null | undefined, url: string) => {
 
 const collectDefinitions = (node: Nodes, definitions: Map<string, string>) => {
 	if (node.type === 'definition' && !definitions.has(node.identifier)) definitions.set(node.identifier, node.url)
-	if ('children' in node) for (const child of node.children) collectDefinitions(child, definitions)
+	for (const child of childrenOf(node)) collectDefinitions(child, definitions)
 }
+
+const candidatesOf = (node: Nodes, definitions: ReadonlyMap<string, string>): ReadonlyArray<LinearFileCandidate> =>
+	Match.value(node).pipe(
+		Match.discriminator('type')('link', (link) => [{ url: link.url, label: safeLabel(textOf(link), link.url) }]),
+		Match.discriminator('type')('image', (image) => [{ url: image.url, label: safeLabel(image.alt, image.url) }]),
+		Match.discriminator('type')('linkReference', 'imageReference', (reference) => {
+			const url = definitions.get(reference.identifier)
+			return Predicate.isUndefined(url) ? [] : [{ url, label: safeLabel(textOf(reference), url) }]
+		}),
+		Match.orElse(() => []),
+	)
 
 const collectCandidates = (
 	node: Nodes,
 	definitions: ReadonlyMap<string, string>,
 	candidates: Array<LinearFileCandidate>,
 ) => {
-	switch (node.type) {
-		case 'link':
-			candidates.push({ url: node.url, label: safeLabel(textOf(node), node.url) })
-			break
-		case 'image':
-			candidates.push({ url: node.url, label: safeLabel(node.alt, node.url) })
-			break
-		case 'linkReference':
-		case 'imageReference': {
-			const url = definitions.get(node.identifier)
-			if (Predicate.isNotUndefined(url)) candidates.push({ url, label: safeLabel(textOf(node), url) })
-			break
-		}
-		default:
-			break
-	}
-	if ('children' in node) for (const child of node.children) collectCandidates(child, definitions, candidates)
+	candidates.push(...candidatesOf(node, definitions))
+	for (const child of childrenOf(node)) collectCandidates(child, definitions, candidates)
 }
 
 export class LinearFile extends Schema.TaggedClass<LinearFile>()('LinearFile', {

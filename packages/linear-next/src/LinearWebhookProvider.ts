@@ -20,6 +20,7 @@ import {
 	SchemaIssue,
 	type StandardSchema,
 } from 'effect'
+import * as Headers from 'effect/unstable/http/Headers'
 
 import {
 	linearAgentSessionResourceId,
@@ -97,10 +98,10 @@ const logInvalidHeaders = (input: RawWebhookInput) =>
 			provider: 'linear',
 			decode_stage: 'headers',
 			body_byte_length: input.body.byteLength,
-			has_linear_delivery: 'linear-delivery' in input.headers,
-			has_linear_event: 'linear-event' in input.headers,
-			has_linear_signature: 'linear-signature' in input.headers,
-			has_linear_timestamp: 'linear-timestamp' in input.headers,
+			has_linear_delivery: Headers.has(input.headers, 'linear-delivery'),
+			has_linear_event: Headers.has(input.headers, 'linear-event'),
+			has_linear_signature: Headers.has(input.headers, 'linear-signature'),
+			has_linear_timestamp: Headers.has(input.headers, 'linear-timestamp'),
 		}),
 	)
 

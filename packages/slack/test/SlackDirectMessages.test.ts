@@ -4,6 +4,7 @@ import { Effect, Fiber, Layer, Option, Queue, Schema } from 'effect'
 
 import { SlackApiError } from '../src/Errors'
 import {
+	DirectMessageOpenFailed,
 	IdempotencyKey,
 	SlackIngress,
 	SlackSubscriptions,
@@ -106,9 +107,16 @@ it.effect('reports openDM failures without fabricating a ThreadId', () =>
 				},
 			}),
 		)
-		assert.strictEqual(error.tenant, 'T_TEST')
-		assert.strictEqual(error.userId, 'U_HUMAN')
-		assert.strictEqual('threadId' in error, false)
+		assert.deepStrictEqual(
+			error,
+			DirectMessageOpenFailed.make({
+				provider: ProviderName.make('slack'),
+				tenant: TenantId.make('T_TEST'),
+				userId: UserId.make('U_HUMAN'),
+				message: 'Slack API rejected opening the DM',
+				retryability: 'non_retryable',
+			}),
+		)
 	}).pipe(
 		Effect.provide(
 			Slack.layer.pipe(

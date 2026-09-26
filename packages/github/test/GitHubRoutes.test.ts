@@ -3,7 +3,14 @@ import { DeliveryQueue, IngressAttributionStore } from '@humanlayer/channels-del
 import { Effect, Layer, Redacted } from 'effect'
 import { HttpRouter } from 'effect/unstable/http'
 
-import { GitHubCredentials, GitHubCrypto, GitHubIngress, GitHubRoutes, GitHubSubscriptionStore } from '../src/index'
+import {
+	GitHub,
+	GitHubCredentials,
+	GitHubCrypto,
+	GitHubIngress,
+	GitHubRoutes,
+	GitHubSubscriptionStore,
+} from '../src/index'
 
 it.effect('reports relative and application-mounted webhook paths', () =>
 	Effect.sync(() => {
@@ -40,6 +47,7 @@ it.effect('mounts webhook admission with addressed services and no mailbox proce
 						Layer.mock(DeliveryQueue, {}),
 						Layer.mock(IngressAttributionStore, {}),
 						Layer.mock(GitHubSubscriptionStore, {}),
+						Layer.mock(GitHub, {}),
 					),
 				),
 			)

@@ -1,4 +1,4 @@
-import { Effect, Schema } from 'effect'
+import { Effect, Match, Schema } from 'effect'
 import * as HttpClientRequest from 'effect/unstable/http/HttpClientRequest'
 
 import type { LinearApiError, LinearApiOperation } from '../LinearApi'
@@ -122,19 +122,14 @@ const failGraphqlResponseError = (
 	if (code === undefined || !Schema.is(LinearKnownGraphqlCode)(code)) {
 		return Effect.fail(new LinearGraphqlRequestError(details))
 	}
-	const category = graphqlErrorCategoryByCode[code]
-	switch (category) {
-		case 'rate_limited':
-			return Effect.fail(new LinearRateLimitedError({ ...details, retryable: true }))
-		case 'forbidden':
-			return Effect.fail(new LinearForbiddenError(details))
-		case 'authentication':
-			return Effect.fail(new LinearAuthenticationError(details))
-		case 'not_found':
-			return Effect.fail(new LinearResourceNotFoundError(details))
-		case 'validation':
-			return Effect.fail(new LinearValidationError(details))
-	}
+	return Match.value(graphqlErrorCategoryByCode[code]).pipe(
+		Match.when('rate_limited', () => Effect.fail(new LinearRateLimitedError({ ...details, retryable: true }))),
+		Match.when('forbidden', () => Effect.fail(new LinearForbiddenError(details))),
+		Match.when('authentication', () => Effect.fail(new LinearAuthenticationError(details))),
+		Match.when('not_found', () => Effect.fail(new LinearResourceNotFoundError(details))),
+		Match.when('validation', () => Effect.fail(new LinearValidationError(details))),
+		Match.exhaustive,
+	)
 }
 
 /** Executes one schema-decoded Linear GraphQL request without retrying or resolving public API policy. */

@@ -1,7 +1,6 @@
 import {
 	bind,
 	type DeliveryHandoff,
-	DeliveryOutputError,
 	DeliveryPolicy,
 	DeliveryQueue,
 	HandlerFailure,
@@ -74,7 +73,7 @@ export class GitHubIngress extends Context.Service<
 				const queue = yield* DeliveryQueue
 				const attribution = yield* IngressAttributionStore
 				const loggers = yield* Logger.CurrentLoggers
-				const configuredGitHub = yield* Effect.serviceOption(GitHub)
+				const github = yield* GitHub
 				const configuredOrganizations = yield* Effect.serviceOption(GitHubOrganizations)
 				const organizations = Option.getOrElse(configuredOrganizations, () =>
 					GitHubOrganizations.of({
@@ -165,19 +164,7 @@ export class GitHubIngress extends Context.Service<
 								)
 							},
 							deliverFinalMessage: (operation) =>
-								Option.match(configuredGitHub, {
-									onNone: () =>
-										Effect.fail(
-											DeliveryOutputError.make({
-												retryable: false,
-												safeCode: 'provider_unavailable',
-											}),
-										),
-									onSome: (github) =>
-										deliverGitHubFinalMessage(operation).pipe(
-											Effect.provideService(GitHub, github),
-										),
-								}),
+								deliverGitHubFinalMessage(operation).pipe(Effect.provideService(GitHub, github)),
 						})
 						bindings.push({ id, route, registration, binding })
 					}

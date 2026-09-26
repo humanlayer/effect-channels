@@ -13,7 +13,6 @@ import {
 	WaitingMailbox,
 	deliveryMailboxKey,
 } from '@humanlayer/channels-delivery-next'
-import { RuntimeContext } from 'alchemy/RuntimeContext'
 import { Clock, Effect, Layer, Option, Schema } from 'effect'
 import { TestClock } from 'effect/testing'
 
@@ -30,14 +29,12 @@ const MailboxDeliveryFromDurableObjectStorage = Layer.effect(
 	MailboxDelivery,
 	Effect.gen(function* () {
 		const deliver = yield* makeDeliverFromDurableObjectStorage
-		const runtimeContext = yield* RuntimeContext
 		return MailboxDelivery.of({
 			deliver: (admission) =>
 				deliver(admission).pipe(
 					Effect.map(({ accepted }) =>
 						DeliveryReceipt.make({ mailboxKey: deliveryMailboxKey(admission), accepted }),
 					),
-					Effect.provideService(RuntimeContext, runtimeContext),
 				),
 		})
 	}),

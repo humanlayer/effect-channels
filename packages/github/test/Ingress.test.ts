@@ -19,7 +19,7 @@ import {
 	activityEventDefinition,
 	issueResourceKey,
 } from '../src/index'
-import { policy } from './fixtures'
+import { policy, unusedGitHub } from './fixtures'
 import { event, routeCredentials, user } from './fixtures'
 import { encodeWebhookBody, host, payloadFor, secret, signedRequest, webhookRequest } from './support'
 
@@ -32,7 +32,7 @@ it.live(
 				namespace: 'security',
 				policy,
 				handlers: [{ id: 'handler', onCreation: () => Effect.void }],
-			}).pipe(Layer.provideMerge(storage))
+			}).pipe(Layer.provide(unusedGitHub), Layer.provideMerge(storage))
 			const environment = yield* Layer.build(services)
 			const request = yield* host(
 				GitHubRoutes.layer({ signingSecret: Redacted.make(secret), maxBodyBytes: 2_000 }).pipe(
@@ -129,6 +129,7 @@ it.live('partial fanout returns 503; retry fills missing admission, then each ha
 			policy,
 			handlers: ['one', 'two'].map((id) => ({ id, onCreation: () => Queue.offer(seen, id).pipe(Effect.asVoid) })),
 		}).pipe(
+			Layer.provide(unusedGitHub),
 			Layer.provide(fault),
 			Layer.provide(Layer.succeed(DeliveryQueue, faultQueue)),
 			Layer.provide(Layer.succeedContext(Context.add(storage, DeliveryQueue, faultQueue))),
@@ -179,7 +180,7 @@ it.effect(
 					namespace: 'queue',
 					policy,
 					handlers: [{ id: 'one', onSubscribedEvent: handler }],
-				}).pipe(Layer.provide(Layer.succeedContext(retained)))
+				}).pipe(Layer.provide(unusedGitHub), Layer.provide(Layer.succeedContext(retained)))
 			const ingress = Context.get(yield* Layer.build(make()), GitHubIngress)
 			yield* Context.get(retained, GitHubSubscriptions).subscribe({
 				namespace: 'queue',
@@ -286,7 +287,7 @@ it.effect('canonical handlers recover existing activity mailbox IDs and saved at
 						onSubscribedEvent: record('subscribed'),
 					},
 				],
-			}).pipe(Layer.provide(storage)),
+			}).pipe(Layer.provide(unusedGitHub), Layer.provide(storage)),
 		)
 		yield* Context.get(environment, GitHubIngress).processActivity({ event }).pipe(Effect.provide(retained))
 		assert.deepEqual(yield* Queue.takeAll(seen), ['creation:original', 'mention:original', 'subscribed:original'])
@@ -313,7 +314,7 @@ it.live('without bot login, normalized PR creation and followed lifecycle work b
 						onSubscribedEvent: (event) => Queue.offer(seen, event.action).pipe(Effect.asVoid),
 					},
 				],
-			}).pipe(Layer.provideMerge(memory({ maxMailboxes: 10 }))),
+			}).pipe(Layer.provide(unusedGitHub), Layer.provideMerge(memory({ maxMailboxes: 10 }))),
 		)
 		const send = yield* host(
 			GitHubRoutes.layer({ signingSecret: Redacted.make(secret), maxBodyBytes: 5000 }).pipe(

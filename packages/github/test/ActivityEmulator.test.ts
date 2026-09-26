@@ -12,7 +12,7 @@ import {
 	GitHubUser,
 } from '../src/index'
 import { layer as memory } from '../src/memory'
-import { policy } from './fixtures'
+import { unusedGitHub, policy } from './fixtures'
 import { adminCall, captureWebhooks, emulator, eventFor, host, secret } from './support'
 
 it.live('native emulator creation selects subscriptions; issue and PR lifecycle state remains provider-visible', () =>
@@ -40,7 +40,7 @@ it.live('native emulator creation selects subscriptions; issue and PR lifecycle 
 						onSubscribedEvent: (event) => Queue.offer(seen, event).pipe(Effect.asVoid),
 					},
 				],
-			}).pipe(Layer.provideMerge(storage), Layer.provideMerge(em.credentials)),
+			}).pipe(Layer.provide(unusedGitHub), Layer.provideMerge(storage), Layer.provideMerge(em.credentials)),
 		)
 		const ingress = Context.get(environment, GitHubIngress)
 		const send = yield* host(

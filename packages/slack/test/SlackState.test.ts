@@ -1,6 +1,6 @@
 import { assert, it } from '@effect/vitest'
 import { MailboxStore } from '@humanlayer/channels-delivery'
-import { ConfigProvider, Deferred, Effect, Fiber, Layer, Option, Queue, Redacted, Ref } from 'effect'
+import { ConfigProvider, Context, Deferred, Effect, Fiber, Layer, Option, Queue, Redacted, Ref } from 'effect'
 import { HttpClient, HttpClientResponse } from 'effect/unstable/http'
 
 import {
@@ -54,21 +54,18 @@ it.effect('native-only lookup pins its authorization to the cache key even if st
 				),
 			),
 		)
-		yield* Effect.gen(function* () {
-			assert.ok(Option.isNone(yield* Effect.serviceOption(MailboxStore)))
-			const slack = yield* Slack
-			yield* slack.getUser(input)
-			yield* slack.getUser(input)
-			assert.deepStrictEqual(yield* Queue.takeAll(requests), ['Bearer first', 'Bearer second'])
-			assert.strictEqual(yield* Ref.get(loads), 2)
-		}).pipe(
-			Effect.provide(
-				Slack.layerFromStore.pipe(
-					Layer.provide(Layer.merge(store, http)),
-					Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({}))),
-				),
+		const services = yield* Layer.build(
+			Slack.layerFromStore.pipe(
+				Layer.provide(Layer.merge(store, http)),
+				Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({}))),
 			),
 		)
+		assert.ok(Option.isNone(Context.getOption(services, MailboxStore)))
+		const slack = Context.get(services, Slack)
+		yield* slack.getUser(input)
+		yield* slack.getUser(input)
+		assert.deepStrictEqual(yield* Queue.takeAll(requests), ['Bearer first', 'Bearer second'])
+		assert.strictEqual(yield* Ref.get(loads), 2)
 	}),
 )
 

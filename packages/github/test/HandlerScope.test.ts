@@ -4,7 +4,7 @@ import { Context, Deferred, Effect, Exit, Fiber, Layer, Match, Ref } from 'effec
 import { TestClock } from 'effect/testing'
 
 import { GitHubError, GitHubIngress, GitHubSubscriptions } from '../src/index'
-import { event, policy } from './fixtures'
+import { event, policy, unusedGitHub } from './fixtures'
 
 for (const callback of ['onCreation', 'onMention', 'onSubscribedEvent'] as const) {
 	it.effect(`releases ${callback} handler resources before the rate-limit wait`, () =>
@@ -27,7 +27,7 @@ for (const callback of ['onCreation', 'onMention', 'onSubscribedEvent'] as const
 							Match.exhaustive,
 						),
 					],
-				}).pipe(Layer.provideMerge(memory({ maxMailboxes: 10 }))),
+				}).pipe(Layer.provide(unusedGitHub), Layer.provideMerge(memory({ maxMailboxes: 10 }))),
 			)
 			const ingress = Context.get(environment, GitHubIngress)
 			yield* Context.get(environment, GitHubSubscriptions).subscribe({
@@ -65,7 +65,7 @@ for (const outcome of ['success', 'failure', 'defect', 'interruption'] as const)
 								}),
 						},
 					],
-				}).pipe(Layer.provideMerge(memory({ maxMailboxes: 10 }))),
+				}).pipe(Layer.provide(unusedGitHub), Layer.provideMerge(memory({ maxMailboxes: 10 }))),
 			)
 			const ingress = Context.get(environment, GitHubIngress)
 			yield* ingress.acceptActivity({ event, mentioned: false, own: false })

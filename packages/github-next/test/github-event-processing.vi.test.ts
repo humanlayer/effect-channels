@@ -38,7 +38,7 @@ const admission = (
 		namespace,
 		provider: 'github',
 		installationId: '100',
-		resourceId: `github:v1:200:${'pull_request' in payload.issue ? 'pull-request' : 'issue'}:${payload.issue.number}`,
+		resourceId: `github:v1:200:issue:${payload.issue.number}`,
 		eventId,
 		payload: { event, payload },
 	})

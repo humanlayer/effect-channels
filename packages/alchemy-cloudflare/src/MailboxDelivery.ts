@@ -6,11 +6,11 @@ import {
 	MailboxDeliveryUnavailable,
 	Timestamp,
 } from '@humanlayer/channels-delivery-next'
-import * as Cloudflare from 'alchemy/Cloudflare'
 import { RuntimeContext } from 'alchemy/RuntimeContext'
 import { Clock, Effect, Layer, Predicate, Schema } from 'effect'
 
 import { DurableMailboxState, emptyMailboxState, mailboxStateKey } from './MailboxState'
+import { MailboxStorage } from './MailboxStorage'
 
 const unavailable = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
 	effect.pipe(
@@ -25,7 +25,7 @@ const unavailable = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
 
 /** Build the admission RPC over the current Durable Object's persistent storage. */
 export const makeDeliverFromDurableObjectStorage = Effect.gen(function* () {
-	const state = yield* Cloudflare.DurableObjectState
+	const storage = yield* MailboxStorage
 
 	return Effect.fn('delivery.cloudflare_durable_object.deliver')(function* (input: DeliveryAdmission) {
 		const admission = yield* Schema.decodeEffect(DeliveryAdmission)(input).pipe(
@@ -36,10 +36,10 @@ export const makeDeliverFromDurableObjectStorage = Effect.gen(function* () {
 			),
 		)
 		const now = Timestamp.make(yield* Clock.currentTimeMillis)
-		return yield* state.storage.transaction((transaction) =>
+		return yield* storage.transaction((transaction) =>
 			Effect.gen(function* () {
 				const eventKey = `event:${admission.eventId}`
-				if (Predicate.isNotUndefined(yield* transaction.get<number>(eventKey))) return { accepted: false }
+				if (Predicate.isNotUndefined(yield* transaction.get(eventKey))) return { accepted: false }
 				const stored = yield* transaction.get(mailboxStateKey)
 				const current = Predicate.isUndefined(stored)
 					? emptyMailboxState({ mailboxKey: deliveryMailboxKey(admission), provider: admission.provider })
@@ -57,7 +57,8 @@ export const makeDeliverFromDurableObjectStorage = Effect.gen(function* () {
 					waiting: [...current.waiting, { sequence: current.nextSequence, arrivedAt: now, admission }],
 					readyAt: wakesMailbox ? now : current.readyAt,
 				})
-				yield* transaction.put({ [eventKey]: current.nextSequence, [mailboxStateKey]: next })
+				yield* transaction.put(eventKey, current.nextSequence)
+				yield* transaction.put(mailboxStateKey, next)
 				if (wakesMailbox) yield* transaction.setAlarm(now)
 				return { accepted: true }
 			}),

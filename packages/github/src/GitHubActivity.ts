@@ -1,5 +1,5 @@
 import { type EventDefinition, resolveDeliveryFor, type ResolvedDelivery } from '@humanlayer/channels-delivery'
-import { Match, Schema } from 'effect'
+import { Match, Predicate, Schema } from 'effect'
 
 import { GitHubCommentData, GitHubIssueData, GitHubUser } from './GitHubEvents'
 import { GitHubDiscussionRef, GitHubId, GitHubIssueRef, GitHubPullRequestRef, issueResourceKey } from './GitHubResource'
@@ -128,7 +128,11 @@ export const GitHubActivityEvent = Schema.Union([
 		...pr,
 		action: Schema.Literals(['review_requested', 'review_request_removed']),
 		...reviewRequestFields,
-	}).check(Schema.makeFilter((e) => e.requested_reviewer != null || e.requested_team != null)),
+	}).check(
+		Schema.makeFilter(
+			(e) => Predicate.isNotNullish(e.requested_reviewer) || Predicate.isNotNullish(e.requested_team),
+		),
+	),
 	Schema.Struct({
 		...review,
 		event: Schema.Literal('pull_request_review'),

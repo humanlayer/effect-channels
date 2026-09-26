@@ -20,7 +20,7 @@ export default eslintCompatPlugin({
 						node.type === 'TemplateLiteral'
 							? node.quasis.map((quasi) => quasi.value.cooked ?? '').join('')
 							: node.value
-					if (value != null && relativeSourceExtension.test(value)) {
+					if (value !== null && value !== undefined && relativeSourceExtension.test(value)) {
 						context.report({ node, messageId: 'extension' })
 					}
 				}

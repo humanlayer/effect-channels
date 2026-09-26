@@ -322,67 +322,69 @@ const normalizeWebhook = (
 
 	const issue = issueFromNotification(webhook, mailboxKey)
 	const actor = webhook.notification.actor
-	switch (webhook.action) {
-		case 'issueMention':
-			return LinearIssueMention.make({
-				eventId,
-				issue,
-				actor: participantOrNull(actor),
-				notification: webhook.notification,
-			})
-		case 'issueCommentMention':
-			return LinearCommentMention.make({
-				eventId,
-				issue,
-				actor: participantOrNull(actor),
-				comment: commentFromNotification(webhook, issue),
-				notification: webhook.notification,
-			})
-		case 'issueAssignedToYou':
-			return LinearAssignmentNotification.make({
-				eventId,
-				issue,
-				actor: participantOrNull(actor),
-				notification: webhook.notification,
-			})
-		case 'issueUnassignedFromYou':
-			return LinearIssueUnassigned.make({
-				eventId,
-				issue,
-				actor: participantOrNull(actor),
-				notification: webhook.notification,
-			})
-		case 'issueNewComment':
-			return LinearIssueNewComment.make({
-				eventId,
-				issue,
-				actor: participantOrNull(actor),
-				comment: commentFromNotification(webhook, issue),
-				notification: webhook.notification,
-			})
-		case 'issueStatusChanged':
-			return LinearIssueStatusChanged.make({
-				eventId,
-				issue,
-				actor: participantOrNull(actor),
-				notification: webhook.notification,
-			})
-		case 'issueEmojiReaction':
-			return LinearIssueReaction.make({
-				eventId,
-				issue,
-				actor: participantOrNull(actor),
-				notification: webhook.notification,
-			})
-		case 'issueCommentReaction':
-			return LinearCommentReaction.make({
-				eventId,
-				issue,
-				actor: participantOrNull(actor),
-				comment: commentFromNotification(webhook, issue),
-				notification: webhook.notification,
-			})
-	}
+	return Match.value(webhook).pipe(
+		Match.discriminatorsExhaustive('action')({
+			issueMention: (notification) =>
+				LinearIssueMention.make({
+					eventId,
+					issue,
+					actor: participantOrNull(actor),
+					notification: notification.notification,
+				}),
+			issueCommentMention: (notification) =>
+				LinearCommentMention.make({
+					eventId,
+					issue,
+					actor: participantOrNull(actor),
+					comment: commentFromNotification(notification, issue),
+					notification: notification.notification,
+				}),
+			issueAssignedToYou: (notification) =>
+				LinearAssignmentNotification.make({
+					eventId,
+					issue,
+					actor: participantOrNull(actor),
+					notification: notification.notification,
+				}),
+			issueUnassignedFromYou: (notification) =>
+				LinearIssueUnassigned.make({
+					eventId,
+					issue,
+					actor: participantOrNull(actor),
+					notification: notification.notification,
+				}),
+			issueNewComment: (notification) =>
+				LinearIssueNewComment.make({
+					eventId,
+					issue,
+					actor: participantOrNull(actor),
+					comment: commentFromNotification(notification, issue),
+					notification: notification.notification,
+				}),
+			issueStatusChanged: (notification) =>
+				LinearIssueStatusChanged.make({
+					eventId,
+					issue,
+					actor: participantOrNull(actor),
+					notification: notification.notification,
+				}),
+			issueEmojiReaction: (notification) =>
+				LinearIssueReaction.make({
+					eventId,
+					issue,
+					actor: participantOrNull(actor),
+					notification: notification.notification,
+				}),
+			issueCommentReaction: (notification) =>
+				LinearCommentReaction.make({
+					eventId,
+					issue,
+					actor: participantOrNull(actor),
+					comment: commentFromNotification(notification, issue),
+					notification: notification.notification,
+				}),
+		}),
+	)
 }
 
 const isSelfAuthoredResource = (webhook: LinearResourceWebhookEvent, options: LinearEventProcessorOptions) =>

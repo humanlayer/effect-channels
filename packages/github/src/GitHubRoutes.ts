@@ -1,4 +1,4 @@
-import { Config, Effect, Layer, Match, Redacted, Schema, Stream } from 'effect'
+import { Config, Effect, Layer, Match, Predicate, Redacted, Schema, Stream } from 'effect'
 import { HttpRouter, HttpServerResponse } from 'effect/unstable/http'
 
 import {
@@ -79,7 +79,7 @@ const layer = (options: GitHubRoutesOptions, mountPath?: string) =>
 							'i',
 						)
 			const isOwn = (user: Pick<GitHubUser, 'id' | 'login'> | null | undefined) =>
-				user != null &&
+				Predicate.isNotNullish(user) &&
 				(user.id === credentials.botUserId || user.login.toLowerCase() === config.botLogin?.toLowerCase())
 			const acceptActivity = Effect.fn('github.webhook.accept_activity')(function* (input: {
 				readonly event: string

@@ -4,9 +4,9 @@
  * Like the real alchemy bridge, a transaction closure runs in its own runtime, outside the calling fiber.
  * Code that reads the clock inside a transaction therefore misses the test clock here too, and its test fails.
  */
-import * as Cloudflare from 'alchemy/Cloudflare'
-import { RuntimeContext } from 'alchemy/RuntimeContext'
-import { Context, Effect, Layer, Predicate, Ref, type Schema } from 'effect'
+import { Context, Effect, Layer, Ref, type Schema } from 'effect'
+
+import { MailboxStorage, type MailboxStorageTransaction } from '../src/MailboxStorage'
 
 type Stored = {
 	readonly entries: ReadonlyMap<string, Schema.Json>
@@ -24,35 +24,12 @@ export class DurableObjectFakeAlarm extends Context.Service<
 	}
 >()('@humanlayer/channels-alchemy-cloudflare/test/DurableObjectFakeAlarm') {}
 
-const toMillis = (scheduledTime: number | Date) =>
-	Predicate.isDate(scheduledTime) ? scheduledTime.getTime() : scheduledTime
-
-/** The part of Durable Object storage, and of a storage transaction, that the mailbox store calls. */
-type StorageOperations = {
-	readonly get: (key: string) => Effect.Effect<Schema.Json | undefined, never, RuntimeContext>
-	readonly put: (
-		keyOrEntries: string | Readonly<Record<string, Schema.Json>>,
-		value?: Schema.Json,
-	) => Effect.Effect<void, never, RuntimeContext>
-	readonly getAlarm: () => Effect.Effect<number | null, never, RuntimeContext>
-	readonly setAlarm: (scheduledTime: number | Date) => Effect.Effect<void, never, RuntimeContext>
-	readonly deleteAlarm: () => Effect.Effect<void, never, RuntimeContext>
-}
-
-const makeStorageOperations = (stored: Ref.Ref<Stored>): StorageOperations => ({
+const makeTransaction = (stored: Ref.Ref<Stored>): MailboxStorageTransaction => ({
 	get: (key) => Ref.get(stored).pipe(Effect.map(({ entries }) => entries.get(key))),
-	put: (keyOrEntries, value = null) =>
-		Ref.update(stored, (current) => ({
-			...current,
-			entries: new Map([
-				...current.entries,
-				...(Predicate.isString(keyOrEntries) ? [[keyOrEntries, value] as const] : Object.entries(keyOrEntries)),
-			]),
-		})),
-	getAlarm: () => Ref.get(stored).pipe(Effect.map(({ alarm }) => alarm)),
-	setAlarm: (scheduledTime: number | Date) =>
-		Ref.update(stored, (current) => ({ ...current, alarm: toMillis(scheduledTime) })),
-	deleteAlarm: () => Ref.update(stored, (current) => ({ ...current, alarm: null })),
+	put: (key, value) =>
+		Ref.update(stored, (current) => ({ ...current, entries: new Map(current.entries).set(key, value) })),
+	setAlarm: (scheduledTime) => Ref.update(stored, (current) => ({ ...current, alarm: scheduledTime })),
+	deleteAlarm: Ref.update(stored, (current) => ({ ...current, alarm: null })),
 })
 
 /** One empty Durable Object for each build of this layer. */
@@ -60,43 +37,25 @@ export const DurableObjectFake = Layer.effectContext(
 	Effect.gen(function* () {
 		const committed = yield* Ref.make<Stored>({ entries: new Map(), alarm: null })
 
-		const storage: StorageOperations & Pick<Cloudflare.DurableObjectStorage, 'transaction'> = {
-			...makeStorageOperations(committed),
-			transaction: <T>(
-				closure: (transaction: Cloudflare.DurableObjectTransaction) => Effect.Effect<T, never, RuntimeContext>,
-			) =>
+		const storage = MailboxStorage.of({
+			...makeTransaction(committed),
+			delete: (key) =>
+				Ref.update(committed, (current) => {
+					const entries = new Map(current.entries)
+					entries.delete(key)
+					return { ...current, entries }
+				}),
+			getAlarm: Ref.get(committed).pipe(Effect.map(({ alarm }) => alarm)),
+			transaction: (closure) =>
 				Effect.gen(function* () {
 					const working = yield* Ref.make(yield* Ref.get(committed))
-					// SAFETY: the fake implements only the transaction methods the store calls; any other call throws.
-					const transaction = makeStorageOperations(working) as Cloudflare.DurableObjectTransaction
-					const result = yield* Effect.promise(() =>
-						Effect.runPromise(closure(transaction).pipe(Effect.provide(RuntimeContext.phantom))),
-					)
+					const result = yield* Effect.promise(() => Effect.runPromise(closure(makeTransaction(working))))
 					yield* Ref.set(committed, yield* Ref.get(working))
 					return result
 				}),
-		}
+		})
 
-		const durableObject: Pick<Cloudflare.DurableObjectState['Service'], 'storage'> = {
-			// SAFETY: the fake implements only the storage methods the store calls; any other call throws.
-			storage: storage as Cloudflare.DurableObjectStorage,
-		}
-
-		return Context.make(
-			Cloudflare.DurableObjectState,
-			// SAFETY: the store reads nothing but `storage` from the Durable Object state.
-			durableObject as Cloudflare.DurableObjectState['Service'],
-		).pipe(
-			Context.add(
-				RuntimeContext,
-				RuntimeContext.of({
-					Type: 'test',
-					id: 'durable-object-fake',
-					env: {},
-					get: () => Effect.succeed(undefined),
-					set: (id) => Effect.succeed(id),
-				}),
-			),
+		return Context.make(MailboxStorage, storage).pipe(
 			Context.add(
 				DurableObjectFakeAlarm,
 				DurableObjectFakeAlarm.of({

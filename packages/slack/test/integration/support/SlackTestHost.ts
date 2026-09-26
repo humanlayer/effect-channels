@@ -1,5 +1,6 @@
 import { NodeCrypto, NodeHttpClient } from '@effect/platform-node'
 import {
+	type DeliveryLocatorStore,
 	DeliveryPolicy,
 	layerMailboxStoreServices,
 	type HandlerContext,
@@ -43,7 +44,7 @@ export const slack = <E = never, R = never>(
 	} = {},
 ): SlackProviderConfig<E, R> => ({ provider: 'slack', ...options })
 
-export type ChannelsStorageServices = MailboxStore | MailboxReadiness | SlackSubscriptions
+export type ChannelsStorageServices = MailboxStore | MailboxReadiness | DeliveryLocatorStore | SlackSubscriptions
 export const StorageTypeId = Symbol.for('test/SlackStorage')
 export type ChannelsStorageConfig<E, R = never> = {
 	readonly [StorageTypeId]: Layer.Layer<ChannelsStorageServices, E, R>

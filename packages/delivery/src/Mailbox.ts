@@ -110,10 +110,12 @@ export const currentMailbox = (state: MailboxState): CurrentMailboxState =>
 				operations: [],
 			}
 
-export const activeBatches = (state: MailboxState): ReadonlyArray<ActiveBatch> => [
-	...(state.active === null ? [] : [state.active]),
-	...(state.version !== 1 ? state.additionalActive : []),
-]
+export const activeBatches = (state: MailboxState): ReadonlyArray<ActiveBatch> => {
+	const batches: Array<ActiveBatch> = []
+	if (state.active !== null) batches.push(state.active)
+	if (state.version !== 1) batches.push(...state.additionalActive)
+	return batches
+}
 
 export const deliveryIds = (state: MailboxState): ReadonlyArray<DeliveryId> =>
 	Arr.dedupe([

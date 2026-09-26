@@ -122,28 +122,29 @@ const renderContent = Match.type<Content>().pipe(
 			files: content.files ?? [],
 			degraded: [],
 		}),
-		MarkdownContent: (content) => ({
-			text: content.markdown,
-			files: content.files ?? [],
-			degraded: [...(content.actions === undefined || content.actions.length === 0 ? [] : ['actions'])],
-		}),
-		StructuredContent: (content) => ({
-			text: content.blocks
-				.map(
-					Match.type<(typeof content.blocks)[number]>().pipe(
-						Match.tagsExhaustive({
-							ParagraphContentBlock: (block) => block.children.map(renderInlineNode).join(''),
-							CodeContentBlock: (block) => `\`\`\`${block.language ?? ''}\n${block.code}\n\`\`\``,
-						}),
-					),
-				)
-				.join('\n\n'),
-			files: content.files ?? [],
-			degraded: [
-				'structured_content',
-				...(content.actions === undefined || content.actions.length === 0 ? [] : ['actions']),
-			],
-		}),
+		MarkdownContent: (content) => {
+			const degraded: Array<string> = []
+			if (content.actions !== undefined && content.actions.length > 0) degraded.push('actions')
+			return { text: content.markdown, files: content.files ?? [], degraded }
+		},
+		StructuredContent: (content) => {
+			const degraded = ['structured_content']
+			if (content.actions !== undefined && content.actions.length > 0) degraded.push('actions')
+			return {
+				text: content.blocks
+					.map(
+						Match.type<(typeof content.blocks)[number]>().pipe(
+							Match.tagsExhaustive({
+								ParagraphContentBlock: (block) => block.children.map(renderInlineNode).join(''),
+								CodeContentBlock: (block) => `\`\`\`${block.language ?? ''}\n${block.code}\n\`\`\``,
+							}),
+						),
+					)
+					.join('\n\n'),
+				files: content.files ?? [],
+				degraded,
+			}
+		},
 	}),
 )
 
@@ -1405,11 +1406,13 @@ export class Slack extends Context.Service<Slack, SlackService>()('slack/Slack')
 					const result = yield* send.pipe(Effect.ensuring(endTypingIfStarted(ref, input.threadId)))
 					if (result.fallback) return EphemeralResult.make({ sent: result.sent, usedFallback: true })
 					const sent = result.sent
+					const degraded = [...rendered.degraded]
+					if (rendered.files.length > 0) degraded.push('files')
 					const delivered = yield* sentFromSlack({
 						threadRef: slackThreadRef(ref, false),
 						sentThreadId: input.threadId,
 						text: rendered.text,
-						degraded: [...rendered.degraded, ...(rendered.files.length === 0 ? [] : ['files'])],
+						degraded,
 						channelId: sent.channelId,
 						ts: sent.ts,
 						botUserId: sent.botUserId,

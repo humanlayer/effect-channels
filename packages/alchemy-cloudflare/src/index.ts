@@ -1,5 +1,6 @@
 export * from './MailboxAlarm'
 export * from './MailboxDelivery'
 export * from './MailboxProcessingBackend'
+export * from './MailboxStorage'
 export * from './MailboxSubscriptions'
 export * as ChannelsCloudflare from './ChannelsCloudflare'
