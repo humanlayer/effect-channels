@@ -1,4 +1,4 @@
-import { Config, Effect, Layer, Match, Option, Predicate, Schema, Stream, type Types } from 'effect'
+import { Config, Effect, Layer, Match, Option, Predicate, Schema, Stream, Struct, type Types } from 'effect'
 import * as FetchHttpClient from 'effect/unstable/http/FetchHttpClient'
 import * as HttpClient from 'effect/unstable/http/HttpClient'
 import type * as UrlParams from 'effect/unstable/http/UrlParams'
@@ -50,6 +50,7 @@ const SlackMessageSnapshot = Schema.Struct({
 	text: Schema.optionalKey(Schema.String),
 	ts: SlackMessageTs,
 	thread_ts: Schema.optionalKey(SlackMessageTs),
+	user_team: Schema.optionalKey(SlackTeamId),
 	files: Schema.optionalKey(Schema.Array(SlackFileMetadata)),
 })
 type SlackMessageSnapshot = typeof SlackMessageSnapshot.Type
@@ -370,6 +371,7 @@ const SlackApiService = Layer.effect(
 				content: SlackMarkdownContent.make({ markdown: snapshot.text ?? '' }),
 				files: (snapshot.files ?? []).map((file) => slackFileFromMetadata(thread.teamId, file)),
 				metadata: {},
+				...Struct.renameKeys(Struct.pick(snapshot, ['user_team']), { user_team: 'authorTeamId' }),
 			})
 		})
 

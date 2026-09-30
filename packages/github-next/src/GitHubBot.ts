@@ -13,6 +13,7 @@ import type { Config, Redacted } from 'effect'
 import { GitHubApi } from './GitHubApi'
 import { GitHubApiLive } from './GitHubApiLive'
 import { GitHubCallbacks, type GitHubCallbackHandlers } from './GitHubCallbacks'
+import { makeGitHubOutputProcessor } from './GitHubDeliveryOutput'
 import { GitHubBotConfiguration, makeGitHubEventProcessor } from './GitHubEventProcessor'
 import { makeGitHubWebhookProvider } from './GitHubWebhookProvider'
 
@@ -74,6 +75,11 @@ export const make = <E, R, ApiError = never, ApiRequirements = never>(
 						.process(admissions, execution)
 						.pipe(Effect.provide(callbacks), Effect.provide(gitHubApi)),
 			}
+		}),
+		/** Sends a handed-off delivery's output: comments, and the `eyes` reaction while it works. */
+		outputProcessor: Effect.fn('github.bot.build_output_processor')(function* ({ namespace }) {
+			const gitHubApi = yield* buildGitHubApi
+			return yield* makeGitHubOutputProcessor({ namespace }).pipe(Effect.provide(gitHubApi))
 		}),
 	}
 }

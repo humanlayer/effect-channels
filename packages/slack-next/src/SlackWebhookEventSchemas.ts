@@ -24,6 +24,8 @@ export const SlackMessageSnapshot = Schema.Struct({
 	text: Schema.optionalKey(Schema.String),
 	ts: SlackMessageTs,
 	thread_ts: Schema.optionalKey(SlackMessageTs),
+	/** The author's workspace. Slack sends it in Slack Connect channels, where it can differ from the installation's. */
+	user_team: Schema.optionalKey(SlackTeamId),
 	files: Schema.optionalKey(Schema.Array(SlackFileMetadata)),
 })
 export type SlackMessageSnapshot = typeof SlackMessageSnapshot.Type
@@ -37,6 +39,7 @@ export const SlackAppMentionEvent = Schema.Struct({
 	thread_ts: Schema.optionalKey(SlackMessageTs),
 	channel: SlackChannelId,
 	team: Schema.optionalKey(SlackTeamId),
+	user_team: Schema.optionalKey(SlackTeamId),
 	files: Schema.optionalKey(Schema.Array(SlackFileMetadata)),
 })
 export type SlackAppMentionEvent = typeof SlackAppMentionEvent.Type
@@ -51,6 +54,7 @@ export const SlackMessageEvent = Schema.Struct({
 	thread_ts: Schema.optionalKey(SlackMessageTs),
 	channel: SlackChannelId,
 	channel_type: Schema.optionalKey(Schema.Literals(['channel', 'group', 'im', 'mpim'])),
+	user_team: Schema.optionalKey(SlackTeamId),
 	message: Schema.optionalKey(SlackMessageSnapshot),
 	previous_message: Schema.optionalKey(SlackMessageSnapshot),
 	deleted_ts: Schema.optionalKey(SlackMessageTs),

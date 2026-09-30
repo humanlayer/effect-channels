@@ -134,15 +134,16 @@ Callbacks provide `GitHubIssue` and `GitHubPullRequest` resources. Their methods
 
 In addition to `fetchInfo()`, comment operations, and subscription operations, an issue supports:
 
-| Resource method      | `GitHubApi` operation  | Result and behavior                                                              |
-| -------------------- | ---------------------- | -------------------------------------------------------------------------------- |
-| `close(reason)`      | `closeIssue`           | Closes with reason `"completed"` or `"not_planned"`; returns updated issue info. |
-| `reopen()`           | `reopenIssue`          | Reopens the issue and returns updated issue info.                                |
-| `listLabels()`       | `listIssueLabels`      | Returns complete `GitHubLabel` records.                                          |
-| `addLabels(labels)`  | `addIssueLabels`       | Adds labels without removing existing labels; returns the resulting set.         |
-| `setLabels(labels)`  | `setIssueLabels`       | Replaces the complete label set; returns the resulting set.                      |
-| `removeLabel(label)` | `removeIssueLabel`     | Removes one label by name; returns the resulting set.                            |
-| `removeAllLabels()`  | `removeAllIssueLabels` | Removes every label.                                                             |
+| Resource method          | `GitHubApi` operation  | Result and behavior                                                                                     |
+| ------------------------ | ---------------------- | ------------------------------------------------------------------------------------------------------- |
+| `close(reason)`          | `closeIssue`           | Closes with reason `"completed"` or `"not_planned"`; returns updated issue info.                        |
+| `reopen()`               | `reopenIssue`          | Reopens the issue and returns updated issue info.                                                       |
+| `listLabels()`           | `listIssueLabels`      | Returns complete `GitHubLabel` records.                                                                 |
+| `addLabels(labels)`      | `addIssueLabels`       | Adds labels without removing existing labels; returns the resulting set.                                |
+| `setLabels(labels)`      | `setIssueLabels`       | Replaces the complete label set; returns the resulting set.                                             |
+| `removeLabel(label)`     | `removeIssueLabel`     | Removes one label by name; returns the resulting set.                                                   |
+| `removeAllLabels()`      | `removeAllIssueLabels` | Removes every label.                                                                                    |
+| `fetchUserAccess(login)` | `fetchUserAccess`      | Returns the user's access to the repository: `none`, `read`, `triage`, `write`, `maintain`, or `admin`. |
 
 ```ts
 const updateIssue = Effect.gen(function* () {
@@ -152,6 +153,8 @@ const updateIssue = Effect.gen(function* () {
 ```
 
 Label inputs are arrays of non-empty names. Duplicate is not a supported close reason. GitHub's duplicate-closing API requires the canonical issue's internal database ID and a newer API contract; this package pins GitHub API version `2022-11-28`.
+
+`fetchUserAccess(login)` calls `GET /repos/{owner}/{repo}/collaborators/{username}/permission`, which works with the permissions listed above (checked live: `admin` for an owner, `read` for an outsider on a public repository). It returns the built-in role (`role_name`); for a custom role it falls back to GitHub's legacy `permission`, which counts `maintain` as `write` and `triage` as `read`. Compare levels with `hasGitHubAccess({ access, minimum })` or `GitHubAccessLevelOrder`. A login that is not a GitHub user fails with reason `not_found`. The package does not check authors itself; an application decides whom to act for, as the Cloudflare example does.
 
 ### Pull requests
 
@@ -173,6 +176,7 @@ In addition to `fetchInfo()`, conversation comments, reviews, review-comment lis
 | `close()`                  | `closePullRequest`                         | Closes the PR and returns updated PR info.                                                        |
 | `reopen()`                 | `reopenPullRequest`                        | Reopens the PR and returns updated PR info.                                                       |
 | `merge(options)`           | `mergePullRequest`                         | Attempts `"merge"`, `"squash"`, or `"rebase"`; returns `{ merged, sha, message }`.                |
+| `fetchUserAccess(login)`   | `fetchUserAccess`                          | Returns the user's access to the repository, as for issues.                                       |
 
 Prefer `listFiles()` when an agent only needs selected changes. GitHub's wire status `removed` is exposed as `deleted`; `copied`, `changed`, and `unchanged` remain distinct statuses rather than being collapsed into `modified`. A file's `sha`, `blobUrl`, and `rawUrl` can be `null`, including for some submodule entries. GitHub limits that endpoint to 3,000 files, may omit `patch` for binary or unusually large files, and limits `listCommits()` to 250 PR commits. `fetchDiff()` loads the complete unified diff into one string.
 
@@ -247,6 +251,23 @@ Listing check runs requests `filter=all`, so rerun attempts are not hidden by Gi
 ### API errors
 
 Every API operation fails with `GitHubApiError`. It includes `operation`, `reason`, and `retryable`, plus `status`, a safe GitHub `message`, and `retryAfterMs` when available. Reasons are `authentication`, `forbidden`, `not_found`, `rate_limited`, `validation`, `stale_head`, `not_mergeable`, `rules_rejected`, `unavailable`, and `invalid_response`. For merge requests, `GitHubApiLive` classifies stable statuses only: `409` is `stale_head`, `405` is `not_mergeable`, non-rate-limited `403` is `forbidden`, and `422` is `validation`. Provider messages are preserved for explanation but are not parsed to infer a reason; `rules_rejected` is reserved for implementations with a stable machine-readable rule signal. `GitHubApiLive` retries once with a fresh installation token after an authentication failure; callers can use `retryable` and `retryAfterMs` for any further retry policy.
+
+## Remote delivery
+
+Every callback receives a `DeliveryContext` and may hand its delivery to a remote worker. The remote worker then drives the output through the delivery API; `GitHubBot` sends it to the issue or pull request.
+
+| Operation                              | Issue or pull request                                                                                                                                         |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `complete` / `fail` (`PresentOutcome`) | a comment when there is Markdown (with `awaitingInput` options listed under it), otherwise nothing; removes `eyes` first when the last activity was `Working` |
+| `activity.set` `Working`               | the bot's `eyes` reaction on what started the delivery; the text is not shown                                                                                 |
+| `activity.set` `Idle`                  | removes that `eyes` reaction                                                                                                                                  |
+| `messages.create`                      | comment                                                                                                                                                       |
+| `messages.update` / `delete`           | edit or delete the comment                                                                                                                                    |
+| `links.add`                            | nothing                                                                                                                                                       |
+
+What started the delivery (its activation target) is the mentioning comment or inline review comment, or the issue or pull request itself when it was opened or mentioned the bot in its body. A subscribed batch has none, so its delivery does not list `SetActivity`, and `activity.set` answers 409. `GET /deliveries/<id>` lists what the delivery supports in `supportedOperations`.
+
+Reactions converge: adding `eyes` that is already there, or removing it when it is already gone, counts as done. `GitHubApi.addReaction` and `removeReaction` take a `GitHubReactionTarget`: a comment (`Comment`), or an issue or pull request itself (`Discussion`). Comments stay at-least-once: if GitHub accepts a comment but the attempt dies before it is saved, the next attempt comments again. The delivery API never exposes installation, repository, or comment IDs.
 
 ## Test and troubleshoot
 

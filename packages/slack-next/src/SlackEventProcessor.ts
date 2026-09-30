@@ -14,7 +14,7 @@ import {
 	ProviderEventInvalid,
 	type ProviderEventProcessor,
 } from '@humanlayer/channels-delivery-next'
-import { Array as Arr, Data, Effect, Match, Option, Predicate, Schema } from 'effect'
+import { Array as Arr, Data, Effect, Match, Option, Predicate, Schema, Struct } from 'effect'
 
 import { SlackApi } from './SlackApi'
 import {
@@ -267,6 +267,7 @@ const makeMessage = (input: {
 			content: SlackMarkdownContent.make({ markdown: input.snapshot.text ?? '' }),
 			files: (input.snapshot.files ?? []).map((file) => slackFileFromMetadata(input.teamId, file)),
 			metadata: { eventId: input.eventId, eventTime: input.eventTime },
+			...Struct.renameKeys(Struct.pick(input.snapshot, ['user_team']), { user_team: 'authorTeamId' }),
 		})
 	})
 

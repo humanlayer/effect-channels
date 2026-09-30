@@ -56,6 +56,11 @@ export const ReviewComment = Schema.Struct({
 	side: Schema.optionalKey(Schema.Literals(['LEFT', 'RIGHT'])),
 })
 export const Reaction = Schema.Struct({ id: GitHubId, content: Schema.String, user: Schema.NullOr(Participant) })
+/** `permission` is GitHub's legacy level; `role_name` is the role, which may be an organization's custom role. */
+export const CollaboratorPermission = Schema.Struct({
+	permission: Schema.Literals(['admin', 'write', 'read', 'none']),
+	role_name: Schema.String,
+})
 
 const NonNegativeInt = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
 const PositiveInt = Schema.Int.check(Schema.isGreaterThan(0))

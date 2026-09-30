@@ -4,12 +4,10 @@
  */
 import { describe, it } from '@effect/vitest'
 import {
-	AddExternalLink,
 	BatchId,
 	CreateMessage,
 	DeliveryOperationId,
 	DeliveryOutcome,
-	ExternalLink,
 	MessageId,
 	PreparedDeliveryInvocation,
 	DeliveryActivity,
@@ -23,6 +21,8 @@ import {
 } from '@humanlayer/channels-delivery-next'
 import { Effect, Layer, Ref, Result, Schema } from 'effect'
 
+import { commentOutputScenarios } from '../../delivery-next/test/comment-output-scenarios'
+
 import {
 	SlackApi,
 	SlackApiError,
@@ -31,6 +31,7 @@ import {
 	SlackDeliveryDestinationJson,
 	SlackMessage,
 	SlackMessageRef,
+	SlackMarkdownContent,
 	SlackMessageTs,
 	SlackOutputReceipt,
 	SlackOutputReceiptJson,
@@ -151,6 +152,33 @@ const run = (
 		return { result, ...(yield* Ref.get(calls)) }
 	})
 
+/** How Slack answers for each shared fault. */
+const slackFaults = {
+	retryable: 'Could not reach Slack',
+	final: 'is_archived',
+	gone: 'message_not_found',
+} as const
+
+commentOutputScenarios({
+	provider: 'Slack thread',
+	optionBullet: '• ',
+	run: (operation, options = {}) =>
+		run(operation, {
+			failWith: options.fault === undefined ? undefined : slackFaults[options.fault],
+			invocation:
+				options.futureVersion === true ? prepared({ presentationVersion: slackPresentationVersion + 1 }) : undefined,
+		}).pipe(
+			Effect.map(({ result, posts, updates, deletes }) => ({
+				result,
+				shown: [
+					...posts.map(({ content }) => `post: ${Schema.is(SlackMarkdownContent)(content) ? content.markdown : '?'}`),
+					...updates.map(({ content }) => `edit: ${Schema.is(SlackMarkdownContent)(content) ? content.markdown : '?'}`),
+					...deletes.map(() => 'delete'),
+				],
+			})),
+		),
+})
+
 const messageId = MessageId.make('progress')
 /** The reference a later update or deletion receives: the receipt of the message's create. */
 const postedReference = Schema.encodeSync(SlackOutputReceiptJson)(SlackOutputReceipt.make({ message: postedRef }))
@@ -176,39 +204,6 @@ describe('Slack delivery output', () => {
 				const receipt = yield* Schema.decodeUnknownEffect(SlackOutputReceiptJson)(result.success.receipt)
 				expect(receipt.message).toEqual(postedRef)
 			}),
-	)
-
-	it.effect('posts nothing for a result without Markdown', ({ expect }) =>
-		Effect.gen(function* () {
-			const failedOutcome = DeliveryOutcome.cases.Failed.make({})
-			const { result, posts } = yield* run(
-				ProviderPresentOutcome.make({ clearActivity: false, outcome: failedOutcome }),
-			)
-			expect(posts).toEqual([])
-			expect(Result.isSuccess(result)).toBe(true)
-		}),
-	)
-
-	it.effect('lists the options of a question after its Markdown', ({ expect }) =>
-		Effect.gen(function* () {
-			const outcome = DeliveryOutcome.cases.AwaitingInput.make({ options: ['staging', 'production'] })
-			const { posts } = yield* run(
-				ProviderPresentOutcome.make({ clearActivity: false, outcome, markdown: 'Where should I deploy?' }),
-			)
-			expect(posts[0]?.content).toEqual({
-				_tag: 'SlackMarkdownContent',
-				markdown: 'Where should I deploy?\n\n• staging\n• production',
-			})
-		}),
-	)
-
-	it.effect('applies a link without calling Slack', ({ expect }) =>
-		Effect.gen(function* () {
-			const link = ExternalLink.make({ label: 'Run', url: 'https://example.com/run/1' })
-			const { result, posts } = yield* run(AddExternalLink.make({ link }))
-			expect(posts).toEqual([])
-			expect(Result.isSuccess(result)).toBe(true)
-		}),
 	)
 
 	it.effect('reports a failure Slack may get over as retryable, and one it will not as final', ({ expect }) =>

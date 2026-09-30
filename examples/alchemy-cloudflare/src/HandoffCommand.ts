@@ -1,10 +1,11 @@
 /**
- * The example's `handoff [seconds] [flaky] [ask]` command, read from a Slack mention or from the text
- * of a Linear Agent Session. A new Linear issue uses `issue-handoff [seconds]` instead, so an issue
+ * The example's `handoff [seconds] [flaky] [ask]` command, read from a Slack mention, a GitHub mention,
+ * or the text of a Linear Agent Session. A new Linear issue uses `issue-handoff [seconds]` instead, so an issue
  * titled `handoff 30` and delegated to the app starts only the session's handoff, not a second one.
  *
  * `handoff` waits the default time; `handoff 60` waits 60 seconds. `flaky` makes Slack refuse the final
- * message for a while, to show that output retries on its own. `ask` ends the turn with a question
+ * message for a while, to show that output retries on its own; it is a Slack-only test switch, and the
+ * GitHub and Linear callbacks ignore it. `ask` ends the turn with a question
  * instead of an answer. A wait outside the allowed range, or text without the command, is not a
  * handoff command.
  */

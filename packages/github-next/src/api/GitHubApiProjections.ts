@@ -2,12 +2,14 @@ import { Match, Predicate, Schema, Struct, type Types } from 'effect'
 
 import type { GitHubPostPullRequestReviewComment } from '../GitHubApi'
 import {
+	GitHubAccessLevel,
 	GitHubActionsJobInfo,
 	type GitHubActionsJobRef,
 	GitHubCheckAnnotation,
 	GitHubCheckRunInfo,
 	type GitHubCheckRunRef,
 	type GitHubCommentRef,
+	type GitHubDiscussionRef,
 	GitHubCommit,
 	type GitHubIssueCommentRef,
 	GitHubIssueInfo,
@@ -17,6 +19,7 @@ import {
 	GitHubPullRequestFile,
 	GitHubPullRequestInfo,
 	type GitHubPullRequestRef,
+	type GitHubReactionTarget,
 	type GitHubRepositoryRef,
 	GitHubReview,
 	GitHubReviewCommentRef,
@@ -32,6 +35,12 @@ const participantOrNull = (value: typeof Api.Participant.Type | null) => {
 	if (value === null) return null
 	return participant(value)
 }
+/**
+ * The role when it is a built-in one. A custom role falls back to the legacy permission, which already counts
+ * `maintain` as `write` and `triage` as `read`.
+ */
+export const accessLevel = (value: typeof Api.CollaboratorPermission.Type): GitHubAccessLevel =>
+	Schema.is(GitHubAccessLevel)(value.role_name) ? value.role_name : value.permission
 export const issueInfo = (ref: GitHubIssueRef, value: typeof Api.Issue.Type) =>
 	GitHubIssueInfo.make({
 		ref,
@@ -236,3 +245,14 @@ export const commentPath = (comment: GitHubCommentRef) =>
 	Schema.is(GitHubReviewCommentRef)(comment)
 		? `${repositoryPath(comment.pullRequest)}/pulls/comments/${comment.id}`
 		: `${repositoryPath(commentRepository(comment))}/issues/comments/${comment.id}`
+/** An issue or pull request as GitHub's issue API addresses it; pull requests share the issue number space. */
+const discussionPath = (discussion: GitHubDiscussionRef) =>
+	`${repositoryPath(discussion.ref)}/issues/${discussion.ref.number}`
+/** The repository a reaction target belongs to, and the path of its reactions. */
+export const reactionsLocation = (target: GitHubReactionTarget) =>
+	Match.value(target).pipe(
+		Match.tagsExhaustive({
+			Comment: ({ comment }) => ({ ref: commentRepository(comment), path: `${commentPath(comment)}/reactions` }),
+			Discussion: ({ discussion }) => ({ ref: discussion.ref, path: `${discussionPath(discussion)}/reactions` }),
+		}),
+	)

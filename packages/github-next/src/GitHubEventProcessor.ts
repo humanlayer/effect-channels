@@ -72,7 +72,7 @@ import {
 	GitHubActivationTargetJson,
 	GitHubDeliveryDestination,
 	GitHubDeliveryDestinationJson,
-	gitHubDiscussionSupportedOperations,
+	gitHubSupportedOperations,
 	gitHubPresentationVersion,
 } from './GitHubDeliveryDestination'
 import { githubDiscussionResourceId, GitHubId } from './GitHubIdentity'
@@ -900,15 +900,16 @@ const invocationActivationTarget = GitHubInvocation.$match({
 /** The saved form of an invocation: callback name, issue or pull request, and what started it. */
 const preparedInvocation = Effect.fn('github.prepared_invocation')(function* (invocation: GitHubInvocation) {
 	const destination = yield* Schema.encodeEffect(GitHubDeliveryDestinationJson)(invocationDestination(invocation))
+	const target = invocationActivationTarget(invocation)
 	const activationTarget = yield* Effect.transposeOption(
-		Option.map(invocationActivationTarget(invocation), Schema.encodeEffect(GitHubActivationTargetJson)),
+		Option.map(target, Schema.encodeEffect(GitHubActivationTargetJson)),
 	)
 	return PreparedDeliveryInvocation.make({
 		callback: invocationCallbackName(invocation),
 		presentationVersion: gitHubPresentationVersion,
 		destination,
 		...Option.match(activationTarget, { onNone: () => ({}), onSome: (target) => ({ activationTarget: target }) }),
-		supportedOperations: gitHubDiscussionSupportedOperations,
+		supportedOperations: gitHubSupportedOperations(target),
 	})
 })
 

@@ -261,12 +261,24 @@ const pullRequestFrom = (action: string) => ({
 })
 
 const issueRef = { installationId: 100, repositoryId: 200, owner: 'alice', repository: 'project', number: 42 }
+/** What a subscribed batch supports: no activation target, so no `SetActivity`. */
 const discussionSupportedOperations: ReadonlyArray<DeliveryOperationKind> = [
 	'PresentOutcome',
 	'CreateMessage',
 	'UpdateMessage',
 	'DeleteMessage',
 	'SetMessageReaction',
+	'RenderPlan',
+	'AddExternalLink',
+]
+/** What a delivery with an activation target supports: `SetActivity` shows as `eyes` on it. */
+const activatedSupportedOperations: ReadonlyArray<DeliveryOperationKind> = [
+	'PresentOutcome',
+	'CreateMessage',
+	'UpdateMessage',
+	'DeleteMessage',
+	'SetMessageReaction',
+	'SetActivity',
 	'RenderPlan',
 	'AddExternalLink',
 ]
@@ -300,7 +312,7 @@ describe('GitHub delivery preparation', () => {
 						_tag: 'GitHubIssueComment',
 						comment: { discussion: { _tag: 'Issue', ref: issueRef }, id: 500 },
 					},
-					supportedOperations: discussionSupportedOperations,
+					supportedOperations: activatedSupportedOperations,
 				}),
 			])
 		})
@@ -318,7 +330,7 @@ describe('GitHub delivery preparation', () => {
 					presentationVersion: 1,
 					destination: { _tag: 'GitHubIssue', issue: issueRef },
 					activationTarget: { _tag: 'GitHubIssue', issue: issueRef },
-					supportedOperations: discussionSupportedOperations,
+					supportedOperations: activatedSupportedOperations,
 				}),
 			])
 
@@ -335,7 +347,7 @@ describe('GitHub delivery preparation', () => {
 					presentationVersion: 1,
 					destination: { _tag: 'GitHubPullRequest', pullRequest: issueRef },
 					activationTarget: { _tag: 'GitHubPullRequest', pullRequest: issueRef },
-					supportedOperations: discussionSupportedOperations,
+					supportedOperations: activatedSupportedOperations,
 				}),
 			])
 

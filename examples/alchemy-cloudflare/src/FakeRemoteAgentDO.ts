@@ -3,12 +3,14 @@
  *
  * It does no agent work. One object per delivery ID saves the job, wakes on its alarm, and reports back
  * over the public delivery API, as a real remote agent would. It works the same for a Slack thread, a
- * Linear Agent Session, or a Linear issue, because it asks the delivery what it supports:
+ * Linear Agent Session, a Linear issue, or a GitHub issue or pull request, because it asks the delivery
+ * what it supports:
  *
- * - While it waits it shows what it is doing as the delivery's activity (Slack's thread status line, or
- *   an ephemeral thought in a Linear session), changing the text halfway through.
+ * - While it waits it shows what it is doing as the delivery's activity (Slack's thread status line, an
+ *   ephemeral thought in a Linear session, or the bot's `eyes` reaction on GitHub), changing the text
+ *   halfway through. GitHub does not show the text.
  * - Just before it finishes it posts one lasting summary message (a Slack message, a lasting thought in
- *   a Linear session, or an issue comment).
+ *   a Linear session, or an issue or pull request comment).
  * - It then completes the delivery with a final message, or with a question and choices for `ask`.
  * - It reads the delivery's status at least every few seconds. When someone asked it to stop, such as
  *   Stop in a Linear session, it fails the delivery with `Stopped as requested.` and ends.

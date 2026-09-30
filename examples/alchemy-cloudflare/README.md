@@ -162,6 +162,13 @@ Configure the Slack Events API request URL as:
 https://<your-worker-hostname>/integrations/slack/webhook
 ```
 
+## Whom the example listens to
+
+The example checks authors in its own callbacks (`src/AuthorAccess.ts`); the libraries do not do it for you.
+
+- **GitHub requires write access.** Anyone can comment on a public repository, so every GitHub callback looks up the author's access to the repository with `fetchUserAccess(login)` before it acts. Authors below `write` (`none`, `read`, `triage`) are ignored: no comment, no reaction, and the log line `Example ignored GitHub author without write access` with their login and access level. In a subscribed batch the example acts only on new comments and review comments, so it checks each of those on its own and looks up each author once per batch; it does not look up the authors of events it does nothing with, such as check runs, whose sender is usually an app. If GitHub answers `not_found` (the login is not a user, such as a bot account), the author counts as `none` and the event is ignored and logged. Any other failed lookup fails the callback, which is retried like any other failure; the event never gets through unchecked. The bot's own events are dropped before any callback runs.
+- **Slack ignores other workspaces.** In a Slack Connect channel, people from another workspace can mention the bot. Slack marks their messages with `user_team`, which `SlackMessage.authorTeamId` carries. A mention or thread message whose author workspace differs from the installation's is ignored, with the log line `Example ignored Slack author from another workspace`. A message without `user_team` counts as local.
+
 ## Fake remote agent
 
 Mention the Slack bot with `handoff [seconds] [flaky]` (for example `@bot handoff 60`; default 60, kept between 5 and 900) to try a durable handoff. The callback starts `FakeRemoteAgent` (`src/FakeRemoteAgentDO.ts`), a Durable Object that stands in for a remote agent host, posts `Handed off <deliveryId>. Finishing in <n>s.`, and returns `delivery.handoff()`. The mailbox stays held while the remote agent waits. When its alarm fires, the remote agent calls `GET /deliveries/<id>`, then `POST /deliveries/<id>/complete` with the final message `Fake remote agent finished after <n>s.`, then `GET /deliveries/<id>` again, all with the delivery's bearer token.
@@ -190,10 +197,10 @@ In the Slack test channel:
 - **Survives a redeploy.** Post `@bot handoff 240`. While it waits, run `bun alchemy deploy --force --yes`. After 240s the logs still show the remote agent's `complete` accepted and the delivery retired.
 - **Bad credentials.** Copy the delivery ID from a bot reply, set `WORKER_URL` in your shell to the printed URL, then:
 
-  ```bash
-  curl -i -X POST "$WORKER_URL/deliveries/<id>/complete" -H 'content-type: application/json' -d '{}'                                  # 401: no token
-  curl -i -X POST "$WORKER_URL/deliveries/<id>/complete" -H 'content-type: application/json' -H 'Authorization: Bearer wrong' -d '{}' # 404
-  ```
+    ```bash
+    curl -i -X POST "$WORKER_URL/deliveries/<id>/complete" -H 'content-type: application/json' -d '{}'                                  # 401: no token
+    curl -i -X POST "$WORKER_URL/deliveries/<id>/complete" -H 'content-type: application/json' -H 'Authorization: Bearer wrong' -d '{}' # 404
+    ```
 
 - Confirm no access token appears in the logs.
 
@@ -214,6 +221,26 @@ Checks, in the `FAKE` team of the HumanLayer workspace. Use a `channels-live-p4-
 5. **Stop.** Reply `handoff 120`. Once `Looking into it…` shows, press Stop. Within about 5 seconds the logs show `Fake remote agent stopped because the delivery asked it to`, the session shows one `error` activity, `Stopped as requested.`, and then `Linear agent session prompted` with `prompt_signal: stop`, after which nothing more is posted.
 6. **Issue delivery.** Create an issue titled `channels-live-p4-<timestamp> issue-handoff 20`, not delegated. The logs show `Linear issue delivery handed off`. About 20 seconds later the issue gets the comment `Summary: the fake remote agent waited 20s and did no real work.`, then the comment `Fake remote agent finished after 20s.`. The logs show no `Fake remote agent set its activity` for it.
 7. Confirm no access token appears in the logs.
+
+### GitHub
+
+The same fake remote agent runs GitHub issue and pull request deliveries. Mention the app with `handoff [seconds] [ask]` in an issue or pull request comment, an inline review comment, or the body of a new issue or pull request (for example `@<app-slug> handoff 30`). The callback subscribes the issue or pull request, starts the job, comments `Handed off <deliveryId>. Finishing in <n>s.`, and hands the delivery off.
+
+- **Activity is `eyes`.** GitHub has no status line, so `Working` adds the bot's `eyes` reaction to what mentioned the bot: the comment, or the issue or pull request itself when the mention was in its body. `Idle` removes it, and so does the result. The text of `Working` is not shown. Adding `eyes` that is already there, or removing it when it is already gone, changes nothing.
+- **Messages are comments.** The summary is one comment on the issue or pull request, posted just before the result; the final message is one more comment. With `ask` the final comment is the question, with `- staging` and `- production` listed under it. The delivery API never exposes installation, repository, or comment IDs.
+- A later comment in a subscribed issue or pull request, without a new mention, is a subscribed batch. It has nothing that started it to react to, so its delivery does not list `SetActivity`.
+- `flaky` is a Slack-only test switch; a GitHub mention ignores it.
+
+Checks, in a test repository where the app is installed (`GITHUB_BOT_MENTION_NAME` is the name after `@`):
+
+1. **Handoff, `eyes` while working, a summary comment, and one final comment.** Open an issue titled `channels-live-p5-<timestamp>` and comment `@<app-slug> handoff 30`. Within a few seconds the app comments `Handed off delivery:v1:…. Finishing in 30s.`, and about a second later your comment shows the app's `eyes` reaction. At 30 seconds the app comments `Summary: the fake remote agent waited 30s and did no real work.`, then `Fake remote agent finished after 30s.`, and the `eyes` reaction is gone. The logs show `GitHub bot mentioned`, `GitHub mention handed off`, `Mailbox delivery handed off; waiting for its remote worker`, then `Delivery output applied` for `SetActivity`, `SetActivity`, `CreateMessage`, and `PresentOutcome`, in that order, each once. Comment edits and deletes are covered by automated tests only.
+2. **Pull request.** On a pull request, comment `@<app-slug> handoff 20`. The same happens on the pull request's conversation: `eyes` on your comment while it works, then the summary comment and the final comment, with `eyes` gone at the end.
+3. **Mention in a body.** Open an issue whose body is `@<app-slug> handoff 20`. The `eyes` reaction shows on the issue itself, not on a comment, and is gone after the final comment.
+4. **A question ends the delivery.** Comment `@<app-slug> handoff 20 ask`. The final comment is `Which environment should I deploy to?` with `- staging` and `- production` under it, and `eyes` is gone.
+5. **Queued follow-up.** Comment `@<app-slug> handoff 30`, then right away comment `follow-up` in the same issue. The app's `eyes` reaction on `follow-up` (from the subscribed-events callback) appears only after the final comment.
+6. **`flaky` is ignored.** Comment `@<app-slug> handoff 10 flaky`. The final comment is `Fake remote agent finished after 10s.` with no extra text, and the logs show no `Example Slack API refusing a flaky post on purpose`.
+7. **Read access gets no response.** From an account with only read access to the repository (on a public repository, any account that is not a collaborator), comment `@<app-slug> handoff 20` on an issue. Nothing is posted and no reaction appears. The logs show `GitHub bot mentioned`, then `Example ignored GitHub author without write access` with that login and `access=read`, and no `GitHub mention handed off`. A plain comment from that account in a subscribed issue gets no `eyes` reaction either.
+8. Confirm no access token appears in the logs.
 
 ## Runtime behavior
 

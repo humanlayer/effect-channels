@@ -13,7 +13,9 @@ import {
 	makeDeliveryId,
 	type ProviderOutputOperation,
 } from '@humanlayer/channels-delivery-next'
-import { Effect, Layer, Ref, Schema } from 'effect'
+import { Effect, Layer, Match, Ref, Result, Schema } from 'effect'
+
+import { commentOutputScenarios } from '../../delivery-next/test/comment-output-scenarios'
 
 import {
 	LinearAgentSessionDestination,
@@ -107,7 +109,12 @@ type Calls = {
  */
 const run = (
 	input: ProviderOutputAttempt,
-	options: { readonly activityError?: LinearApiError; readonly deleteError?: LinearApiError } = {},
+	options: {
+		readonly activityError?: LinearApiError
+		readonly deleteError?: LinearApiError
+		/** How Linear answers every comment create, update, and delete. */
+		readonly commentError?: LinearApiError
+	} = {},
 ) =>
 	Effect.gen(function* () {
 		const calls = yield* Ref.make<Calls>({
@@ -119,6 +126,7 @@ const run = (
 		})
 		const record = <K extends keyof Calls>(key: K, value: Calls[K][number]) =>
 			Ref.update(calls, (all) => ({ ...all, [key]: [...all[key], value] }))
+		const commentAnswer = options.commentError === undefined ? Effect.void : Effect.fail(options.commentError)
 		const api = Layer.mock(LinearApi, {
 			createAgentActivity: (request) =>
 				record('activities', request).pipe(
@@ -136,6 +144,7 @@ const run = (
 			updateAgentSession: (request) => record('sessionUpdates', request),
 			createComment: (request) =>
 				record('comments', request).pipe(
+					Effect.andThen(commentAnswer),
 					Effect.as(
 						LinearComment.make({
 							ref: commentRef,
@@ -149,6 +158,7 @@ const run = (
 				),
 			updateComment: (request) =>
 				record('commentUpdates', request).pipe(
+					Effect.andThen(commentAnswer),
 					Effect.as(
 						LinearComment.make({
 							ref: request.comment,
@@ -163,6 +173,7 @@ const run = (
 			deleteComment: (request) =>
 				record('commentDeletes', request).pipe(
 					Effect.andThen(options.deleteError === undefined ? Effect.void : Effect.fail(options.deleteError)),
+					Effect.andThen(commentAnswer),
 				),
 		})
 		const processor = yield* makeLinearOutputProcessor({ namespace: 'linear-output-test', bot }).pipe(
@@ -187,6 +198,37 @@ const linearError = (reason: LinearApiError['reason'], retryable: boolean, retry
 			? { operation: 'create_agent_activity', reason, retryable }
 			: { operation: 'create_agent_activity', reason, retryable, retryAfterMs },
 	)
+
+const commentFault = {
+	retryable: LinearApiError.make({ operation: 'create_comment', reason: 'unavailable', retryable: true }),
+	final: LinearApiError.make({ operation: 'create_comment', reason: 'forbidden', retryable: false }),
+	gone: LinearApiError.make({ operation: 'update_comment', reason: 'not_found', retryable: false }),
+} as const
+
+commentOutputScenarios({
+	provider: 'Linear issue',
+	optionBullet: '- ',
+	run: (operation, options = {}) => {
+		const base = attempt(operation, issueDestination)
+		const input =
+			options.futureVersion === true
+				? ProviderOutputAttempt.make({ ...base, prepared: prepared(issueDestination, 2) })
+				: base
+		return run(input, options.fault === undefined ? {} : { commentError: commentFault[options.fault] }).pipe(
+			Effect.map(({ result, calls }) => ({
+				result: Match.valueTags(result, {
+					Success: ({ success }) => Result.succeed(success),
+					Failure: ({ failure }) => Result.fail(failure),
+				}),
+				shown: [
+					...calls.comments.map(({ content }) => `post: ${content.markdown}`),
+					...calls.commentUpdates.map(({ content }) => `edit: ${content.markdown}`),
+					...calls.commentDeletes.map(() => 'delete'),
+				],
+			})),
+		)
+	},
+})
 
 describe('Linear output: Agent Session', () => {
 	it.effect('posts one final activity for each outcome, with a default text when there is no Markdown', ({ expect }) =>

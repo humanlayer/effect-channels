@@ -166,6 +166,11 @@ export class SlackMessage extends Schema.TaggedClass<SlackMessage>()('SlackMessa
 	ref: SlackMessageRef,
 	thread: SlackThreadRef,
 	author: SlackParticipant,
+	/**
+	 * The author's workspace, from the message's `user_team`. Slack sends it in Slack Connect channels, where an
+	 * author from another workspace can post; when absent, treat the author as from the installation's workspace.
+	 */
+	authorTeamId: Schema.optionalKey(SlackTeamId),
 	content: SlackContent,
 	files: Schema.Array(SlackFile),
 	metadata: SlackMetadata,

@@ -4,7 +4,7 @@
  * GitHub reads them.
  */
 import type { DeliveryOperationKind } from '@humanlayer/channels-delivery-next'
-import { Schema } from 'effect'
+import { Option, Schema } from 'effect'
 
 import { GitHubIssueCommentRef, GitHubIssueRef, GitHubPullRequestRef, GitHubReviewCommentRef } from './GitHubModels'
 
@@ -35,15 +35,21 @@ export const GitHubDeliveryDestinationJson = Schema.toCodecJson(GitHubDeliveryDe
 export const GitHubActivationTargetJson = Schema.toCodecJson(GitHubActivationTarget)
 
 /**
- * The output operations a GitHub issue or pull request supports. `SetActivity` (the `eyes` reaction)
- * is left out until GitHub has an output processor that shows it.
+ * The output operations a GitHub issue or pull request supports. `SetActivity` shows as the bot's `eyes`
+ * reaction on what started the delivery, so a delivery without an activation target, such as a
+ * subscribed batch, does not list it.
  */
-export const gitHubDiscussionSupportedOperations: ReadonlyArray<DeliveryOperationKind> = [
-	'PresentOutcome',
-	'CreateMessage',
-	'UpdateMessage',
-	'DeleteMessage',
-	'SetMessageReaction',
-	'RenderPlan',
-	'AddExternalLink',
-]
+export const gitHubSupportedOperations = (
+	activationTarget: Option.Option<GitHubActivationTarget>,
+): ReadonlyArray<DeliveryOperationKind> => {
+	const operations: Array<DeliveryOperationKind> = [
+		'PresentOutcome',
+		'CreateMessage',
+		'UpdateMessage',
+		'DeleteMessage',
+		'SetMessageReaction',
+	]
+	if (Option.isSome(activationTarget)) operations.push('SetActivity')
+	operations.push('RenderPlan', 'AddExternalLink')
+	return operations
+}

@@ -162,6 +162,36 @@ const process = <E, R>(handlers: SlackCallbackHandlers<E, R>, batch: DeliveryAdm
 	).pipe(Effect.provide(Layer.merge(SlackCallbacks.layer(handlers), layer)))
 
 describe('Slack event batch processing', () => {
+	it.effect('carries the author workspace from user_team, and leaves it out when Slack omits it', ({ expect }) =>
+		Effect.gen(function* () {
+			const received = yield* Ref.make(Option.none<SlackNewMention>())
+			const otherTeam = SlackTeamId.make('T_OTHER')
+			const connectMention = mention()
+			const connectReply = reply('Ev_CONNECT_REPLY')
+			const batch = DeliveryAdmissionBatch.make([
+				admission('Ev_MENTION', {
+					...connectMention,
+					event: { ...connectMention.event, user_team: otherTeam },
+				}),
+				admission('Ev_REPLY', reply()),
+				admission('Ev_CONNECT_REPLY', { ...connectReply, event: { ...connectReply.event, user_team: teamId } }),
+			])
+
+			expect(yield* process({ onNewMention: (event) => Ref.set(received, Option.some(event)) }, batch)).toEqual(
+				ProviderEventHandled.make({}),
+			)
+			const event = Option.getOrThrow(yield* Ref.get(received))
+			expect(event.trigger.authorTeamId).toBe('T_OTHER')
+			expect(event.events.map((threadEvent) => threadEvent._tag)).toEqual([
+				'SlackMessageReceived',
+				'SlackMessageReceived',
+			])
+			const [plain, connect] = event.events.filter(Schema.is(SlackMessageReceived))
+			expect(plain?.message).not.toHaveProperty('authorTeamId')
+			expect(connect?.message.authorTeamId).toBe('T_TEST')
+		}),
+	)
+
 	it.effect('delivers mention plus later message and reaction in one onNewMention call', ({ expect }) =>
 		Effect.gen(function* () {
 			const onNewMention = vi.fn<MentionCallback>(() => Effect.void)

@@ -1,6 +1,7 @@
 import { Context, Effect, Schema } from 'effect'
 
 import {
+	type GitHubAccessLevel,
 	GitHubActionsJobRef,
 	type GitHubActionsJobInfo,
 	GitHubCheckRunRef,
@@ -15,7 +16,9 @@ import {
 	type GitHubPullRequestInfo,
 	GitHubPullRequestRef,
 	GitHubReaction,
+	GitHubReactionTarget,
 	GitHubReviewCommentLocation,
+	GitHubRepositoryRef,
 	GitHubReviewCommentRef,
 } from './GitHubModels'
 import type {
@@ -98,8 +101,9 @@ export type GitHubUpdateComment = typeof GitHubUpdateComment.Type
 export const GitHubDeleteComment = Schema.Struct({ comment: GitHubCommentRef })
 export interface GitHubDeleteComment extends Schema.Schema.Type<typeof GitHubDeleteComment> {}
 
+/** The bot's reaction on a comment, or on an issue or pull request itself. */
 export const GitHubReactionRequest = Schema.Struct({
-	comment: GitHubCommentRef,
+	target: GitHubReactionTarget,
 	reaction: GitHubReaction,
 })
 export interface GitHubReactionRequest extends Schema.Schema.Type<typeof GitHubReactionRequest> {}
@@ -160,6 +164,13 @@ export const GitHubListCheckRunsForRef = Schema.Struct({
 })
 export interface GitHubListCheckRunsForRef extends Schema.Schema.Type<typeof GitHubListCheckRunsForRef> {}
 
+/** A GitHub user, by login, in a repository. */
+export const GitHubUserAccessRequest = Schema.Struct({
+	repository: GitHubRepositoryRef,
+	login: Schema.NonEmptyString,
+})
+export interface GitHubUserAccessRequest extends Schema.Schema.Type<typeof GitHubUserAccessRequest> {}
+
 export const GitHubApiOperation = Schema.Literals([
 	'fetch_issue',
 	'fetch_pull_request',
@@ -199,6 +210,7 @@ export const GitHubApiOperation = Schema.Literals([
 	'resolve_check_run_actions_job',
 	'fetch_actions_job',
 	'download_actions_job_log',
+	'fetch_user_access',
 ])
 export type GitHubApiOperation = typeof GitHubApiOperation.Type
 
@@ -282,7 +294,9 @@ export class GitHubApi extends Context.Service<
 		) => Effect.Effect<GitHubReviewComment, GitHubApiError>
 		readonly updateComment: (input: GitHubUpdateComment) => Effect.Effect<GitHubComment, GitHubApiError>
 		readonly deleteComment: (input: GitHubDeleteComment) => Effect.Effect<void, GitHubApiError>
+		/** Add the bot's reaction to a comment, issue, or pull request. Already present counts as added. */
 		readonly addReaction: (input: GitHubReactionRequest) => Effect.Effect<void, GitHubApiError>
+		/** Remove the bot's own reaction from a comment, issue, or pull request. Already absent counts as removed. */
 		readonly removeReaction: (input: GitHubReactionRequest) => Effect.Effect<void, GitHubApiError>
 		readonly closeIssue: (input: GitHubCloseIssue) => Effect.Effect<GitHubIssueInfo, GitHubApiError>
 		readonly reopenIssue: (input: GitHubIssueRequest) => Effect.Effect<GitHubIssueInfo, GitHubApiError>
@@ -307,5 +321,7 @@ export class GitHubApi extends Context.Service<
 			input: GitHubActionsJobRequest,
 		) => Effect.Effect<GitHubActionsJobInfo, GitHubApiError>
 		readonly downloadActionsJobLog: (input: GitHubActionsJobRequest) => Effect.Effect<string, GitHubApiError>
+		/** A user's access to a repository. An account that is not a GitHub user fails with `not_found`. */
+		readonly fetchUserAccess: (input: GitHubUserAccessRequest) => Effect.Effect<GitHubAccessLevel, GitHubApiError>
 	}
 >()('@humanlayer/channels-github-next/GitHubApi') {}
