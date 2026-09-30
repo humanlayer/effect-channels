@@ -12,6 +12,7 @@ import { LinearApi } from '../src/LinearApi'
 import { type LinearCallbackHandler, LinearCallbacks } from '../src/LinearCallbacks'
 import { makeLinearEventProcessor } from '../src/LinearEventProcessor'
 import {
+	firstAttempt,
 	appUserNotificationPayloads,
 	issueCreatePayload,
 	linearAppUserId,
@@ -120,7 +121,7 @@ describe('Linear subscribed events', () => {
 				bot: { organizationId: linearOrganizationId, appUserId: linearAppUserId },
 				oauthClientId: linearOauthClientId,
 			})
-				.process([admissions[0]!, ...admissions.slice(1)])
+				.process([admissions[0]!, ...admissions.slice(1)], yield* firstAttempt())
 				.pipe(Effect.provide(services))
 			expect(result).toEqual(ProviderEventHandled.make({}))
 			expect(callback.mock.calls[0]?.[0].events.map((event) => event._tag)).toEqual([
@@ -190,7 +191,7 @@ describe('Linear subscribed events', () => {
 				Layer.mock(MailboxSubscriptions, { isSubscribed: () => Effect.succeed(true) }),
 			)
 			yield* makeLinearEventProcessor({ namespace })
-				.process([admissions[0]!, admissions[1]!])
+				.process([admissions[0]!, admissions[1]!], yield* firstAttempt())
 				.pipe(Effect.provide(services))
 			const event = callback.mock.calls[0]?.[0]
 			expect(event?.events).toHaveLength(2)
@@ -228,7 +229,9 @@ describe('Linear subscribed events', () => {
 					},
 				},
 			})
-			yield* makeLinearEventProcessor({ namespace }).process([attachmentAdmission]).pipe(Effect.provide(services))
+			yield* makeLinearEventProcessor({ namespace })
+				.process([attachmentAdmission], yield* firstAttempt())
+				.pipe(Effect.provide(services))
 			const reducedIssue = callback.mock.calls[1]?.[0].issue
 			expect(reducedIssue?.ref.teamId).toBeNull()
 			expect(reducedIssue?.identifier).toBeNull()
@@ -236,7 +239,7 @@ describe('Linear subscribed events', () => {
 				attachment: { _tag: 'LinearIssueAttachment', issueId, id: 'attachment-1' },
 			})
 			yield* makeLinearEventProcessor({ namespace })
-				.process([attachmentAdmission, admissions[0]!])
+				.process([attachmentAdmission, admissions[0]!], yield* firstAttempt())
 				.pipe(Effect.provide(services))
 			const recoveredIssue = callback.mock.calls[2]?.[0].issue
 			expect(recoveredIssue?.ref.teamId).toBe(created.data.teamId)
@@ -281,7 +284,7 @@ describe('Linear subscribed events', () => {
 				Layer.mock(MailboxSubscriptions, { isSubscribed: () => Effect.succeed(true) }),
 			)
 			const result = yield* makeLinearEventProcessor({ namespace })
-				.process([admissions[0]!, admissions[1]!])
+				.process([admissions[0]!, admissions[1]!], yield* firstAttempt())
 				.pipe(Effect.provide(services))
 			expect(result).toEqual(ProviderEventHandled.make({}))
 			expect(callback.mock.calls[0]?.[0].events.map((event) => event._tag)).toEqual(['LinearCommentCreated'])
@@ -326,7 +329,7 @@ describe('Linear subscribed events', () => {
 				Layer.mock(MailboxSubscriptions, { isSubscribed: () => Effect.succeed(true) }),
 			)
 			const result = yield* makeLinearEventProcessor({ namespace })
-				.process([admissions[0]!, admissions[1]!])
+				.process([admissions[0]!, admissions[1]!], yield* firstAttempt())
 				.pipe(Effect.provide(services))
 			expect(result).toEqual(ProviderEventHandled.make({}))
 			expect(onMentioned.mock.calls[0]?.[0].events.map((event) => event._tag)).toEqual(['LinearCommentCreated'])
@@ -374,10 +377,14 @@ describe('Linear subscribed events', () => {
 				namespace,
 				bot: { organizationId: linearOrganizationId, appUserId: linearAppUserId },
 			})
-			const createResult = yield* processor.process([selfCreateAdmission]).pipe(Effect.provide(services))
+			const createResult = yield* processor
+				.process([selfCreateAdmission], yield* firstAttempt())
+				.pipe(Effect.provide(services))
 			expect(createResult).toEqual(ProviderEventIgnored.make({ reason: 'callback_not_configured' }))
 			expect(createdCallback).not.toHaveBeenCalled()
-			const removeResult = yield* processor.process([removeAdmission]).pipe(Effect.provide(services))
+			const removeResult = yield* processor
+				.process([removeAdmission], yield* firstAttempt())
+				.pipe(Effect.provide(services))
 			expect(removeResult).toEqual(ProviderEventHandled.make({}))
 			expect(unsubscribe).toHaveBeenCalledOnce()
 		}),

@@ -7,6 +7,7 @@
 	},
 	"dependencies": {
 		"@effect/platform-node": "catalog:",
+		"@effect/platform-bun": "catalog:",
 		"@humanlayer/channels-alchemy-cloudflare": "workspace:*",
 		"@humanlayer/channels-delivery-next": "workspace:*",
 		"@humanlayer/channels-github-next": "workspace:*",

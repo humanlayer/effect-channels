@@ -26,6 +26,7 @@ import {
 	HttpServer,
 } from 'effect/unstable/http'
 
+import { makeTestDeliveryExecution } from '../../delivery-next/test/delivery-execution'
 import { AddIssueLabelsBody } from '../src/api/AddIssueLabels'
 import { CloseIssueBody } from '../src/api/CloseIssue'
 import { ClosePullRequestBody } from '../src/api/ClosePullRequest'
@@ -76,7 +77,11 @@ export const makeInMemoryMailboxFixture = <R>(processors: ReadonlyArray<Provider
 				return mailbox === undefined
 					? Effect.die(new Error(`In-memory mailbox not found: ${mailboxKey}`))
 					: Queue.take(mailbox).pipe(
-							Effect.flatMap((admission) => processProviderEvent(processors)([admission])),
+							Effect.flatMap((admission) =>
+								Effect.flatMap(makeTestDeliveryExecution(mailboxKey), ({ execution }) =>
+									processProviderEvent(processors)([admission], execution),
+								),
+							),
 						)
 			},
 		}

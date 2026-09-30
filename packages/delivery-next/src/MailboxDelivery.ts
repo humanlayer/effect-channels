@@ -34,6 +34,8 @@ export type MailboxDeliveryError = MailboxDeliveryUnavailable | MailboxDeliveryR
  * @property resourceId - for slack the channel + thread TS, for github the issue/pr #, for linear the ticket #
  * @property eventId - the unique event ID for the webhook
  * @property payload - the parsed, provider-specific event encoded as JSON
+ * @property interrupt - the event asks the mailbox's current delivery to stop, such as a Linear stop
+ * prompt. The store marks the active delivery in the same write; the event itself still waits its turn.
  *
  */
 export const DeliveryAdmission = Schema.TaggedStruct('DeliveryAdmission', {
@@ -43,6 +45,7 @@ export const DeliveryAdmission = Schema.TaggedStruct('DeliveryAdmission', {
 	resourceId: Schema.NonEmptyString,
 	eventId: Schema.NonEmptyString,
 	payload: Schema.Json,
+	interrupt: Schema.optionalKey(Schema.Literal(true)),
 })
 export type DeliveryAdmission = Schema.Schema.Type<typeof DeliveryAdmission>
 

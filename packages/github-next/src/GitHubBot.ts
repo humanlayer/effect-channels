@@ -6,6 +6,7 @@ import {
 	type ChannelsProvider,
 	type DeliveryMode,
 	type DeliveryAdmissionBatch,
+	type ProviderDeliveryExecution,
 } from '@humanlayer/channels-delivery-next'
 import { Effect, Layer, Predicate, Schema } from 'effect'
 import type { Config, Redacted } from 'effect'
@@ -73,8 +74,10 @@ export const make = <E, R, ApiError = never, ApiRequirements = never>(
 				namespace: eventProcessor.namespace,
 				providerName: eventProcessor.providerName,
 				/** The callbacks are wrapped per batch because they read the services of the running batch. */
-				process: (admissions: DeliveryAdmissionBatch) =>
-					eventProcessor.process(admissions).pipe(Effect.provide(callbacks), Effect.provide(gitHubApi)),
+				process: (admissions: DeliveryAdmissionBatch, execution: ProviderDeliveryExecution) =>
+					eventProcessor
+						.process(admissions, execution)
+						.pipe(Effect.provide(callbacks), Effect.provide(gitHubApi)),
 			}
 		}),
 	}

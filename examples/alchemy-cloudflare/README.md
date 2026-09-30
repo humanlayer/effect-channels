@@ -162,6 +162,33 @@ Configure the Slack Events API request URL as:
 https://<your-worker-hostname>/integrations/slack/webhook
 ```
 
+## Fake remote agent (Phase 1)
+
+Mention the Slack bot with `handoff [seconds]` (for example `@bot handoff 60`; default 60, kept between 5 and 900) to try a durable handoff. The callback starts `FakeRemoteAgent` (`src/FakeRemoteAgentDO.ts`), a Durable Object that stands in for a remote agent host, posts `Handed off <deliveryId>. Finishing in <n>s.`, and returns `delivery.handoff()`. The mailbox stays held while the remote agent waits. When its alarm fires, the remote agent calls `GET /deliveries/<id>` and `POST /deliveries/<id>/complete` on the Worker with the delivery's bearer token, which retires the delivery and releases the mailbox. Phase 1 posts nothing on completion; the proof is that a queued follow-up in the thread is answered only then.
+
+The remote agent calls the delivery API at the Worker's own public URL, which Alchemy binds at deploy (`Cloudflare.Worker.URL`). If the delivery API cannot be reached, the alarm fails and Cloudflare retries it. If the API refuses the request, the remote agent logs the reason and drops the job. Logs name the delivery ID, stage, and receipt status only, never the token.
+
+### Setup
+
+1. From `examples/alchemy-cloudflare`, run `bun alchemy deploy`, and note the URL it prints.
+2. In a second terminal, run `bun alchemy logs --filter IngressWorker --since 10m` and leave it open.
+
+### Checks
+
+In the Slack test channel:
+
+- **Handoff.** Post `@bot handoff 60`. Within a few seconds the bot replies `Handed off delivery:v1:…. Finishing in 60s.` The logs show `Mailbox processing completed` with the delivery handed off and no claim held. About 60s later they show `Fake remote agent read delivery status` (stage `ExternalWaiting`), `Fake remote agent completed delivery` (receipt `accepted`), and the delivery retiring.
+- **Queued follow-up.** Post `@bot handoff 60` in a new thread. Right after the bot's reply, post `follow-up` in that thread. The bot doesn't react to the follow-up until the 60s are up; then the subscribed-thread `eyes` reaction appears.
+- **Survives a redeploy.** Post `@bot handoff 240`. While it waits, run `bun alchemy deploy --force --yes`. After 240s the logs still show the remote agent's `complete` accepted and the delivery retired.
+- **Bad credentials.** Copy the delivery ID from a bot reply, set `WORKER_URL` in your shell to the printed URL, then:
+
+  ```bash
+  curl -i -X POST "$WORKER_URL/deliveries/<id>/complete" -H 'content-type: application/json' -d '{}'                                  # 401: no token
+  curl -i -X POST "$WORKER_URL/deliveries/<id>/complete" -H 'content-type: application/json' -H 'Authorization: Bearer wrong' -d '{}' # 404
+  ```
+
+- Confirm no access token appears in the logs.
+
 ## Runtime behavior
 
 - The Worker verifies provider signatures before admitting events through typed Durable Object RPC.

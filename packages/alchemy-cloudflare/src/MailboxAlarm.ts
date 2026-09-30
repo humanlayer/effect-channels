@@ -26,7 +26,7 @@ export const makeMailboxAlarmHandler = (options: MailboxAlarmHandlerOptions) =>
 		const rearmWhenDueWithoutAlarm = Effect.gen(function* () {
 			const stored = yield* storage.get(mailboxStateKey)
 			if (Predicate.isUndefined(stored)) return
-			const { readyAt } = yield* Schema.decodeUnknownEffect(DurableMailboxState)(stored)
+			const { readyAt } = (yield* Schema.decodeUnknownEffect(DurableMailboxState)(stored)).deliveries
 			if (Predicate.isNull(readyAt)) return
 			if (Predicate.isNotNull(yield* storage.getAlarm)) return
 			const now = yield* Clock.currentTimeMillis

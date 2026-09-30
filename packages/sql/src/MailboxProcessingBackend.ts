@@ -9,29 +9,39 @@
  * All times come from Effect's Clock and reach SQL as parameters.
  */
 import {
+	BatchId,
 	ClaimedMailboxBatch,
+	DeliveryAccessToken,
 	DeliveryAdmission,
 	DeliveryAdmissionBatch,
+	DeliveryHandoffUnsupported,
+	DeliveryPreparationConflict,
 	MailboxProcessingAttemptResult,
 	MailboxProcessingBackend,
 	MailboxProcessingClaimLost,
 	MailboxProcessingUnavailable,
 	MailboxSequence,
+	PreparedDeliveryInvocation,
 	RecoverableMailbox,
 	Timestamp,
 	WaitingMailbox,
+	makeDeliveryId,
 	type ClaimMailbox,
 	type DeferMailbox,
+	type HandOffMailboxDelivery,
+	type PrepareMailboxDelivery,
 	type RecordProcessingAttemptResult,
 	type RenewMailboxClaim,
 } from '@humanlayer/channels-delivery-next'
-import { Array as Arr, Clock, Effect, Layer, Match, Option, Predicate, Random, Schema } from 'effect'
+import { Array as Arr, Clock, Effect, Layer, Match, Option, Predicate, Random, Result, Schema } from 'effect'
 import * as SqlClient from 'effect/unstable/sql/SqlClient'
 import * as SqlError from 'effect/unstable/sql/SqlError'
 
 import { migrate } from './MailboxDelivery'
 
 const resultCodec = Schema.fromJsonString(MailboxProcessingAttemptResult)
+const preparedCodec = Schema.fromJsonString(PreparedDeliveryInvocation)
+const samePreparation = Schema.toEquivalence(PreparedDeliveryInvocation)
 
 const PositiveInt = Schema.Int.check(Schema.isGreaterThan(0))
 
@@ -58,10 +68,24 @@ const lockedMailboxRows = Schema.Array(Schema.Struct({ status: Schema.Literals([
 	Schema.isMaxLength(1),
 )
 
-/** The one claim of a mailbox that is running or waiting for its retry. The claims table allows at most one. */
-const liveClaimRows = Schema.Array(Schema.Struct({ claim_id: Schema.NonEmptyString, attempt: PositiveInt })).check(
-	Schema.isMaxLength(1),
-)
+/**
+ * The one claim of a mailbox that is running or waiting for its retry, with its batch.
+ * The claims table allows at most one.
+ */
+const liveClaimRows = Schema.Array(
+	Schema.Struct({
+		claim_id: Schema.NonEmptyString,
+		attempt: PositiveInt,
+		batch_id: BatchId,
+		access_token: DeliveryAccessToken,
+		prepared_json: Schema.NullOr(preparedCodec),
+	}),
+).check(Schema.isMaxLength(1))
+
+/** The batch a running claim owns. */
+const ownedBatchRows = Schema.Array(
+	Schema.Struct({ batch_id: BatchId, prepared_json: Schema.NullOr(preparedCodec) }),
+).check(Schema.isMaxLength(1))
 
 const admissionRows = Schema.Array(Schema.Struct({ admission_json: Schema.fromJsonString(DeliveryAdmission) }))
 
@@ -136,6 +160,7 @@ const findReadyMailboxes = Effect.fn('delivery.sql.find_ready_mailboxes')(functi
 
 type StartClaim = {
 	readonly mailboxKey: string
+	readonly batchId: BatchId
 	readonly claimId: string
 	readonly attempt: number
 	readonly now: number
@@ -146,8 +171,12 @@ type StartClaim = {
 const insertClaim = (input: StartClaim) =>
 	Effect.gen(function* () {
 		const sql = (yield* SqlClient.SqlClient).withoutTransforms()
-		yield* sql`INSERT INTO delivery_next_claims (claim_id, mailbox_key, attempt, status, lease_expires_at, claimed_at)
-			VALUES (${input.claimId}, ${input.mailboxKey}, ${input.attempt}, 'active', ${input.leaseExpiresAt}, ${input.now})`
+		yield* sql`INSERT INTO delivery_next_claims (
+				claim_id, mailbox_key, batch_id, attempt, status, lease_expires_at, claimed_at
+			) VALUES (
+				${input.claimId}, ${input.mailboxKey}, ${input.batchId}, ${input.attempt}, 'active',
+				${input.leaseExpiresAt}, ${input.now}
+			)`
 	})
 
 const activateMailbox = (input: StartClaim) =>
@@ -158,8 +187,13 @@ const activateMailbox = (input: StartClaim) =>
 			WHERE mailbox_key = ${input.mailboxKey}`
 	})
 
-/** Freeze the waiting admissions at or below `upToSequence` as attempt 1 of a new claim. Runs under the mailbox lock. */
-const claimWaitingEvents = (input: StartClaim & { readonly upToSequence: number }) =>
+/**
+ * Freeze the waiting admissions at or below `upToSequence` as a new batch, and claim it for attempt 1.
+ * Runs under the mailbox lock.
+ */
+const claimWaitingEvents = (
+	input: StartClaim & { readonly upToSequence: number; readonly accessToken: DeliveryAccessToken },
+) =>
 	Effect.gen(function* () {
 		const sql = (yield* SqlClient.SqlClient).withoutTransforms()
 		const admissions = toBatch(
@@ -170,6 +204,8 @@ const claimWaitingEvents = (input: StartClaim & { readonly upToSequence: number 
 			),
 		)
 		if (Option.isNone(admissions)) return Option.none()
+		yield* sql`INSERT INTO delivery_next_batches (batch_id, mailbox_key, access_token, created_at)
+			VALUES (${input.batchId}, ${input.mailboxKey}, ${input.accessToken}, ${input.now})`
 		yield* insertClaim(input)
 		yield* sql`UPDATE delivery_next_admissions SET claim_id = ${input.claimId}
 			WHERE mailbox_key = ${input.mailboxKey} AND claim_id IS NULL AND sequence_id <= ${input.upToSequence}`
@@ -177,8 +213,10 @@ const claimWaitingEvents = (input: StartClaim & { readonly upToSequence: number 
 		return Option.some(
 			ClaimedMailboxBatch.make({
 				mailboxKey: input.mailboxKey,
+				batchId: input.batchId,
 				claimId: input.claimId,
 				attempt: input.attempt,
+				accessToken: input.accessToken,
 				admissions: admissions.value,
 			}),
 		)
@@ -190,7 +228,13 @@ const claimWaitingEvents = (input: StartClaim & { readonly upToSequence: number 
  * The old claim is closed first, because a mailbox may have only one live claim.
  * Runs under the mailbox lock.
  */
-const claimFrozenBatch = (input: StartClaim & { readonly previousClaimId: string }) =>
+const claimFrozenBatch = (
+	input: StartClaim & {
+		readonly previousClaimId: string
+		readonly accessToken: DeliveryAccessToken
+		readonly prepared: PreparedDeliveryInvocation | null
+	},
+) =>
 	Effect.gen(function* () {
 		const sql = (yield* SqlClient.SqlClient).withoutTransforms()
 		yield* sql`UPDATE delivery_next_claims
@@ -210,13 +254,18 @@ const claimFrozenBatch = (input: StartClaim & { readonly previousClaimId: string
 			return yield* new MailboxProcessingUnavailable({ reason: 'sql_frozen_batch_missing' })
 		}
 		yield* activateMailbox(input)
+		const batch = {
+			mailboxKey: input.mailboxKey,
+			batchId: input.batchId,
+			claimId: input.claimId,
+			attempt: input.attempt,
+			accessToken: input.accessToken,
+			admissions: admissions.value,
+		}
 		return Option.some(
-			ClaimedMailboxBatch.make({
-				mailboxKey: input.mailboxKey,
-				claimId: input.claimId,
-				attempt: input.attempt,
-				admissions: admissions.value,
-			}),
+			Predicate.isNull(input.prepared)
+				? ClaimedMailboxBatch.make(batch)
+				: ClaimedMailboxBatch.make({ ...batch, prepared: input.prepared }),
 		)
 	})
 
@@ -235,15 +284,20 @@ const claimMailbox = (input: ClaimMailbox) =>
 				)
 				if (Predicate.isUndefined(mailbox)) return Option.none()
 				const [liveClaim] = yield* Schema.decodeUnknownEffect(liveClaimRows)(
-					yield* sql`SELECT claim_id, attempt::double precision AS attempt FROM delivery_next_claims
-					WHERE mailbox_key = ${mailboxKey} AND status IN ('active', 'retry')`,
+					yield* sql`SELECT claim.claim_id, claim.attempt::double precision AS attempt, claim.batch_id,
+						batch.access_token, batch.prepared_json
+					FROM delivery_next_claims claim
+					LEFT JOIN delivery_next_batches batch ON batch.batch_id = claim.batch_id
+					WHERE claim.mailbox_key = ${mailboxKey} AND claim.status IN ('active', 'retry')`,
 				)
 				return yield* Match.value(input).pipe(
 					Match.tagsExhaustive({
-						ClaimWaitingEvents: ({ upToSequence }) =>
+						ClaimWaitingEvents: ({ upToSequence, batchId, accessToken }) =>
 							mailbox.status === 'idle'
 								? claimWaitingEvents({
 										mailboxKey,
+										batchId,
+										accessToken,
 										claimId,
 										attempt: 1,
 										now,
@@ -256,6 +310,9 @@ const claimMailbox = (input: ClaimMailbox) =>
 								? Effect.succeedNone
 								: claimFrozenBatch({
 										mailboxKey,
+										batchId: liveClaim.batch_id,
+										accessToken: liveClaim.access_token,
+										prepared: liveClaim.prepared_json,
 										claimId,
 										attempt: liveClaim.attempt + 1,
 										now,
@@ -386,6 +443,67 @@ const recordProcessingAttemptResult = (input: RecordProcessingAttemptResult) =>
 		}),
 	)
 
+/**
+ * What a prepare does with the batch its claim owns: nothing owned is a lost claim, a saved choice must
+ * match, and otherwise the new choice is saved.
+ */
+const decidePreparation = (
+	input: PrepareMailboxDelivery & { readonly owned: (typeof ownedBatchRows.Type)[number] | undefined },
+): Result.Result<PreparedDeliveryInvocation, MailboxProcessingClaimLost | DeliveryPreparationConflict> => {
+	const { mailboxKey, claimId, owned } = input
+	if (Predicate.isUndefined(owned)) return Result.fail(new MailboxProcessingClaimLost({ mailboxKey, claimId }))
+	if (Predicate.isNull(owned.prepared_json)) return Result.succeed(input.prepared)
+	return samePreparation(owned.prepared_json, input.prepared)
+		? Result.succeed(owned.prepared_json)
+		: Result.fail(
+				new DeliveryPreparationConflict({ deliveryId: makeDeliveryId({ mailboxKey, batchId: owned.batch_id }) }),
+			)
+}
+
+/**
+ * Save the callback choice on the batch the running claim owns, once. The same choice again returns
+ * the saved one; a different choice is a conflict and changes nothing.
+ */
+const prepareDelivery = (input: PrepareMailboxDelivery) =>
+	Effect.gen(function* () {
+		const { mailboxKey, claimId } = input
+		const outcome = yield* Effect.gen(function* () {
+			const now = yield* Clock.currentTimeMillis
+			const sql = (yield* SqlClient.SqlClient).withoutTransforms()
+			const preparedJson = yield* Schema.encodeEffect(preparedCodec)(input.prepared)
+			return yield* sql.withTransaction(
+				Effect.gen(function* () {
+					yield* sql`SELECT mailbox_key FROM delivery_next_mailboxes WHERE mailbox_key = ${mailboxKey} FOR UPDATE`
+					const [owned] = yield* Schema.decodeUnknownEffect(ownedBatchRows)(
+						yield* sql`SELECT batch.batch_id, batch.prepared_json
+							FROM delivery_next_claims claim
+							JOIN delivery_next_batches batch ON batch.batch_id = claim.batch_id
+							WHERE claim.claim_id = ${claimId} AND claim.mailbox_key = ${mailboxKey}
+								AND claim.status = 'active'`,
+					)
+					const outcome = decidePreparation({ ...input, owned })
+					if (Predicate.isUndefined(owned) || Predicate.isNotNull(owned.prepared_json)) return outcome
+					yield* sql`UPDATE delivery_next_batches SET prepared_json = ${preparedJson}, prepared_at = ${now}
+						WHERE batch_id = ${owned.batch_id}`
+					return outcome
+				}),
+			)
+		}).pipe(unavailable)
+		return yield* Effect.fromResult(outcome)
+	}).pipe(
+		Effect.withSpan('delivery.sql.prepare_delivery', {
+			attributes: { mailbox_key: input.mailboxKey, claim_id: input.claimId },
+		}),
+	)
+
+/** Postgres has no remote control yet, so it refuses every handoff. */
+const handOffDelivery = (input: HandOffMailboxDelivery) =>
+	Effect.fail(new DeliveryHandoffUnsupported()).pipe(
+		Effect.withSpan('delivery.sql.hand_off_delivery', {
+			attributes: { mailbox_key: input.mailboxKey, claim_id: input.claimId },
+		}),
+	)
+
 export type MailboxProcessingBackendSqlOptions = {
 	/** The most mailboxes one `findReadyMailboxes` reports. */
 	readonly claimLimit: number
@@ -407,6 +525,8 @@ export const MailboxProcessingBackendSql = (options: MailboxProcessingBackendSql
 				renewClaim: (input) => renewClaim(input).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
 				recordProcessingAttemptResult: (input) =>
 					recordProcessingAttemptResult(input).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
+				prepareDelivery: (input) => prepareDelivery(input).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
+				handOffDelivery,
 			})
 		}),
 	)

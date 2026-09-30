@@ -7,6 +7,7 @@ import {
 } from '@humanlayer/channels-delivery-next'
 import { Effect, Layer, Ref } from 'effect'
 
+import { makeTestDeliveryExecution } from '../../delivery-next/test/delivery-execution'
 import { LinearApi } from '../src/LinearApi'
 import { LinearCallbacks, type LinearCallbackHandlers } from '../src/LinearCallbacks'
 import { makeLinearEventProcessor } from '../src/LinearEventProcessor'
@@ -14,6 +15,7 @@ import { LinearAgentActivityId } from '../src/LinearIdentity'
 import { LinearActivityContent, LinearAgentActivityReceipt } from '../src/LinearModels'
 import type { LinearCreateAgentActivityRequest } from '../src/LinearModels'
 import {
+	firstAttempt,
 	agentSessionPayloads,
 	appUserNotificationPayloads,
 	linearAgentSessionAdmission,
@@ -79,7 +81,7 @@ describe('Linear Agent Session processing', () => {
 					),
 			)
 			const result = yield* processor
-				.process([yield* linearAgentSessionAdmission(agentSessionPayloads[0])])
+				.process([yield* linearAgentSessionAdmission(agentSessionPayloads[0])], yield* firstAttempt())
 				.pipe(Effect.provide(layer))
 			expect(result).toEqual(ProviderEventHandled.make({}))
 			expect(yield* Ref.get(order)).toEqual(['thought', 'callback'])
@@ -115,8 +117,10 @@ describe('Linear Agent Session processing', () => {
 					),
 			)
 			const admission = yield* linearAgentSessionAdmission(agentSessionPayloads[0])
-			yield* processor.process([admission]).pipe(Effect.provide(layer), Effect.flip)
-			const result = yield* processor.process([admission]).pipe(Effect.provide(layer))
+			const first = yield* makeTestDeliveryExecution()
+			yield* processor.process([admission], first.execution).pipe(Effect.provide(layer), Effect.flip)
+			const retry = yield* first.retry
+			const result = yield* processor.process([admission], retry.execution).pipe(Effect.provide(layer))
 			expect(result).toEqual(ProviderEventHandled.make({}))
 			const captured = yield* Ref.get(requests)
 			expect(captured).toHaveLength(2)
@@ -134,7 +138,7 @@ describe('Linear Agent Session processing', () => {
 				() => Effect.die('prompted must not create an automatic thought'),
 			)
 			const result = yield* processor
-				.process([yield* linearAgentSessionAdmission(agentSessionPayloads[1])])
+				.process([yield* linearAgentSessionAdmission(agentSessionPayloads[1])], yield* firstAttempt())
 				.pipe(Effect.provide(layer))
 			expect(result).toEqual(ProviderEventHandled.make({}))
 			expect(yield* Ref.get(prompts)).toEqual(['Please include a regression test.'])
@@ -148,7 +152,7 @@ describe('Linear Agent Session processing', () => {
 				() => Effect.die('must not create an activity'),
 			)
 			const result = yield* processor
-				.process([linearNotificationAdmission(appUserNotificationPayloads[0])])
+				.process([linearNotificationAdmission(appUserNotificationPayloads[0])], yield* firstAttempt())
 				.pipe(Effect.provide(layer))
 			expect(result).toEqual(ProviderEventIgnored.make({ reason: 'supplemental_signal' }))
 		}),
@@ -162,7 +166,7 @@ describe('Linear Agent Session processing', () => {
 				Effect.die('must not create an activity'),
 			)
 			const result = yield* processor
-				.process([yield* linearAgentSessionAdmission(payload)])
+				.process([yield* linearAgentSessionAdmission(payload)], yield* firstAttempt())
 				.pipe(Effect.provide(layer), Effect.flip)
 			expect(result).toEqual(ProviderEventInvalid.make({ provider: 'linear', reason: 'identity_mismatch' }))
 		}),

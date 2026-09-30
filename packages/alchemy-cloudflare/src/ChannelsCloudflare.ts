@@ -6,15 +6,23 @@
  * mailbox's Durable Object. The Durable Object stores the mailbox and runs the callbacks when its
  * alarm fires. Both halves are built from the same options, so they cannot drift apart.
  */
-import { Channels, type ChannelsProviderRequirements } from '@humanlayer/channels-delivery-next'
-import { Effect, Layer } from 'effect'
+import {
+	Channels,
+	DeliveryControlLive,
+	deliveryApiRoutes,
+	type ChannelsProviderRequirements,
+	type MailboxSubscriptions,
+} from '@humanlayer/channels-delivery-next'
+import { RuntimeContext } from 'alchemy/RuntimeContext'
+import { Context, type Crypto, Effect, Layer } from 'effect'
 import * as HttpRouter from 'effect/unstable/http/HttpRouter'
 
+import { DeliveryControlAlchemyCloudflare, makeDeliveryRequestHandler } from './DeliveryControl'
+import { DeliveryControlBackendFromDurableObjectStorage } from './DeliveryControlBackend'
 import { makeMailboxAlarmHandler, type MailboxAlarmHandlerOptions } from './MailboxAlarm'
 import {
 	MailboxDeliveryAlchemyCloudflare,
 	makeDeliverFromDurableObjectStorage,
-	type DeliveryMailboxNamespace,
 } from './MailboxDelivery'
 import { MailboxProcessingBackendFromDurableObjectStorage } from './MailboxProcessingBackend'
 import { type MailboxStorage, MailboxStorageFromDurableObjectState } from './MailboxStorage'
@@ -23,6 +31,7 @@ import { MailboxSubscriptionsFromDurableObjectStorage } from './MailboxSubscript
 /**
  * The Durable Object half over the given `MailboxStorage`. `make` runs it over the Durable Object's own storage.
  *
+ * Needs `Crypto` to make each new batch's ID and token; a Durable Object can provide `NodeCrypto.layer`.
  * A provider that cannot be built, such as one with a missing secret, is logged by the provider
  * and then dies here: a Durable Object has no caller that could handle the failure.
  */
@@ -33,15 +42,17 @@ export const makeMailbox = <const Requirements extends ReadonlyArray<ChannelsPro
 ) =>
 	Effect.gen(function* () {
 		const deliver = yield* makeDeliverFromDurableObjectStorage
+		const deliveryRequest = yield* makeDeliveryRequestHandler
 		const runMailboxAlarm = yield* makeMailboxAlarmHandler(alarmOptions)
-		return { deliver, alarm: runMailboxAlarm }
+		return { deliver, deliveryRequest, alarm: runMailboxAlarm }
 	}).pipe(
 		Effect.provide(
-			Channels.processingLayer(options, 'disabled').pipe(
+			Layer.merge(Channels.processingLayer(options, 'disabled'), DeliveryControlLive).pipe(
 				Layer.provide(
-					Layer.merge(
+					Layer.mergeAll(
 						MailboxProcessingBackendFromDurableObjectStorage,
 						MailboxSubscriptionsFromDurableObjectStorage,
+						DeliveryControlBackendFromDurableObjectStorage,
 					),
 				),
 				Layer.provideMerge(storage),
@@ -50,25 +61,63 @@ export const makeMailbox = <const Requirements extends ReadonlyArray<ChannelsPro
 		Effect.orDie,
 	)
 
+/**
+ * What a mailbox needs from its host: `Crypto`, and whatever the providers' callbacks need. The mailbox
+ * itself supplies `RuntimeContext`, so callbacks can call other Durable Objects.
+ */
+export type MailboxServices<Requirements extends ReadonlyArray<ChannelsProviderRequirements>> = Exclude<
+	| Crypto.Crypto
+	| Requirements[number]['build']
+	| Exclude<Requirements[number]['process'], MailboxSubscriptions>,
+	RuntimeContext
+>
+
 export const make = <const Requirements extends ReadonlyArray<ChannelsProviderRequirements>>(
 	options: Channels.Options<Requirements>,
 ) => {
 	/**
-	 * The Durable Object half. Run it inside the application's own Durable Object class and return
-	 * `deliver` and `alarm` from it, beside any methods of the application's own.
-	 * The class cannot use its alarm for anything else: a Durable Object has one, and the mailbox needs it.
+	 * The Durable Object half, as Alchemy's two-phase implementation: pass it to the mailbox class's
+	 * `.make(...)`. The outer Effect runs when the object is built and takes the services the callbacks
+	 * need, such as `Crypto`, from the host Worker's layers; those become requirements of the class's
+	 * layer. The inner Effect runs per instance over the object's own storage and returns `deliver`,
+	 * `deliveryRequest` and `alarm`; the callbacks get the instance's `RuntimeContext`. The class cannot
+	 * use its alarm for anything else: a Durable Object has one, and the mailbox needs it.
 	 */
 	const mailbox = (alarmOptions: MailboxAlarmHandlerOptions) =>
-		makeMailbox(options, alarmOptions, MailboxStorageFromDurableObjectState)
+		Effect.context<MailboxServices<Requirements>>().pipe(
+			Effect.map((services) =>
+				Effect.gen(function* () {
+					const runtimeContext = yield* RuntimeContext
+					return yield* makeMailbox(options, alarmOptions, MailboxStorageFromDurableObjectState).pipe(
+						Effect.provideContext(Context.add(services, RuntimeContext, runtimeContext)),
+					)
+				}),
+			),
+		)
 
 	/**
-	 * The Worker half. Use one of the two: mount `routes` on the application's own router,
-	 * or yield `fetch` for a Worker that serves nothing else.
+	 * The Worker's routes: provider webhooks, forwarded to the mailbox object that owns each event.
+	 * Needs `DeliveryMailboxes`, the application's mailbox namespace.
 	 */
-	const ingress = (mailboxes: DeliveryMailboxNamespace) => {
-		const routes = Channels.routesLayer(options).pipe(Layer.provide(MailboxDeliveryAlchemyCloudflare(mailboxes)))
-		return { routes, fetch: HttpRouter.toHttpEffect(routes).pipe(Effect.orDie) }
-	}
+	const routes = Channels.routesLayer(options).pipe(Layer.provide(MailboxDeliveryAlchemyCloudflare))
 
-	return { mailbox, ingress }
+	/**
+	 * The delivery API, for remote workers finishing handed-off deliveries. Serve it beside `routes`,
+	 * or leave it out. Each request goes to the mailbox object that owns the delivery.
+	 */
+	const deliveryApi = deliveryApiRoutes(options).pipe(Layer.provide(DeliveryControlAlchemyCloudflare))
+
+	return { mailbox, routes, deliveryApi }
 }
+
+/**
+ * A Worker's `fetch` from the bot's routes. Raises the router's path-parameter limit, because a
+ * delivery ID is longer than the default 100 characters. A provider that cannot be built is logged
+ * by the provider and then dies here: a Worker has no caller that could handle the failure.
+ */
+export const serve = <E, R>(routes: Layer.Layer<never, E, R | HttpRouter.HttpRouter>) =>
+	HttpRouter.toHttpEffect(routes).pipe(
+		Effect.provideService(HttpRouter.RouterConfig, Channels.routerConfig),
+		Effect.orDie,
+	)
+

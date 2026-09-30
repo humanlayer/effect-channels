@@ -1,6 +1,8 @@
 import { describe, it } from '@effect/vitest'
-import { Cause, Context, Effect, Exit, Layer, Schema } from 'effect'
+import { DeliveryHandoff, type DeliveryContext } from '@humanlayer/channels-delivery-next'
+import { Cause, Context, Effect, Exit, Layer, Ref, Schema } from 'effect'
 
+import { makeTestDeliveryExecution } from '../../delivery-next/test/delivery-execution'
 import {
 	SlackCallbackError,
 	SlackCallbacks,
@@ -56,11 +58,18 @@ const subscribedThreadEvents = SlackSubscribedThreadEvents.make({
 const buildCallbacks = <E, R>(handlers: SlackCallbackHandlers<E, R>) =>
 	SlackCallbacks.pipe(Effect.provide(SlackCallbacks.layer(handlers)))
 
-const requireNewMention = (callbacks: SlackCallbacks['Service']) =>
-	callbacks.onNewMention ?? (() => Effect.die(new Error('Expected onNewMention callback')))
+/** Run a wrapped callback with a fresh test delivery. */
+const withDelivery =
+	<A, B, E>(callback: ((event: A, delivery: DeliveryContext) => Effect.Effect<B, E>) | undefined, name: string) =>
+	(event: A) =>
+		callback === undefined
+			? Effect.die(new Error(`Expected ${name} callback`))
+			: Effect.flatMap(makeTestDeliveryExecution(), ({ execution }) => callback(event, execution.context))
+
+const requireNewMention = (callbacks: SlackCallbacks['Service']) => withDelivery(callbacks.onNewMention, 'onNewMention')
 
 const requireSubscribed = (callbacks: SlackCallbacks['Service']) =>
-	callbacks.onSubscribedThreadEvents ?? (() => Effect.die(new Error('Expected onSubscribedThreadEvents callback')))
+	withDelivery(callbacks.onSubscribedThreadEvents, 'onSubscribedThreadEvents')
 
 describe('SlackCallbacks', () => {
 	it.effect('captures the application context when its layer is built', ({ expect }) =>
@@ -129,6 +138,20 @@ describe('SlackCallbacks', () => {
 			const callbacks = yield* buildCallbacks({ onNewMention: () => Effect.interrupt })
 			const exit = yield* requireNewMention(callbacks)(newMention).pipe(Effect.exit)
 			expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true)
+		}),
+	)
+
+	it.effect('passes the delivery context through and returns a handoff unchanged', ({ expect }) =>
+		Effect.gen(function* () {
+			const { execution, handoffs } = yield* makeTestDeliveryExecution()
+			const callbacks = yield* buildCallbacks({
+				onNewMention: (_event, delivery) => delivery.handoff(),
+			})
+			const onNewMention =
+				callbacks.onNewMention ?? (() => Effect.die(new Error('Expected onNewMention callback')))
+			const result = yield* onNewMention(newMention, execution.context)
+			expect(result).toEqual(DeliveryHandoff.make({ deliveryId: execution.deliveryId }))
+			expect(yield* Ref.get(handoffs)).toHaveLength(1)
 		}),
 	)
 })

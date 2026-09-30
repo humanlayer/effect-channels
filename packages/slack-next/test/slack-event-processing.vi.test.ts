@@ -3,7 +3,12 @@ import { describe, it } from '@effect/vitest'
 import {
 	DeliveryAdmission,
 	DeliveryAdmissionBatch,
+	type DeliveryOperationKind,
+	DeliveryPreparationConflict,
+	DeliveryPreparationUnavailable,
 	MailboxSubscriptions,
+	PreparedDeliveryInvocation,
+	ProviderDeliveryExecution,
 	processProviderEvent,
 	ProviderEventExecutionFailed,
 	ProviderEventHandled,
@@ -12,9 +17,10 @@ import {
 	ProviderWebhookEvent,
 	MailboxSubscriptionsMemory,
 } from '@humanlayer/channels-delivery-next'
-import { Cause, Effect, Exit, Layer, Redacted, Schema } from 'effect'
+import { Cause, Effect, Exit, Layer, Option, Redacted, Ref, Schema } from 'effect'
 import { vi } from 'vite-plus/test'
 
+import { makeTestDeliveryExecution } from '../../delivery-next/test/delivery-execution'
 import { SlackApi } from '../src/SlackApi'
 import {
 	SlackConversationStopped,
@@ -26,7 +32,7 @@ import {
 	type SlackNewMention,
 	type SlackSubscribedThreadEvents,
 } from '../src/SlackCallbackEvents'
-import { SlackCallbacks, type SlackCallbackHandlers } from '../src/SlackCallbacks'
+import { SlackCallbacks, type SlackCallbackHandler, type SlackCallbackHandlers } from '../src/SlackCallbacks'
 import { makeSlackEventProcessor } from '../src/SlackEventProcessor'
 import { SlackChannelId, SlackMessageTs, SlackTeamId, slackThreadResourceId } from '../src/SlackIdentity'
 import {
@@ -151,9 +157,9 @@ const subscribedRuntimeLayer = Layer.merge(
 )
 
 const process = <E, R>(handlers: SlackCallbackHandlers<E, R>, batch: DeliveryAdmissionBatch, layer = runtimeLayer) =>
-	processProviderEvent([makeSlackEventProcessor({ namespace: 'mention-test' })])(batch).pipe(
-		Effect.provide(Layer.merge(SlackCallbacks.layer(handlers), layer)),
-	)
+	Effect.flatMap(makeTestDeliveryExecution(), ({ execution }) =>
+		processProviderEvent([makeSlackEventProcessor({ namespace: 'mention-test' })])(batch, execution),
+	).pipe(Effect.provide(Layer.merge(SlackCallbacks.layer(handlers), layer)))
 
 describe('Slack event batch processing', () => {
 	it.effect('delivers mention plus later message and reaction in one onNewMention call', ({ expect }) =>
@@ -465,6 +471,245 @@ describe('Slack event batch processing', () => {
 					metadata: { eventId: 'Ev_FILE_SHARE', eventTime: 1_700_000_003 },
 				},
 			})
+		}),
+	)
+})
+
+const processor = makeSlackEventProcessor({ namespace: 'mention-test' })
+const mentionBatch = () => DeliveryAdmissionBatch.make([admission('Ev_MENTION', mention())])
+
+/** Callbacks and the processor share one in-memory subscription store, so a callback can subscribe the thread. */
+const sharedRuntimeLayer = <E, R>(handlers: SlackCallbackHandlers<E, R>) =>
+	Layer.merge(Layer.provideMerge(SlackCallbacks.layer(handlers), MailboxSubscriptionsMemory), apiLayer)
+
+const threadSupportedOperations: ReadonlyArray<DeliveryOperationKind> = [
+	'CreateMessage',
+	'UpdateMessage',
+	'DeleteMessage',
+	'SetMessageReaction',
+	'SetActivity',
+	'RenderPlan',
+	'AddExternalLink',
+]
+
+describe('Slack delivery preparation', () => {
+	it.effect('prepares the callback, thread, and trigger message once before the callback runs', ({ expect }) => {
+		const preparedBeforeCallback: Array<number> = []
+		const deliveryIds: Array<string> = []
+		return Effect.gen(function* () {
+			const test = yield* makeTestDeliveryExecution()
+			const onNewMention: SlackCallbackHandler<SlackNewMention, never, never> = (_event, delivery) =>
+				Ref.get(test.preparations).pipe(
+					Effect.map((preparations) => {
+						preparedBeforeCallback.push(preparations.length)
+						deliveryIds.push(delivery.deliveryId)
+					}),
+				)
+			const result = yield* processor
+				.process(mentionBatch(), test.execution)
+				.pipe(Effect.provide(sharedRuntimeLayer({ onNewMention })))
+
+			expect(result).toEqual(ProviderEventHandled.make({}))
+			expect(preparedBeforeCallback).toEqual([1])
+			expect(deliveryIds).toEqual([test.execution.deliveryId])
+			expect(yield* Ref.get(test.preparations)).toEqual([
+				PreparedDeliveryInvocation.make({
+					callback: 'onNewMention',
+					presentationVersion: 1,
+					destination: {
+						_tag: 'SlackThread',
+						thread: { teamId, channelId, threadTs: rootTs, isDm: false },
+					},
+					activationTarget: { _tag: 'SlackMessage', message: { teamId, channelId, messageTs: rootTs } },
+					supportedOperations: threadSupportedOperations,
+				}),
+			])
+		})
+	})
+
+	it.effect('omits the activation target for a subscribed batch', ({ expect }) =>
+		Effect.gen(function* () {
+			const test = yield* makeTestDeliveryExecution()
+			yield* processor
+				.process(DeliveryAdmissionBatch.make([admission('Ev_REPLY', reply())]), test.execution)
+				.pipe(
+					Effect.provide(
+						Layer.merge(
+							SlackCallbacks.layer({ onSubscribedThreadEvents: () => Effect.void }),
+							subscribedRuntimeLayer,
+						),
+					),
+				)
+			expect(yield* Ref.get(test.preparations)).toEqual([
+				PreparedDeliveryInvocation.make({
+					callback: 'onSubscribedThreadEvents',
+					presentationVersion: 1,
+					destination: {
+						_tag: 'SlackThread',
+						thread: { teamId, channelId, threadTs: rootTs, isDm: false },
+					},
+					supportedOperations: threadSupportedOperations,
+				}),
+			])
+		}),
+	)
+
+	it.effect('does not prepare a batch it ignores', ({ expect }) =>
+		Effect.gen(function* () {
+			const test = yield* makeTestDeliveryExecution()
+			const result = yield* processor
+				.process(DeliveryAdmissionBatch.make([admission('Ev_REPLY', reply())]), test.execution)
+				.pipe(Effect.provide(sharedRuntimeLayer({ onNewMention: () => Effect.void })))
+			expect(result).toEqual(ProviderEventIgnored.make({ reason: 'no_activation_event' }))
+			expect(yield* Ref.get(test.preparations)).toEqual([])
+		}),
+	)
+
+	it.effect('retries the saved callback after the first attempt subscribed the thread', ({ expect }) => {
+		const calls: Array<string> = []
+		const onNewMention: SlackCallbackHandler<
+			SlackNewMention,
+			{ readonly retryable: boolean },
+			MailboxSubscriptions
+		> = (event) =>
+			Effect.suspend(() => {
+				calls.push('onNewMention')
+				return calls.length === 1
+					? event.thread.subscribe().pipe(Effect.orDie, Effect.andThen(Effect.fail({ retryable: true })))
+					: Effect.void
+			})
+		const onSubscribedThreadEvents = () =>
+			Effect.sync(() => {
+				calls.push('onSubscribedThreadEvents')
+			})
+		return Effect.gen(function* () {
+			const first = yield* makeTestDeliveryExecution()
+			expect(yield* processor.process(mentionBatch(), first.execution).pipe(Effect.flip)).toEqual(
+				ProviderEventExecutionFailed.make({ provider: 'slack', retryable: true, safeCode: 'callback_failed' }),
+			)
+
+			const second = yield* first.retry
+			expect(Option.map(second.execution.prepared, ({ callback }) => callback)).toEqual(
+				Option.some('onNewMention'),
+			)
+			expect(yield* processor.process(mentionBatch(), second.execution)).toEqual(ProviderEventHandled.make({}))
+			expect(yield* Ref.get(second.preparations)).toEqual([])
+			expect(calls).toEqual(['onNewMention', 'onNewMention'])
+
+			const fresh = yield* makeTestDeliveryExecution()
+			yield* processor.process(mentionBatch(), fresh.execution)
+			expect(calls).toEqual(['onNewMention', 'onNewMention', 'onSubscribedThreadEvents'])
+		}).pipe(Effect.provide(sharedRuntimeLayer({ onNewMention, onSubscribedThreadEvents })))
+	})
+
+	it.effect('records a handoff the callback returns and reports the batch handled', ({ expect }) =>
+		Effect.gen(function* () {
+			const test = yield* makeTestDeliveryExecution()
+			const result = yield* processor
+				.process(mentionBatch(), test.execution)
+				.pipe(Effect.provide(sharedRuntimeLayer({ onNewMention: (_event, delivery) => delivery.handoff() })))
+			expect(result).toEqual(ProviderEventHandled.make({}))
+			expect(yield* Ref.get(test.handoffs)).toHaveLength(1)
+		}),
+	)
+
+	it.effect('maps preparation failures without running the callback', ({ expect }) => {
+		const onNewMention = vi.fn<MentionCallback>(() => Effect.void)
+		return Effect.gen(function* () {
+			const test = yield* makeTestDeliveryExecution()
+			const withPrepare = (prepare: ProviderDeliveryExecution['prepare']) =>
+				new ProviderDeliveryExecution({ ...test.execution, prepare })
+
+			const conflict = yield* processor
+				.process(
+					mentionBatch(),
+					withPrepare(() =>
+						Effect.fail(DeliveryPreparationConflict.make({ deliveryId: test.execution.deliveryId })),
+					),
+				)
+				.pipe(Effect.flip)
+			expect(conflict).toEqual(
+				ProviderEventExecutionFailed.make({
+					provider: 'slack',
+					retryable: false,
+					safeCode: 'delivery_prepare_conflict',
+				}),
+			)
+
+			const unavailable = yield* processor
+				.process(
+					mentionBatch(),
+					withPrepare(() => Effect.fail(DeliveryPreparationUnavailable.make({ reason: 'store offline' }))),
+				)
+				.pipe(Effect.flip)
+			expect(unavailable).toEqual(
+				ProviderEventExecutionFailed.make({
+					provider: 'slack',
+					retryable: true,
+					safeCode: 'delivery_prepare_unavailable',
+				}),
+			)
+			expect(onNewMention).not.toHaveBeenCalled()
+		}).pipe(Effect.provide(sharedRuntimeLayer({ onNewMention })))
+	})
+
+	it.effect('fails a saved callback that is unknown or no longer configured', ({ expect }) => {
+		const onNewMention = vi.fn<MentionCallback>(() => Effect.void)
+		return Effect.gen(function* () {
+			const test = yield* makeTestDeliveryExecution()
+			const withPrepared = (callback: string) =>
+				new ProviderDeliveryExecution({
+					...test.execution,
+					prepared: Option.some(
+						PreparedDeliveryInvocation.make({
+							callback,
+							presentationVersion: 1,
+							destination: null,
+							supportedOperations: [],
+						}),
+					),
+				})
+			const missing = ProviderEventExecutionFailed.make({
+				provider: 'slack',
+				retryable: false,
+				safeCode: 'prepared_callback_missing',
+			})
+
+			expect(
+				yield* processor.process(mentionBatch(), withPrepared('onSubscribedThreadEvents')).pipe(Effect.flip),
+			).toEqual(missing)
+			expect(yield* processor.process(mentionBatch(), withPrepared('onRemoved')).pipe(Effect.flip)).toEqual(
+				missing,
+			)
+			expect(onNewMention).not.toHaveBeenCalled()
+			expect(yield* Ref.get(test.preparations)).toEqual([])
+		}).pipe(Effect.provide(sharedRuntimeLayer({ onNewMention })))
+	})
+
+	it.effect('fails a saved callback whose event cannot be rebuilt from the batch', ({ expect }) =>
+		Effect.gen(function* () {
+			const test = yield* makeTestDeliveryExecution()
+			const execution = new ProviderDeliveryExecution({
+				...test.execution,
+				prepared: Option.some(
+					PreparedDeliveryInvocation.make({
+						callback: 'onNewMention',
+						presentationVersion: 1,
+						destination: null,
+						supportedOperations: [],
+					}),
+				),
+			})
+			const error = yield* processor
+				.process(DeliveryAdmissionBatch.make([admission('Ev_REPLY', reply())]), execution)
+				.pipe(Effect.provide(sharedRuntimeLayer({ onNewMention: () => Effect.void })), Effect.flip)
+			expect(error).toEqual(
+				ProviderEventExecutionFailed.make({
+					provider: 'slack',
+					retryable: false,
+					safeCode: 'prepared_callback_unbuildable',
+				}),
+			)
 		}),
 	)
 })

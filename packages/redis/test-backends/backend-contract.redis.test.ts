@@ -8,6 +8,7 @@
 import * as NodeRedis from '@effect/platform-node/NodeRedis'
 import { assert, it } from '@effect/vitest'
 import { Config, Effect, Layer, Option, Schema } from 'effect'
+import { TestClock } from 'effect/testing'
 import * as Redis from 'effect/unstable/persistence/Redis'
 
 import {
@@ -16,8 +17,19 @@ import {
 	MailboxDelivery,
 	MailboxProcessingBackend,
 } from '../../delivery-next/src'
-import { mailboxBackendContract } from '../../delivery-next/test/backend-contract'
+import {
+	claimAll,
+	claimFrozen,
+	deliver,
+	findWaiting,
+	leaseMs,
+	mailboxBackendContract,
+	mailboxKey as contractMailboxKey,
+	nextBatchIdentity,
+} from '../../delivery-next/test/backend-contract'
+import { handoffUnsupportedContract } from '../../delivery-next/test/delivery-handoff-contract'
 import { MailboxDeliveryRedis, MailboxProcessingBackendRedis } from '../src'
+import { mailboxStateKey } from '../src/Keys'
 
 const disposableRedis = Layer.unwrap(
 	Effect.gen(function* () {
@@ -43,6 +55,7 @@ const makeEmptyStore = () =>
 	)
 
 mailboxBackendContract('redis', makeEmptyStore)
+handoffUnsupportedContract('redis', makeEmptyStore)
 
 it.effect(
 	'redis: hands back a claimed admission exactly as delivered, with no cjson round trip turning [] into {}',
@@ -55,11 +68,30 @@ it.effect(
 				resourceId: 'thread|with|pipes',
 				eventId: 'event|1',
 				payload: { empty: [], nested: { list: [[]], text: 'a|b', big: 9007199254740991, ratio: 0.1 } },
+				interrupt: true,
 			})
 			const { mailboxKey } = yield* (yield* MailboxDelivery).deliver(admission)
 			const claim = yield* (yield* MailboxProcessingBackend).claimMailbox(
-				ClaimWaitingEvents.make({ mailboxKey, upToSequence: 0, leaseMs: 1_000 }),
+				ClaimWaitingEvents.make({ mailboxKey, upToSequence: 0, leaseMs: 1_000, ...nextBatchIdentity() }),
 			)
 			assert.deepStrictEqual(Option.getOrThrow(claim).admissions, [admission])
 		}).pipe(Effect.provide(makeEmptyStore())),
+)
+
+it.effect('redis: gives a frozen batch saved before batches had IDs an ID and token on its next claim', () =>
+	Effect.gen(function* () {
+		yield* deliver('a')
+		const claim = yield* claimAll(yield* findWaiting)
+		yield* (yield* Redis.Redis).send('HDEL', mailboxStateKey(contractMailboxKey), 'batch_id', 'access_token')
+		yield* TestClock.adjust(leaseMs)
+		const recovered = Option.getOrThrow(yield* claimFrozen)
+		assert.strictEqual(recovered.attempt, 2)
+		assert.match(recovered.batchId, /^legacy-[0-9a-f]{32}$/)
+		assert.match(recovered.accessToken, /^[0-9a-f]{40}$/)
+		assert.notStrictEqual(recovered.claimId, claim.claimId)
+		yield* TestClock.adjust(leaseMs)
+		const again = Option.getOrThrow(yield* claimFrozen)
+		assert.strictEqual(again.batchId, recovered.batchId)
+		assert.strictEqual(again.accessToken, recovered.accessToken)
+	}).pipe(Effect.provide(makeEmptyStore())),
 )

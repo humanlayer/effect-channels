@@ -1,4 +1,4 @@
 {
 	"extends": "../tsconfig.json",
-	"include": [".", "../src", "../../delivery-next/test/backend-contract.ts"]
+	"include": [".", "../src", "../../delivery-next/test/backend-contract.ts", "../../delivery-next/test/delivery-handoff-contract.ts"]
 }

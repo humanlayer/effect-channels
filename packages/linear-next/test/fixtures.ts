@@ -12,6 +12,7 @@ import {
 import { Effect, Match, Queue, Redacted, Schema } from 'effect'
 import { Headers } from 'effect/unstable/http'
 
+import { makeTestDeliveryExecution } from '../../delivery-next/test/delivery-execution'
 import { LinearOrganizationId, LinearUserId, LinearWebhookDeliveryId } from '../src/LinearIdentity'
 import { LinearAgentSessionEventWebhook, type LinearIssueCreateWebhook } from '../src/LinearWebhookEventSchemas'
 import { makeLinearWebhookProvider } from '../src/LinearWebhookProvider'
@@ -192,7 +193,15 @@ export const makeControlledMailbox = <R>(processors: ReadonlyArray<ProviderEvent
 					),
 			}),
 			processNext: Queue.take(queue).pipe(
-				Effect.flatMap((admission) => processProviderEvent(processors)([admission])),
+				Effect.flatMap((admission) =>
+					Effect.flatMap(firstAttempt(admission.resourceId), (execution) =>
+						processProviderEvent(processors)([admission], execution),
+					),
+				),
 			),
 		}
 	})
+
+/** A delivery execution for a batch's first attempt, with nothing prepared yet. */
+export const firstAttempt = (mailboxKey?: string) =>
+	makeTestDeliveryExecution(mailboxKey).pipe(Effect.map(({ execution }) => execution))

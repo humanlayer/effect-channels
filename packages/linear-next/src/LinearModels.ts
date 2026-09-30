@@ -165,6 +165,8 @@ export const LinearAgentPrompt = Schema.Struct({
 	body: Schema.String,
 	createdAt: Schema.String,
 	user: LinearParticipant,
+	/** Linear's signal on the prompt, such as `stop` when the user asks the agent to stop. */
+	signal: Schema.NullOr(Schema.String),
 })
 export type LinearAgentPrompt = typeof LinearAgentPrompt.Type
 

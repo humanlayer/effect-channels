@@ -3,18 +3,52 @@
  * The Worker and the Durable Object both build their half from this one value.
  */
 import { ChannelsCloudflare } from '@humanlayer/channels-alchemy-cloudflare'
-import { DebounceDeliveryMode } from '@humanlayer/channels-delivery-next'
+import { DebounceDeliveryMode, type DeliveryContext } from '@humanlayer/channels-delivery-next'
 import { GitHubBot, GitHubContent, GitHubId, GitHubReaction } from '@humanlayer/channels-github-next'
 import { LinearAuth, LinearBot, LinearOrganizationId, LinearUserId } from '@humanlayer/channels-linear-next'
-import { SlackBot, SlackContent, SlackReaction } from '@humanlayer/channels-slack-next'
-import { Config, Effect, Predicate, Duration } from 'effect'
+import { SlackBot, SlackContent, SlackReaction, type SlackNewMention } from '@humanlayer/channels-slack-next'
+import { Config, Effect, Option, Predicate, Duration, Redacted } from 'effect'
+
+import { FakeRemoteAgent } from './FakeRemoteAgentDO'
+import { parseHandoffCommand, type HandoffCommand } from './SlackTestHandoffCommand'
+
+/** The reply to any other mention. */
+const replyToMention = Effect.fn('example.slack.reply_to_mention')(function* (event: SlackNewMention) {
+	yield* event.thread.startTyping()
+	yield* Effect.sleep(2_000)
+	yield* event.thread.post(SlackContent.make({ markdown: 'Subscribed! subsequent messages will be logged' }))
+})
+
+/**
+ * `@bot handoff [seconds]`: start a job on the remote agent, say so in the thread, and hand the delivery off.
+ * The callback then returns; the remote agent completes the delivery through the delivery API.
+ */
+const handOffMention = Effect.fn('example.slack.hand_off_mention')(function* (
+	event: SlackNewMention,
+	delivery: DeliveryContext,
+	command: HandoffCommand,
+) {
+	const { delaySeconds } = command
+	const agents = yield* FakeRemoteAgent
+	yield* agents.getByName(delivery.deliveryId).start({
+		deliveryId: delivery.deliveryId,
+		accessToken: Redacted.value(delivery.accessToken),
+		delaySeconds,
+	})
+	yield* event.thread.post(
+		SlackContent.make({
+			markdown: `Handed off \`${delivery.deliveryId}\`. Finishing in ${delaySeconds}s.`,
+		}),
+	)
+	return yield* delivery.handoff()
+})
 
 /** Slack with placeholder callbacks. `SlackApiLive`, the default, reads `SLACK_BOT_TOKEN`. */
 const slack = SlackBot.make({
 	signingSecret: Config.redacted('SLACK_SIGNING_SECRET'),
 	deliveryMode: DebounceDeliveryMode.make({ quietPeriodMs: 2_000, maxWaitMs: 10_000 }),
 	handlers: {
-		onNewMention: (event) =>
+		onNewMention: (event, delivery) =>
 			Effect.gen(function* () {
 				yield* Effect.logInfo('Slack new mention received').pipe(
 					Effect.annotateLogs({
@@ -25,11 +59,10 @@ const slack = SlackBot.make({
 					}),
 				)
 				if (!(yield* event.thread.isSubscribed())) yield* event.thread.subscribe()
-				yield* event.thread.startTyping()
-				yield* Effect.sleep(2_000)
-				yield* event.thread.post(
-					SlackContent.make({ markdown: 'Subscribed! subsequent messages will be logged' }),
-				)
+				return yield* Option.match(parseHandoffCommand(event.trigger.content), {
+					onNone: () => replyToMention(event),
+					onSome: (command) => handOffMention(event, delivery, command),
+				})
 			}),
 		onSubscribedThreadEvents: (event) =>
 			Effect.gen(function* () {

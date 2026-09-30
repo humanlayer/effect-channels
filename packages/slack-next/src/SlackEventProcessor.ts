@@ -3,14 +3,18 @@ import {
 	deliveryMailboxKey,
 	type DeliveryAdmission,
 	type DeliveryAdmissionBatch,
+	type DeliveryCallbackResult,
+	type DeliveryContext,
 	MailboxSubscriptions,
+	PreparedDeliveryInvocation,
+	type ProviderDeliveryExecution,
 	ProviderEventExecutionFailed,
 	ProviderEventHandled,
 	ProviderEventIgnored,
 	ProviderEventInvalid,
 	type ProviderEventProcessor,
 } from '@humanlayer/channels-delivery-next'
-import { Array as Arr, Effect, Match, Option, Predicate, Schema } from 'effect'
+import { Array as Arr, Data, Effect, Match, Option, Predicate, Schema } from 'effect'
 
 import { SlackApi } from './SlackApi'
 import {
@@ -26,7 +30,15 @@ import {
 	SlackSubscribedThreadEvents,
 	type SlackThreadEvent,
 } from './SlackCallbackEvents'
-import { SlackCallbacks } from './SlackCallbacks'
+import { type SlackCallbackError, SlackCallbackName, SlackCallbacks } from './SlackCallbacks'
+import {
+	SlackActivationTarget,
+	SlackActivationTargetJson,
+	SlackDeliveryDestination,
+	SlackDeliveryDestinationJson,
+	slackPresentationVersion,
+	slackThreadSupportedOperations,
+} from './SlackDeliveryDestination'
 import { SlackChannelId, SlackMessageTs, SlackTeamId, slackThreadResourceId } from './SlackIdentity'
 import {
 	slackFileFromMetadata,
@@ -99,6 +111,9 @@ const identityMismatch = () => ProviderEventInvalid.make({ provider: 'slack', re
 
 const providerFailure = (safeCode: string) =>
 	ProviderEventExecutionFailed.make({ provider: 'slack', retryable: true, safeCode })
+
+const nonRetryableFailure = (safeCode: string) =>
+	ProviderEventExecutionFailed.make({ provider: 'slack', retryable: false, safeCode })
 
 const decodeEnvelope = (admission: DeliveryAdmission) =>
 	Schema.decodeUnknownEffect(SlackEventEnvelope)(admission.payload, { onExcessProperty: 'preserve' }).pipe(
@@ -432,7 +447,7 @@ const normalizeEnvelope = (envelope: SlackEnvelope, thread: SlackThreadRef) =>
 		)
 	})
 
-const runCallback = (effect: Effect.Effect<void, { readonly retryable: boolean }>) =>
+const runCallback = (effect: Effect.Effect<DeliveryCallbackResult, { readonly retryable: boolean }>) =>
 	effect.pipe(
 		Effect.mapError((error) =>
 			ProviderEventExecutionFailed.make({
@@ -461,8 +476,192 @@ const belongsToBatch = (
 	envelopeRoot(envelope, address) === address.threadTs &&
 	slackThreadResourceId(address) === admission.resourceId
 
+/** The callback a batch runs, with the event value it receives. */
+type SlackInvocation = Data.TaggedEnum<{
+	NewMention: { readonly event: SlackNewMention }
+	SubscribedThreadEvents: { readonly event: SlackSubscribedThreadEvents }
+}>
+const SlackInvocation = Data.taggedEnum<SlackInvocation>()
+
+const invocationCallbackName = SlackInvocation.$match({
+	NewMention: (): SlackCallbackName => 'onNewMention',
+	SubscribedThreadEvents: (): SlackCallbackName => 'onSubscribedThreadEvents',
+})
+
+/** A new mention starts at the first activating message; relevant events before it are dropped. */
+const buildNewMention = (thread: SlackThread, normalized: ReadonlyArray<NormalizedEvent>) => {
+	const activationIndex = normalized.findIndex(({ activation }) => Option.isSome(activation))
+	const activating = normalized[activationIndex]
+	if (activating === undefined || Option.isNone(activating.activation)) return Option.none<SlackInvocation>()
+	return Option.some(
+		SlackInvocation.NewMention({
+			event: SlackNewMention.make({
+				thread,
+				trigger: activating.activation.value,
+				events: normalized.slice(activationIndex + 1).map(({ event }) => event),
+			}),
+		}),
+	)
+}
+
+const buildSubscribedThreadEvents = (thread: SlackThread, normalized: ReadonlyArray<NormalizedEvent>) => {
+	const first = normalized[0]
+	if (first === undefined) return Option.none<SlackInvocation>()
+	const events = SlackNonEmptyThreadEvents.make([first.event, ...normalized.slice(1).map(({ event }) => event)])
+	return Option.some(
+		SlackInvocation.SubscribedThreadEvents({ event: SlackSubscribedThreadEvents.make({ thread, events }) }),
+	)
+}
+
+/** Rebuild the event value for a callback an earlier attempt chose. */
+const buildInvocation = (
+	callback: SlackCallbackName,
+	thread: SlackThread,
+	normalized: ReadonlyArray<NormalizedEvent>,
+): Option.Option<SlackInvocation> =>
+	Match.value(callback).pipe(
+		Match.when('onNewMention', () => buildNewMention(thread, normalized)),
+		Match.when('onSubscribedThreadEvents', () => buildSubscribedThreadEvents(thread, normalized)),
+		Match.exhaustive,
+	)
+
+/** Which callback a new batch runs, or why it runs none. Ignoring a batch is a normal outcome, not an error. */
+type CallbackSelection = Data.TaggedEnum<{
+	Selected: { readonly invocation: SlackInvocation }
+	Ignored: { readonly reason: string }
+}>
+const CallbackSelection = Data.taggedEnum<CallbackSelection>()
+
+/** Choose the callback for a batch no attempt has prepared yet. */
+const selectInvocation = (input: {
+	readonly callbacks: typeof SlackCallbacks.Service
+	readonly thread: SlackThread
+	readonly normalized: ReadonlyArray<NormalizedEvent>
+	readonly subscribed: boolean
+}): CallbackSelection => {
+	if (input.subscribed) {
+		if (Predicate.isUndefined(input.callbacks.onSubscribedThreadEvents)) {
+			return CallbackSelection.Ignored({ reason: 'callback_not_configured' })
+		}
+		return Option.match(buildSubscribedThreadEvents(input.thread, input.normalized), {
+			onNone: () => CallbackSelection.Ignored({ reason: 'no_relevant_event' }),
+			onSome: (invocation) => CallbackSelection.Selected({ invocation }),
+		})
+	}
+	const mention = buildNewMention(input.thread, input.normalized)
+	if (Option.isNone(mention)) return CallbackSelection.Ignored({ reason: 'no_activation_event' })
+	if (Predicate.isUndefined(input.callbacks.onNewMention)) {
+		return CallbackSelection.Ignored({ reason: 'callback_not_configured' })
+	}
+	return CallbackSelection.Selected({ invocation: mention.value })
+}
+
+const isCallbackConfigured = (callbacks: typeof SlackCallbacks.Service, callback: SlackCallbackName) =>
+	Predicate.isNotUndefined(callbacks[callback])
+
+/** A new mention's trigger message; a subscribed batch has no single message that started it. */
+const invocationActivationTarget = SlackInvocation.$match({
+	NewMention: ({ event }) => Option.some(SlackActivationTarget.make({ message: event.trigger.ref })),
+	SubscribedThreadEvents: () => Option.none<SlackActivationTarget>(),
+})
+
+/** The saved form of an invocation: callback name, thread, and the activating message when there is one. */
+const preparedInvocation = Effect.fn('slack.prepared_invocation')(function* (invocation: SlackInvocation) {
+	const destination = yield* Schema.encodeEffect(SlackDeliveryDestinationJson)(
+		SlackDeliveryDestination.make({ thread: invocation.event.thread.ref }),
+	)
+	const activationTarget = yield* Effect.transposeOption(
+		Option.map(invocationActivationTarget(invocation), Schema.encodeEffect(SlackActivationTargetJson)),
+	)
+	return PreparedDeliveryInvocation.make({
+		callback: invocationCallbackName(invocation),
+		presentationVersion: slackPresentationVersion,
+		destination,
+		...Option.match(activationTarget, { onNone: () => ({}), onSome: (target) => ({ activationTarget: target }) }),
+		supportedOperations: slackThreadSupportedOperations,
+	})
+})
+
+/** Save the callback choice before any application code runs, so every retry runs the same callback. */
+const prepareInvocation = Effect.fn('slack.prepare_delivery')(function* (
+	execution: ProviderDeliveryExecution,
+	invocation: SlackInvocation,
+) {
+	const prepared = yield* preparedInvocation(invocation).pipe(
+		Effect.tapError((error) => Effect.logError('Slack delivery destination could not be encoded', error)),
+		Effect.mapError(() => nonRetryableFailure('delivery_destination_unencodable')),
+	)
+	yield* execution.prepare(prepared).pipe(
+		Effect.tapError((error) =>
+			Effect.logError('Slack delivery preparation failed', error).pipe(
+				Effect.annotateLogs({ deliveryId: execution.deliveryId, callback: prepared.callback }),
+			),
+		),
+		Effect.catchTags({
+			DeliveryPreparationUnavailable: () => Effect.fail(providerFailure('delivery_prepare_unavailable')),
+			DeliveryPreparationConflict: () => Effect.fail(nonRetryableFailure('delivery_prepare_conflict')),
+		}),
+	)
+})
+
+const invokeCallback = (
+	callbacks: typeof SlackCallbacks.Service,
+	invocation: SlackInvocation,
+	delivery: DeliveryContext,
+): Option.Option<Effect.Effect<DeliveryCallbackResult, SlackCallbackError>> =>
+	SlackInvocation.$match(invocation, {
+		NewMention: ({ event }) =>
+			Option.map(Option.fromUndefinedOr(callbacks.onNewMention), (callback) => callback(event, delivery)),
+		SubscribedThreadEvents: ({ event }) =>
+			Option.map(Option.fromUndefinedOr(callbacks.onSubscribedThreadEvents), (callback) =>
+				callback(event, delivery),
+			),
+	})
+
+const runInvocation = (
+	callbacks: typeof SlackCallbacks.Service,
+	invocation: SlackInvocation,
+	delivery: DeliveryContext,
+) =>
+	Option.match(invokeCallback(callbacks, invocation, delivery), {
+		onNone: () => Effect.fail(nonRetryableFailure('prepared_callback_missing')),
+		onSome: runCallback,
+	})
+
+/** Run the callback an earlier attempt saved, without choosing again. */
+const runPreparedInvocation = Effect.fn('slack.run_prepared_invocation')(function* (input: {
+	readonly callbacks: typeof SlackCallbacks.Service
+	readonly prepared: PreparedDeliveryInvocation
+	readonly thread: SlackThread
+	readonly normalized: ReadonlyArray<NormalizedEvent>
+	readonly delivery: DeliveryContext
+}) {
+	const annotations = { deliveryId: input.delivery.deliveryId, callback: input.prepared.callback }
+	const callback = yield* Schema.decodeUnknownEffect(SlackCallbackName)(input.prepared.callback).pipe(
+		Effect.tapError((error) =>
+			Effect.logError('Prepared Slack callback is unknown', error).pipe(Effect.annotateLogs(annotations)),
+		),
+		Effect.mapError(() => nonRetryableFailure('prepared_callback_missing')),
+	)
+	if (!isCallbackConfigured(input.callbacks, callback)) {
+		yield* Effect.logError('Prepared Slack callback is no longer configured').pipe(Effect.annotateLogs(annotations))
+		return yield* nonRetryableFailure('prepared_callback_missing')
+	}
+	const invocation = buildInvocation(callback, input.thread, input.normalized)
+	if (Option.isNone(invocation)) {
+		yield* Effect.logError('Prepared Slack callback cannot be rebuilt from its batch').pipe(
+			Effect.annotateLogs(annotations),
+		)
+		return yield* nonRetryableFailure('prepared_callback_unbuildable')
+	}
+	return yield* runInvocation(input.callbacks, invocation.value, input.delivery)
+})
+
 const processSlackBatch = (options: SlackEventProcessorOptions) =>
-	Effect.fn('slack.process_event_batch')(function* (admissions: DeliveryAdmissionBatch) {
+	Effect.fn('slack.process_event_batch')(function* (
+		admissions: DeliveryAdmissionBatch,
+		execution: ProviderDeliveryExecution,
+	) {
 		const callbacks = yield* SlackCallbacks
 		const first = admissions[0]
 		const envelopes = yield* Effect.forEach(admissions, decodeEnvelope)
@@ -488,6 +687,16 @@ const processSlackBatch = (options: SlackEventProcessorOptions) =>
 			),
 		)
 		const normalized = normalizedOptions.flatMap(Option.toArray)
+
+		if (Option.isSome(execution.prepared)) {
+			return yield* runPreparedInvocation({
+				callbacks,
+				prepared: execution.prepared.value,
+				thread,
+				normalized,
+				delivery: execution.context,
+			})
+		}
 		if (Arr.isReadonlyArrayEmpty(normalized)) return ProviderEventIgnored.make({ reason: 'no_relevant_event' })
 
 		const subscribed = yield* Effect.flatMap(MailboxSubscriptions, (subscriptions) =>
@@ -497,39 +706,13 @@ const processSlackBatch = (options: SlackEventProcessorOptions) =>
 			Effect.mapError(() => providerFailure('subscription_lookup_failed')),
 		)
 
-		if (subscribed) {
-			if (Predicate.isUndefined(callbacks.onSubscribedThreadEvents)) {
-				return ProviderEventIgnored.make({ reason: 'callback_not_configured' })
-			}
-			const firstNormalized = normalized[0]
-			if (firstNormalized === undefined) return ProviderEventIgnored.make({ reason: 'no_relevant_event' })
-			const events = SlackNonEmptyThreadEvents.make([
-				firstNormalized.event,
-				...normalized.slice(1).map(({ event }) => event),
-			])
-			return yield* runCallback(
-				callbacks.onSubscribedThreadEvents(SlackSubscribedThreadEvents.make({ thread, events })),
-			)
-		}
-
-		const activationIndex = normalized.findIndex(({ activation }) => Option.isSome(activation))
-		if (activationIndex < 0) return ProviderEventIgnored.make({ reason: 'no_activation_event' })
-		const activating = normalized[activationIndex]
-		if (activating === undefined || Option.isNone(activating.activation)) {
-			return ProviderEventIgnored.make({ reason: 'no_activation_event' })
-		}
-		if (Predicate.isUndefined(callbacks.onNewMention)) {
-			return ProviderEventIgnored.make({ reason: 'callback_not_configured' })
-		}
-		return yield* runCallback(
-			callbacks.onNewMention(
-				SlackNewMention.make({
-					thread,
-					trigger: activating.activation.value,
-					events: normalized.slice(activationIndex + 1).map(({ event }) => event),
-				}),
-			),
-		)
+		return yield* CallbackSelection.$match(selectInvocation({ callbacks, thread, normalized, subscribed }), {
+			Ignored: ({ reason }) => Effect.succeed(ProviderEventIgnored.make({ reason })),
+			Selected: ({ invocation }) =>
+				prepareInvocation(execution, invocation).pipe(
+					Effect.andThen(runInvocation(callbacks, invocation, execution.context)),
+				),
+		})
 	})
 
 export const makeSlackEventProcessor = (

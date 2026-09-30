@@ -13,6 +13,7 @@ import {
 import { Clock, Context, Effect, Layer, Match, Queue, Redacted, Schema } from 'effect'
 import { Headers, HttpRouter, HttpServer, HttpServerRequest, HttpServerResponse } from 'effect/unstable/http'
 
+import { makeTestDeliveryExecution } from '../../delivery-next/test/delivery-execution'
 import { SlackApi } from '../src/SlackApi'
 import { makeSlackWebhookProvider } from '../src/SlackWebhookProvider'
 import { signSlackBody } from '../src/SlackWebhookSignature'
@@ -64,7 +65,8 @@ export const makeInMemoryMailboxFixture = <R>(processors: ReadonlyArray<Provider
 					if (takeCount < 1) return yield* Effect.die(new Error(`In-memory mailbox is empty: ${mailboxKey}`))
 					const first = yield* Queue.take(mailbox)
 					const rest = yield* Effect.forEach(Array.from({ length: takeCount - 1 }), () => Queue.take(mailbox))
-					return yield* processProviderEvent(processors)([first, ...rest])
+					const { execution } = yield* makeTestDeliveryExecution(mailboxKey)
+					return yield* processProviderEvent(processors)([first, ...rest], execution)
 				})
 			},
 			processNext: (mailboxKey: string) => {
@@ -72,7 +74,11 @@ export const makeInMemoryMailboxFixture = <R>(processors: ReadonlyArray<Provider
 				return mailbox === undefined
 					? Effect.die(new Error(`In-memory mailbox not found: ${mailboxKey}`))
 					: Queue.take(mailbox).pipe(
-							Effect.flatMap((admission) => processProviderEvent(processors)([admission])),
+							Effect.flatMap((admission) =>
+								Effect.flatMap(makeTestDeliveryExecution(mailboxKey), ({ execution }) =>
+									processProviderEvent(processors)([admission], execution),
+								),
+							),
 						)
 			},
 		}

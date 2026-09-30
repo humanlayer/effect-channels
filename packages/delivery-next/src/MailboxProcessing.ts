@@ -4,7 +4,46 @@
  * It is responsible for processing provider events that have been saved in a mailbox
  *
  */
-import { Cause, Clock, Context, Data, Duration, Effect, Exit, Layer, Match, Option, Predicate, Schema } from 'effect'
+import {
+	Cause,
+	Clock,
+	Context,
+	Crypto,
+	Data,
+	Duration,
+	Effect,
+	Exit,
+	Layer,
+	Match,
+	Option,
+	Predicate,
+	Redacted,
+	Ref,
+	Schema,
+} from 'effect'
+
+import {
+	DeliveryContext,
+	DeliveryHandoff,
+	DeliveryHandoffRejected,
+	DeliveryHandoffUnavailable,
+	DeliveryPreparationConflict,
+	DeliveryPreparationUnavailable,
+	ExternalLink,
+	PreparedDeliveryInvocation,
+	ProviderDeliveryExecution,
+	type DeliveryHandoffUnsupported,
+	type HandoffOptions,
+} from './DeliveryContext'
+import {
+	BatchId,
+	DeliveryAccessToken,
+	isRoutableMailboxKey,
+	makeBatchId,
+	makeConversationId,
+	makeDeliveryAccessToken,
+	makeDeliveryId,
+} from './DeliveryReference'
 
 import {
 	decideMailboxClaim,
@@ -47,11 +86,18 @@ export type RecoverableMailbox = typeof RecoverableMailbox.Type
 export const ReadyMailbox = Schema.Union([WaitingMailbox, RecoverableMailbox])
 export type ReadyMailbox = typeof ReadyMailbox.Type
 
-/** Claim the waiting events of an idle mailbox, at or below `upToSequence`, as one new frozen batch. */
+/**
+ * Claim the waiting events of an idle mailbox, at or below `upToSequence`, as one new frozen batch.
+ *
+ * @property batchId - the new batch's permanent ID, made by the caller so no store needs a random source
+ * @property accessToken - the new batch's remote-worker token, saved with it
+ */
 export const ClaimWaitingEvents = Schema.TaggedStruct('ClaimWaitingEvents', {
 	mailboxKey: Schema.NonEmptyString,
 	upToSequence: MailboxSequence,
 	leaseMs: LeaseMilliseconds,
+	batchId: BatchId,
+	accessToken: DeliveryAccessToken,
 })
 
 /** Claim the frozen batch of a mailbox that is due for a retry or whose lease ran out. */
@@ -84,14 +130,41 @@ export const RenewMailboxClaim = Schema.Struct({
 })
 export type RenewMailboxClaim = typeof RenewMailboxClaim.Type
 
-/** A batch of things from the mailbox that we successfully claimed for processing from a given mailbox */
+/**
+ * A batch of things from the mailbox that we successfully claimed for processing from a given mailbox
+ *
+ * @property batchId - the same on every attempt at this batch
+ * @property claimId - new on every attempt; proves this attempt still owns the batch
+ * @property accessToken - the batch's remote-worker token, the same on every attempt
+ * @property prepared - what an earlier attempt saved about its callback and destination
+ */
 export const ClaimedMailboxBatch = Schema.Struct({
 	mailboxKey: Schema.NonEmptyString,
+	batchId: BatchId,
 	claimId: Schema.NonEmptyString,
 	attempt: Schema.Int.check(Schema.isGreaterThan(0)),
+	accessToken: DeliveryAccessToken,
 	admissions: DeliveryAdmissionBatch,
+	prepared: Schema.optionalKey(PreparedDeliveryInvocation),
 })
 export type ClaimedMailboxBatch = typeof ClaimedMailboxBatch.Type
+
+/** Save the callback choice and destination for the batch this claim owns. */
+export const PrepareMailboxDelivery = Schema.Struct({
+	mailboxKey: Schema.NonEmptyString,
+	claimId: Schema.NonEmptyString,
+	prepared: PreparedDeliveryInvocation,
+})
+export type PrepareMailboxDelivery = typeof PrepareMailboxDelivery.Type
+
+/** Hand the batch this claim owns to a remote worker. The claim stays as ownership of callback cleanup. */
+export const HandOffMailboxDelivery = Schema.Struct({
+	mailboxKey: Schema.NonEmptyString,
+	claimId: Schema.NonEmptyString,
+	handedOffAt: Timestamp,
+	links: Schema.Array(ExternalLink),
+})
+export type HandOffMailboxDelivery = typeof HandOffMailboxDelivery.Type
 
 /** The result of attempting to process a batch from mailbox - complete (or ignored) / retrable failure / terminal failure */
 export const MailboxProcessingAttemptCompleted = Schema.TaggedStruct('Completed', {
@@ -168,11 +241,31 @@ export class MailboxProcessingBackend extends Context.Service<
 
 		/**
 		 * Record the result of processing ONE frozen claim against the latest mailbox state,
-		 * preserving admissions that were received while it ran
+		 * preserving admissions that were received while it ran.
+		 *
+		 * The delivery's stage decides what happens, not only the result: a handed-off delivery waits
+		 * for its remote worker whatever the callback returned, and a delivery with a remote terminal
+		 * result retires.
 		 */
 		readonly recordProcessingAttemptResult: (
 			input: RecordProcessingAttemptResult,
 		) => Effect.Effect<void, MailboxProcessingBackendError>
+
+		/**
+		 * Save the callback choice and destination, once per batch. Returns the saved record, which is
+		 * an earlier identical one on replay. Fails with a conflict when a different record is saved.
+		 */
+		readonly prepareDelivery: (
+			input: PrepareMailboxDelivery,
+		) => Effect.Effect<PreparedDeliveryInvocation, MailboxProcessingBackendError | DeliveryPreparationConflict>
+
+		/**
+		 * Hand the claimed batch off. Repeating it is harmless. Stores without remote control fail
+		 * with `DeliveryHandoffUnsupported`.
+		 */
+		readonly handOffDelivery: (
+			input: HandOffMailboxDelivery,
+		) => Effect.Effect<void, MailboxProcessingBackendError | DeliveryHandoffUnsupported>
 	}
 >()('@humanlayer/channels-delivery-next/MailboxProcessingBackend') {}
 
@@ -243,6 +336,7 @@ export class ProviderEventDispatcher extends Context.Service<
 	{
 		readonly process: (
 			admissions: DeliveryAdmissionBatch,
+			execution: ProviderDeliveryExecution,
 		) => Effect.Effect<ProviderEventResult, ProviderEventProcessingError>
 	}
 >()('@humanlayer/channels-delivery-next/ProviderEventDispatcher') {}
@@ -267,8 +361,8 @@ export const ProviderEventDispatcherLive = <const Requirements extends ReadonlyA
 		Effect.gen(function* () {
 			const processorContext = yield* Effect.context<Requirements[number]>()
 			return ProviderEventDispatcher.of({
-				process: (admissions) =>
-					processProviderEvent<Requirements[number]>(processors)(admissions).pipe(
+				process: (admissions, execution) =>
+					processProviderEvent<Requirements[number]>(processors)(admissions, execution).pipe(
 						Effect.provide(processorContext),
 					),
 			})
@@ -315,6 +409,67 @@ const keepClaimLeaseAlive = (input: { readonly claim: ClaimedMailboxBatch; reado
 		)
 	})
 
+/**
+ * The execution a provider receives for one attempt: the delivery's identity, what an earlier attempt
+ * saved, and the claim-guarded prepare and handoff operations.
+ */
+const makeProviderDeliveryExecution = (input: {
+	readonly claim: ClaimedMailboxBatch
+	readonly handedOff: Ref.Ref<boolean>
+}) =>
+	Effect.gen(function* () {
+		const { claim } = input
+		const backend = yield* MailboxProcessingBackend
+		const deliveryId = makeDeliveryId({ mailboxKey: claim.mailboxKey, batchId: claim.batchId })
+		const owner = { mailboxKey: claim.mailboxKey, claimId: claim.claimId }
+
+		const prepare = (prepared: PreparedDeliveryInvocation) =>
+			backend.prepareDelivery({ ...owner, prepared }).pipe(
+				Effect.tapError((error) =>
+					Effect.logWarning('Delivery preparation failed', error).pipe(
+						Effect.annotateLogs({ mailbox_key: claim.mailboxKey, claim_id: claim.claimId }),
+					),
+				),
+				Effect.catchTags({
+					MailboxProcessingUnavailable: ({ reason }) =>
+						Effect.fail(new DeliveryPreparationUnavailable({ reason })),
+					MailboxProcessingClaimLost: () => Effect.fail(new DeliveryPreparationConflict({ deliveryId })),
+				}),
+				Effect.withSpan('delivery.prepare'),
+			)
+
+		const handoff = (options?: HandoffOptions) =>
+			Effect.gen(function* () {
+				const handedOffAt = Timestamp.make(yield* Clock.currentTimeMillis)
+				yield* backend.handOffDelivery({ ...owner, handedOffAt, links: options?.links ?? [] }).pipe(
+					Effect.tapError((error) =>
+						Effect.logWarning('Delivery handoff failed', error).pipe(
+							Effect.annotateLogs({ mailbox_key: claim.mailboxKey, claim_id: claim.claimId }),
+						),
+					),
+					Effect.catchTags({
+						MailboxProcessingUnavailable: ({ reason }) =>
+							Effect.fail(new DeliveryHandoffUnavailable({ reason })),
+						MailboxProcessingClaimLost: () => Effect.fail(new DeliveryHandoffRejected({ deliveryId })),
+					}),
+				)
+				yield* Ref.set(input.handedOff, true)
+				return DeliveryHandoff.make({ deliveryId })
+			}).pipe(Effect.withSpan('delivery.handoff'))
+
+		return new ProviderDeliveryExecution({
+			deliveryId,
+			prepared: Option.fromUndefinedOr(claim.prepared),
+			prepare,
+			context: new DeliveryContext({
+				deliveryId,
+				conversationId: makeConversationId(claim.mailboxKey),
+				accessToken: Redacted.make(claim.accessToken),
+				handoff,
+			}),
+		})
+	})
+
 export const processClaim = Effect.fn('delivery.process_mailbox_claim')(function* (input: ProcessClaimInput) {
 	const { claim, maxAttempts, leaseMs } = input
 	const mailboxProcessingBackend = yield* MailboxProcessingBackend
@@ -322,6 +477,7 @@ export const processClaim = Effect.fn('delivery.process_mailbox_claim')(function
 	const startedAt = yield* Clock.currentTimeMillis
 	const claimAnnotations = {
 		mailbox_key: claim.mailboxKey,
+		batch_id: claim.batchId,
 		claim_id: claim.claimId,
 		attempt: claim.attempt,
 		event_count: claim.admissions.length,
@@ -330,15 +486,20 @@ export const processClaim = Effect.fn('delivery.process_mailbox_claim')(function
 
 	yield* Effect.logInfo('Mailbox processing started').pipe(Effect.annotateLogs(claimAnnotations))
 
-	const runCallbackUnderLease = Effect.raceFirst(
-		providerEventDispatcher.process(claim.admissions).pipe(
-			Effect.match({
-				onSuccess: providerSuccessToAttemptResult,
-				onFailure: providerFailureToAttemptResult,
-			}),
-		),
-		keepClaimLeaseAlive({ claim, leaseMs }),
-	).pipe(
+	const handedOff = yield* Ref.make(false)
+
+	const runCallbackUnderLease = Effect.gen(function* () {
+		const execution = yield* makeProviderDeliveryExecution({ claim, handedOff })
+		return yield* Effect.raceFirst(
+			providerEventDispatcher.process(claim.admissions, execution).pipe(
+				Effect.match({
+					onSuccess: providerSuccessToAttemptResult,
+					onFailure: providerFailureToAttemptResult,
+				}),
+			),
+			keepClaimLeaseAlive({ claim, leaseMs }),
+		)
+	}).pipe(
 		Effect.tapError((error) =>
 			Effect.logWarning('Mailbox claim was lost while its callback ran; callback interrupted', error).pipe(
 				Effect.annotateLogs(claimAnnotations),
@@ -348,7 +509,9 @@ export const processClaim = Effect.fn('delivery.process_mailbox_claim')(function
 	const providerResult =
 		claim.attempt > maxAttempts
 			? MailboxProcessingAttemptTerminalFailure.make({ safeCode: 'attempts_exhausted' })
-			: yield* runCallbackUnderLease
+			: !isRoutableMailboxKey(claim.mailboxKey)
+				? MailboxProcessingAttemptTerminalFailure.make({ safeCode: 'mailbox_key_unroutable' })
+				: yield* runCallbackUnderLease
 	const processingResult = Match.value(providerResult).pipe(
 		Match.tag('RetryableFailure', (result) =>
 			claim.attempt >= maxAttempts
@@ -364,6 +527,17 @@ export const processClaim = Effect.fn('delivery.process_mailbox_claim')(function
 		finishedAt: Timestamp.make(processingFinishedAt),
 	})
 	const recordedAt = yield* Clock.currentTimeMillis
+	const recordedAnnotations = {
+		...claimAnnotations,
+		result: processingResult._tag,
+		duration_ms: recordedAt - startedAt,
+	}
+	/** After a handoff the store waits for the remote worker, whatever the callback returned. */
+	if (yield* Ref.get(handedOff)) {
+		return yield* Effect.logInfo('Mailbox delivery handed off; waiting for its remote worker').pipe(
+			Effect.annotateLogs({ ...recordedAnnotations, handed_off: true }),
+		)
+	}
 	yield* Match.value(processingResult).pipe(
 		Match.tagsExhaustive({
 			Completed: ({ ignoredReason }) => {
@@ -385,11 +559,7 @@ export const processClaim = Effect.fn('delivery.process_mailbox_claim')(function
 					Effect.annotateLogs({ safe_code: safeCode }),
 				),
 		}),
-		Effect.annotateLogs({
-			...claimAnnotations,
-			result: processingResult._tag,
-			duration_ms: recordedAt - startedAt,
-		}),
+		Effect.annotateLogs(recordedAnnotations),
 	)
 })
 
@@ -449,9 +619,22 @@ export const claimOrDeferReadyMailbox = Effect.fn('delivery.claim_or_defer_ready
 					const decision = decideMailboxClaim({ waiting, mode: input.deliveryModeFor(provider), now })
 					return yield* MailboxClaimDecision.$match(decision, {
 						ClaimUpTo: ({ upToSequence }) =>
-							mailboxProcessingBackend
-								.claimMailbox(ClaimWaitingEvents.make({ mailboxKey, upToSequence, leaseMs }))
-								.pipe(Effect.map(claimedOrSkipped)),
+							Effect.gen(function* () {
+								const batchId = yield* makeBatchId
+								const accessToken = yield* makeDeliveryAccessToken
+								const claimed = yield* mailboxProcessingBackend.claimMailbox(
+									ClaimWaitingEvents.make({ mailboxKey, upToSequence, leaseMs, batchId, accessToken }),
+								)
+								return claimedOrSkipped(claimed)
+							}).pipe(
+								Effect.catchTag('PlatformError', (error) =>
+									Effect.logError('Random batch identity could not be made', error).pipe(
+										Effect.andThen(
+											Effect.fail(new MailboxProcessingUnavailable({ reason: 'random_unavailable' })),
+										),
+									),
+								),
+							),
 						WaitUntil: ({ until }) =>
 							mailboxProcessingBackend
 								.deferMailbox({ mailboxKey, until, lastSequenceSeen: waiting.lastSequence })
@@ -467,6 +650,8 @@ export const makeMailboxProcessing = (options: MailboxProcessingOptions) =>
 	Effect.gen(function* () {
 		const processingBackend = yield* MailboxProcessingBackend
 		const providerEventDispatcher = yield* ProviderEventDispatcher
+		/** Makes each new batch's ID and remote-worker token. */
+		const crypto = yield* Crypto.Crypto
 
 		const runClaim = (claim: ClaimedMailboxBatch) =>
 			processClaim({ claim, maxAttempts: options.maxAttempts ?? 5, leaseMs: options.leaseMs }).pipe(
@@ -486,6 +671,7 @@ export const makeMailboxProcessing = (options: MailboxProcessingOptions) =>
 					deliveryModeFor: options.deliveryModeFor,
 				}).pipe(
 					Effect.provideService(MailboxProcessingBackend, processingBackend),
+					Effect.provideService(Crypto.Crypto, crypto),
 					Effect.catchTag('MailboxProcessingUnavailable', (error) =>
 						Effect.logError('Mailbox could not be claimed or deferred', error).pipe(
 							Effect.annotateLogs({ mailbox_key: mailbox.mailboxKey }),

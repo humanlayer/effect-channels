@@ -7,7 +7,12 @@ import { LinearApi } from '../src/LinearApi'
 import { LinearIssueOpened } from '../src/LinearCallbackEvents'
 import { type LinearCallbackHandler, LinearCallbacks, type LinearCallbackHandlers } from '../src/LinearCallbacks'
 import { makeLinearEventProcessor } from '../src/LinearEventProcessor'
-import { appUserNotificationPayloads, linearIssueCreateAdmission, linearNotificationAdmission } from './fixtures'
+import {
+	appUserNotificationPayloads,
+	firstAttempt,
+	linearIssueCreateAdmission,
+	linearNotificationAdmission,
+} from './fixtures'
 
 const namespace = 'linear-processing-test'
 const layer = (handlers: LinearCallbackHandlers<never, never>, subscribed = false) =>
@@ -26,9 +31,10 @@ const process = (
 	admissions: Parameters<ReturnType<typeof makeLinearEventProcessor>['process']>[0],
 	subscribed = false,
 ) =>
-	makeLinearEventProcessor({ namespace })
-		.process(admissions)
-		.pipe(Effect.provide(layer(handlers, subscribed)))
+	firstAttempt().pipe(
+		Effect.flatMap((execution) => makeLinearEventProcessor({ namespace }).process(admissions, execution)),
+		Effect.provide(layer(handlers, subscribed)),
+	)
 
 describe('Linear directed entry points', () => {
 	it.effect('routes issue mentions, comment mentions, and assignments', ({ expect }) =>

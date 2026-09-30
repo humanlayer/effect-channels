@@ -1,6 +1,7 @@
 import { describe, it } from '@effect/vitest'
 import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Queue, Ref } from 'effect'
 import { TestClock } from 'effect/testing'
+import * as NodeCrypto from '@effect/platform-node/NodeCrypto'
 
 import {
 	BurstDeliveryMode,
@@ -77,7 +78,11 @@ const processingOptions = (overrides: Partial<MailboxProcessingOptions> = {}): M
 
 /** The real processing layer over the in-memory store, with the store's services left visible to the test. */
 const processingOver = (dispatcher: Layer.Layer<ProviderEventDispatcher>, options: MailboxProcessingOptions) =>
-	MailboxProcessingLive(options).pipe(Layer.provide(dispatcher), Layer.provideMerge(MailboxBackendMemory))
+	MailboxProcessingLive(options).pipe(
+		Layer.provide(dispatcher),
+		Layer.provide(NodeCrypto.layer),
+		Layer.provideMerge(MailboxBackendMemory),
+	)
 
 /** An in-memory store built ahead of the processing layer, for tests that wrap or call the store themselves. */
 const buildMemoryStore = Effect.gen(function* () {
@@ -314,6 +319,7 @@ describe('delivery modes', () => {
 				Effect.provide(
 					MailboxProcessingLive(withMode(DebounceDeliveryMode.make({ quietPeriodMs: 2_000 }))).pipe(
 						Layer.provide(dispatcher),
+						Layer.provide(NodeCrypto.layer),
 						Layer.provideMerge(Layer.succeedContext(store)),
 					),
 				),
@@ -384,7 +390,7 @@ describe('claim lease', () => {
 			}).pipe(
 				Effect.provide(
 					MailboxProcessingLive(processingOptions({ leaseMs: 3_000 })).pipe(
-						Layer.provide(Layer.merge(dispatcher, backendThatLosesClaims)),
+						Layer.provide(Layer.mergeAll(dispatcher, backendThatLosesClaims, NodeCrypto.layer)),
 					),
 				),
 				Effect.provide(store),
@@ -434,7 +440,7 @@ describe('polling', () => {
 							deliveryModeFor: () => SerialDeliveryMode.make({}),
 							polling: { intervalMs: 1_000 },
 						}),
-					).pipe(Layer.provide(Layer.merge(recordingDispatcher(dispatched), observedBackend))),
+					).pipe(Layer.provide(Layer.mergeAll(recordingDispatcher(dispatched), observedBackend, NodeCrypto.layer))),
 				),
 				Effect.provide(store),
 			)

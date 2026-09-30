@@ -1,17 +1,25 @@
 import {
+	BatchId,
 	ClaimedMailboxBatch,
+	DeliveryAccessToken,
 	DeliveryAdmissionBatch,
+	DeliveryHandoffUnsupported,
+	DeliveryPreparationConflict,
 	MailboxProcessingBackend,
 	MailboxProcessingClaimLost,
 	MailboxProcessingUnavailable,
 	MailboxSequence,
+	PreparedDeliveryInvocation,
 	RecordProcessingAttemptResult,
 	RecoverableMailbox,
 	Timestamp,
 	WaitingEvents,
 	WaitingMailbox,
+	makeDeliveryId,
 	type ClaimMailbox,
 	type DeferMailbox,
+	type HandOffMailboxDelivery,
+	type PrepareMailboxDelivery,
 	type ReadyMailbox,
 	type RecordProcessingAttemptResult as RecordProcessingAttemptResultType,
 	type RenewMailboxClaim,
@@ -44,13 +52,22 @@ const FrozenLook = Schema.Tuple([
 ])
 const Look = Schema.NullOr(Schema.Union([IdleLook, FrozenLook]))
 
+const preparedCodec = Schema.fromJsonString(PreparedDeliveryInvocation)
+const samePreparation = Schema.toEquivalence(PreparedDeliveryInvocation)
+
+/** What the claim script reports: the claim, its frozen batch, and the batch's saved preparation, if any. */
 const Claimed = Schema.NullOr(
 	Schema.Tuple([
 		Schema.NonEmptyString,
 		ClaimedMailboxBatch.fields.attempt,
 		Schema.fromJsonString(DeliveryAdmissionBatch),
+		BatchId,
+		DeliveryAccessToken,
+		Schema.Union([Schema.Literal(''), preparedCodec]),
 	]),
 )
+/** What the prepare script reports: the batch's saved preparation and its ID, or null when the claim is lost. */
+const Prepared = Schema.NullOr(Schema.Tuple([preparedCodec, BatchId]))
 const Changed = Schema.Literals([0, 1])
 const resultCodec = Schema.fromJsonString(RecordProcessingAttemptResult.fields.result)
 
@@ -106,17 +123,24 @@ const claimMailbox = (input: ClaimMailbox) =>
 			claimNonce: yield* makeClaimNonce,
 			now,
 			leaseUntil: now + input.leaseMs,
-			upToSequence: Match.value(input).pipe(
+			newBatch: Match.value(input).pipe(
 				Match.tagsExhaustive({
-					ClaimWaitingEvents: ({ upToSequence }) => upToSequence,
+					ClaimWaitingEvents: ({ upToSequence, batchId, accessToken }) => ({
+						upToSequence,
+						batchId,
+						accessToken,
+					}),
 					ClaimFrozenBatch: () => null,
 				}),
 			),
 		})
 		const claimed = yield* Schema.decodeUnknownEffect(Claimed)(result)
 		if (Predicate.isNull(claimed)) return Option.none<ClaimedMailboxBatch>()
-		const [claimId, attempt, admissions] = claimed
-		return Option.some(ClaimedMailboxBatch.make({ mailboxKey: input.mailboxKey, claimId, attempt, admissions }))
+		const [claimId, attempt, admissions, batchId, accessToken, prepared] = claimed
+		const batch = { mailboxKey: input.mailboxKey, batchId, claimId, attempt, accessToken, admissions }
+		return Option.some(
+			prepared === '' ? ClaimedMailboxBatch.make(batch) : ClaimedMailboxBatch.make({ ...batch, prepared }),
+		)
 	}).pipe(unavailable, Effect.withSpan('delivery.redis.claim_mailbox', { attributes: { claim_kind: input._tag } }))
 
 const deferMailbox = Effect.fn('delivery.redis.defer_mailbox')(function* (input: DeferMailbox) {
@@ -166,6 +190,31 @@ const recordProcessingAttemptResult = Effect.fn('delivery.redis.record_processin
 	}
 })
 
+/**
+ * Save the callback choice on the batch the running claim owns, once. The script saves it only when none is
+ * saved; a different saved choice is a conflict.
+ */
+const prepareDelivery = Effect.fn('delivery.redis.prepare_delivery')(function* (input: PrepareMailboxDelivery) {
+	const redis = yield* Redis.Redis
+	const { mailboxKey, claimId } = input
+	const saved = yield* Effect.gen(function* () {
+		const preparedJson = yield* Schema.encodeEffect(preparedCodec)(input.prepared)
+		const result = yield* redis.eval(Scripts.prepare)({ mailboxKey, claimId, preparedJson })
+		return yield* Schema.decodeUnknownEffect(Prepared)(result)
+	}).pipe(unavailable)
+	if (Predicate.isNull(saved)) return yield* new MailboxProcessingClaimLost({ mailboxKey, claimId })
+	const [prepared, batchId] = saved
+	if (!samePreparation(prepared, input.prepared)) {
+		return yield* new DeliveryPreparationConflict({ deliveryId: makeDeliveryId({ mailboxKey, batchId }) })
+	}
+	return prepared
+})
+
+/** Redis has no remote control yet, so it refuses every handoff. */
+const handOffDelivery = Effect.fn('delivery.redis.hand_off_delivery')(function* (_input: HandOffMailboxDelivery) {
+	return yield* new DeliveryHandoffUnsupported()
+})
+
 export type MailboxProcessingBackendRedisOptions = {
 	/** The most due mailboxes one look reports. */
 	readonly claimLimit: number
@@ -183,6 +232,8 @@ export const MailboxProcessingBackendRedis = (options: MailboxProcessingBackendR
 				deferMailbox: (input) => deferMailbox(input).pipe(withRedis),
 				renewClaim: (input) => renewClaim(input).pipe(withRedis),
 				recordProcessingAttemptResult: (input) => recordProcessingAttemptResult(input).pipe(withRedis),
+				prepareDelivery: (input) => prepareDelivery(input).pipe(withRedis),
+				handOffDelivery,
 			})
 		}),
 	)

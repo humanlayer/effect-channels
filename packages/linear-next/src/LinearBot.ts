@@ -2,6 +2,7 @@ import {
 	ChannelsProviderUnavailable,
 	type ChannelsProvider,
 	type DeliveryAdmissionBatch,
+	type ProviderDeliveryExecution,
 	SerialDeliveryMode,
 } from '@humanlayer/channels-delivery-next'
 import { Config, Effect, Layer, Match, Option, Predicate, Redacted, Schema } from 'effect'
@@ -101,8 +102,8 @@ export const make = <E, R, ApiError = never, ApiRequirements = never>(
 			return {
 				namespace: processor.namespace,
 				providerName: processor.providerName,
-				process: (admissions: DeliveryAdmissionBatch) =>
-					processor.process(admissions).pipe(Effect.provide(callbacks), Effect.provide(linearApi)),
+				process: (admissions: DeliveryAdmissionBatch, execution: ProviderDeliveryExecution) =>
+					processor.process(admissions, execution).pipe(Effect.provide(callbacks), Effect.provide(linearApi)),
 			}
 		}),
 	}

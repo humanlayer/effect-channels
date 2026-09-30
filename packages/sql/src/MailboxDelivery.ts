@@ -22,6 +22,38 @@ const unavailable = <A, R>(effect: Effect.Effect<A, Schema.SchemaError | SqlErro
 	)
 
 /**
+ * Added after the first tables, so every statement is safe to run again on a store that has them.
+ *
+ * - a batch row is one frozen batch for good: its permanent ID, its remote-worker token, and the
+ *   callback choice saved by its first prepare;
+ * - each claim row belongs to one batch, and a retry or recovery adds a claim row for the same batch.
+ *
+ * A claim still live from before this migration gets a batch of its own, with a fresh token.
+ */
+const migrateBatches = Effect.gen(function* () {
+	const sql = (yield* SqlClient.SqlClient).withoutTransforms()
+	yield* sql`CREATE TABLE IF NOT EXISTS delivery_next_batches (
+		batch_id text COLLATE "C" PRIMARY KEY,
+		mailbox_key text COLLATE "C" NOT NULL REFERENCES delivery_next_mailboxes(mailbox_key),
+		access_token text NOT NULL,
+		prepared_json text,
+		created_at double precision NOT NULL,
+		prepared_at double precision
+	)`
+	yield* sql`ALTER TABLE delivery_next_claims
+		ADD COLUMN IF NOT EXISTS batch_id text COLLATE "C" REFERENCES delivery_next_batches(batch_id)`
+	yield* sql`CREATE INDEX IF NOT EXISTS delivery_next_claims_batch
+		ON delivery_next_claims (batch_id, claimed_at)`
+	yield* sql`INSERT INTO delivery_next_batches (batch_id, mailbox_key, access_token, created_at)
+		SELECT 'legacy-' || md5(claim_id), mailbox_key,
+			replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', ''), claimed_at
+		FROM delivery_next_claims WHERE batch_id IS NULL AND status IN ('active', 'retry')
+		ON CONFLICT (batch_id) DO NOTHING`
+	yield* sql`UPDATE delivery_next_claims SET batch_id = 'legacy-' || md5(claim_id)
+		WHERE batch_id IS NULL AND status IN ('active', 'retry')`
+})
+
+/**
  * The mailbox store's tables.
  *
  * - a mailbox row says whether the mailbox is idle, running a claim, or waiting to retry one, and when it is next due;
@@ -70,6 +102,7 @@ export const migrate = Effect.gen(function* () {
 		ON delivery_next_admissions (mailbox_key, sequence_id) WHERE claim_id IS NULL`
 	yield* sql`CREATE INDEX IF NOT EXISTS delivery_next_admissions_claim
 		ON delivery_next_admissions (claim_id, sequence_id) WHERE claim_id IS NOT NULL`
+	yield* migrateBatches
 }).pipe(unavailable, Effect.asVoid, Effect.withSpan('delivery.sql.migrate'))
 
 /**

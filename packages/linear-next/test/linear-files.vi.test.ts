@@ -17,7 +17,7 @@ import {
 import { LinearAttachmentId } from '../src/LinearIdentity'
 import { LinearIssueAttachment, LinearIssue } from '../src/LinearResources'
 import { issue } from './api-test-fixtures'
-import { issueCreatePayload, linearAppUserId, linearOrganizationId } from './fixtures'
+import { firstAttempt, issueCreatePayload, linearAppUserId, linearOrganizationId } from './fixtures'
 
 const workspace = '8f1d3c4e-1111-4222-8333-944455556666'
 const upload = (asset: string) =>
@@ -90,8 +90,8 @@ describe('Linear file discovery', () => {
 			const subscribedEvents = yield* Queue.unbounded<LinearSubscribedEvents>()
 			const services = Layer.mergeAll(
 				LinearCallbacks.layer({
-					onIssueCreated: (event) => Queue.offer(createdEvents, event),
-					onSubscribedEvent: (event) => Queue.offer(subscribedEvents, event),
+					onIssueCreated: (event) => Effect.asVoid(Queue.offer(createdEvents, event)),
+					onSubscribedEvent: (event) => Effect.asVoid(Queue.offer(subscribedEvents, event)),
 				}),
 				Layer.mock(LinearApi, {}),
 				Layer.mock(MailboxSubscriptions, {
@@ -115,7 +115,7 @@ describe('Linear file discovery', () => {
 				})
 			const issueCreate = { ...created, data: { ...created.data, description } }
 			const opened = yield* processor
-				.process([admission('issue-create', issueCreate)])
+				.process([admission('issue-create', issueCreate)], yield* firstAttempt())
 				.pipe(Effect.provide(services))
 			expect(opened).toEqual(ProviderEventHandled.make({}))
 			const createdEvent = yield* Queue.take(createdEvents)
@@ -141,7 +141,9 @@ describe('Linear file discovery', () => {
 					reactionData: {},
 				},
 			}
-			yield* processor.process([admission('comment-create', commentCreate)]).pipe(Effect.provide(services))
+			yield* processor
+				.process([admission('comment-create', commentCreate)], yield* firstAttempt())
+				.pipe(Effect.provide(services))
 			const subscribed = yield* Queue.take(subscribedEvents)
 			const [event] = subscribed.events
 			if (event?._tag !== 'LinearCommentCreated') return yield* Effect.die('expected LinearCommentCreated')

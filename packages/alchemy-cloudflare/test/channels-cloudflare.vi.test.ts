@@ -3,16 +3,24 @@ import { it } from '@effect/vitest'
 import {
 	type Channels,
 	DeliveryAdmission,
+	DeliveryMutationReceipt,
+	DeliveryNotFound,
+	DeliveryOutcome,
+	DeliveryStatus,
+	PreparedDeliveryInvocation,
 	ProviderEventHandled,
+	deliveryMailboxKey,
+	type ProviderDeliveryExecution,
 	ProviderWebhookEvent,
 	QueueDeliveryMode,
 	type ChannelsProvider,
+	type CompleteDeliveryPayload,
 	type DeliveryAdmissionBatch,
 } from '@humanlayer/channels-delivery-next'
-import { Context, Effect, Layer, Ref } from 'effect'
+import { Context, Effect, Layer, Option, Predicate, Redacted, Ref, Schema } from 'effect'
 import { HttpServerRequest, HttpServerResponse } from 'effect/unstable/http'
 
-import { ChannelsCloudflare } from '../src'
+import { ChannelsCloudflare, DeliveryMailboxes } from '../src'
 import { DurableObjectFake, DurableObjectFakeAlarm } from './DurableObjectFake'
 
 const admission = (namespace: string) =>
@@ -25,8 +33,8 @@ const admission = (namespace: string) =>
 		payload: { type: 'example' },
 	})
 
-/** A provider that accepts any webhook as one event and records the size of each batch it is handed. */
-const makeExampleProvider = (batchSizes: Ref.Ref<ReadonlyArray<number>>): ChannelsProvider => ({
+/** The provider parts that accept any webhook as one event. */
+const exampleWebhooks: Pick<ChannelsProvider, 'providerName' | 'deliveryMode' | 'webhookProvider'> = {
 	providerName: 'example',
 	deliveryMode: QueueDeliveryMode.make({}),
 	webhookProvider: ({ namespace }) =>
@@ -34,6 +42,11 @@ const makeExampleProvider = (batchSizes: Ref.Ref<ReadonlyArray<number>>): Channe
 			providerName: 'example',
 			handle: () => Effect.succeed(ProviderWebhookEvent.make({ event: admission(namespace) })),
 		}),
+}
+
+/** A provider that records the size of each batch it is handed. */
+const makeExampleProvider = (batchSizes: Ref.Ref<ReadonlyArray<number>>): ChannelsProvider => ({
+	...exampleWebhooks,
 	eventProcessor: ({ namespace }) =>
 		Effect.succeed({
 			namespace,
@@ -45,12 +58,46 @@ const makeExampleProvider = (batchSizes: Ref.Ref<ReadonlyArray<number>>): Channe
 		}),
 })
 
+/** The delivery a callback handed off, as the remote worker it started would hold it. */
+type HandedOff = { readonly deliveryId: string; readonly accessToken: Redacted.Redacted }
+
+/** A provider whose callback hands every batch off and records the delivery it handed off. */
+const makeHandOffProvider = (handedOff: Ref.Ref<Option.Option<HandedOff>>): ChannelsProvider => ({
+	...exampleWebhooks,
+	eventProcessor: ({ namespace }) =>
+		Effect.succeed({
+			namespace,
+			providerName: 'example',
+			process: (_admissions: DeliveryAdmissionBatch, execution: ProviderDeliveryExecution) =>
+				Effect.gen(function* () {
+					yield* execution.prepare(
+						PreparedDeliveryInvocation.make({
+							callback: 'onExample',
+							presentationVersion: 1,
+							destination: { thread: 'thread-1' },
+							supportedOperations: [],
+						}),
+					)
+					yield* execution.context.handoff()
+					yield* Ref.set(
+						handedOff,
+						Option.some({ deliveryId: execution.deliveryId, accessToken: execution.context.accessToken }),
+					)
+					return ProviderEventHandled.make({})
+				}).pipe(Effect.orDie),
+		}),
+})
+
+/** Parse a delivery API response body as the schema the route answers with. */
+const decodeBody = <S extends Schema.Decoder<unknown>>(schema: S, text: string) =>
+	Schema.decodeEffect(Schema.fromJsonString(schema))(text)
+
 const makeOptions = (
-	batchSizes: Ref.Ref<ReadonlyArray<number>>,
+	provider: ChannelsProvider,
 ): Channels.Options<ReadonlyArray<{ readonly build: never; readonly process: never }>> => ({
 	namespace: 'channels-cloudflare-test',
 	basePath: '/api/channels',
-	providers: [makeExampleProvider(batchSizes)],
+	providers: [provider],
 	eventProcessing: { concurrency: 1, leaseMs: 30_000 },
 })
 
@@ -59,10 +106,10 @@ it.effect('ChannelsCloudflare mailbox: deliver sets the alarm and the alarm runs
 		const batchSizes = yield* Ref.make<ReadonlyArray<number>>([])
 		const durableObject = yield* Layer.build(DurableObjectFake)
 		const mailbox = yield* ChannelsCloudflare.makeMailbox(
-			makeOptions(batchSizes),
+			makeOptions(makeExampleProvider(batchSizes)),
 			{ rearmAfterMs: 1_000 },
 			Layer.succeedContext(durableObject),
-		)
+		).pipe(Effect.provide(NodeCrypto.layer))
 		const alarm = Context.get(durableObject, DurableObjectFakeAlarm)
 
 		const receipt = yield* mailbox.deliver(admission('channels-cloudflare-test'))
@@ -77,19 +124,21 @@ it.effect('ChannelsCloudflare mailbox: deliver sets the alarm and the alarm runs
 )
 
 it.effect(
-	'ChannelsCloudflare ingress: a webhook under the base path reaches the mailbox named by its key',
+	'ChannelsCloudflare routes: a webhook under the base path reaches the mailbox named by its key',
 	({ expect }) =>
 		Effect.gen(function* () {
 			const delivered = yield* Ref.make<ReadonlyArray<string>>([])
-			const bot = ChannelsCloudflare.make(makeOptions(yield* Ref.make<ReadonlyArray<number>>([])))
-			const fetch = yield* bot
-				.ingress({
-					getByName: (mailboxKey) => ({
-						deliver: () =>
-							Ref.update(delivered, (keys) => [...keys, mailboxKey]).pipe(Effect.as({ accepted: true })),
-					}),
-				})
-				.fetch.pipe(Effect.provide(NodeCrypto.layer))
+			const bot = ChannelsCloudflare.make(makeOptions(makeExampleProvider(yield* Ref.make<ReadonlyArray<number>>([]))))
+			const mailboxes = DeliveryMailboxes.of({
+				getByName: (mailboxKey) => ({
+					deliver: () =>
+						Ref.update(delivered, (keys) => [...keys, mailboxKey]).pipe(Effect.as({ accepted: true })),
+					deliveryRequest: () => Effect.die(new Error('this test sends no delivery requests')),
+				}),
+			})
+			const fetch = yield* ChannelsCloudflare.serve(bot.routes).pipe(
+				Effect.provide(Layer.merge(NodeCrypto.layer, Layer.succeed(DeliveryMailboxes, mailboxes))),
+			)
 
 			const post = (path: string) =>
 				fetch.pipe(
@@ -103,5 +152,87 @@ it.effect(
 			expect((yield* post('/integrations/example/webhook')).status).toEqual(404)
 			expect((yield* post('/api/channels/integrations/example/webhook')).status).toEqual(200)
 			expect((yield* Ref.get(delivered)).length).toEqual(1)
+		}),
+)
+
+it.effect(
+	'ChannelsCloudflare delivery API: a remote worker reads and completes its delivery through the Worker and its mailbox object',
+	({ expect }) =>
+		Effect.gen(function* () {
+			const handedOff = yield* Ref.make(Option.none<HandedOff>())
+			const options = makeOptions(makeHandOffProvider(handedOff))
+			const durableObject = yield* Layer.build(DurableObjectFake)
+			const mailbox = yield* ChannelsCloudflare.makeMailbox(
+				options,
+				{ rearmAfterMs: 1_000 },
+				Layer.succeedContext(durableObject),
+			).pipe(Effect.provide(NodeCrypto.layer))
+			const alarm = Context.get(durableObject, DurableObjectFakeAlarm)
+
+			yield* mailbox.deliver(admission('channels-cloudflare-test'))
+			yield* mailbox.alarm()
+			const { deliveryId, accessToken } = Option.getOrThrow(yield* Ref.get(handedOff))
+			expect(yield* alarm.scheduledAt).toEqual(null)
+
+			const routedTo = yield* Ref.make<ReadonlyArray<string>>([])
+			const mailboxes = DeliveryMailboxes.of({
+				getByName: (mailboxKey) => ({
+					deliver: mailbox.deliver,
+					deliveryRequest: (request) =>
+						Ref.update(routedTo, (keys) => [...keys, mailboxKey]).pipe(
+							Effect.andThen(mailbox.deliveryRequest(request)),
+						),
+				}),
+			})
+			const bot = ChannelsCloudflare.make(options)
+			const fetch = yield* ChannelsCloudflare.serve(Layer.merge(bot.routes, bot.deliveryApi)).pipe(
+				Effect.provide(Layer.merge(NodeCrypto.layer, Layer.succeed(DeliveryMailboxes, mailboxes))),
+			)
+
+			const call = (input: {
+				readonly path: string
+				readonly token: string
+				readonly payload?: CompleteDeliveryPayload
+			}) => {
+				const url = `http://localhost/api/channels/deliveries/${deliveryId}${input.path}`
+				const headers = { authorization: `Bearer ${input.token}`, 'content-type': 'application/json' }
+				const request = Predicate.isUndefined(input.payload)
+					? new Request(url, { headers })
+					: new Request(url, { method: 'POST', headers, body: JSON.stringify(input.payload) })
+				return fetch.pipe(
+					Effect.provideService(HttpServerRequest.HttpServerRequest, HttpServerRequest.fromWeb(request)),
+					Effect.flatMap((response) => {
+						const web = HttpServerResponse.toWeb(response)
+						return Effect.promise(() => web.text()).pipe(Effect.map((text) => ({ status: web.status, text })))
+					}),
+				)
+			}
+			const token = Redacted.value(accessToken)
+
+			const waiting = yield* call({ path: '', token })
+			expect(waiting.status).toEqual(200)
+			expect(yield* decodeBody(DeliveryStatus, waiting.text)).toMatchObject({
+				deliveryId,
+				stage: 'ExternalWaiting',
+				interruptRequested: false,
+			})
+
+			const completed = yield* call({ path: '/complete', token, payload: {} })
+			expect(completed.status).toEqual(202)
+			expect(yield* decodeBody(DeliveryMutationReceipt, completed.text)).toMatchObject({
+				deliveryId,
+				status: 'accepted',
+			})
+
+			const retired = yield* decodeBody(DeliveryStatus, (yield* call({ path: '', token })).text)
+			expect(retired.stage).toEqual('Retired')
+			expect(retired.outcome).toEqual(DeliveryOutcome.cases.Completed.make({}))
+
+			const wrongToken = yield* call({ path: '', token: 'wrong-token' })
+			expect(wrongToken.status).toEqual(404)
+			expect(yield* decodeBody(DeliveryNotFound, wrongToken.text)).toBeInstanceOf(DeliveryNotFound)
+
+			const mailboxKey = deliveryMailboxKey(admission('channels-cloudflare-test'))
+			expect(yield* Ref.get(routedTo)).toEqual([mailboxKey, mailboxKey, mailboxKey, mailboxKey])
 		}),
 )

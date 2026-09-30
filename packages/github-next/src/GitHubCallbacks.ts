@@ -1,3 +1,4 @@
+import type { DeliveryCallbackResult, DeliveryContext } from '@humanlayer/channels-delivery-next'
 import { Cause, Context, Effect, Layer, Option, Predicate, Schema } from 'effect'
 
 import type {
@@ -30,12 +31,21 @@ export class GitHubCallbackError extends Schema.TaggedError<GitHubCallbackError>
 	reason: Schema.Literals(['failed', 'unexpected']),
 }) {}
 
+/**
+ * One application callback. `delivery` names the delivery and can hand it to a remote worker; a callback
+ * that did so may return the `DeliveryHandoff`. The saved handoff, not the return value, is authoritative.
+ */
+export type GitHubCallbackHandler<A, E, R> = (
+	event: A,
+	delivery: DeliveryContext,
+) => Effect.Effect<DeliveryCallbackResult, E, R>
+
 export type GitHubCallbackHandlers<E, R> = {
-	readonly onIssueCreated?: (event: GitHubIssueCreated) => Effect.Effect<void, E, R>
-	readonly onPrCreated?: (event: GitHubPrCreated) => Effect.Effect<void, E, R>
-	readonly onMentioned?: (event: GitHubMentioned) => Effect.Effect<void, E, R>
-	readonly onSubscribedIssueEvents?: (event: GitHubSubscribedIssueEvents) => Effect.Effect<void, E, R>
-	readonly onSubscribedPrEvents?: (event: GitHubSubscribedPrEvents) => Effect.Effect<void, E, R>
+	readonly onIssueCreated?: GitHubCallbackHandler<GitHubIssueCreated, E, R>
+	readonly onPrCreated?: GitHubCallbackHandler<GitHubPrCreated, E, R>
+	readonly onMentioned?: GitHubCallbackHandler<GitHubMentioned, E, R>
+	readonly onSubscribedIssueEvents?: GitHubCallbackHandler<GitHubSubscribedIssueEvents, E, R>
+	readonly onSubscribedPrEvents?: GitHubCallbackHandler<GitHubSubscribedPrEvents, E, R>
 }
 
 const retryableFromCause = (cause: Cause.Cause<unknown>): boolean =>
@@ -84,11 +94,11 @@ const narrowGitHubCallbackCause = (input: {
 const wrapCallback = <A, E, R>(
 	context: Context.Context<R>,
 	callback: GitHubCallbackName,
-	handler: ((event: A) => Effect.Effect<void, E, R>) | undefined,
+	handler: GitHubCallbackHandler<A, E, R> | undefined,
 ) => {
 	if (Predicate.isUndefined(handler)) return undefined
-	return Effect.fn(`github.callbacks.${callback}`)((event: A) =>
-		Effect.suspend(() => handler(event)).pipe(
+	return Effect.fn(`github.callbacks.${callback}`)((event: A, delivery: DeliveryContext) =>
+		Effect.suspend(() => handler(event, delivery)).pipe(
 			Effect.provide(context),
 			Effect.catchCause((cause) => narrowGitHubCallbackCause({ callback, cause })),
 		),

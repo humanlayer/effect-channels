@@ -1,17 +1,26 @@
 import { describe, it } from '@effect/vitest'
 import {
 	DeliveryAdmission,
+	deliveryMailboxKey,
+	type DeliveryOperationKind,
+	DeliveryPreparationConflict,
+	DeliveryPreparationUnavailable,
 	MailboxSubscriptions,
+	MailboxSubscriptionsMemory,
+	PreparedDeliveryInvocation,
+	ProviderDeliveryExecution,
 	ProviderEventExecutionFailed,
 	ProviderEventHandled,
 	ProviderEventIgnored,
 	ProviderEventInvalid,
 } from '@humanlayer/channels-delivery-next'
-import { Cause, Effect, Exit, Layer } from 'effect'
+import { Cause, Effect, Exit, Layer, Option, Ref } from 'effect'
 import { vi } from 'vite-plus/test'
 
+import { makeTestDeliveryExecution } from '../../delivery-next/test/delivery-execution'
 import { GitHubApi } from '../src/GitHubApi'
-import { GitHubCallbacks, type GitHubCallbackHandlers } from '../src/GitHubCallbacks'
+import type { GitHubMentioned } from '../src/GitHubCallbackEvents'
+import { GitHubCallbacks, type GitHubCallbackHandler, type GitHubCallbackHandlers } from '../src/GitHubCallbacks'
 import { GitHubBotConfiguration, makeGitHubEventProcessor } from '../src/GitHubEventProcessor'
 import { GitHubId } from '../src/GitHubIdentity'
 import {
@@ -73,9 +82,9 @@ const process = <E, R>(
 	admissions: readonly [DeliveryAdmission, ...Array<DeliveryAdmission>],
 	subscribed = false,
 ) =>
-	makeGitHubEventProcessor({ namespace, bot })
-		.process(admissions)
-		.pipe(Effect.provide(layer(handlers, subscribed)))
+	Effect.flatMap(makeTestDeliveryExecution(), ({ execution }) =>
+		makeGitHubEventProcessor({ namespace, bot }).process(admissions, execution),
+	).pipe(Effect.provide(layer(handlers, subscribed)))
 
 describe('GitHub event batch processing', () => {
 	it.effect('routes an opened issue to onIssueCreated', ({ expect }) =>
@@ -232,4 +241,257 @@ describe('GitHub event batch processing', () => {
 			expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true)
 		}),
 	)
+})
+
+const processor = makeGitHubEventProcessor({ namespace, bot })
+const mentionAdmission = () => admission('issue_comment', issueCommentPayload(), 'mention')
+const openedAdmission = () => admission('issues', issuePayload('opened'), 'opened')
+
+/** Callbacks and the processor share one in-memory subscription store, so a callback can subscribe the issue. */
+const sharedLayer = <E, R>(handlers: GitHubCallbackHandlers<E, R>) =>
+	Layer.merge(
+		Layer.provideMerge(GitHubCallbacks.layer(handlers), MailboxSubscriptionsMemory),
+		Layer.mock(GitHubApi, {}),
+	)
+
+/** Another test mutates the fixtures' shared user into the bot, so pull request payloads name their own sender. */
+const pullRequestFrom = (action: string) => ({
+	...pullRequestPayload(action),
+	sender: { id: 402, login: 'carol', type: 'User' },
+})
+
+const issueRef = { installationId: 100, repositoryId: 200, owner: 'alice', repository: 'project', number: 42 }
+const discussionSupportedOperations: ReadonlyArray<DeliveryOperationKind> = [
+	'CreateMessage',
+	'UpdateMessage',
+	'DeleteMessage',
+	'SetMessageReaction',
+	'SetActivity',
+	'RenderPlan',
+	'AddExternalLink',
+]
+
+describe('GitHub delivery preparation', () => {
+	it.effect('prepares the callback, issue, and mentioning comment once before the callback runs', ({ expect }) => {
+		const preparedBeforeCallback: Array<number> = []
+		const deliveryIds: Array<string> = []
+		return Effect.gen(function* () {
+			const test = yield* makeTestDeliveryExecution()
+			const onMentioned: Handler<'onMentioned'> = (_event, delivery) =>
+				Ref.get(test.preparations).pipe(
+					Effect.map((preparations) => {
+						preparedBeforeCallback.push(preparations.length)
+						deliveryIds.push(delivery.deliveryId)
+					}),
+				)
+			const result = yield* processor
+				.process([mentionAdmission()], test.execution)
+				.pipe(Effect.provide(sharedLayer({ onMentioned })))
+
+			expect(result).toEqual(ProviderEventHandled.make({}))
+			expect(preparedBeforeCallback).toEqual([1])
+			expect(deliveryIds).toEqual([test.execution.deliveryId])
+			expect(yield* Ref.get(test.preparations)).toEqual([
+				PreparedDeliveryInvocation.make({
+					callback: 'onMentioned',
+					presentationVersion: 1,
+					destination: { _tag: 'GitHubIssue', issue: issueRef },
+					activationTarget: {
+						_tag: 'GitHubIssueComment',
+						comment: { discussion: { _tag: 'Issue', ref: issueRef }, id: 500 },
+					},
+					supportedOperations: discussionSupportedOperations,
+				}),
+			])
+		})
+	})
+
+	it.effect('targets the opened issue or pull request itself, and nothing for subscribed batches', ({ expect }) =>
+		Effect.gen(function* () {
+			const issue = yield* makeTestDeliveryExecution()
+			yield* processor
+				.process([openedAdmission()], issue.execution)
+				.pipe(Effect.provide(sharedLayer({ onIssueCreated: () => Effect.void })))
+			expect(yield* Ref.get(issue.preparations)).toEqual([
+				PreparedDeliveryInvocation.make({
+					callback: 'onIssueCreated',
+					presentationVersion: 1,
+					destination: { _tag: 'GitHubIssue', issue: issueRef },
+					activationTarget: { _tag: 'GitHubIssue', issue: issueRef },
+					supportedOperations: discussionSupportedOperations,
+				}),
+			])
+
+			const pullRequest = yield* makeTestDeliveryExecution()
+			yield* processor
+				.process(
+					[pullRequestAdmission('pull_request', pullRequestFrom('opened'), 'opened')],
+					pullRequest.execution,
+				)
+				.pipe(Effect.provide(sharedLayer({ onPrCreated: () => Effect.void })))
+			expect(yield* Ref.get(pullRequest.preparations)).toEqual([
+				PreparedDeliveryInvocation.make({
+					callback: 'onPrCreated',
+					presentationVersion: 1,
+					destination: { _tag: 'GitHubPullRequest', pullRequest: issueRef },
+					activationTarget: { _tag: 'GitHubPullRequest', pullRequest: issueRef },
+					supportedOperations: discussionSupportedOperations,
+				}),
+			])
+
+			const subscribed = yield* makeTestDeliveryExecution()
+			yield* processor
+				.process(
+					[pullRequestAdmission('pull_request', pullRequestFrom('closed'), 'closed')],
+					subscribed.execution,
+				)
+				.pipe(Effect.provide(layer({ onSubscribedPrEvents: () => Effect.void }, true)))
+			expect(yield* Ref.get(subscribed.preparations)).toEqual([
+				PreparedDeliveryInvocation.make({
+					callback: 'onSubscribedPrEvents',
+					presentationVersion: 1,
+					destination: { _tag: 'GitHubPullRequest', pullRequest: issueRef },
+					supportedOperations: discussionSupportedOperations,
+				}),
+			])
+		}),
+	)
+
+	it.effect('does not prepare a batch it ignores', ({ expect }) =>
+		Effect.gen(function* () {
+			const test = yield* makeTestDeliveryExecution()
+			const result = yield* processor
+				.process([openedAdmission()], test.execution)
+				.pipe(Effect.provide(sharedLayer({ onMentioned: () => Effect.void })))
+			expect(result).toEqual(ProviderEventIgnored.make({ reason: 'callback_not_configured' }))
+			expect(yield* Ref.get(test.preparations)).toEqual([])
+		}),
+	)
+
+	it.effect('retries the saved callback after the first attempt subscribed the issue', ({ expect }) => {
+		const calls: Array<string> = []
+		const onMentioned: GitHubCallbackHandler<
+			GitHubMentioned,
+			{ readonly retryable: boolean },
+			MailboxSubscriptions
+		> = () =>
+			Effect.suspend(() => {
+				calls.push('onMentioned')
+				return calls.length === 1
+					? Effect.flatMap(MailboxSubscriptions, (subscriptions) =>
+							subscriptions.subscribe({ mailboxKey: deliveryMailboxKey(mentionAdmission()) }),
+						).pipe(Effect.orDie, Effect.andThen(Effect.fail({ retryable: true })))
+					: Effect.void
+			})
+		const onSubscribedIssueEvents = () =>
+			Effect.sync(() => {
+				calls.push('onSubscribedIssueEvents')
+			})
+		return Effect.gen(function* () {
+			const first = yield* makeTestDeliveryExecution()
+			expect(yield* processor.process([mentionAdmission()], first.execution).pipe(Effect.flip)).toEqual(
+				ProviderEventExecutionFailed.make({ provider: 'github', retryable: true, safeCode: 'callback_failed' }),
+			)
+
+			const second = yield* first.retry
+			expect(Option.map(second.execution.prepared, ({ callback }) => callback)).toEqual(
+				Option.some('onMentioned'),
+			)
+			expect(yield* processor.process([mentionAdmission()], second.execution)).toEqual(
+				ProviderEventHandled.make({}),
+			)
+			expect(yield* Ref.get(second.preparations)).toEqual([])
+			expect(calls).toEqual(['onMentioned', 'onMentioned'])
+
+			const fresh = yield* makeTestDeliveryExecution()
+			yield* processor.process([mentionAdmission()], fresh.execution)
+			expect(calls).toEqual(['onMentioned', 'onMentioned', 'onSubscribedIssueEvents'])
+		}).pipe(Effect.provide(sharedLayer({ onMentioned, onSubscribedIssueEvents })))
+	})
+
+	it.effect('records a handoff the callback returns and reports the batch handled', ({ expect }) =>
+		Effect.gen(function* () {
+			const test = yield* makeTestDeliveryExecution()
+			const result = yield* processor
+				.process([openedAdmission()], test.execution)
+				.pipe(Effect.provide(sharedLayer({ onIssueCreated: (_event, delivery) => delivery.handoff() })))
+			expect(result).toEqual(ProviderEventHandled.make({}))
+			expect(yield* Ref.get(test.handoffs)).toHaveLength(1)
+		}),
+	)
+
+	it.effect('maps preparation failures without running the callback', ({ expect }) => {
+		const onIssueCreated = vi.fn<Handler<'onIssueCreated'>>(() => Effect.void)
+		return Effect.gen(function* () {
+			const test = yield* makeTestDeliveryExecution()
+			const withPrepare = (prepare: ProviderDeliveryExecution['prepare']) =>
+				new ProviderDeliveryExecution({ ...test.execution, prepare })
+
+			const conflict = yield* processor
+				.process(
+					[openedAdmission()],
+					withPrepare(() =>
+						Effect.fail(DeliveryPreparationConflict.make({ deliveryId: test.execution.deliveryId })),
+					),
+				)
+				.pipe(Effect.flip)
+			expect(conflict).toEqual(
+				ProviderEventExecutionFailed.make({
+					provider: 'github',
+					retryable: false,
+					safeCode: 'delivery_prepare_conflict',
+				}),
+			)
+
+			const unavailable = yield* processor
+				.process(
+					[openedAdmission()],
+					withPrepare(() => Effect.fail(DeliveryPreparationUnavailable.make({ reason: 'store offline' }))),
+				)
+				.pipe(Effect.flip)
+			expect(unavailable).toEqual(
+				ProviderEventExecutionFailed.make({
+					provider: 'github',
+					retryable: true,
+					safeCode: 'delivery_prepare_unavailable',
+				}),
+			)
+			expect(onIssueCreated).not.toHaveBeenCalled()
+		}).pipe(Effect.provide(sharedLayer({ onIssueCreated })))
+	})
+
+	it.effect('fails a saved callback that is unknown, unconfigured, or cannot be rebuilt', ({ expect }) => {
+		const onIssueCreated = vi.fn<Handler<'onIssueCreated'>>(() => Effect.void)
+		const onPrCreated = vi.fn<Handler<'onPrCreated'>>(() => Effect.void)
+		return Effect.gen(function* () {
+			const test = yield* makeTestDeliveryExecution()
+			const withPrepared = (callback: string) =>
+				new ProviderDeliveryExecution({
+					...test.execution,
+					prepared: Option.some(
+						PreparedDeliveryInvocation.make({
+							callback,
+							presentationVersion: 1,
+							destination: null,
+							supportedOperations: [],
+						}),
+					),
+				})
+			const failed = (safeCode: string) =>
+				ProviderEventExecutionFailed.make({ provider: 'github', retryable: false, safeCode })
+
+			expect(
+				yield* processor.process([openedAdmission()], withPrepared('onMentioned')).pipe(Effect.flip),
+			).toEqual(failed('prepared_callback_missing'))
+			expect(yield* processor.process([openedAdmission()], withPrepared('onRemoved')).pipe(Effect.flip)).toEqual(
+				failed('prepared_callback_missing'),
+			)
+			expect(
+				yield* processor.process([openedAdmission()], withPrepared('onPrCreated')).pipe(Effect.flip),
+			).toEqual(failed('prepared_callback_unbuildable'))
+			expect(onIssueCreated).not.toHaveBeenCalled()
+			expect(onPrCreated).not.toHaveBeenCalled()
+			expect(yield* Ref.get(test.preparations)).toEqual([])
+		}).pipe(Effect.provide(sharedLayer({ onIssueCreated, onPrCreated })))
+	})
 })

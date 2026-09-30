@@ -4,6 +4,7 @@
  */
 import { Layer } from 'effect'
 
+import type { DeliveryControlBackend } from './DeliveryControl'
 import type { ChannelsStorage } from './ChannelsStorage'
 import { MailboxBackendMemory } from './MailboxBackendMemory'
 import { MailboxSubscriptionsMemory } from './MailboxSubscriptionsMemory'
@@ -17,4 +18,4 @@ export const make = (options: MakeOptions) =>
 	({
 		polling: options.polling,
 		layer: Layer.merge(MailboxBackendMemory, MailboxSubscriptionsMemory),
-	}) satisfies ChannelsStorage
+	}) satisfies ChannelsStorage<never, never, DeliveryControlBackend>

@@ -95,7 +95,7 @@ describe('Channels.make', () => {
 				storage: ChannelsMemory.make({ polling: { intervalMs: 1_000 } }),
 			})
 
-			const services = yield* Layer.build(bot.layer)
+			const services = yield* Layer.build(bot.layer.pipe(Layer.provide(NodeCrypto.layer)))
 			const delivery = Context.get(services, MailboxDelivery)
 			yield* delivery.deliver(
 				DeliveryAdmission.make({

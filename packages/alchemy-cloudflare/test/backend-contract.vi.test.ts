@@ -2,6 +2,9 @@ import { it } from '@effect/vitest'
 import {
 	ClaimWaitingEvents,
 	DeliveryAdmission,
+	DeliveryControlBackend,
+	DeliveryOutcome,
+	DeliveryTerminal,
 	DeliveryReceipt,
 	MailboxDelivery,
 	MailboxProcessing,
@@ -12,12 +15,16 @@ import {
 	Timestamp,
 	WaitingMailbox,
 	deliveryMailboxKey,
+	makeDeliveryId,
+	parseDeliveryId,
 } from '@humanlayer/channels-delivery-next'
 import { Clock, Effect, Layer, Option, Schema } from 'effect'
 import { TestClock } from 'effect/testing'
 
-import { mailboxBackendContract } from '../../delivery-next/test/backend-contract'
+import { mailboxBackendContract, nextBatchIdentity, preparation } from '../../delivery-next/test/backend-contract'
+import { deliveryHandoffContract } from '../../delivery-next/test/delivery-handoff-contract'
 import {
+	DeliveryControlBackendFromDurableObjectStorage,
 	MailboxProcessingBackendFromDurableObjectStorage,
 	makeDeliverFromDurableObjectStorage,
 	makeMailboxAlarmHandler,
@@ -42,12 +49,17 @@ const MailboxDeliveryFromDurableObjectStorage = Layer.effect(
 
 /** `Layer.fresh` gives every test its own Durable Object, whatever layer memoization is in play. */
 const makeEmptyStore = () =>
-	Layer.mergeAll(MailboxDeliveryFromDurableObjectStorage, MailboxProcessingBackendFromDurableObjectStorage).pipe(
+	Layer.mergeAll(
+		MailboxDeliveryFromDurableObjectStorage,
+		MailboxProcessingBackendFromDurableObjectStorage,
+		DeliveryControlBackendFromDurableObjectStorage,
+	).pipe(
 		Layer.provideMerge(DurableObjectFake),
 		Layer.fresh,
 	)
 
 mailboxBackendContract('Durable Object', makeEmptyStore, { holdsManyMailboxes: false })
+deliveryHandoffContract('Durable Object', makeEmptyStore)
 
 const leaseMs = 1_000
 
@@ -88,7 +100,12 @@ it.effect('Durable Object: keeps the alarm on the time the mailbox is next due',
 		yield* TestClock.adjust(600)
 		const claim = Option.getOrThrow(
 			yield* backend.claimMailbox(
-				ClaimWaitingEvents.make({ mailboxKey, upToSequence: waiting.waiting.lastSequence, leaseMs }),
+				ClaimWaitingEvents.make({
+					mailboxKey,
+					upToSequence: waiting.waiting.lastSequence,
+					leaseMs,
+					...nextBatchIdentity(),
+				}),
 			),
 		)
 		expect(yield* alarm.scheduledAt).toEqual(700 + leaseMs)
@@ -116,7 +133,9 @@ it.effect(
 
 			yield* delivery.deliver(event('a'))
 			const claim = Option.getOrThrow(
-				yield* backend.claimMailbox(ClaimWaitingEvents.make({ mailboxKey, upToSequence: 0, leaseMs })),
+				yield* backend.claimMailbox(
+					ClaimWaitingEvents.make({ mailboxKey, upToSequence: 0, leaseMs, ...nextBatchIdentity() }),
+				),
 			)
 			yield* TestClock.adjust(250)
 			yield* delivery.deliver(event('during-run'))
@@ -128,6 +147,49 @@ it.effect(
 				finishedAt: Timestamp.make(yield* Clock.currentTimeMillis),
 			})
 			expect(yield* alarm.scheduledAt).toEqual(250)
+		}).pipe(Effect.provide(makeEmptyStore())),
+)
+
+it.effect(
+	'Durable Object: a handed-off delivery clears the alarm, and its remote result wakes the events that wait',
+	({ expect }) =>
+		Effect.gen(function* () {
+			const delivery = yield* MailboxDelivery
+			const backend = yield* MailboxProcessingBackend
+			const control = yield* DeliveryControlBackend
+			const alarm = yield* DurableObjectFakeAlarm
+
+			yield* delivery.deliver(event('a'))
+			const claim = Option.getOrThrow(
+				yield* backend.claimMailbox(
+					ClaimWaitingEvents.make({ mailboxKey, upToSequence: 0, leaseMs, ...nextBatchIdentity() }),
+				),
+			)
+			yield* backend.prepareDelivery({ mailboxKey, claimId: claim.claimId, prepared: preparation('onMention') })
+			yield* backend.handOffDelivery({ mailboxKey, claimId: claim.claimId, handedOffAt: Timestamp.make(0), links: [] })
+			expect(yield* alarm.scheduledAt).toEqual(leaseMs)
+
+			yield* backend.recordProcessingAttemptResult({
+				claim,
+				result: MailboxProcessingAttemptCompleted.make({}),
+				finishedAt: Timestamp.make(yield* Clock.currentTimeMillis),
+			})
+			expect(yield* alarm.scheduledAt).toEqual(null)
+
+			yield* TestClock.adjust(300)
+			yield* delivery.deliver(event('while-waiting'))
+			expect(yield* alarm.scheduledAt).toEqual(null)
+
+			yield* TestClock.adjust(200)
+			const reference = Option.getOrThrow(
+				parseDeliveryId(makeDeliveryId({ mailboxKey, batchId: claim.batchId })),
+			)
+			yield* control.recordDeliveryTerminal({
+				reference,
+				accessToken: claim.accessToken,
+				terminal: DeliveryTerminal.make({ outcome: DeliveryOutcome.cases.Completed.make({}) }),
+			})
+			expect(yield* alarm.scheduledAt).toEqual(500)
 		}).pipe(Effect.provide(makeEmptyStore())),
 )
 

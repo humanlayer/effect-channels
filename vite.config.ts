@@ -25,6 +25,7 @@ export default defineConfig({
 		options: {
 			typeAware: true,
 			typeCheck: true,
+
 		},
 		jsPlugins: [
 			{ name: 'import-extensions', specifier: './tools/oxlint/import-extensions.mjs' },
@@ -219,6 +220,7 @@ export default defineConfig({
 			'tools/diff-check/**',
 			'tools/typed/**',
 		],
+		sortPackageJson: true
 	},
 	run: {
 		cache: true,

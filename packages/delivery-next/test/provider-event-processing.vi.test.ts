@@ -9,6 +9,7 @@ import {
 	ProviderEventInvalid,
 	type ProviderEventProcessor,
 } from '../src'
+import { makeTestDeliveryExecution } from './delivery-execution'
 
 const admission = (eventId: string, overrides: Partial<DeliveryAdmission> = {}) =>
 	DeliveryAdmission.make({
@@ -32,7 +33,7 @@ describe('provider event batch processing', () => {
 			}
 			const batch = DeliveryAdmissionBatch.make([admission('first'), admission('second')])
 
-			expect(yield* processProviderEvent([processor])(batch)).toEqual(ProviderEventHandled.make({}))
+			expect(yield* processProviderEvent([processor])(batch, (yield* makeTestDeliveryExecution()).execution)).toEqual(ProviderEventHandled.make({}))
 			expect(yield* Queue.take(calls)).toEqual(batch)
 		}),
 	)
@@ -47,7 +48,7 @@ describe('provider event batch processing', () => {
 			}
 			const batch = DeliveryAdmissionBatch.make([admission('first'), admission('second', { provider: 'other' })])
 
-			expect(yield* processProviderEvent([processor])(batch).pipe(Effect.flip)).toEqual(
+			expect(yield* processProviderEvent([processor])(batch, (yield* makeTestDeliveryExecution()).execution).pipe(Effect.flip)).toEqual(
 				ProviderEventInvalid.make({ provider: 'example', reason: 'identity_mismatch' }),
 			)
 			expect(yield* Queue.size(calls)).toBe(0)

@@ -1,3 +1,4 @@
+import type { DeliveryCallbackResult, DeliveryContext } from '@humanlayer/channels-delivery-next'
 import { Cause, Context, Effect, Layer, Option, Predicate, Schema } from 'effect'
 
 import type { SlackNewMention, SlackSubscribedThreadEvents } from './SlackCallbackEvents'
@@ -18,9 +19,18 @@ export class SlackCallbackError extends Schema.TaggedError<SlackCallbackError>()
 	reason: Schema.Literals(['failed', 'unexpected']),
 }) {}
 
+/**
+ * One application callback. `delivery` names the delivery and can hand it to a remote worker; a callback
+ * that did so may return the `DeliveryHandoff`. The saved handoff, not the return value, is authoritative.
+ */
+export type SlackCallbackHandler<A, E, R> = (
+	event: A,
+	delivery: DeliveryContext,
+) => Effect.Effect<DeliveryCallbackResult, E, R>
+
 export type SlackCallbackHandlers<E, R> = {
-	readonly onNewMention?: (event: SlackNewMention) => Effect.Effect<void, E, R>
-	readonly onSubscribedThreadEvents?: (event: SlackSubscribedThreadEvents) => Effect.Effect<void, E, R>
+	readonly onNewMention?: SlackCallbackHandler<SlackNewMention, E, R>
+	readonly onSubscribedThreadEvents?: SlackCallbackHandler<SlackSubscribedThreadEvents, E, R>
 }
 
 const retryableFromCause = (cause: Cause.Cause<unknown>): boolean =>
@@ -66,11 +76,11 @@ const narrowSlackCallbackCause = (input: {
 const wrapCallback = <A, E, R>(
 	context: Context.Context<R>,
 	callback: SlackCallbackName,
-	handler: ((event: A) => Effect.Effect<void, E, R>) | undefined,
+	handler: SlackCallbackHandler<A, E, R> | undefined,
 ) => {
 	if (Predicate.isUndefined(handler)) return undefined
-	return Effect.fn(`slack.callbacks.${callback}`)((event: A) =>
-		Effect.suspend(() => handler(event)).pipe(
+	return Effect.fn(`slack.callbacks.${callback}`)((event: A, delivery: DeliveryContext) =>
+		Effect.suspend(() => handler(event, delivery)).pipe(
 			Effect.provide(context),
 			Effect.catchCause((cause) => narrowSlackCallbackCause({ callback, cause })),
 		),
