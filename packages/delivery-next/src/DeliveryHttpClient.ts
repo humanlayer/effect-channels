@@ -8,7 +8,12 @@ import { Effect, Redacted } from 'effect'
 import { HttpClient, HttpClientRequest } from 'effect/unstable/http'
 import { HttpApiClient } from 'effect/unstable/httpapi'
 
-import { prefixedDeliveryHttpApi, type CompleteDeliveryPayload, type FailDeliveryPayload } from './DeliveryHttpApi'
+import {
+	prefixedDeliveryHttpApi,
+	type AddLinkPayload,
+	type CompleteDeliveryPayload,
+	type FailDeliveryPayload,
+} from './DeliveryHttpApi'
 
 /**
  * @property baseUrl - the application's public origin, such as `https://agent.example.com`
@@ -61,6 +66,14 @@ export const makeDeliveryClient = Effect.fn('delivery.client.make')(function* (o
 					client.deliveries.fail({ params: { deliveryId: target.deliveryId }, payload: target.payload ?? {} }),
 				),
 				Effect.withSpan('delivery.client.fail'),
+			),
+		/** Add a link, such as a pull request the remote job opened. A URL already added is a replay. */
+		addLink: (target: DeliveryClientTarget & { readonly link: AddLinkPayload }) =>
+			forDelivery(target).pipe(
+				Effect.flatMap((client) =>
+					client.deliveries.addLink({ params: { deliveryId: target.deliveryId }, payload: target.link }),
+				),
+				Effect.withSpan('delivery.client.add_link'),
 			),
 	}
 })

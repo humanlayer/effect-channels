@@ -5,21 +5,25 @@
  * and DeliveryControlBackend) and must pass the same backend contract, so the shared processing code
  * can run against realistic mailbox behaviour without a database.
  */
-import { Clock, Context, Effect, Layer, Match, Option, Predicate, Ref, Result } from 'effect'
+import { Array as Arr, Clock, Context, Effect, Layer, Match, Option, Predicate, Ref, Result } from 'effect'
 
 import { DeliveryPreparationConflict, type PreparedDeliveryInvocation } from './DeliveryContext'
 import { DeliveryControlBackend, DeliveryNotFound, type DeliveryStatus } from './DeliveryControl'
 import {
 	DEFAULT_RETRY_AFTER_MS,
+	activeDeliveryWork,
+	applyDeliverySlotMutation,
+	claimDeliveryOutput,
 	claimFrozenBatch,
 	emptyDeliverySlot,
 	handOffDeliverySlot,
 	prepareDeliverySlot,
 	readDeliverySlotStatus,
 	recordDeliveryAttempt,
-	recordDeliverySlotTerminal,
 	renewDeliveryClaim,
+	renewDeliveryOutput,
 	requestDeliveryInterrupt,
+	settleDeliveryOutput,
 	startDeliveryBatch,
 	type ActiveDelivery,
 	type DeliverySlot,
@@ -30,9 +34,12 @@ import { Timestamp } from './MailboxPolicy'
 import {
 	ClaimedMailboxBatch,
 	MailboxProcessingBackend,
+	type ClaimedDeliveryOutput,
 	MailboxProcessingClaimLost,
+	OutputReadyMailbox,
 	RecoverableMailbox,
 	WaitingMailbox,
+	toClaimedDeliveryOutput,
 	type ClaimMailbox,
 	type ReadyMailbox,
 } from './MailboxProcessing'
@@ -138,7 +145,9 @@ export const MailboxBackendMemory = Layer.effectContext(
 				.filter(({ deliveries }) => deliveries.readyAt !== null && deliveries.readyAt <= now)
 				.flatMap((mailbox): ReadonlyArray<ReadyMailbox> => {
 					if (mailbox.deliveries.active !== null) {
-						return [RecoverableMailbox.make({ mailboxKey: mailbox.mailboxKey })]
+						return activeDeliveryWork(mailbox.deliveries.active) === 'Output'
+							? [OutputReadyMailbox.make({ mailboxKey: mailbox.mailboxKey })]
+							: [RecoverableMailbox.make({ mailboxKey: mailbox.mailboxKey })]
 					}
 					const first = mailbox.waiting[0]
 					const last = mailbox.waiting.at(-1)
@@ -198,7 +207,7 @@ export const MailboxBackendMemory = Layer.effectContext(
 									claimId,
 									leaseMs,
 									now,
-									hasWaiting: current.waiting.length > 0,
+									hasWaiting: Arr.isReadonlyArrayNonEmpty(current.waiting),
 								})
 								const nextStore = { ...withMailbox(store, { ...current, deliveries: slot }), ...claimsMade }
 								return claimed === null
@@ -225,13 +234,13 @@ export const MailboxBackendMemory = Layer.effectContext(
 						readDeliverySlotStatus(mailbox.deliveries, { ...input, now }),
 					) satisfies Effect.Effect<DeliveryStatus, DeliveryNotFound>
 				}),
-			recordDeliveryTerminal: (input) =>
+			applyDeliveryMutation: (input) =>
 				updateDeliveries(input.reference.mailboxKey, new DeliveryNotFound(), (mailbox, now) =>
 					Result.map(
-						recordDeliverySlotTerminal(mailbox.deliveries, {
+						applyDeliverySlotMutation(mailbox.deliveries, {
 							...input,
 							now,
-							hasWaiting: mailbox.waiting.length > 0,
+							hasWaiting: Arr.isReadonlyArrayNonEmpty(mailbox.waiting),
 						}),
 						({ slot, receipt }) => ({ slot, value: receipt }),
 					),
@@ -274,7 +283,7 @@ export const MailboxBackendMemory = Layer.effectContext(
 										Match.orElse(() => null),
 									),
 									now: input.finishedAt,
-									hasWaiting: mailbox.waiting.length > 0,
+									hasWaiting: Arr.isReadonlyArrayNonEmpty(mailbox.waiting),
 								}).pipe(
 									Result.map((slot) => ({ slot, value: undefined })),
 									Result.mapError(() => claimLost(input.claim.mailboxKey, input.claim.claimId)),
@@ -303,6 +312,39 @@ export const MailboxBackendMemory = Layer.effectContext(
 					handOffDelivery: (input) =>
 						updateDeliveries(input.mailboxKey, claimLost(input.mailboxKey, input.claimId), (mailbox) =>
 							handOffDeliverySlot(mailbox.deliveries, input).pipe(
+								Result.map((slot) => ({ slot, value: undefined })),
+								Result.mapError(() => claimLost(input.mailboxKey, input.claimId)),
+							),
+						),
+					claimDeliveryOutput: (input) =>
+						Effect.gen(function* () {
+							const now = yield* Clock.currentTimeMillis
+							return yield* Ref.modify(state, (store): readonly [Option.Option<ClaimedDeliveryOutput>, MemoryStore] => {
+								const current = store.mailboxes.get(input.mailboxKey)
+								if (current === undefined) return [Option.none(), store]
+								const claimId = `output-claim-${store.claimsMade + 1}`
+								const { slot, claimed } = claimDeliveryOutput(current.deliveries, { claimId, leaseMs: input.leaseMs, now })
+								if (claimed === null) return [Option.none(), store]
+								return [
+									Option.some(toClaimedDeliveryOutput({ mailboxKey: input.mailboxKey, claimId, ...claimed })),
+									{ ...withMailbox(store, { ...current, deliveries: slot }), claimsMade: store.claimsMade + 1 },
+								]
+							})
+						}),
+					renewDeliveryOutput: (input) =>
+						updateDeliveries(input.mailboxKey, claimLost(input.mailboxKey, input.claimId), (mailbox, now) =>
+							renewDeliveryOutput(mailbox.deliveries, { ...input, now }).pipe(
+								Result.map((slot) => ({ slot, value: undefined })),
+								Result.mapError(() => claimLost(input.mailboxKey, input.claimId)),
+							),
+						),
+					settleDeliveryOutput: (input) =>
+						updateDeliveries(input.mailboxKey, claimLost(input.mailboxKey, input.claimId), (mailbox) =>
+							settleDeliveryOutput(mailbox.deliveries, {
+								...input,
+								now: input.settledAt,
+								hasWaiting: Arr.isReadonlyArrayNonEmpty(mailbox.waiting),
+							}).pipe(
 								Result.map((slot) => ({ slot, value: undefined })),
 								Result.mapError(() => claimLost(input.mailboxKey, input.claimId)),
 							),

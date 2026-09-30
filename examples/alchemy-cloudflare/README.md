@@ -162,9 +162,13 @@ Configure the Slack Events API request URL as:
 https://<your-worker-hostname>/integrations/slack/webhook
 ```
 
-## Fake remote agent (Phase 1)
+## Fake remote agent
 
-Mention the Slack bot with `handoff [seconds]` (for example `@bot handoff 60`; default 60, kept between 5 and 900) to try a durable handoff. The callback starts `FakeRemoteAgent` (`src/FakeRemoteAgentDO.ts`), a Durable Object that stands in for a remote agent host, posts `Handed off <deliveryId>. Finishing in <n>s.`, and returns `delivery.handoff()`. The mailbox stays held while the remote agent waits. When its alarm fires, the remote agent calls `GET /deliveries/<id>` and `POST /deliveries/<id>/complete` on the Worker with the delivery's bearer token, which retires the delivery and releases the mailbox. Phase 1 posts nothing on completion; the proof is that a queued follow-up in the thread is answered only then.
+Mention the Slack bot with `handoff [seconds] [flaky]` (for example `@bot handoff 60`; default 60, kept between 5 and 900) to try a durable handoff. The callback starts `FakeRemoteAgent` (`src/FakeRemoteAgentDO.ts`), a Durable Object that stands in for a remote agent host, posts `Handed off <deliveryId>. Finishing in <n>s.`, and returns `delivery.handoff()`. The mailbox stays held while the remote agent waits. When its alarm fires, the remote agent calls `GET /deliveries/<id>`, then `POST /deliveries/<id>/complete` with the final message `Fake remote agent finished after <n>s.`, then `GET /deliveries/<id>` again, all with the delivery's bearer token.
+
+`complete` returns 202 as soon as the result and its `PresentOutcome` output are saved; the second status read shows the delivery `Finishing`, its output not yet applied (`outcome:Pending`, or `outcome:Delivering` if the alarm has already claimed it). The mailbox's alarm then posts the final message to the thread, retires the delivery, and releases the mailbox, so a queued follow-up is answered only after the final message.
+
+`flaky` makes Slack refuse the final message for 20 seconds (`src/FlakySlackApi.ts` wraps `SlackApiLive` and fails that one post as if Slack were unreachable). Output retries on its own, after waits that double from about a second, and posts once the 20 seconds are up. Neither the callback nor the remote agent runs again.
 
 The remote agent calls the delivery API at the Worker's own public URL, which Alchemy binds at deploy (`Cloudflare.Worker.URL`). If the delivery API cannot be reached, the alarm fails and Cloudflare retries it. If the API refuses the request, the remote agent logs the reason and drops the job. Logs name the delivery ID, stage, and receipt status only, never the token.
 
@@ -177,8 +181,9 @@ The remote agent calls the delivery API at the Worker's own public URL, which Al
 
 In the Slack test channel:
 
-- **Handoff.** Post `@bot handoff 60`. Within a few seconds the bot replies `Handed off delivery:v1:…. Finishing in 60s.` The logs show `Mailbox processing completed` with the delivery handed off and no claim held. About 60s later they show `Fake remote agent read delivery status` (stage `ExternalWaiting`), `Fake remote agent completed delivery` (receipt `accepted`), and the delivery retiring.
-- **Queued follow-up.** Post `@bot handoff 60` in a new thread. Right after the bot's reply, post `follow-up` in that thread. The bot doesn't react to the follow-up until the 60s are up; then the subscribed-thread `eyes` reaction appears.
+- **Handoff and final message.** Post `@bot handoff 30`. Within a few seconds the bot replies `Handed off delivery:v1:…. Finishing in 30s.` The logs show `Mailbox delivery handed off; waiting for its remote worker`. About 30s later they show `Fake remote agent read delivery status` (stage `ExternalWaiting`), `Fake remote agent completed delivery` (receipt `accepted`), `Fake remote agent read delivery status after completing` (stage `Finishing`, output `outcome:Pending` or `outcome:Delivering`), then `Delivery output started` and `Delivery output applied`. The thread gets `Fake remote agent finished after 30s.`
+- **Output retries on its own.** Post `@bot handoff 10 flaky`. After 10s the logs show `Example Slack API refusing a flaky post on purpose` and `Delivery output scheduled for retry` several times, with growing `retry_after_ms`, then `Delivery output applied` about 20s later, and the final message appears. `Slack new mention received` and `Fake remote agent job started` each appear once.
+- **Queued follow-up.** Post `@bot handoff 60` in a new thread. Right after the bot's reply, post `follow-up` in that thread. The bot doesn't react to the follow-up until the final message is posted; then the subscribed-thread `eyes` reaction appears.
 - **Survives a redeploy.** Post `@bot handoff 240`. While it waits, run `bun alchemy deploy --force --yes`. After 240s the logs still show the remote agent's `complete` accepted and the delivery retired.
 - **Bad credentials.** Copy the delivery ID from a bot reply, set `WORKER_URL` in your shell to the printed URL, then:
 

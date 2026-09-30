@@ -14,6 +14,7 @@ import type { Config, Redacted } from 'effect'
 import { SlackApi } from './SlackApi'
 import { SlackApiLive } from './SlackApiLive'
 import { SlackCallbacks, type SlackCallbackHandlers } from './SlackCallbacks'
+import { makeSlackOutputProcessor } from './SlackDeliveryOutput'
 import { makeSlackEventProcessor } from './SlackEventProcessor'
 import { makeSlackWebhookProvider } from './SlackWebhookProvider'
 
@@ -68,6 +69,10 @@ export const make = <E, R, ApiError = never, ApiRequirements = never>(
 						.process(admissions, execution)
 						.pipe(Effect.provide(callbacks), Effect.provide(slackApi)),
 			}
+		}),
+		outputProcessor: Effect.fn('slack.bot.build_output_processor')(function* ({ namespace }) {
+			const slackApi = yield* buildSlackApi
+			return yield* makeSlackOutputProcessor({ namespace }).pipe(Effect.provide(slackApi))
 		}),
 	}
 }

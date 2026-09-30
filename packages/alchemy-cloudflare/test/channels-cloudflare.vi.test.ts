@@ -6,6 +6,7 @@ import {
 	DeliveryMutationReceipt,
 	DeliveryNotFound,
 	DeliveryOutcome,
+	DeliveryOutputApplied,
 	DeliveryStatus,
 	PreparedDeliveryInvocation,
 	ProviderEventHandled,
@@ -14,8 +15,10 @@ import {
 	ProviderWebhookEvent,
 	QueueDeliveryMode,
 	type ChannelsProvider,
+	type AddLinkPayload,
 	type CompleteDeliveryPayload,
 	type DeliveryAdmissionBatch,
+	type DeliveryOutputOperation,
 } from '@humanlayer/channels-delivery-next'
 import { Context, Effect, Layer, Option, Predicate, Redacted, Ref, Schema } from 'effect'
 import { HttpServerRequest, HttpServerResponse } from 'effect/unstable/http'
@@ -61,8 +64,14 @@ const makeExampleProvider = (batchSizes: Ref.Ref<ReadonlyArray<number>>): Channe
 /** The delivery a callback handed off, as the remote worker it started would hold it. */
 type HandedOff = { readonly deliveryId: string; readonly accessToken: Redacted.Redacted }
 
-/** A provider whose callback hands every batch off and records the delivery it handed off. */
-const makeHandOffProvider = (handedOff: Ref.Ref<Option.Option<HandedOff>>): ChannelsProvider => ({
+/**
+ * A provider whose callback hands every batch off and records the delivery it handed off, and whose
+ * output processor records each operation it sends.
+ */
+const makeHandOffProvider = (
+	handedOff: Ref.Ref<Option.Option<HandedOff>>,
+	sent: Ref.Ref<ReadonlyArray<DeliveryOutputOperation>>,
+): ChannelsProvider => ({
 	...exampleWebhooks,
 	eventProcessor: ({ namespace }) =>
 		Effect.succeed({
@@ -85,6 +94,13 @@ const makeHandOffProvider = (handedOff: Ref.Ref<Option.Option<HandedOff>>): Chan
 					)
 					return ProviderEventHandled.make({})
 				}).pipe(Effect.orDie),
+		}),
+	outputProcessor: ({ namespace }) =>
+		Effect.succeed({
+			namespace,
+			providerName: 'example',
+			process: ({ operation }) =>
+				Ref.update(sent, (all) => [...all, operation]).pipe(Effect.as(DeliveryOutputApplied.make({}))),
 		}),
 })
 
@@ -160,7 +176,8 @@ it.effect(
 	({ expect }) =>
 		Effect.gen(function* () {
 			const handedOff = yield* Ref.make(Option.none<HandedOff>())
-			const options = makeOptions(makeHandOffProvider(handedOff))
+			const sent = yield* Ref.make<ReadonlyArray<DeliveryOutputOperation>>([])
+			const options = makeOptions(makeHandOffProvider(handedOff, sent))
 			const durableObject = yield* Layer.build(DurableObjectFake)
 			const mailbox = yield* ChannelsCloudflare.makeMailbox(
 				options,
@@ -192,7 +209,7 @@ it.effect(
 			const call = (input: {
 				readonly path: string
 				readonly token: string
-				readonly payload?: CompleteDeliveryPayload
+				readonly payload?: CompleteDeliveryPayload | AddLinkPayload
 			}) => {
 				const url = `http://localhost/api/channels/deliveries/${deliveryId}${input.path}`
 				const headers = { authorization: `Bearer ${input.token}`, 'content-type': 'application/json' }
@@ -217,22 +234,38 @@ it.effect(
 				interruptRequested: false,
 			})
 
-			const completed = yield* call({ path: '/complete', token, payload: {} })
+			const link = { label: 'Run', url: 'https://example.com/run/1' }
+			expect((yield* call({ path: '/links', token, payload: link })).status).toEqual(202)
+			expect(yield* alarm.scheduledAt).toEqual(0)
+
+			const completed = yield* call({ path: '/complete', token, payload: { markdown: 'done' } })
 			expect(completed.status).toEqual(202)
 			expect(yield* decodeBody(DeliveryMutationReceipt, completed.text)).toMatchObject({
 				deliveryId,
 				status: 'accepted',
 			})
+			expect(yield* Ref.get(sent)).toEqual([])
+			const finishing = yield* decodeBody(DeliveryStatus, (yield* call({ path: '', token })).text)
+			expect(finishing.stage).toEqual('Finishing')
+
+			yield* mailbox.alarm()
+			yield* mailbox.alarm()
+			expect(yield* Ref.get(sent)).toEqual([
+				{ _tag: 'AddExternalLink', link: { _tag: 'ExternalLink', ...link } },
+				{ _tag: 'PresentOutcome', outcome: { _tag: 'Completed' }, markdown: 'done' },
+			])
+			expect(yield* alarm.scheduledAt).toEqual(null)
 
 			const retired = yield* decodeBody(DeliveryStatus, (yield* call({ path: '', token })).text)
 			expect(retired.stage).toEqual('Retired')
 			expect(retired.outcome).toEqual(DeliveryOutcome.cases.Completed.make({}))
+			expect(retired.output.map(({ state }) => state)).toEqual(['Delivered', 'Delivered'])
 
 			const wrongToken = yield* call({ path: '', token: 'wrong-token' })
 			expect(wrongToken.status).toEqual(404)
 			expect(yield* decodeBody(DeliveryNotFound, wrongToken.text)).toBeInstanceOf(DeliveryNotFound)
 
 			const mailboxKey = deliveryMailboxKey(admission('channels-cloudflare-test'))
-			expect(yield* Ref.get(routedTo)).toEqual([mailboxKey, mailboxKey, mailboxKey, mailboxKey])
+			expect(yield* Ref.get(routedTo)).toEqual(Array.from({ length: 6 }, () => mailboxKey))
 		}),
 )

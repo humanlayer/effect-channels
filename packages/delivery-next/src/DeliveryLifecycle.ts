@@ -6,22 +6,20 @@
  * their own data layout, such as SQL, follow the same rules through the shared backend contract.
  *
  * ```text
- * Local ──handoff──▶ ExternalCleaning ──callback returns──▶ ExternalWaiting ──terminal──▶ Retired
- *   │                     │ terminal: retire once the callback returns
- *   │ retryable failure
+ * Local ──handoff──▶ ExternalCleaning ──callback returns──▶ ExternalWaiting ──result──▶ Finishing ──output settled──▶ Retired
+ *   │                     │ result: finish once the callback returns                          ▲
+ *   │ retryable failure   └───────────────────────────────────────────────────────────────────┘
  *   ▼
  * Retry ──due──▶ Local (new claim, same batch)
  * ```
+ *
+ * Output runs only while no callback code does: in `ExternalWaiting` and `Finishing`. Operations run
+ * one at a time, in the order they were saved. A delivery retires once its callback has returned and
+ * every operation is delivered or has failed.
  */
-import { Data, Match, Predicate, Result, Schema } from 'effect'
+import { Data, Effect, Match, Predicate, Result, Schema } from 'effect'
 
-import {
-	DeliveryOperationKind,
-	DeliveryTerminal,
-	ExternalLink,
-	PreparedDeliveryInvocation,
-	type DeliveryStage,
-} from './DeliveryContext'
+import { DeliveryOperationKind, PreparedDeliveryInvocation, type DeliveryStage } from './DeliveryContext'
 import {
 	DeliveryClosed,
 	DeliveryMutationReceipt,
@@ -29,7 +27,21 @@ import {
 	DeliveryStatus,
 	DeliveryTerminalConflict,
 	sameDeliveryTerminal,
+	terminalFromMutation,
+	type DeliveryMutation,
 } from './DeliveryControl'
+import { AddExternalLink, ExternalLink } from './DeliveryLink'
+import {
+	DeliveryOperation,
+	DeliveryOperationId,
+	DeliveryOperationState,
+	DeliveryOutputStatus,
+	deliveryOutputStatus,
+	isUnsettledOperation,
+	type DeliveryOutputOperation,
+	type DeliveryOutputSettlement,
+} from './DeliveryOperation'
+import { DeliveryTerminal, PresentOutcome } from './DeliveryOutcome'
 import {
 	BatchId,
 	DeliveryAccessToken,
@@ -48,7 +60,11 @@ export const MAX_RETAINED_DELIVERIES = 20
 /** The default wait before a retryable failure runs again. */
 export const DEFAULT_RETRY_AFTER_MS = 1_000
 
-export const ActiveDeliveryStage = Schema.Literals(['Local', 'Retry', 'ExternalCleaning', 'ExternalWaiting'])
+/**
+ * Where the active delivery is. `Finishing` means its callback has returned and it is sending the
+ * output it still owes before it retires.
+ */
+export const ActiveDeliveryStage = Schema.Literals(['Local', 'Retry', 'ExternalCleaning', 'ExternalWaiting', 'Finishing'])
 export type ActiveDeliveryStage = typeof ActiveDeliveryStage.Type
 
 /**
@@ -56,6 +72,7 @@ export type ActiveDeliveryStage = typeof ActiveDeliveryStage.Type
  *
  * @property claimId - the attempt that owns the batch; kept through `ExternalCleaning` as ownership of callback cleanup
  * @property terminal - the remote worker's result, when it has sent one
+ * @property operations - provider output the delivery owes or has sent, in the order it was saved
  */
 export const ActiveDelivery = Schema.Struct({
 	batchId: BatchId,
@@ -69,10 +86,12 @@ export const ActiveDelivery = Schema.Struct({
 	interruptRequestedAt: Schema.optionalKey(Timestamp),
 	handedOffAt: Schema.optionalKey(Timestamp),
 	links: Schema.Array(ExternalLink),
+	/** Stores written before output existed read it as empty. */
+	operations: Schema.Array(DeliveryOperation).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
 })
 export type ActiveDelivery = typeof ActiveDelivery.Type
 
-/** A finished delivery, kept for status reads and repeated terminal requests. */
+/** A finished delivery, kept for status reads and repeated requests. */
 export const RetainedDelivery = Schema.Struct({
 	batchId: BatchId,
 	accessToken: DeliveryAccessToken,
@@ -80,13 +99,16 @@ export const RetainedDelivery = Schema.Struct({
 	terminal: Schema.optionalKey(DeliveryTerminal),
 	interruptRequested: Schema.Boolean,
 	retainUntil: Timestamp,
+	/** Stores written before output existed read these as empty. */
+	links: Schema.Array(ExternalLink).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
+	output: Schema.Array(DeliveryOutputStatus).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
 })
 export type RetainedDelivery = typeof RetainedDelivery.Type
 
 /**
  * One mailbox's deliveries.
  *
- * @property readyAt - when the mailbox next needs processing: a lease deadline, a retry, or waiting events
+ * @property readyAt - when the mailbox next needs processing: a lease deadline, a retry, due output, or waiting events
  */
 export const DeliverySlot = Schema.Struct({
 	active: Schema.NullOr(ActiveDelivery),
@@ -113,6 +135,25 @@ const claimNotOwned = new ClaimNotOwned()
 /** A different preparation is already saved. */
 export class PreparationMismatch extends Data.TaggedError('PreparationMismatch')<{ readonly batchId: BatchId }> {}
 
+/** What due work the active delivery has: its callback to run, or output to send. */
+export const activeDeliveryWork = (active: ActiveDelivery): 'Callback' | 'Output' =>
+	active.stage === 'ExternalWaiting' || active.stage === 'Finishing' ? 'Output' : 'Callback'
+
+/** The operation that runs next. Operations run in order, so a later one waits for this one to settle. */
+const nextOperation = (active: ActiveDelivery) => active.operations.find(isUnsettledOperation)
+
+/** When the next operation is due: when it is ready, or when its attempt's lease runs out. */
+const nextOutputAt = (active: ActiveDelivery): number | null => {
+	const next = nextOperation(active)
+	if (next === undefined) return null
+	return DeliveryOperationState.match(next.state, {
+		Pending: ({ readyAt }) => readyAt,
+		Delivering: ({ leaseUntil }) => leaseUntil,
+		Delivered: () => null,
+		Failed: () => null,
+	})
+}
+
 const retire = (slot: DeliverySlot, active: ActiveDelivery, facts: MailboxFacts): DeliverySlot => {
 	const entry = {
 		batchId: active.batchId,
@@ -120,6 +161,8 @@ const retire = (slot: DeliverySlot, active: ActiveDelivery, facts: MailboxFacts)
 		supportedOperations: active.prepared?.supportedOperations ?? [],
 		interruptRequested: active.interruptRequestedAt !== undefined,
 		retainUntil: Timestamp.make(facts.now + DELIVERY_RETENTION_MS),
+		links: active.links,
+		output: active.operations.map(deliveryOutputStatus),
 	}
 	const retiredEntry = RetainedDelivery.make(
 		Predicate.isUndefined(active.terminal) ? entry : { ...entry, terminal: active.terminal },
@@ -136,6 +179,63 @@ const retire = (slot: DeliverySlot, active: ActiveDelivery, facts: MailboxFacts)
 
 const withActive = (slot: DeliverySlot, active: ActiveDelivery, readyAt: number | null): DeliverySlot =>
 	DeliverySlot.make({ ...slot, active, readyAt: readyAt === null ? null : Timestamp.make(readyAt) })
+
+/**
+ * Settle a delivery whose callback code has stopped. A handed-off delivery without a result waits for
+ * its remote worker. Any other sends the output it still owes, then retires.
+ */
+const afterCallback = (slot: DeliverySlot, active: ActiveDelivery, facts: MailboxFacts): DeliverySlot => {
+	if (active.handedOffAt !== undefined && active.terminal === undefined) {
+		const waiting = ActiveDelivery.make({ ...active, stage: 'ExternalWaiting', claimId: null })
+		return withActive(slot, waiting, nextOutputAt(waiting))
+	}
+	if (nextOperation(active) === undefined) return retire(slot, active, facts)
+	const finishing = ActiveDelivery.make({ ...active, stage: 'Finishing', claimId: null })
+	return withActive(slot, finishing, nextOutputAt(finishing))
+}
+
+/** Add operations, each with the next free ID of its kind. Output is due at `now`. */
+const withOperations = (
+	active: ActiveDelivery,
+	operations: ReadonlyArray<DeliveryOutputOperation>,
+	now: number,
+): ActiveDelivery => {
+	const added = operations.reduce<ReadonlyArray<DeliveryOperation>>((saved, operation) => {
+		const operationId = Match.value(operation).pipe(
+			Match.tagsExhaustive({
+				PresentOutcome: () => 'outcome',
+				AddExternalLink: () =>
+					`link-${saved.filter(({ operation }) => Predicate.isTagged(operation, 'AddExternalLink')).length + 1}`,
+			}),
+		)
+		return [
+			...saved,
+			DeliveryOperation.make({
+				operationId: DeliveryOperationId.make(operationId),
+				operation,
+				state: DeliveryOperationState.cases.Pending.make({ readyAt: Timestamp.make(now) }),
+				attempt: 0,
+				hadAmbiguousAttempt: false,
+			}),
+		]
+	}, active.operations)
+	return ActiveDelivery.make({ ...active, operations: added })
+}
+
+/** Links not already saved, each once. A repeat of a saved URL is a replay. */
+const newLinks = (saved: ReadonlyArray<ExternalLink>, links: ReadonlyArray<ExternalLink>) =>
+	links.reduce<ReadonlyArray<ExternalLink>>(
+		(fresh, link) => ([...saved, ...fresh].some(({ url }) => url === link.url) ? fresh : [...fresh, link]),
+		[],
+	)
+
+/** Save links and an `AddExternalLink` operation for each. */
+const withLinks = (active: ActiveDelivery, links: ReadonlyArray<ExternalLink>, now: number) =>
+	withOperations(
+		ActiveDelivery.make({ ...active, links: [...active.links, ...links] }),
+		links.map((link) => AddExternalLink.make({ link })),
+		now,
+	)
 
 /** The owned active delivery, when `claimId` owns it in a stage where callback code may be running. */
 const owned = (slot: DeliverySlot, claimId: string) =>
@@ -169,6 +269,7 @@ export const startDeliveryBatch = (
 		claimId: input.claimId,
 		stage: 'Local',
 		links: [],
+		operations: [],
 	})
 	return { slot: withActive(slot, claimed, input.now + input.leaseMs), claimed }
 }
@@ -177,7 +278,7 @@ export const startDeliveryBatch = (
  * Take the frozen batch again after a retry comes due or a lease runs out.
  *
  * A lease that ran out after a handoff does not run the callback again: the handoff stands, so the
- * delivery waits for its remote worker, or retires if the remote worker already finished.
+ * delivery waits for its remote worker, or finishes if the remote worker already sent a result.
  */
 export const claimFrozenBatch = (
 	slot: DeliverySlot,
@@ -185,26 +286,17 @@ export const claimFrozenBatch = (
 ): DeliverySlotClaim => {
 	const active = slot.active
 	if (active === null || slot.readyAt === null || slot.readyAt > input.now) return { slot, claimed: null }
-	if (active.terminal !== undefined) return { slot: retire(slot, active, input), claimed: null }
-	const runAgain = (): DeliverySlotClaim => {
-		const claimed = ActiveDelivery.make({
-			...active,
-			stage: 'Local',
-			claimId: input.claimId,
-			attempt: active.attempt + 1,
-		})
-		return { slot: withActive(slot, claimed, input.now + input.leaseMs), claimed }
+	if (activeDeliveryWork(active) === 'Output') return { slot, claimed: null }
+	if (active.terminal !== undefined || active.stage === 'ExternalCleaning') {
+		return { slot: afterCallback(slot, active, input), claimed: null }
 	}
-	return Match.value(active.stage).pipe(
-		Match.when('ExternalWaiting', () => ({ slot, claimed: null })),
-		Match.when('ExternalCleaning', () => ({
-			slot: withActive(slot, ActiveDelivery.make({ ...active, stage: 'ExternalWaiting', claimId: null }), null),
-			claimed: null,
-		})),
-		Match.when('Local', runAgain),
-		Match.when('Retry', runAgain),
-		Match.exhaustive,
-	)
+	const claimed = ActiveDelivery.make({
+		...active,
+		stage: 'Local',
+		claimId: input.claimId,
+		attempt: active.attempt + 1,
+	})
+	return { slot: withActive(slot, claimed, input.now + input.leaseMs), claimed }
 }
 
 /** Move a live claim's lease forward. */
@@ -235,7 +327,10 @@ export const prepareDeliverySlot = (
 	return Result.succeed({ slot: withActive(slot, next, slot.readyAt), prepared: input.prepared })
 }
 
-/** Hand the batch off. Repeating it is harmless. The claim stays as ownership of callback cleanup. */
+/**
+ * Hand the batch off, saving any new links with an `AddExternalLink` each. Repeating it is harmless.
+ * The claim stays as ownership of callback cleanup; the links are sent once the callback returns.
+ */
 export const handOffDeliverySlot = (
 	slot: DeliverySlot,
 	input: { readonly claimId: string; readonly handedOffAt: number; readonly links: ReadonlyArray<ExternalLink> },
@@ -243,19 +338,17 @@ export const handOffDeliverySlot = (
 	const active = owned(slot, input.claimId)
 	if (active === null) return Result.fail(claimNotOwned)
 	if (active.stage === 'ExternalCleaning') return Result.succeed(slot)
-	const links = [...active.links, ...input.links.filter((link) => !active.links.some(({ url }) => url === link.url))]
-	const next = ActiveDelivery.make({
-		...active,
-		stage: 'ExternalCleaning',
-		handedOffAt: Timestamp.make(input.handedOffAt),
-		links,
-	})
+	const next = withLinks(
+		ActiveDelivery.make({ ...active, stage: 'ExternalCleaning', handedOffAt: Timestamp.make(input.handedOffAt) }),
+		newLinks(active.links, input.links),
+		input.handedOffAt,
+	)
 	return Result.succeed(withActive(slot, next, slot.readyAt))
 }
 
 /**
  * Record how an attempt ended. The stage decides, not only the result: a handed-off delivery waits
- * for its remote worker whatever the callback returned, and one with a remote result retires.
+ * for its remote worker whatever the callback returned, and one with a remote result finishes.
  */
 export const recordDeliveryAttempt = (
 	slot: DeliverySlot,
@@ -266,15 +359,11 @@ export const recordDeliveryAttempt = (
 ): Result.Result<DeliverySlot, ClaimNotOwned> => {
 	const active = owned(slot, input.claimId)
 	if (active === null) return Result.fail(claimNotOwned)
-	if (active.terminal !== undefined) return Result.succeed(retire(slot, active, input))
-	if (active.stage === 'ExternalCleaning') {
-		return Result.succeed(withActive(slot, ActiveDelivery.make({ ...active, stage: 'ExternalWaiting', claimId: null }), null))
-	}
-	if (input.retryAfterMs !== null) {
+	if (active.terminal === undefined && active.stage === 'Local' && input.retryAfterMs !== null) {
 		const next = ActiveDelivery.make({ ...active, stage: 'Retry', claimId: null })
 		return Result.succeed(withActive(slot, next, input.now + input.retryAfterMs))
 	}
-	return Result.succeed(retire(slot, active, input))
+	return Result.succeed(afterCallback(slot, active, input))
 }
 
 /** An event asked the current delivery to stop. Marks it once; the event itself still waits its turn. */
@@ -285,6 +374,101 @@ export const requestDeliveryInterrupt = (slot: DeliverySlot, now: number): Deliv
 				...slot,
 				active: ActiveDelivery.make({ ...slot.active, interruptRequestedAt: Timestamp.make(now) }),
 			})
+
+/** An output operation claimed by one attempt, with the delivery it belongs to. */
+export type DeliveryOutputClaim = {
+	readonly slot: DeliverySlot
+	readonly claimed: { readonly active: ActiveDelivery; readonly operation: DeliveryOperation } | null
+}
+
+/**
+ * Claim the next operation when it is due. An operation whose earlier attempt's lease ran out is
+ * claimed again and marked ambiguous: the provider may already have applied it.
+ */
+export const claimDeliveryOutput = (
+	slot: DeliverySlot,
+	input: { readonly claimId: string; readonly leaseMs: number; readonly now: number },
+): DeliveryOutputClaim => {
+	const active = slot.active
+	if (active === null || activeDeliveryWork(active) !== 'Output') return { slot, claimed: null }
+	const next = nextOperation(active)
+	const dueAt = nextOutputAt(active)
+	if (next === undefined || dueAt === null || dueAt > input.now) return { slot, claimed: null }
+	const operation = DeliveryOperation.make({
+		...next,
+		state: DeliveryOperationState.cases.Delivering.make({
+			claimId: input.claimId,
+			leaseUntil: Timestamp.make(input.now + input.leaseMs),
+		}),
+		attempt: next.attempt + 1,
+		hadAmbiguousAttempt: next.hadAmbiguousAttempt || Predicate.isTagged(next.state, 'Delivering'),
+	})
+	const claimed = replaceOperation(active, operation)
+	return { slot: withActive(slot, claimed, nextOutputAt(claimed)), claimed: { active: claimed, operation } }
+}
+
+/** The operation `claimId` is delivering, if it still is. */
+const ownedOperation = (slot: DeliverySlot, input: { readonly operationId: string; readonly claimId: string }) => {
+	const active = slot.active
+	if (active === null) return null
+	const operation = active.operations.find(({ operationId }) => operationId === input.operationId)
+	if (operation === undefined) return null
+	const { state } = operation
+	return Predicate.isTagged(state, 'Delivering') && state.claimId === input.claimId ? { active, operation } : null
+}
+
+const replaceOperation = (active: ActiveDelivery, operation: DeliveryOperation) =>
+	ActiveDelivery.make({
+		...active,
+		operations: active.operations.map((saved) => (saved.operationId === operation.operationId ? operation : saved)),
+	})
+
+/** Move a live output attempt's lease forward. */
+export const renewDeliveryOutput = (
+	slot: DeliverySlot,
+	input: { readonly operationId: string; readonly claimId: string; readonly leaseMs: number; readonly now: number },
+): Result.Result<DeliverySlot, ClaimNotOwned> => {
+	const owner = ownedOperation(slot, input)
+	if (owner === null) return Result.fail(claimNotOwned)
+	const active = replaceOperation(
+		owner.active,
+		DeliveryOperation.make({
+			...owner.operation,
+			state: DeliveryOperationState.cases.Delivering.make({
+				claimId: input.claimId,
+				leaseUntil: Timestamp.make(input.now + input.leaseMs),
+			}),
+		}),
+	)
+	return Result.succeed(withActive(slot, active, nextOutputAt(active)))
+}
+
+/**
+ * Record how an output attempt ended. A finishing delivery whose output is all settled retires and
+ * wakes the events waiting behind it.
+ */
+export const settleDeliveryOutput = (
+	slot: DeliverySlot,
+	input: {
+		readonly operationId: string
+		readonly claimId: string
+		readonly settlement: DeliveryOutputSettlement
+	} & MailboxFacts,
+): Result.Result<DeliverySlot, ClaimNotOwned> => {
+	const owner = ownedOperation(slot, input)
+	if (owner === null) return Result.fail(claimNotOwned)
+	const state = Match.value(input.settlement).pipe(
+		Match.tagsExhaustive({
+			Applied: ({ receipt }) =>
+				DeliveryOperationState.cases.Delivered.make(Predicate.isUndefined(receipt) ? {} : { receipt }),
+			Retry: ({ readyAt }) => DeliveryOperationState.cases.Pending.make({ readyAt }),
+			Failed: ({ safeCode }) => DeliveryOperationState.cases.Failed.make({ safeCode }),
+		}),
+	)
+	const active = replaceOperation(owner.active, DeliveryOperation.make({ ...owner.operation, state }))
+	if (active.stage === 'Finishing' && nextOperation(active) === undefined) return Result.succeed(retire(slot, active, input))
+	return Result.succeed(withActive(slot, active, nextOutputAt(active)))
+}
 
 /** The stage a remote worker sees. A delivery with a result whose callback is still returning is finishing. */
 const publicStage = (active: ActiveDelivery): DeliveryStage =>
@@ -333,6 +517,7 @@ export const readDeliverySlotStatus = (
 						stage: publicStage(active),
 						interruptRequested: active.interruptRequestedAt !== undefined,
 						supportedOperations: active.prepared?.supportedOperations ?? [],
+						output: active.operations.map(deliveryOutputStatus),
 					},
 					active.terminal,
 				),
@@ -343,6 +528,7 @@ export const readDeliverySlotStatus = (
 						stage: 'Retired',
 						interruptRequested: retained.interruptRequested,
 						supportedOperations: retained.supportedOperations,
+						output: retained.output,
 					},
 					retained.terminal,
 				),
@@ -350,46 +536,97 @@ export const readDeliverySlotStatus = (
 	)
 }
 
-/**
- * Record a remote worker's final result.
- *
- * - The same result again is `already_recorded`; a different one is a conflict.
- * - A delivery waiting for its remote worker, or waiting to retry, retires at once.
- * - A delivery whose callback is still running keeps the result and retires when the callback returns.
- * - A delivery that ended without a remote result is closed.
- */
-export const recordDeliverySlotTerminal = (
-	slot: DeliverySlot,
-	input: {
-		readonly reference: DeliveryReference
-		readonly accessToken: string
-		readonly terminal: DeliveryTerminal
-	} & MailboxFacts,
-): Result.Result<
+type MutationChange = Result.Result<
 	{ readonly slot: DeliverySlot; readonly receipt: DeliveryMutationReceipt },
 	DeliveryNotFound | DeliveryTerminalConflict | DeliveryClosed
-> => {
-	const located = locate(slot, input)
-	if (located === null) return Result.fail(new DeliveryNotFound())
-	const receipt = (status: DeliveryMutationReceipt['status']) =>
-		DeliveryMutationReceipt.make({ deliveryId: input.reference.deliveryId, status })
+>
+
+/**
+ * Record a remote worker's final result, and the `PresentOutcome` that shows it, in one change.
+ *
+ * - The same result again is `already_recorded`; a different one is a conflict.
+ * - A delivery with no callback running starts finishing at once.
+ * - A delivery whose callback is still running keeps the result and finishes when the callback returns.
+ * - A delivery that ended without a remote result is closed.
+ */
+const recordTerminal = (
+	slot: DeliverySlot,
+	located: Located,
+	input: { readonly terminal: DeliveryTerminal; readonly receipt: (status: DeliveryMutationReceipt['status']) => DeliveryMutationReceipt } & MailboxFacts,
+): MutationChange => {
 	const replay = (saved: DeliveryTerminal | undefined) => {
 		if (saved === undefined) return Result.fail(new DeliveryClosed())
 		return sameDeliveryTerminal(saved, input.terminal)
-			? Result.succeed({ slot, receipt: receipt('already_recorded') })
+			? Result.succeed({ slot, receipt: input.receipt('already_recorded') })
 			: Result.fail(new DeliveryTerminalConflict())
 	}
 	return Located.$match(located, {
 		Retained: ({ retained }) => replay(retained.terminal),
 		Active: ({ active }) => {
-			if (active.terminal !== undefined) return replay(active.terminal)
-			const next = ActiveDelivery.make({ ...active, terminal: input.terminal })
-			/** No callback code is running in these stages, so nothing is left to wait for. */
+			if (active.terminal !== undefined || active.stage === 'Finishing') return replay(active.terminal)
+			const present = PresentOutcome.make(
+				Predicate.isUndefined(input.terminal.markdown)
+					? { outcome: input.terminal.outcome }
+					: { outcome: input.terminal.outcome, markdown: input.terminal.markdown },
+			)
+			const next = withOperations(ActiveDelivery.make({ ...active, terminal: input.terminal }), [present], input.now)
+			/** No callback code is running in these stages, so the output can start now. */
 			const nextSlot =
 				active.stage === 'ExternalWaiting' || active.stage === 'Retry'
-					? retire(slot, next, input)
+					? afterCallback(slot, next, input)
 					: withActive(slot, next, slot.readyAt)
-			return Result.succeed({ slot: nextSlot, receipt: receipt('accepted') })
+			return Result.succeed({ slot: nextSlot, receipt: input.receipt('accepted') })
 		},
 	})
+}
+
+/**
+ * Add a link, and the `AddExternalLink` that shows it, in one change. A URL already added is a replay,
+ * even after the delivery ended. A new link after the delivery ended is refused.
+ */
+const addLink = (
+	slot: DeliverySlot,
+	located: Located,
+	input: { readonly link: ExternalLink; readonly receipt: (status: DeliveryMutationReceipt['status']) => DeliveryMutationReceipt } & MailboxFacts,
+): MutationChange => {
+	const saved = Located.$match(located, {
+		Active: ({ active }) => active.links,
+		Retained: ({ retained }) => retained.links,
+	})
+	if (saved.some(({ url }) => url === input.link.url)) {
+		return Result.succeed({ slot, receipt: input.receipt('already_recorded') })
+	}
+	return Located.$match(located, {
+		Retained: () => Result.fail(new DeliveryClosed()),
+		Active: ({ active }) => {
+			if (active.terminal !== undefined || active.stage === 'Finishing') return Result.fail(new DeliveryClosed())
+			const next = withLinks(active, [input.link], input.now)
+			/** A delivery waiting for its remote worker has no callback running, so the output can start now. */
+			const readyAt = active.stage === 'ExternalWaiting' ? nextOutputAt(next) : slot.readyAt
+			return Result.succeed({ slot: withActive(slot, next, readyAt), receipt: input.receipt('accepted') })
+		},
+	})
+}
+
+/** Apply a remote worker's change: check its token, then change the delivery and save the output it needs. */
+export const applyDeliverySlotMutation = (
+	slot: DeliverySlot,
+	input: {
+		readonly reference: DeliveryReference
+		readonly accessToken: string
+		readonly mutation: DeliveryMutation
+	} & MailboxFacts,
+): MutationChange => {
+	const located = locate(slot, input)
+	if (located === null) return Result.fail(new DeliveryNotFound())
+	const receipt = (status: DeliveryMutationReceipt['status']) =>
+		DeliveryMutationReceipt.make({ deliveryId: input.reference.deliveryId, status })
+	const facts = { now: input.now, hasWaiting: input.hasWaiting, receipt }
+	return Match.value(input.mutation).pipe(
+		Match.tagsExhaustive({
+			CompleteDelivery: (mutation) => recordTerminal(slot, located, { ...facts, terminal: terminalFromMutation(mutation) }),
+			FailDelivery: (mutation) => recordTerminal(slot, located, { ...facts, terminal: terminalFromMutation(mutation) }),
+			AddDeliveryLink: ({ link }) => addLink(slot, located, { ...facts, link }),
+		}),
+	)
 }

@@ -16,6 +16,8 @@ import {
 	WaitingEvents,
 	WaitingMailbox,
 	makeDeliveryId,
+	type ClaimDeliveryOutput,
+	type ClaimedDeliveryOutput,
 	type ClaimMailbox,
 	type DeferMailbox,
 	type HandOffMailboxDelivery,
@@ -215,6 +217,14 @@ const handOffDelivery = Effect.fn('delivery.redis.hand_off_delivery')(function* 
 	return yield* new DeliveryHandoffUnsupported()
 })
 
+/** Without handoff there is no output to send, so nothing is ever claimed or settled. */
+const claimDeliveryOutput = Effect.fn('delivery.redis.claim_delivery_output')(function* (_input: ClaimDeliveryOutput) {
+	return Option.none<ClaimedDeliveryOutput>()
+})
+
+const noOutputClaim = (input: { readonly mailboxKey: string; readonly claimId: string }) =>
+	Effect.fail(new MailboxProcessingClaimLost({ mailboxKey: input.mailboxKey, claimId: input.claimId }))
+
 export type MailboxProcessingBackendRedisOptions = {
 	/** The most due mailboxes one look reports. */
 	readonly claimLimit: number
@@ -234,6 +244,9 @@ export const MailboxProcessingBackendRedis = (options: MailboxProcessingBackendR
 				recordProcessingAttemptResult: (input) => recordProcessingAttemptResult(input).pipe(withRedis),
 				prepareDelivery: (input) => prepareDelivery(input).pipe(withRedis),
 				handOffDelivery,
+				claimDeliveryOutput,
+				renewDeliveryOutput: noOutputClaim,
+				settleDeliveryOutput: noOutputClaim,
 			})
 		}),
 	)

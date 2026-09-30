@@ -2,7 +2,8 @@
  * This file defines the delivery API a remote worker calls, as one typed Effect `HttpApi`.
  *
  * Every route takes the delivery's token as `Authorization: Bearer <token>`. Mutations answer 202:
- * the change is saved, not yet shown in Slack, GitHub, or Linear.
+ * the change is saved, not yet shown in Slack, GitHub, or Linear. Mailbox processing sends the output
+ * afterwards, and retries it on its own.
  *
  * Paths are relative. `Channels.make` mounts them under the same `basePath` as the provider webhooks.
  */
@@ -19,6 +20,7 @@ import {
 	DeliveryStatus,
 	DeliveryTerminalConflict,
 } from './DeliveryControl'
+import { ExternalLink } from './DeliveryLink'
 
 /** The request had no `Authorization: Bearer` token. */
 export class DeliveryCredentialMissing extends Schema.TaggedError<DeliveryCredentialMissing>()(
@@ -38,6 +40,13 @@ export const FailDeliveryPayload = Schema.Struct({
 	markdown: Schema.optionalKey(DeliveryMarkdown),
 })
 export type FailDeliveryPayload = typeof FailDeliveryPayload.Type
+
+/** A link to add: `label` and an `https` `url`. */
+export const AddLinkPayload = Schema.Struct({
+	label: ExternalLink.fields.label,
+	url: ExternalLink.fields.url,
+})
+export type AddLinkPayload = typeof AddLinkPayload.Type
 
 const Accepted = DeliveryMutationReceipt.pipe(HttpApiSchema.status(202))
 
@@ -69,6 +78,12 @@ export const DeliveryHttpApi = HttpApi.make('ChannelsDeliveryApi').add(
 		HttpApiEndpoint.post('fail', '/deliveries/:deliveryId/fail', {
 			params: Params,
 			payload: FailDeliveryPayload,
+			success: Accepted,
+			error: mutationErrors,
+		}),
+		HttpApiEndpoint.post('addLink', '/deliveries/:deliveryId/links', {
+			params: Params,
+			payload: AddLinkPayload,
 			success: Accepted,
 			error: mutationErrors,
 		}),

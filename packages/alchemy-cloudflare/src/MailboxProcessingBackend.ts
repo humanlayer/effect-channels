@@ -6,23 +6,33 @@ import {
 	MailboxProcessingBackend,
 	MailboxProcessingClaimLost,
 	MailboxProcessingUnavailable,
+	OutputReadyMailbox,
 	RecoverableMailbox,
 	WaitingMailbox,
+	activeDeliveryWork,
+	claimDeliveryOutput,
 	claimFrozenBatch,
 	handOffDeliverySlot,
 	makeDeliveryId,
 	prepareDeliverySlot,
 	recordDeliveryAttempt,
 	renewDeliveryClaim,
+	renewDeliveryOutput,
+	settleDeliveryOutput,
 	startDeliveryBatch,
+	toClaimedDeliveryOutput,
 	type ActiveDelivery,
+	type ClaimDeliveryOutput,
+	type ClaimedDeliveryOutput,
 	type ClaimMailbox,
 	type DeferMailbox,
 	type HandOffMailboxDelivery,
 	type PrepareMailboxDelivery,
 	type ReadyMailbox,
 	type RecordProcessingAttemptResult,
+	type RenewDeliveryOutput,
 	type RenewMailboxClaim,
+	type SettleDeliveryOutput,
 } from '@humanlayer/channels-delivery-next'
 import { Array as Arr, Clock, Effect, Layer, Match, Option, Predicate, Random, Result } from 'effect'
 
@@ -67,7 +77,9 @@ const isDue = (current: DurableMailboxState, now: number) =>
 const describeReadyMailbox = (current: DurableMailboxState, now: number): ReadonlyArray<ReadyMailbox> => {
 	if (!isDue(current, now)) return []
 	if (Predicate.isNotNull(current.deliveries.active)) {
-		return [RecoverableMailbox.make({ mailboxKey: current.mailboxKey })]
+		return activeDeliveryWork(current.deliveries.active) === 'Output'
+			? [OutputReadyMailbox.make({ mailboxKey: current.mailboxKey })]
+			: [RecoverableMailbox.make({ mailboxKey: current.mailboxKey })]
 	}
 	const first = current.waiting[0]
 	const last = current.waiting.at(-1)
@@ -152,6 +164,22 @@ const claimTransition = (input: {
 	)
 }
 
+const claimOutputTransition = (input: {
+	readonly current: DurableMailboxState
+	readonly claim: ClaimDeliveryOutput
+	readonly claimId: string
+	readonly now: number
+}): MailboxTransition<Option.Option<ClaimedDeliveryOutput>> => {
+	const { current, claim, claimId, now } = input
+	if (current.mailboxKey !== claim.mailboxKey) return unchanged(Option.none())
+	const { slot, claimed } = claimDeliveryOutput(current.deliveries, { claimId, leaseMs: claim.leaseMs, now })
+	if (Predicate.isNull(claimed)) return unchanged(Option.none())
+	return {
+		result: Option.some(toClaimedDeliveryOutput({ mailboxKey: current.mailboxKey, claimId, ...claimed })),
+		next: Option.some(DurableMailboxState.make({ ...current, deliveries: slot })),
+	}
+}
+
 const deferTransition = (current: DurableMailboxState, input: DeferMailbox): MailboxTransition<void> => {
 	const seenLatest = current.waiting.at(-1)?.sequence === input.lastSequenceSeen
 	if (current.mailboxKey !== input.mailboxKey || Predicate.isNotNull(current.deliveries.active) || !seenLatest) {
@@ -169,7 +197,8 @@ const deferTransition = (current: DurableMailboxState, input: DeferMailbox): Mai
  * Builds a mailbox-processing backend over the current Durable Object's persistent storage.
  *
  * One Durable Object holds one mailbox. Its alarm always matches the stored `deliveries.readyAt`,
- * so the host's alarm handler wakes processing exactly when the mailbox is next due.
+ * so the host's alarm handler wakes processing exactly when the mailbox is next due, whether for a
+ * callback or for output.
  * The lifecycle rules themselves are the shared `DeliveryLifecycle` transitions.
  */
 export const makeMailboxProcessingBackendFromDurableObjectStorage = Effect.gen(function* () {
@@ -278,6 +307,46 @@ export const makeMailboxProcessingBackendFromDurableObjectStorage = Effect.gen(f
 				),
 			).pipe(narrowToUnavailable('Cloudflare mailbox handoff failed'))
 			return yield* Effect.fromResult(handedOff)
+		}),
+
+		claimDeliveryOutput: Effect.fn('delivery.cloudflare.claim_delivery_output')(function* (
+			claim: ClaimDeliveryOutput,
+		) {
+			const now = yield* Clock.currentTimeMillis
+			const claimId = yield* makeClaimId
+			return yield* transactMailbox(storage, {
+				whenNothingStored: Option.none(),
+				transition: (current) => claimOutputTransition({ current, claim, claimId, now }),
+			})
+		}, narrowToUnavailable('Cloudflare delivery output claim failed')),
+
+		renewDeliveryOutput: Effect.fn('delivery.cloudflare.renew_delivery_output')(function* (
+			renewal: RenewDeliveryOutput,
+		) {
+			const now = yield* Clock.currentTimeMillis
+			const renewed = yield* changeClaimedDeliveries<void, never>(renewal, (current) =>
+				renewDeliveryOutput(current.deliveries, { ...renewal, now }).pipe(
+					Result.map((slot) => ({ slot, value: undefined })),
+					Result.mapError(() => claimLost(renewal)),
+				),
+			).pipe(narrowToUnavailable('Cloudflare delivery output renewal failed'))
+			return yield* Effect.fromResult(renewed)
+		}),
+
+		settleDeliveryOutput: Effect.fn('delivery.cloudflare.settle_delivery_output')(function* (
+			input: SettleDeliveryOutput,
+		) {
+			const settled = yield* changeClaimedDeliveries<void, never>(input, (current) =>
+				settleDeliveryOutput(current.deliveries, {
+					...input,
+					now: input.settledAt,
+					hasWaiting: Arr.isReadonlyArrayNonEmpty(current.waiting),
+				}).pipe(
+					Result.map((slot) => ({ slot, value: undefined })),
+					Result.mapError(() => claimLost(input)),
+				),
+			).pipe(narrowToUnavailable('Cloudflare delivery output settlement failed'))
+			return yield* Effect.fromResult(settled)
 		}),
 	})
 })

@@ -17,6 +17,7 @@ import { MailboxDelivery } from './MailboxDelivery'
 import { QueueDeliveryMode } from './MailboxPolicy'
 import type { DeliveryMode } from './MailboxPolicy'
 import { MailboxProcessingLive, ProviderEventDispatcherLive } from './MailboxProcessing'
+import { ProviderOutputDispatcherLive } from './ProviderOutput'
 import type { MailboxProcessingOptions } from './MailboxProcessing'
 import type { MailboxSubscriptions } from './MailboxSubscriptions'
 import { webhookRoutes } from './ProviderWebhooks'
@@ -73,7 +74,7 @@ const deliveryModeForProviders =
 		return Predicate.isUndefined(provider) ? QueueDeliveryMode.make({}) : provider.deliveryMode
 	}
 
-/** Mailbox processing for a bot: claims batches and runs each provider's callbacks. */
+/** Mailbox processing for a bot: claims batches, runs each provider's callbacks, and sends saved output. */
 export const processingLayer = <const Requirements extends ReadonlyArray<ChannelsProviderRequirements>>(
 	options: Options<Requirements>,
 	polling: MailboxProcessingOptions['polling'],
@@ -90,7 +91,15 @@ export const processingLayer = <const Requirements extends ReadonlyArray<Channel
 					const eventProcessors = yield* Effect.forEach(providers, (provider) =>
 						provider.eventProcessor({ namespace: options.namespace }),
 					)
-					return ProviderEventDispatcherLive(eventProcessors)
+					const outputProcessors = yield* Effect.forEach(providers, (provider) =>
+						Predicate.isUndefined(provider.outputProcessor)
+							? Effect.succeed([])
+							: Effect.map(provider.outputProcessor({ namespace: options.namespace }), (processor) => [processor]),
+					)
+					return Layer.merge(
+						ProviderEventDispatcherLive(eventProcessors),
+						ProviderOutputDispatcherLive(outputProcessors.flat()),
+					)
 				}),
 			),
 		),

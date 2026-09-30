@@ -3,8 +3,8 @@ import {
 	ClaimWaitingEvents,
 	DeliveryAdmission,
 	DeliveryControlBackend,
-	DeliveryOutcome,
-	DeliveryTerminal,
+	CompleteDelivery,
+	DeliveryOutputSettlement,
 	DeliveryReceipt,
 	MailboxDelivery,
 	MailboxProcessing,
@@ -151,7 +151,7 @@ it.effect(
 )
 
 it.effect(
-	'Durable Object: a handed-off delivery clears the alarm, and its remote result wakes the events that wait',
+	'Durable Object: a handed-off delivery clears the alarm; its result wakes output, and settled output wakes the events that wait',
 	({ expect }) =>
 		Effect.gen(function* () {
 			const delivery = yield* MailboxDelivery
@@ -184,19 +184,31 @@ it.effect(
 			const reference = Option.getOrThrow(
 				parseDeliveryId(makeDeliveryId({ mailboxKey, batchId: claim.batchId })),
 			)
-			yield* control.recordDeliveryTerminal({
+			yield* control.applyDeliveryMutation({
 				reference,
 				accessToken: claim.accessToken,
-				terminal: DeliveryTerminal.make({ outcome: DeliveryOutcome.cases.Completed.make({}) }),
+				mutation: CompleteDelivery.make({}),
 			})
 			expect(yield* alarm.scheduledAt).toEqual(500)
+
+			const output = Option.getOrThrow(yield* backend.claimDeliveryOutput({ mailboxKey, leaseMs }))
+			expect(yield* alarm.scheduledAt).toEqual(500 + leaseMs)
+			yield* TestClock.adjust(100)
+			yield* backend.settleDeliveryOutput({
+				mailboxKey,
+				operationId: output.operationId,
+				claimId: output.claimId,
+				settlement: DeliveryOutputSettlement.cases.Applied.make({}),
+				settledAt: Timestamp.make(yield* Clock.currentTimeMillis),
+			})
+			expect(yield* alarm.scheduledAt).toEqual(600)
 		}).pipe(Effect.provide(makeEmptyStore())),
 )
 
 /** A processing pass that does nothing, as when the storage refuses the claim and the mailbox is skipped. */
 const processingThatSkipsEverything = Layer.succeed(
 	MailboxProcessing,
-	MailboxProcessing.of({ processReady: Effect.succeed(MailboxProcessingSummary.make({ claimed: 0, deferred: 0 })) }),
+	MailboxProcessing.of({ processReady: Effect.succeed(MailboxProcessingSummary.make({ claimed: 0, deferred: 0, output: 0 })) }),
 )
 
 const processingThatFails = Layer.succeed(

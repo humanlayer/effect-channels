@@ -7,16 +7,16 @@
  *
  * `DeliveryControlBackend` is the store's half. Memory and the Durable Object implement it; SQL and
  * Redis do not yet, so a bot on those stores cannot mount the delivery API.
+ *
+ * A change saves the provider output it needs in the same write, such as the `PresentOutcome` of a
+ * result. Mailbox processing applies that output later.
  */
 import { Context, Effect, Layer, Match, Option, Predicate, Redacted, Schema } from 'effect'
 
-import {
-	DeliveryOperationKind,
-	DeliveryOutcome,
-	DeliveryStage,
-	DeliveryTerminal,
-	type DeliveryTerminal as DeliveryTerminalType,
-} from './DeliveryContext'
+import { DeliveryOperationKind, DeliveryStage } from './DeliveryContext'
+import { ExternalLink } from './DeliveryLink'
+import { DeliveryOutputStatus } from './DeliveryOperation'
+import { DeliveryOutcome, DeliveryTerminal } from './DeliveryOutcome'
 import { DeliveryId, DeliveryReference, parseDeliveryId } from './DeliveryReference'
 
 /** The longest final Markdown a remote worker may send. */
@@ -40,8 +40,14 @@ export const FailDelivery = Schema.TaggedStruct('FailDelivery', {
 })
 export type FailDelivery = typeof FailDelivery.Type
 
+/** Add a link to the delivery. A repeat of a URL already added is a replay. */
+export const AddDeliveryLink = Schema.TaggedStruct('AddDeliveryLink', {
+	link: ExternalLink,
+})
+export type AddDeliveryLink = typeof AddDeliveryLink.Type
+
 /** A change a remote worker asks for. Later phases add message, reaction, activity, and plan changes. */
-export const DeliveryMutation = Schema.Union([CompleteDelivery, FailDelivery])
+export const DeliveryMutation = Schema.Union([CompleteDelivery, FailDelivery, AddDeliveryLink])
 export type DeliveryMutation = typeof DeliveryMutation.Type
 
 /**
@@ -55,13 +61,19 @@ export const DeliveryMutationReceipt = Schema.TaggedStruct('DeliveryMutationRece
 })
 export type DeliveryMutationReceipt = typeof DeliveryMutationReceipt.Type
 
-/** What a remote worker may read about its delivery. Never includes the token or provider IDs. */
+/**
+ * What a remote worker may read about its delivery. Never includes the token or provider IDs.
+ *
+ * @property outcome - how the remote worker ended the delivery
+ * @property output - the provider output the delivery owes or has sent. A failed output does not change `outcome`.
+ */
 export const DeliveryStatus = Schema.TaggedStruct('DeliveryStatus', {
 	deliveryId: DeliveryId,
 	stage: DeliveryStage,
 	outcome: Schema.optionalKey(DeliveryOutcome),
 	interruptRequested: Schema.Boolean,
 	supportedOperations: Schema.Array(DeliveryOperationKind),
+	output: Schema.Array(DeliveryOutputStatus),
 })
 export type DeliveryStatus = typeof DeliveryStatus.Type
 
@@ -77,7 +89,7 @@ export class DeliveryTerminalConflict extends Schema.TaggedError<DeliveryTermina
 	{},
 ) {}
 
-/** The delivery ended without a remote result, so it takes no more changes. */
+/** The delivery has ended, so it takes no new changes. Repeats of changes it already took are still accepted. */
 export class DeliveryClosed extends Schema.TaggedError<DeliveryClosed>()('DeliveryClosed', {}) {}
 
 /** The store could not be reached. */
@@ -104,12 +116,12 @@ export const ReadDeliveryStatus = Schema.Struct({
 })
 export type ReadDeliveryStatus = typeof ReadDeliveryStatus.Type
 
-export const RecordDeliveryTerminal = Schema.Struct({
+export const ApplyDeliveryMutation = Schema.Struct({
 	reference: DeliveryReference,
 	accessToken: Schema.String,
-	terminal: DeliveryTerminal,
+	mutation: DeliveryMutation,
 })
-export type RecordDeliveryTerminal = typeof RecordDeliveryTerminal.Type
+export type ApplyDeliveryMutation = typeof ApplyDeliveryMutation.Type
 
 /**
  * The store's half of delivery control. Each method checks the token and applies its change in one
@@ -119,8 +131,8 @@ export class DeliveryControlBackend extends Context.Service<
 	DeliveryControlBackend,
 	{
 		readonly readDeliveryStatus: (input: ReadDeliveryStatus) => Effect.Effect<DeliveryStatus, DeliveryStatusError>
-		readonly recordDeliveryTerminal: (
-			input: RecordDeliveryTerminal,
+		readonly applyDeliveryMutation: (
+			input: ApplyDeliveryMutation,
 		) => Effect.Effect<DeliveryMutationReceipt, DeliveryMutationError>
 	}
 >()('@humanlayer/channels-delivery-next/DeliveryControlBackend') {}
@@ -144,8 +156,8 @@ export class DeliveryControl extends Context.Service<
 	}
 >()('@humanlayer/channels-delivery-next/DeliveryControl') {}
 
-/** The terminal a mutation asks for. */
-export const terminalFromMutation = (mutation: DeliveryMutation): DeliveryTerminalType => {
+/** The result a complete or fail request asks for. */
+export const terminalFromMutation = (mutation: CompleteDelivery | FailDelivery): DeliveryTerminal => {
 	const markdown = Predicate.isUndefined(mutation.markdown) ? {} : { markdown: mutation.markdown }
 	const outcome = Match.value(mutation).pipe(
 		Match.tagsExhaustive({
@@ -182,10 +194,10 @@ export const DeliveryControlLive = Layer.effect(
 			}),
 			apply: Effect.fn('delivery.control.apply')(function* (input) {
 				const reference = yield* referenceOrNotFound(input.deliveryId)
-				return yield* backend.recordDeliveryTerminal({
+				return yield* backend.applyDeliveryMutation({
 					reference,
 					accessToken: Redacted.value(input.accessToken),
-					terminal: terminalFromMutation(input.mutation),
+					mutation: input.mutation,
 				})
 			}),
 		})

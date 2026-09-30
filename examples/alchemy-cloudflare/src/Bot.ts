@@ -10,6 +10,7 @@ import { SlackBot, SlackContent, SlackReaction, type SlackNewMention } from '@hu
 import { Config, Effect, Option, Predicate, Duration, Redacted } from 'effect'
 
 import { FakeRemoteAgent } from './FakeRemoteAgentDO'
+import { FlakySlackApiLive } from './FlakySlackApi'
 import { parseHandoffCommand, type HandoffCommand } from './SlackTestHandoffCommand'
 
 /** The reply to any other mention. */
@@ -20,32 +21,39 @@ const replyToMention = Effect.fn('example.slack.reply_to_mention')(function* (ev
 })
 
 /**
- * `@bot handoff [seconds]`: start a job on the remote agent, say so in the thread, and hand the delivery off.
- * The callback then returns; the remote agent completes the delivery through the delivery API.
+ * `@bot handoff [seconds] [flaky]`: start a job on the remote agent, say so in the thread, and hand the
+ * delivery off. The callback then returns; the remote agent completes the delivery through the delivery
+ * API with a final message, which the bot posts to the thread. `flaky` makes that post fail for a while.
  */
 const handOffMention = Effect.fn('example.slack.hand_off_mention')(function* (
 	event: SlackNewMention,
 	delivery: DeliveryContext,
 	command: HandoffCommand,
 ) {
-	const { delaySeconds } = command
+	const { delaySeconds, flakyOutput } = command
 	const agents = yield* FakeRemoteAgent
 	yield* agents.getByName(delivery.deliveryId).start({
 		deliveryId: delivery.deliveryId,
 		accessToken: Redacted.value(delivery.accessToken),
 		delaySeconds,
+		flakyOutput,
 	})
+	const flakyNote = flakyOutput ? ' Slack will refuse the final message for 20s, then it retries.' : ''
 	yield* event.thread.post(
 		SlackContent.make({
-			markdown: `Handed off \`${delivery.deliveryId}\`. Finishing in ${delaySeconds}s.`,
+			markdown: `Handed off \`${delivery.deliveryId}\`. Finishing in ${delaySeconds}s.${flakyNote}`,
 		}),
 	)
 	return yield* delivery.handoff()
 })
 
-/** Slack with placeholder callbacks. `SlackApiLive`, the default, reads `SLACK_BOT_TOKEN`. */
+/**
+ * Slack with placeholder callbacks. `FlakySlackApiLive` is `SlackApiLive`, which reads `SLACK_BOT_TOKEN`,
+ * except that it refuses a `flaky` handoff's final message for a while.
+ */
 const slack = SlackBot.make({
 	signingSecret: Config.redacted('SLACK_SIGNING_SECRET'),
+	slackApi: FlakySlackApiLive,
 	deliveryMode: DebounceDeliveryMode.make({ quietPeriodMs: 2_000, maxWaitMs: 10_000 }),
 	handlers: {
 		onNewMention: (event, delivery) =>

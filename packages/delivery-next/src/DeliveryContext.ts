@@ -11,17 +11,8 @@
 import { Data, Schema } from 'effect'
 import type { Effect, Option, Redacted } from 'effect'
 
+import { ExternalLink } from './DeliveryLink'
 import { ConversationId, DeliveryId } from './DeliveryReference'
-
-/** An `https` URL. */
-export const HttpsUrl = Schema.NonEmptyString.check(Schema.isMaxLength(2_048), Schema.isPattern(/^https:\/\/\S+$/))
-
-/** A labeled link to something outside the conversation, such as the remote job's page. */
-export const ExternalLink = Schema.TaggedStruct('ExternalLink', {
-	label: Schema.NonEmptyString.check(Schema.isMaxLength(200)),
-	url: HttpsUrl,
-})
-export type ExternalLink = typeof ExternalLink.Type
 
 export const HandoffOptions = Schema.Struct({
 	links: Schema.optionalKey(Schema.Array(ExternalLink)),
@@ -66,21 +57,6 @@ export const PreparedDeliveryInvocation = Schema.Struct({
 	supportedOperations: Schema.Array(DeliveryOperationKind),
 })
 export type PreparedDeliveryInvocation = typeof PreparedDeliveryInvocation.Type
-
-/** How a delivery ended. `AwaitingInput` ends the turn with a question; the reply is a new delivery. */
-export const DeliveryOutcome = Schema.TaggedUnion({
-	Completed: {},
-	Failed: {},
-	AwaitingInput: { options: Schema.optionalKey(Schema.Array(Schema.NonEmptyString)) },
-})
-export type DeliveryOutcome = typeof DeliveryOutcome.Type
-
-/** A remote worker's final word on a delivery. */
-export const DeliveryTerminal = Schema.Struct({
-	outcome: DeliveryOutcome,
-	markdown: Schema.optionalKey(Schema.String),
-})
-export type DeliveryTerminal = typeof DeliveryTerminal.Type
 
 /** Where a delivery is in its life. */
 export const DeliveryStage = Schema.Literals([

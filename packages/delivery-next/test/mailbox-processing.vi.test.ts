@@ -15,6 +15,7 @@ import {
 	ProviderEventDispatcher,
 	ProviderEventExecutionFailed,
 	ProviderEventHandled,
+	ProviderOutputDispatcherLive,
 	QueueDeliveryMode,
 	SerialDeliveryMode,
 	type DeliveryAdmissionBatch,
@@ -80,6 +81,7 @@ const processingOptions = (overrides: Partial<MailboxProcessingOptions> = {}): M
 const processingOver = (dispatcher: Layer.Layer<ProviderEventDispatcher>, options: MailboxProcessingOptions) =>
 	MailboxProcessingLive(options).pipe(
 		Layer.provide(dispatcher),
+		Layer.provide(ProviderOutputDispatcherLive([])),
 		Layer.provide(NodeCrypto.layer),
 		Layer.provideMerge(MailboxBackendMemory),
 	)
@@ -106,7 +108,7 @@ describe('mailbox processing', () => {
 			yield* Effect.gen(function* () {
 				yield* deliver('a', 'broken')
 				yield* deliver('b', 'healthy')
-				expect(yield* processReady).toEqual({ claimed: 2, deferred: 0 })
+				expect(yield* processReady).toEqual({ claimed: 2, deferred: 0, output: 0 })
 				expect(yield* (yield* MailboxProcessingBackend).findReadyMailboxes).toEqual([])
 				yield* TestClock.adjust(30_000)
 				expect(yield* (yield* MailboxProcessingBackend).findReadyMailboxes).toHaveLength(1)
@@ -231,14 +233,14 @@ describe('delivery modes', () => {
 			const dispatched = yield* Queue.unbounded<ReadonlyArray<string>>()
 			yield* Effect.gen(function* () {
 				yield* deliver('a')
-				expect(yield* processReady).toEqual({ claimed: 0, deferred: 1 })
+				expect(yield* processReady).toEqual({ claimed: 0, deferred: 1, output: 0 })
 				yield* TestClock.adjust(1_500)
 				yield* deliver('b')
-				expect(yield* processReady).toEqual({ claimed: 0, deferred: 1 })
+				expect(yield* processReady).toEqual({ claimed: 0, deferred: 1, output: 0 })
 				yield* TestClock.adjust(1_999)
-				expect(yield* processReady).toEqual({ claimed: 0, deferred: 0 })
+				expect(yield* processReady).toEqual({ claimed: 0, deferred: 0, output: 0 })
 				yield* TestClock.adjust(1)
-				expect(yield* processReady).toEqual({ claimed: 1, deferred: 0 })
+				expect(yield* processReady).toEqual({ claimed: 1, deferred: 0, output: 0 })
 				expect(yield* Queue.takeAll(dispatched)).toEqual([['a', 'b']])
 			}).pipe(
 				Effect.provide(
@@ -262,7 +264,7 @@ describe('delivery modes', () => {
 				yield* processReady
 				yield* TestClock.adjust(1_500)
 				yield* deliver('c')
-				expect(yield* processReady).toEqual({ claimed: 1, deferred: 0 })
+				expect(yield* processReady).toEqual({ claimed: 1, deferred: 0, output: 0 })
 				expect(yield* Queue.takeAll(dispatched)).toEqual([['a', 'b', 'c']])
 			}).pipe(
 				Effect.provide(
@@ -280,12 +282,12 @@ describe('delivery modes', () => {
 			const dispatched = yield* Queue.unbounded<ReadonlyArray<string>>()
 			yield* Effect.gen(function* () {
 				yield* deliver('a')
-				expect(yield* processReady).toEqual({ claimed: 0, deferred: 1 })
+				expect(yield* processReady).toEqual({ claimed: 0, deferred: 1, output: 0 })
 				yield* TestClock.adjust(1_500)
 				yield* deliver('b')
-				expect(yield* processReady).toEqual({ claimed: 0, deferred: 1 })
+				expect(yield* processReady).toEqual({ claimed: 0, deferred: 1, output: 0 })
 				yield* TestClock.adjust(500)
-				expect(yield* processReady).toEqual({ claimed: 1, deferred: 0 })
+				expect(yield* processReady).toEqual({ claimed: 1, deferred: 0, output: 0 })
 				expect(yield* Queue.takeAll(dispatched)).toEqual([['a', 'b']])
 			}).pipe(
 				Effect.provide(
@@ -310,8 +312,8 @@ describe('delivery modes', () => {
 			yield* Effect.gen(function* () {
 				yield* deliver('a')
 				yield* TestClock.adjust(2_000)
-				expect(yield* processReady).toEqual({ claimed: 1, deferred: 0 })
-				expect(yield* processReady).toEqual({ claimed: 0, deferred: 1 })
+				expect(yield* processReady).toEqual({ claimed: 1, deferred: 0, output: 0 })
+				expect(yield* processReady).toEqual({ claimed: 0, deferred: 1, output: 0 })
 				yield* TestClock.adjust(2_000)
 				yield* processReady
 				expect(yield* Queue.takeAll(dispatched)).toEqual([['a'], ['during-run']])
@@ -319,6 +321,7 @@ describe('delivery modes', () => {
 				Effect.provide(
 					MailboxProcessingLive(withMode(DebounceDeliveryMode.make({ quietPeriodMs: 2_000 }))).pipe(
 						Layer.provide(dispatcher),
+						Layer.provide(ProviderOutputDispatcherLive([])),
 						Layer.provide(NodeCrypto.layer),
 						Layer.provideMerge(Layer.succeedContext(store)),
 					),
@@ -344,7 +347,7 @@ describe('claim lease', () => {
 				yield* TestClock.adjust(9_000)
 				expect(yield* backend.findReadyMailboxes).toEqual([])
 				yield* Deferred.succeed(finishCallback, undefined)
-				expect(yield* Fiber.join(pass)).toEqual({ claimed: 1, deferred: 0 })
+				expect(yield* Fiber.join(pass)).toEqual({ claimed: 1, deferred: 0, output: 0 })
 				yield* TestClock.adjust(60_000)
 				expect(yield* backend.findReadyMailboxes).toEqual([])
 			}).pipe(Effect.provide(processingOver(dispatcher, processingOptions({ leaseMs: 3_000 }))))
@@ -385,12 +388,14 @@ describe('claim lease', () => {
 				yield* Deferred.await(callbackStarted)
 				yield* TestClock.adjust(1_000)
 				yield* Deferred.await(callbackInterrupted)
-				expect(yield* Fiber.join(pass)).toEqual({ claimed: 1, deferred: 0 })
+				expect(yield* Fiber.join(pass)).toEqual({ claimed: 1, deferred: 0, output: 0 })
 				expect(yield* Ref.get(recorded)).toBe(0)
 			}).pipe(
 				Effect.provide(
 					MailboxProcessingLive(processingOptions({ leaseMs: 3_000 })).pipe(
-						Layer.provide(Layer.mergeAll(dispatcher, backendThatLosesClaims, NodeCrypto.layer)),
+						Layer.provide(
+							Layer.mergeAll(dispatcher, backendThatLosesClaims, ProviderOutputDispatcherLive([]), NodeCrypto.layer),
+						),
 					),
 				),
 				Effect.provide(store),
@@ -440,7 +445,15 @@ describe('polling', () => {
 							deliveryModeFor: () => SerialDeliveryMode.make({}),
 							polling: { intervalMs: 1_000 },
 						}),
-					).pipe(Layer.provide(Layer.mergeAll(recordingDispatcher(dispatched), observedBackend, NodeCrypto.layer))),
+					).pipe(Layer.provide(
+							Layer.mergeAll(
+								recordingDispatcher(dispatched),
+								observedBackend,
+								ProviderOutputDispatcherLive([]),
+								NodeCrypto.layer,
+							),
+						),
+					),
 				),
 				Effect.provide(store),
 			)

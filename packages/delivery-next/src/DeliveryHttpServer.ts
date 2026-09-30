@@ -5,8 +5,9 @@ import { Effect, FileSystem, Layer, Option, Path, Redacted } from 'effect'
 import { Etag, HttpPlatform, type HttpServerRequest } from 'effect/unstable/http'
 import { HttpApiBuilder } from 'effect/unstable/httpapi'
 
-import { CompleteDelivery, DeliveryControl, FailDelivery } from './DeliveryControl'
+import { AddDeliveryLink, CompleteDelivery, DeliveryControl, FailDelivery } from './DeliveryControl'
 import { DeliveryCredentialMissing, prefixedDeliveryHttpApi } from './DeliveryHttpApi'
+import { ExternalLink } from './DeliveryLink'
 
 const bearerPattern = /^Bearer\s+([A-Za-z0-9_-]+)\s*$/i
 
@@ -50,6 +51,16 @@ const handlers = (api: ReturnType<typeof prefixedDeliveryHttpApi>) =>
 							mutation: FailDelivery.make(payload),
 						})
 					}).pipe(Effect.withSpan('delivery.api.fail')),
+				)
+				.handle('addLink', ({ params, payload, request }) =>
+					Effect.gen(function* () {
+						const accessToken = yield* bearerToken(request)
+						return yield* control.apply({
+							deliveryId: params.deliveryId,
+							accessToken,
+							mutation: AddDeliveryLink.make({ link: ExternalLink.make(payload) }),
+						})
+					}).pipe(Effect.withSpan('delivery.api.add_link')),
 				)
 		}),
 	)

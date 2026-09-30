@@ -26,6 +26,7 @@ import {
 	Timestamp,
 	WaitingMailbox,
 	makeDeliveryId,
+	type ClaimDeliveryOutput,
 	type ClaimMailbox,
 	type DeferMailbox,
 	type HandOffMailboxDelivery,
@@ -504,6 +505,13 @@ const handOffDelivery = (input: HandOffMailboxDelivery) =>
 		}),
 	)
 
+/** Without handoff there is no output to send, so nothing is ever claimed or settled. */
+const claimDeliveryOutput = (_input: ClaimDeliveryOutput) =>
+	Effect.succeedNone.pipe(Effect.withSpan('delivery.sql.claim_delivery_output'))
+
+const noOutputClaim = (input: { readonly mailboxKey: string; readonly claimId: string }) =>
+	Effect.fail(new MailboxProcessingClaimLost({ mailboxKey: input.mailboxKey, claimId: input.claimId }))
+
 export type MailboxProcessingBackendSqlOptions = {
 	/** The most mailboxes one `findReadyMailboxes` reports. */
 	readonly claimLimit: number
@@ -527,6 +535,9 @@ export const MailboxProcessingBackendSql = (options: MailboxProcessingBackendSql
 					recordProcessingAttemptResult(input).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
 				prepareDelivery: (input) => prepareDelivery(input).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
 				handOffDelivery,
+				claimDeliveryOutput,
+				renewDeliveryOutput: noOutputClaim,
+				settleDeliveryOutput: noOutputClaim,
 			})
 		}),
 	)

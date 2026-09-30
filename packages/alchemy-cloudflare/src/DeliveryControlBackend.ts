@@ -2,17 +2,17 @@
  * This file defines the store half of delivery control over a mailbox Durable Object's storage.
  *
  * The token check and the change run in one storage transaction, through the shared
- * `DeliveryLifecycle` rules, and the alarm moves with the mailbox's new `readyAt`: a finished
- * delivery with events waiting wakes the mailbox at once.
+ * `DeliveryLifecycle` rules, and the alarm moves with the mailbox's new `readyAt`: a result or a link
+ * saves its output and wakes the mailbox at once to send it.
  */
 import {
 	DeliveryControlBackend,
 	DeliveryControlUnavailable,
 	DeliveryNotFound,
+	applyDeliverySlotMutation,
 	readDeliverySlotStatus,
-	recordDeliverySlotTerminal,
+	type ApplyDeliveryMutation,
 	type ReadDeliveryStatus,
-	type RecordDeliveryTerminal,
 } from '@humanlayer/channels-delivery-next'
 import { Array as Arr, Clock, Effect, Layer, Option, Predicate, Result } from 'effect'
 
@@ -54,8 +54,8 @@ export const makeDeliveryControlBackendFromDurableObjectStorage = Effect.gen(fun
 			return yield* Effect.fromResult(readDeliverySlotStatus(mailbox.value.deliveries, { ...input, now }))
 		}),
 
-		recordDeliveryTerminal: Effect.fn('delivery.cloudflare.record_delivery_terminal')(function* (
-			input: RecordDeliveryTerminal,
+		applyDeliveryMutation: Effect.fn('delivery.cloudflare.apply_delivery_mutation')(function* (
+			input: ApplyDeliveryMutation,
 		) {
 			const now = yield* Clock.currentTimeMillis
 			const recorded = yield* changeDeliveries(storage, {
@@ -63,7 +63,7 @@ export const makeDeliveryControlBackendFromDurableObjectStorage = Effect.gen(fun
 				change: (current) =>
 					current.mailboxKey === input.reference.mailboxKey
 						? Result.map(
-								recordDeliverySlotTerminal(current.deliveries, {
+								applyDeliverySlotMutation(current.deliveries, {
 									...input,
 									now,
 									hasWaiting: Arr.isReadonlyArrayNonEmpty(current.waiting),
@@ -71,7 +71,7 @@ export const makeDeliveryControlBackendFromDurableObjectStorage = Effect.gen(fun
 								({ slot, receipt }) => ({ slot, value: receipt }),
 							)
 						: Result.fail(new DeliveryNotFound()),
-			}).pipe(narrowToUnavailable('Cloudflare delivery terminal recording failed'))
+			}).pipe(narrowToUnavailable('Cloudflare delivery mutation failed'))
 			return yield* Effect.fromResult(recorded)
 		}),
 	})

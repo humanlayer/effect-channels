@@ -1,7 +1,9 @@
 /**
  * This file defines the mailbox processing service.
  *
- * It is responsible for processing provider events that have been saved in a mailbox
+ * It is responsible for processing provider events that have been saved in a mailbox, and for sending
+ * the provider output a delivery owes, such as its final message. Output has its own claim, lease,
+ * and retries, so a provider outage never runs an application callback again.
  *
  */
 import {
@@ -17,6 +19,7 @@ import {
 	Match,
 	Option,
 	Predicate,
+	Random,
 	Redacted,
 	Ref,
 	Schema,
@@ -29,12 +32,19 @@ import {
 	DeliveryHandoffUnavailable,
 	DeliveryPreparationConflict,
 	DeliveryPreparationUnavailable,
-	ExternalLink,
 	PreparedDeliveryInvocation,
 	ProviderDeliveryExecution,
 	type DeliveryHandoffUnsupported,
 	type HandoffOptions,
 } from './DeliveryContext'
+import { ExternalLink } from './DeliveryLink'
+import type { ActiveDelivery } from './DeliveryLifecycle'
+import {
+	DeliveryOperationId,
+	DeliveryOutputOperation,
+	DeliveryOutputSettlement,
+	type DeliveryOperation,
+} from './DeliveryOperation'
 import {
 	BatchId,
 	DeliveryAccessToken,
@@ -53,6 +63,7 @@ import {
 	WaitingEvents,
 	type DeliveryMode,
 } from './MailboxPolicy'
+import { ProviderOutputAttempt, ProviderOutputDispatcher } from './ProviderOutput'
 import {
 	DeliveryAdmissionBatch,
 	processProviderEvent,
@@ -82,8 +93,14 @@ export const RecoverableMailbox = Schema.TaggedStruct('RecoverableMailbox', {
 })
 export type RecoverableMailbox = typeof RecoverableMailbox.Type
 
+/** A mailbox whose active delivery has provider output due: a remote worker's result, or a link. */
+export const OutputReadyMailbox = Schema.TaggedStruct('OutputReadyMailbox', {
+	mailboxKey: Schema.NonEmptyString,
+})
+export type OutputReadyMailbox = typeof OutputReadyMailbox.Type
+
 /** One mailbox that is due now, as reported by `findReadyMailboxes`. */
-export const ReadyMailbox = Schema.Union([WaitingMailbox, RecoverableMailbox])
+export const ReadyMailbox = Schema.Union([WaitingMailbox, RecoverableMailbox, OutputReadyMailbox])
 export type ReadyMailbox = typeof ReadyMailbox.Type
 
 /**
@@ -165,6 +182,79 @@ export const HandOffMailboxDelivery = Schema.Struct({
 	links: Schema.Array(ExternalLink),
 })
 export type HandOffMailboxDelivery = typeof HandOffMailboxDelivery.Type
+
+/** Claim the next due output operation of a mailbox's active delivery. */
+export const ClaimDeliveryOutput = Schema.Struct({
+	mailboxKey: Schema.NonEmptyString,
+	leaseMs: LeaseMilliseconds,
+})
+export type ClaimDeliveryOutput = typeof ClaimDeliveryOutput.Type
+
+/**
+ * One output operation claimed for one attempt.
+ *
+ * @property claimId - new on every attempt; proves this attempt still owns the operation
+ * @property namespace - with `provider`, names the provider that sends the output
+ * @property prepared - where the output goes; missing when the provider never prepared the delivery
+ * @property hadAmbiguousAttempt - an earlier attempt's lease ran out, so the provider may already have applied it
+ */
+export const ClaimedDeliveryOutput = Schema.Struct({
+	mailboxKey: Schema.NonEmptyString,
+	batchId: BatchId,
+	claimId: Schema.NonEmptyString,
+	namespace: Schema.NonEmptyString,
+	provider: Schema.NonEmptyString,
+	prepared: Schema.optionalKey(PreparedDeliveryInvocation),
+	operationId: DeliveryOperationId,
+	operation: DeliveryOutputOperation,
+	attempt: Schema.Int.check(Schema.isGreaterThan(0)),
+	hadAmbiguousAttempt: Schema.Boolean,
+})
+export type ClaimedDeliveryOutput = typeof ClaimedDeliveryOutput.Type
+
+/** The claim a store returns for an operation the lifecycle has just claimed. */
+export const toClaimedDeliveryOutput = (input: {
+	readonly mailboxKey: string
+	readonly claimId: string
+	readonly active: ActiveDelivery
+	readonly operation: DeliveryOperation
+}) => {
+	const { active, operation } = input
+	const first = active.admissions[0]
+	const claimed = {
+		mailboxKey: input.mailboxKey,
+		batchId: active.batchId,
+		claimId: input.claimId,
+		namespace: first.namespace,
+		provider: first.provider,
+		operationId: operation.operationId,
+		operation: operation.operation,
+		attempt: operation.attempt,
+		hadAmbiguousAttempt: operation.hadAmbiguousAttempt,
+	}
+	return ClaimedDeliveryOutput.make(
+		Predicate.isUndefined(active.prepared) ? claimed : { ...claimed, prepared: active.prepared },
+	)
+}
+
+/** "Still sending": move the lease of a live output attempt forward by `leaseMs` from now. */
+export const RenewDeliveryOutput = Schema.Struct({
+	mailboxKey: Schema.NonEmptyString,
+	operationId: DeliveryOperationId,
+	claimId: Schema.NonEmptyString,
+	leaseMs: LeaseMilliseconds,
+})
+export type RenewDeliveryOutput = typeof RenewDeliveryOutput.Type
+
+/** Record how one output attempt ended. */
+export const SettleDeliveryOutput = Schema.Struct({
+	mailboxKey: Schema.NonEmptyString,
+	operationId: DeliveryOperationId,
+	claimId: Schema.NonEmptyString,
+	settlement: DeliveryOutputSettlement,
+	settledAt: Timestamp,
+})
+export type SettleDeliveryOutput = typeof SettleDeliveryOutput.Type
 
 /** The result of attempting to process a batch from mailbox - complete (or ignored) / retrable failure / terminal failure */
 export const MailboxProcessingAttemptCompleted = Schema.TaggedStruct('Completed', {
@@ -266,12 +356,34 @@ export class MailboxProcessingBackend extends Context.Service<
 		readonly handOffDelivery: (
 			input: HandOffMailboxDelivery,
 		) => Effect.Effect<void, MailboxProcessingBackendError | DeliveryHandoffUnsupported>
+
+		/**
+		 * Take the next due output operation of the mailbox's active delivery under a new lease.
+		 * Returns none when nothing is due. Stores without remote control never have output.
+		 */
+		readonly claimDeliveryOutput: (
+			input: ClaimDeliveryOutput,
+		) => Effect.Effect<Option.Option<ClaimedDeliveryOutput>, MailboxProcessingUnavailable>
+
+		/** Move the lease of a live output attempt forward. Fails with claim lost when it is no longer ours. */
+		readonly renewDeliveryOutput: (input: RenewDeliveryOutput) => Effect.Effect<void, MailboxProcessingBackendError>
+
+		/**
+		 * Record how an output attempt ended. A delivery whose result is in and whose output is all
+		 * settled retires, and the events waiting behind it become due.
+		 */
+		readonly settleDeliveryOutput: (input: SettleDeliveryOutput) => Effect.Effect<void, MailboxProcessingBackendError>
 	}
 >()('@humanlayer/channels-delivery-next/MailboxProcessingBackend') {}
 
+/**
+ * @property claimed - batches whose callbacks ran
+ * @property output - output operations sent, or tried
+ */
 export const MailboxProcessingSummary = Schema.Struct({
 	claimed: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
 	deferred: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+	output: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
 })
 export type MailboxProcessingSummary = typeof MailboxProcessingSummary.Type
 
@@ -563,10 +675,144 @@ export const processClaim = Effect.fn('delivery.process_mailbox_claim')(function
 	)
 })
 
+/** How many times one output operation is tried before it fails for good. */
+export const DEFAULT_OUTPUT_MAX_ATTEMPTS = 8
+
+/** The first wait before an output operation is tried again. Each later wait doubles, up to `OUTPUT_RETRY_MAX_MS`. */
+export const OUTPUT_RETRY_INITIAL_MS = 1_000
+export const OUTPUT_RETRY_MAX_MS = 5 * 60 * 1_000
+
+/** The wait before retry `attempt + 1`: doubling from one second, capped, then spread over its upper half. */
+const outputRetryDelayMs = (attempt: number) =>
+	Effect.gen(function* () {
+		const ceiling = Math.min(OUTPUT_RETRY_INITIAL_MS * 2 ** Math.max(0, attempt - 1), OUTPUT_RETRY_MAX_MS)
+		return Math.round(ceiling / 2 + (ceiling / 2) * (yield* Random.next))
+	})
+
+export type ProcessOutputClaimInput = {
+	readonly claim: ClaimedDeliveryOutput
+	readonly maxAttempts: number
+	readonly leaseMs: number
+}
+
+/** Tell the store "still sending" for as long as the provider call runs. See `keepClaimLeaseAlive`. */
+const keepOutputLeaseAlive = (input: { readonly claim: ClaimedDeliveryOutput; readonly leaseMs: number }) =>
+	Effect.gen(function* () {
+		const mailboxProcessingBackend = yield* MailboxProcessingBackend
+		return yield* Effect.sleep(Duration.millis(Math.max(1, Math.floor(input.leaseMs / 3)))).pipe(
+			Effect.andThen(
+				mailboxProcessingBackend.renewDeliveryOutput({
+					mailboxKey: input.claim.mailboxKey,
+					operationId: input.claim.operationId,
+					claimId: input.claim.claimId,
+					leaseMs: input.leaseMs,
+				}),
+			),
+			Effect.catchTag('MailboxProcessingUnavailable', (error) =>
+				Effect.logWarning('Delivery output lease renewal failed; will try again', error),
+			),
+			Effect.forever,
+		)
+	})
+
+/**
+ * Send one claimed output operation through its provider, then record how it went.
+ *
+ * The provider call and the lease renewal race, as for callbacks. A retryable failure is tried again
+ * after a doubling wait, until `maxAttempts`; anything else fails the operation for good. Either way
+ * the delivery's result stands: a failed output never changes `completed` to `failed`.
+ */
+export const processOutputClaim = Effect.fn('delivery.process_output_claim')(function* (input: ProcessOutputClaimInput) {
+	const { claim, maxAttempts, leaseMs } = input
+	const mailboxProcessingBackend = yield* MailboxProcessingBackend
+	const providerOutputDispatcher = yield* ProviderOutputDispatcher
+	const startedAt = yield* Clock.currentTimeMillis
+	const deliveryId = makeDeliveryId({ mailboxKey: claim.mailboxKey, batchId: claim.batchId })
+	const annotations = {
+		mailbox_key: claim.mailboxKey,
+		batch_id: claim.batchId,
+		delivery_id: deliveryId,
+		operation_id: claim.operationId,
+		operation: claim.operation._tag,
+		attempt: claim.attempt,
+		had_ambiguous_attempt: claim.hadAmbiguousAttempt,
+		provider: claim.provider,
+	}
+	const failed = (safeCode: string) => DeliveryOutputSettlement.cases.Failed.make({ safeCode })
+
+	const sendUnderLease = (prepared: PreparedDeliveryInvocation) =>
+		Effect.raceFirst(
+			providerOutputDispatcher
+				.process({
+					namespace: claim.namespace,
+					provider: claim.provider,
+					attempt: ProviderOutputAttempt.make({
+						deliveryId,
+						operationId: claim.operationId,
+						attempt: claim.attempt,
+						hadAmbiguousAttempt: claim.hadAmbiguousAttempt,
+						prepared,
+						operation: claim.operation,
+					}),
+				})
+				.pipe(
+					Effect.map(({ receipt }) =>
+						DeliveryOutputSettlement.cases.Applied.make(Predicate.isUndefined(receipt) ? {} : { receipt }),
+					),
+					Effect.catchTags({
+						ProviderOutputProcessorNotFound: () => Effect.succeed(failed('output_processor_not_found')),
+						DeliveryOutputFailed: ({ retryable, retryAfterMs, safeCode }) =>
+							Effect.gen(function* () {
+								if (!retryable) return failed(safeCode)
+								if (claim.attempt >= maxAttempts) return failed('attempts_exhausted')
+								const now = yield* Clock.currentTimeMillis
+								const waitMs = retryAfterMs ?? (yield* outputRetryDelayMs(claim.attempt))
+								return DeliveryOutputSettlement.cases.Retry.make({ readyAt: Timestamp.make(now + waitMs) })
+							}),
+					}),
+				),
+			keepOutputLeaseAlive({ claim, leaseMs }),
+		).pipe(
+			Effect.tapError((error) =>
+				Effect.logWarning('Delivery output lease was lost while its provider call ran; call interrupted', error).pipe(
+					Effect.annotateLogs(annotations),
+				),
+			),
+		)
+
+	yield* Effect.logInfo('Delivery output started').pipe(Effect.annotateLogs(annotations))
+	const settlement =
+		claim.attempt > maxAttempts
+			? failed('attempts_exhausted')
+			: Predicate.isUndefined(claim.prepared)
+				? failed('destination_missing')
+				: yield* sendUnderLease(claim.prepared)
+	const settledAt = Timestamp.make(yield* Clock.currentTimeMillis)
+	yield* mailboxProcessingBackend.settleDeliveryOutput({
+		mailboxKey: claim.mailboxKey,
+		operationId: claim.operationId,
+		claimId: claim.claimId,
+		settlement,
+		settledAt,
+	})
+	const settledAnnotations = { ...annotations, result: settlement._tag, duration_ms: settledAt - startedAt }
+	yield* DeliveryOutputSettlement.match(settlement, {
+		Applied: () => Effect.logInfo('Delivery output applied'),
+		Retry: ({ readyAt }) =>
+			Effect.logWarning('Delivery output scheduled for retry').pipe(
+				Effect.annotateLogs({ retry_after_ms: readyAt - settledAt }),
+			),
+		Failed: ({ safeCode }) =>
+			Effect.logWarning('Delivery output permanently failed').pipe(Effect.annotateLogs({ safe_code: safeCode })),
+	}).pipe(Effect.annotateLogs(settledAnnotations))
+})
+
 export type MailboxProcessingOptions = {
 	/** How many mailboxes one pass works on at the same time. */
 	readonly concurrency: number
 	readonly maxAttempts?: number
+	/** How many times one output operation is tried. Defaults to `DEFAULT_OUTPUT_MAX_ATTEMPTS`. */
+	readonly outputMaxAttempts?: number
 	/**
 	 * How long a claim stays ours without a renewal. The lease is renewed while the callback runs,
 	 * so this bounds how long a crashed worker's batch waits, not how long a callback may take.
@@ -584,6 +830,7 @@ export type MailboxProcessingOptions = {
 /** What one pass did with one ready mailbox. */
 type ReadyMailboxOutcome = Data.TaggedEnum<{
 	Claimed: { readonly claim: ClaimedMailboxBatch }
+	Output: { readonly claim: ClaimedDeliveryOutput }
 	Deferred: {}
 	/** Another worker got there first, or the store could not be reached for this mailbox. */
 	Skipped: {}
@@ -609,6 +856,15 @@ export const claimOrDeferReadyMailbox = Effect.fn('delivery.claim_or_defer_ready
 	const { leaseMs } = input
 	return yield* Match.value(input.mailbox).pipe(
 		Match.tagsExhaustive({
+			OutputReadyMailbox: ({ mailboxKey }) =>
+				mailboxProcessingBackend.claimDeliveryOutput(ClaimDeliveryOutput.make({ mailboxKey, leaseMs })).pipe(
+					Effect.map(
+						Option.match({
+							onNone: () => ReadyMailboxOutcome.Skipped(),
+							onSome: (claim) => ReadyMailboxOutcome.Output({ claim }),
+						}),
+					),
+				),
 			RecoverableMailbox: ({ mailboxKey }) =>
 				mailboxProcessingBackend
 					.claimMailbox(ClaimFrozenBatch.make({ mailboxKey, leaseMs }))
@@ -650,6 +906,7 @@ export const makeMailboxProcessing = (options: MailboxProcessingOptions) =>
 	Effect.gen(function* () {
 		const processingBackend = yield* MailboxProcessingBackend
 		const providerEventDispatcher = yield* ProviderEventDispatcher
+		const providerOutputDispatcher = yield* ProviderOutputDispatcher
 		/** Makes each new batch's ID and remote-worker token. */
 		const crypto = yield* Crypto.Crypto
 
@@ -658,6 +915,30 @@ export const makeMailboxProcessing = (options: MailboxProcessingOptions) =>
 				Effect.provideService(MailboxProcessingBackend, processingBackend),
 				Effect.provideService(ProviderEventDispatcher, providerEventDispatcher),
 			)
+
+		const runOutput = (claim: ClaimedDeliveryOutput) =>
+			processOutputClaim({
+				claim,
+				maxAttempts: options.outputMaxAttempts ?? DEFAULT_OUTPUT_MAX_ATTEMPTS,
+				leaseMs: options.leaseMs,
+			}).pipe(
+				Effect.provideService(MailboxProcessingBackend, processingBackend),
+				Effect.provideService(ProviderOutputDispatcher, providerOutputDispatcher),
+			)
+
+		/** Run one claimed piece of work. A failure is logged here so one mailbox cannot stop the pass. */
+		const runLogged = <E, R>(
+			work: Effect.Effect<void, E, R>,
+			annotations: { readonly mailbox_key: string; readonly claim_id: string },
+		) =>
+			Effect.gen(function* () {
+				const result = yield* work.pipe(Effect.exit)
+				if (Exit.isSuccess(result)) return
+				if (Cause.hasInterruptsOnly(result.cause)) return yield* Effect.failCause(result.cause)
+				yield* Effect.logError('Mailbox claim processing failed', result.cause).pipe(
+					Effect.annotateLogs(annotations),
+				)
+			})
 
 		/**
 		 * Each mailbox is claimed right before its callback runs, never ahead of time,
@@ -683,14 +964,9 @@ export const makeMailboxProcessing = (options: MailboxProcessingOptions) =>
 					Deferred: () => Effect.void,
 					Skipped: () => Effect.void,
 					Claimed: ({ claim }) =>
-						Effect.gen(function* () {
-							const result = yield* runClaim(claim).pipe(Effect.exit)
-							if (Exit.isSuccess(result)) return
-							if (Cause.hasInterruptsOnly(result.cause)) return yield* Effect.failCause(result.cause)
-							yield* Effect.logError('Mailbox claim processing failed', result.cause).pipe(
-								Effect.annotateLogs({ mailbox_key: claim.mailboxKey, claim_id: claim.claimId }),
-							)
-						}),
+						runLogged(runClaim(claim), { mailbox_key: claim.mailboxKey, claim_id: claim.claimId }),
+					Output: ({ claim }) =>
+						runLogged(runOutput(claim), { mailbox_key: claim.mailboxKey, claim_id: claim.claimId }),
 				})
 				return outcome
 			})
@@ -704,8 +980,9 @@ export const makeMailboxProcessing = (options: MailboxProcessingOptions) =>
 				const summary = MailboxProcessingSummary.make({
 					claimed: outcomes.filter(ReadyMailboxOutcome.$is('Claimed')).length,
 					deferred: outcomes.filter(ReadyMailboxOutcome.$is('Deferred')).length,
+					output: outcomes.filter(ReadyMailboxOutcome.$is('Output')).length,
 				})
-				if (summary.claimed > 0) {
+				if (summary.claimed > 0 || summary.output > 0) {
 					yield* Effect.logInfo('Mailbox processing claimed ready work').pipe(Effect.annotateLogs(summary))
 				}
 				return summary
@@ -725,7 +1002,7 @@ const pollReadyMailboxes = (input: {
 	readonly intervalMs: number
 }) =>
 	input.processing.processReady.pipe(
-		Effect.map((summary) => summary.claimed > 0),
+		Effect.map((summary) => summary.claimed > 0 || summary.output > 0),
 		Effect.catchCauseIf(
 			(cause) => !Cause.hasInterruptsOnly(cause),
 			(cause) => Effect.logError('Mailbox polling pass failed', cause).pipe(Effect.as(false)),

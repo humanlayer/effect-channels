@@ -2,9 +2,9 @@
  * `FakeRemoteAgent`: a Durable Object that stands in for a remote agent host, such as a VM or a sandbox.
  *
  * It does no agent work. One object per delivery ID saves the job, waits for its alarm, then reports
- * back over the public delivery API, as a real remote agent would. It is a Durable Object only because
- * the example already deploys to Cloudflare: its alarm outlives the callback, the mailbox claim, and a
- * redeploy.
+ * back over the public delivery API, as a real remote agent would: it completes the delivery with a
+ * final message, which the bot then posts to Slack. It is a Durable Object only because the example
+ * already deploys to Cloudflare: its alarm outlives the callback, the mailbox claim, and a redeploy.
  */
 import { DeliveryId, makeDeliveryClient, type DeliveryClient } from '@humanlayer/channels-delivery-next'
 import * as Cloudflare from 'alchemy/Cloudflare'
@@ -12,24 +12,39 @@ import type { RuntimeContext } from 'alchemy/RuntimeContext'
 import { Clock, Context, Effect, Option, Schema } from 'effect'
 import { HttpClient } from 'effect/unstable/http'
 
+import { withFlakyOutputMarker } from './FlakySlackApi'
+
 const JOB_KEY = 'fake-remote-agent-job'
+
+/** How long Slack refuses a `flaky` job's final message, counted from when the job completes. */
+const FLAKY_OUTPUT_MS = 20_000
 
 /** The delivery API, as the fake remote agent calls it: through the Worker's public URL. */
 class DeliveryApi extends Context.Service<DeliveryApi, DeliveryClient>()('alchemy-cloudflare-example/DeliveryApi') {}
 
-/** What `start` receives over RPC. The token arrives as a plain string and is redacted on arrival. */
+/**
+ * What `start` receives over RPC. The token arrives as a plain string and is redacted on arrival.
+ *
+ * @property flakyOutput - make Slack refuse the final message for a while
+ */
 export const StartRemoteAgentJob = Schema.Struct({
 	deliveryId: DeliveryId,
 	accessToken: Schema.RedactedFromValue(Schema.NonEmptyString),
 	delaySeconds: Schema.Int.check(Schema.isGreaterThan(0)),
+	flakyOutput: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
 })
 export type StartRemoteAgentJob = typeof StartRemoteAgentJob.Type
 
-/** The job one object saves. Stored in its encoded form, so the token is kept as its plain value. */
+/**
+ * The job one object saves. Stored in its encoded form, so the token is kept as its plain value.
+ * Jobs saved before `delaySeconds` and `flakyOutput` existed read them as 0 and false.
+ */
 const RemoteAgentJob = Schema.Struct({
 	deliveryId: DeliveryId,
 	accessToken: Schema.RedactedFromValue(Schema.NonEmptyString),
 	finishAt: Schema.Int,
+	delaySeconds: Schema.Int.pipe(Schema.withDecodingDefaultKey(Effect.succeed(0))),
+	flakyOutput: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
 })
 type RemoteAgentJob = typeof RemoteAgentJob.Type
 
@@ -67,8 +82,10 @@ const toStarted = (job: RemoteAgentJob) =>
 	RemoteAgentJobStarted.make({ deliveryId: job.deliveryId, finishAt: job.finishAt })
 
 /**
- * Report the job's delivery as complete: read its status, complete it, and log only safe fields.
- * A refused request ends the job; an unreachable API dies so Cloudflare retries the alarm.
+ * Report the job's delivery as complete: read its status, complete it with a final message, read its
+ * status again, and log only safe fields. The second read shows the delivery still finishing: the
+ * request returned before Slack was called. A refused request ends the job; an unreachable API dies
+ * so Cloudflare retries the alarm.
  */
 const completeDelivery = Effect.fn('fake_remote_agent.complete_delivery')(
 	function* (job: RemoteAgentJob) {
@@ -78,9 +95,21 @@ const completeDelivery = Effect.fn('fake_remote_agent.complete_delivery')(
 		yield* Effect.logInfo('Fake remote agent read delivery status').pipe(
 			Effect.annotateLogs({ delivery_id: job.deliveryId, stage: status.stage }),
 		)
-		const receipt = yield* deliveryApi.complete(target)
+		const finished = `Fake remote agent finished after ${job.delaySeconds}s.`
+		const markdown = job.flakyOutput
+			? withFlakyOutputMarker(finished, (yield* Clock.currentTimeMillis) + FLAKY_OUTPUT_MS)
+			: finished
+		const receipt = yield* deliveryApi.complete({ ...target, payload: { markdown } })
 		yield* Effect.logInfo('Fake remote agent completed delivery').pipe(
 			Effect.annotateLogs({ delivery_id: job.deliveryId, receipt_status: receipt.status }),
+		)
+		const after = yield* deliveryApi.status(target)
+		yield* Effect.logInfo('Fake remote agent read delivery status after completing').pipe(
+			Effect.annotateLogs({
+				delivery_id: job.deliveryId,
+				stage: after.stage,
+				output: after.output.map(({ operationId, state }) => `${operationId}:${state}`).join(','),
+			}),
 		)
 	},
 	(effect, job) => {
@@ -154,11 +183,17 @@ export const FakeRemoteAgentLive = FakeRemoteAgent.make<HttpClient.HttpClient>(
 					deliveryId: request.deliveryId,
 					accessToken: request.accessToken,
 					finishAt,
+					delaySeconds: request.delaySeconds,
+					flakyOutput: request.flakyOutput,
 				})
 				yield* storage.put(JOB_KEY, yield* encodeJob(job))
 				yield* storage.setAlarm(job.finishAt)
 				yield* Effect.logInfo('Fake remote agent job started').pipe(
-					Effect.annotateLogs({ delivery_id: job.deliveryId, finish_at: job.finishAt }),
+					Effect.annotateLogs({
+						delivery_id: job.deliveryId,
+						finish_at: job.finishAt,
+						flaky_output: job.flakyOutput,
+					}),
 				)
 				return toStarted(job)
 			})
