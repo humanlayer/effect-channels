@@ -433,25 +433,37 @@ export const requestDeliveryInterrupt = (slot: DeliverySlot, now: number): Deliv
 				active: ActiveDelivery.make({ ...slot.active, interruptRequestedAt: Timestamp.make(now) }),
 			})
 
-/** An output operation claimed by one attempt, with the delivery it belongs to. */
+/**
+ * An output operation claimed by one attempt, with the delivery it belongs to.
+ *
+ * @property idempotencyKey - the operation's key, the same on every attempt at it
+ */
 export type DeliveryOutputClaim = {
 	readonly slot: DeliverySlot
-	readonly claimed: { readonly active: ActiveDelivery; readonly operation: DeliveryOperation } | null
+	readonly claimed: {
+		readonly active: ActiveDelivery
+		readonly operation: DeliveryOperation
+		readonly idempotencyKey: string
+	} | null
 }
 
 /**
  * Claim the next operation when it is due. An operation whose earlier attempt's lease ran out is
  * claimed again and marked ambiguous: the provider may already have applied it.
+ *
+ * The first claim gives the operation `idempotencyKey`, a random UUID the caller made; later claims
+ * keep the one it has, so every attempt sends the same key.
  */
 export const claimDeliveryOutput = (
 	slot: DeliverySlot,
-	input: { readonly claimId: string; readonly leaseMs: number; readonly now: number },
+	input: { readonly claimId: string; readonly leaseMs: number; readonly now: number; readonly idempotencyKey: string },
 ): DeliveryOutputClaim => {
 	const active = slot.active
 	if (active === null || activeDeliveryWork(active) !== 'Output') return { slot, claimed: null }
 	const next = nextOperation(active)
 	const dueAt = nextOutputAt(active)
 	if (next === undefined || dueAt === null || dueAt > input.now) return { slot, claimed: null }
+	const idempotencyKey = next.idempotencyKey ?? input.idempotencyKey
 	const operation = DeliveryOperation.make({
 		...next,
 		state: DeliveryOperationState.cases.Delivering.make({
@@ -460,9 +472,13 @@ export const claimDeliveryOutput = (
 		}),
 		attempt: next.attempt + 1,
 		hadAmbiguousAttempt: next.hadAmbiguousAttempt || Predicate.isTagged(next.state, 'Delivering'),
+		idempotencyKey,
 	})
 	const claimed = replaceOperation(active, operation)
-	return { slot: withActive(slot, claimed, nextOutputAt(claimed)), claimed: { active: claimed, operation } }
+	return {
+		slot: withActive(slot, claimed, nextOutputAt(claimed)),
+		claimed: { active: claimed, operation, idempotencyKey },
+	}
 }
 
 /** The operation `claimId` is delivering, if it still is. */
@@ -750,6 +766,19 @@ const requiredOperation = (mutation: DeliveryMutation): DeliveryOperationKind =>
 	)
 
 /**
+ * A waiting `SetActivity` with a new activity. It drops its idempotency key: an earlier attempt may
+ * have shown the old activity under that key, so the new one needs its own.
+ */
+const replacedActivity = (saved: DeliveryOperation, activity: DeliveryActivity) =>
+	DeliveryOperation.make({
+		operationId: saved.operationId,
+		operation: SetActivity.make({ activity }),
+		state: saved.state,
+		attempt: saved.attempt,
+		hadAmbiguousAttempt: saved.hadAmbiguousAttempt,
+	})
+
+/**
  * Save the activity the remote worker wants shown. The activity already desired is a replay. A new
  * one replaces a `SetActivity` still waiting to be sent, so only the latest is sent; one already being
  * sent is followed by a new operation. A delivery with a result takes no new activity.
@@ -773,7 +802,7 @@ const changeActivity = (
 			const last = lastActivityOperation(active)
 			const next =
 				last !== undefined && Predicate.isTagged(last.state, 'Pending')
-					? replaceOperation(active, DeliveryOperation.make({ ...last, operation: SetActivity.make({ activity }) }))
+					? replaceOperation(active, replacedActivity(last, activity))
 					: withOperations(active, [SetActivity.make({ activity })], input.now)
 			/** A delivery waiting for its remote worker has no callback running, so the output can start now. */
 			const readyAt = active.stage === 'ExternalWaiting' ? nextOutputAt(next) : slot.readyAt

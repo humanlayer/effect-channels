@@ -172,7 +172,12 @@ const claimOutputTransition = (input: {
 }): MailboxTransition<Option.Option<ClaimedDeliveryOutput>> => {
 	const { current, claim, claimId, now } = input
 	if (current.mailboxKey !== claim.mailboxKey) return unchanged(Option.none())
-	const { slot, claimed } = claimDeliveryOutput(current.deliveries, { claimId, leaseMs: claim.leaseMs, now })
+	const { slot, claimed } = claimDeliveryOutput(current.deliveries, {
+		claimId,
+		leaseMs: claim.leaseMs,
+		now,
+		idempotencyKey: claim.idempotencyKey,
+	})
 	if (Predicate.isNull(claimed)) return unchanged(Option.none())
 	return {
 		result: Option.some(toClaimedDeliveryOutput({ mailboxKey: current.mailboxKey, claimId, ...claimed })),

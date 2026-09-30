@@ -60,6 +60,10 @@ export type DeliveryOperationState = typeof DeliveryOperationState.Type
  *
  * @property attempt - how many attempts have claimed it
  * @property hadAmbiguousAttempt - an attempt's lease ran out, so the provider may have applied it already
+ * @property idempotencyKey - a random UUID given at the first claim and sent on every attempt after it.
+ * A provider that takes a client-chosen ID, such as Linear for Agent Activities, sends it so a repeated
+ * attempt is refused instead of applied twice. A `SetActivity` replaced before it is sent loses its key,
+ * because its next attempt is a new request.
  */
 export const DeliveryOperation = Schema.Struct({
 	operationId: DeliveryOperationId,
@@ -67,6 +71,7 @@ export const DeliveryOperation = Schema.Struct({
 	state: DeliveryOperationState,
 	attempt: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
 	hadAmbiguousAttempt: Schema.Boolean,
+	idempotencyKey: Schema.optionalKey(Schema.NonEmptyString),
 })
 export type DeliveryOperation = typeof DeliveryOperation.Type
 

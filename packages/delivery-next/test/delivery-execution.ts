@@ -18,6 +18,9 @@ import {
 	type PreparedDeliveryInvocation,
 } from '../src'
 
+/** The idempotency key every test execution carries: stable across attempts, as in a real store. */
+export const TEST_DELIVERY_IDEMPOTENCY_KEY = '00000000-0000-4000-8000-00000000d11e'
+
 export type TestDeliveryExecution = {
 	/** Pass this to `process`. Its `prepared` is what the previous attempt saved. */
 	readonly execution: ProviderDeliveryExecution
@@ -40,6 +43,7 @@ const make = (input: {
 		const prepared = yield* Ref.get(input.saved)
 		const execution = new ProviderDeliveryExecution({
 			deliveryId,
+			idempotencyKey: TEST_DELIVERY_IDEMPOTENCY_KEY,
 			prepared,
 			prepare: (proposed) =>
 				Effect.gen(function* () {

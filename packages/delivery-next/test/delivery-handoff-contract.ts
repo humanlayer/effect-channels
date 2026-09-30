@@ -85,9 +85,13 @@ const finish = (claim: ClaimedMailboxBatch, mutation: DeliveryMutation = complet
 
 const link = (url: string) => ExternalLink.make({ label: 'Run', url })
 
-const claimOutput = Effect.gen(function* () {
-	return yield* (yield* MailboxProcessingBackend).claimDeliveryOutput({ mailboxKey, leaseMs })
-})
+/** Claim the next due output operation, offering `idempotencyKey` for an operation claimed for the first time. */
+const claimOutputWithKey = (idempotencyKey: string) =>
+	Effect.gen(function* () {
+		return yield* (yield* MailboxProcessingBackend).claimDeliveryOutput({ mailboxKey, leaseMs, idempotencyKey })
+	})
+
+const claimOutput = claimOutputWithKey('00000000-0000-4000-8000-000000000001')
 
 const settleOutput = (
 	claim: ClaimedDeliveryOutput,
@@ -105,11 +109,14 @@ const settleOutput = (
 	})
 
 /** Claim the next due output operation and settle it as applied. Dies when none is due. */
-const sendOutput = Effect.gen(function* () {
-	const claim = Option.getOrThrow(yield* claimOutput)
-	yield* settleOutput(claim)
-	return claim
-})
+const sendOutputWithKey = (idempotencyKey: string) =>
+	Effect.gen(function* () {
+		const claim = Option.getOrThrow(yield* claimOutputWithKey(idempotencyKey))
+		yield* settleOutput(claim)
+		return claim
+	})
+
+const sendOutput = sendOutputWithKey('00000000-0000-4000-8000-000000000001')
 
 /** Claim the one waiting batch and prepare it, as a provider does before its callback runs. */
 const claimPreparedWith = (prepared: PreparedDeliveryInvocation) =>
@@ -772,6 +779,47 @@ export const deliveryHandoffContract = <E>(storeName: string, makeEmptyStore: ()
 	)
 
 	contract(
+		'every attempt at an operation sends the idempotency key its first claim gave it',
+		Effect.gen(function* () {
+			const claim = yield* waitingDelivery
+			yield* finish(claim)
+			const first = Option.getOrThrow(yield* claimOutputWithKey('key-1'))
+			expect(first.idempotencyKey).toEqual('key-1')
+			yield* TestClock.adjust(leaseMs)
+			const recovered = Option.getOrThrow(yield* claimOutputWithKey('key-2'))
+			expect(recovered.hadAmbiguousAttempt).toEqual(true)
+			expect(recovered.idempotencyKey).toEqual('key-1')
+			const now = yield* Clock.currentTimeMillis
+			yield* settleOutput(recovered, DeliveryOutputSettlement.cases.Retry.make({ readyAt: Timestamp.make(now) }))
+			const retried = Option.getOrThrow(yield* claimOutputWithKey('key-3'))
+			expect(retried.attempt).toEqual(3)
+			expect(retried.idempotencyKey).toEqual('key-1')
+		}),
+	)
+
+	contract(
+		'a waiting SetActivity given a new activity gets a new idempotency key; operations saved later get their own',
+		Effect.gen(function* () {
+			const claim = yield* messageDelivery
+			yield* apply(claim, working('a'))
+			const first = Option.getOrThrow(yield* claimOutputWithKey('key-1'))
+			yield* TestClock.adjust(leaseMs)
+			const now = yield* Clock.currentTimeMillis
+			const recovered = Option.getOrThrow(yield* claimOutputWithKey('key-2'))
+			expect(recovered.idempotencyKey).toEqual(first.idempotencyKey)
+			yield* settleOutput(recovered, DeliveryOutputSettlement.cases.Retry.make({ readyAt: Timestamp.make(now) }))
+			yield* apply(claim, working('b'))
+			const replaced = Option.getOrThrow(yield* claimOutputWithKey('key-3'))
+			expect(replaced.operation).toEqual({ _tag: 'SetActivity', activity: { _tag: 'Working', message: 'b' } })
+			expect(replaced.hadAmbiguousAttempt).toEqual(true)
+			expect(replaced.idempotencyKey).toEqual('key-3')
+			yield* settleOutput(replaced)
+			yield* apply(claim, createProgress('Summary'))
+			expect((yield* sendOutputWithKey('key-4')).idempotencyKey).toEqual('key-4')
+		}),
+	)
+
+	contract(
 		'a result clears the activity: status shows Idle, its outcome asks the provider to clear, and new activity is refused',
 		Effect.gen(function* () {
 			const claim = yield* messageDelivery
@@ -850,6 +898,7 @@ export const handoffUnsupportedContract = <E>(
 			yield* settle(claim, 'completed')
 			expect(yield* findReady).toEqual([])
 			const backend = yield* MailboxProcessingBackend
-			expect(Option.isNone(yield* backend.claimDeliveryOutput({ mailboxKey, leaseMs }))).toEqual(true)
+			const idempotencyKey = '00000000-0000-4000-8000-000000000001'
+		expect(Option.isNone(yield* backend.claimDeliveryOutput({ mailboxKey, leaseMs, idempotencyKey }))).toEqual(true)
 		}).pipe(Effect.provide(makeEmptyStore())),
 	)

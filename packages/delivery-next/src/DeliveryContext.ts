@@ -124,12 +124,16 @@ export class DeliveryContext extends Data.Class<{
 /**
  * What mailbox processing gives a provider processor for one attempt at one batch.
  *
+ * @property idempotencyKey - a UUID made from the delivery ID, the same on every attempt. Send it with
+ * output the provider makes before the callback runs, such as Linear's first thought, where the provider
+ * takes a client-chosen ID, so a retry cannot make that output twice.
  * @property prepared - what an earlier attempt saved; when present the provider must run that callback
  * @property prepare - save the callback choice and destination; returns what is saved, which may be an earlier identical record
  * @property context - the value to pass to the application callback
  */
 export class ProviderDeliveryExecution extends Data.Class<{
 	readonly deliveryId: DeliveryId
+	readonly idempotencyKey: string
 	readonly prepared: Option.Option<PreparedDeliveryInvocation>
 	readonly prepare: (
 		invocation: PreparedDeliveryInvocation,

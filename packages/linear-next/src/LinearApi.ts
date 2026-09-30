@@ -23,6 +23,7 @@ import {
 	LinearContent,
 	LinearCreateAgentActivityRequest,
 	LinearIssueInfo,
+	LinearUpdateAgentSessionRequest,
 	LinearIssueRef,
 	LinearUser,
 	LinearUserPage,
@@ -116,6 +117,7 @@ export const LinearApiOperation = Schema.Literals([
 	'acquire_client_credentials_token',
 	'viewer_identity',
 	'create_agent_activity',
+	'update_agent_session',
 	'get_issue',
 	'update_issue',
 	'list_assignable_users',
@@ -137,6 +139,12 @@ export const LinearApiOperation = Schema.Literals([
 ])
 export type LinearApiOperation = typeof LinearApiOperation.Type
 
+/**
+ * A Linear API call failed.
+ *
+ * `already_exists` means Linear refused to create something because an entity with the caller's
+ * chosen ID exists, as when an Agent Activity is retried with the same ID. The first attempt created it.
+ */
 export class LinearApiError extends Schema.TaggedError<LinearApiError>()('LinearApiError', {
 	operation: LinearApiOperation,
 	reason: Schema.Literals([
@@ -149,6 +157,7 @@ export class LinearApiError extends Schema.TaggedError<LinearApiError>()('Linear
 		'not_found',
 		'validation',
 		'rate_limited',
+		'already_exists',
 	]),
 	retryable: Schema.Boolean,
 	status: Schema.optionalKey(Schema.Int),
@@ -163,6 +172,7 @@ export class LinearApi extends Context.Service<
 		readonly createAgentActivity: (
 			request: LinearCreateAgentActivityRequest,
 		) => Effect.Effect<LinearAgentActivityReceipt, LinearApiError>
+		readonly updateAgentSession: (request: LinearUpdateAgentSessionRequest) => Effect.Effect<void, LinearApiError>
 		readonly getIssue: (request: LinearIssueRequest) => Effect.Effect<LinearIssueInfo, LinearApiError>
 		readonly updateIssue: (request: LinearUpdateIssueRequest) => Effect.Effect<LinearIssueInfo, LinearApiError>
 		readonly listAssignableUsers: (

@@ -70,6 +70,7 @@ const attempt = (operation: ProviderOutputOperation, invocation = prepared()) =>
 		operationId: DeliveryOperationId.make('outcome'),
 		attempt: 1,
 		hadAmbiguousAttempt: false,
+		idempotencyKey: '00000000-0000-4000-8000-000000000001',
 		prepared: invocation,
 		operation,
 	})

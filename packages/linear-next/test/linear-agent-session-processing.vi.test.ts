@@ -7,8 +7,8 @@ import {
 } from '@humanlayer/channels-delivery-next'
 import { Effect, Layer, Ref } from 'effect'
 
-import { makeTestDeliveryExecution } from '../../delivery-next/test/delivery-execution'
-import { LinearApi } from '../src/LinearApi'
+import { TEST_DELIVERY_IDEMPOTENCY_KEY, makeTestDeliveryExecution } from '../../delivery-next/test/delivery-execution'
+import { LinearApi, LinearApiError } from '../src/LinearApi'
 import { LinearCallbacks, type LinearCallbackHandlers } from '../src/LinearCallbacks'
 import { makeLinearEventProcessor } from '../src/LinearEventProcessor'
 import { LinearAgentActivityId } from '../src/LinearIdentity'
@@ -34,7 +34,9 @@ const processor = makeLinearEventProcessor({
 
 const makeLayer = <E>(
 	handlers: LinearCallbackHandlers<E, never>,
-	createAgentActivity: (request: LinearCreateAgentActivityRequest) => Effect.Effect<LinearAgentActivityReceipt>,
+	createAgentActivity: (
+		request: LinearCreateAgentActivityRequest,
+	) => Effect.Effect<LinearAgentActivityReceipt, LinearApiError>,
 ) =>
 	Layer.mergeAll(
 		LinearCallbacks.layer(handlers),
@@ -93,10 +95,11 @@ describe('Linear Agent Session processing', () => {
 		}),
 	)
 
-	it.effect('can retry a callback after a successful thought without reusing a caller activity ID', ({ expect }) =>
+	it.effect('sends the automatic thought under the delivery\'s key, so a callback retry does not post it twice', ({ expect }) =>
 		Effect.gen(function* () {
 			const attempts = yield* Ref.make(0)
 			const requests = yield* Ref.make<ReadonlyArray<LinearCreateAgentActivityRequest>>([])
+			const posted = yield* Ref.make<ReadonlyArray<string>>([])
 			const layer = makeLayer(
 				{
 					onAgentSessionCreated: () =>
@@ -107,14 +110,23 @@ describe('Linear Agent Session processing', () => {
 						),
 				},
 				(request) =>
-					Ref.update(requests, (values) => [...values, request]).pipe(
-						Effect.as(
-							LinearAgentActivityReceipt.make({
-								activityId: LinearAgentActivityId.make('generated-by-provider'),
-								sessionId: request.sessionId,
-							}),
-						),
-					),
+					Effect.gen(function* () {
+						yield* Ref.update(requests, (values) => [...values, request])
+						const activityId = request.activityId ?? 'generated-by-provider'
+						/** Linear refuses a second activity with an ID it has seen. */
+						if ((yield* Ref.get(posted)).includes(activityId)) {
+							return yield* LinearApiError.make({
+								operation: 'create_agent_activity',
+								reason: 'already_exists',
+								retryable: false,
+							})
+						}
+						yield* Ref.update(posted, (ids) => [...ids, activityId])
+						return LinearAgentActivityReceipt.make({
+							activityId: LinearAgentActivityId.make(activityId),
+							sessionId: request.sessionId,
+						})
+					}),
 			)
 			const admission = yield* linearAgentSessionAdmission(agentSessionPayloads[0])
 			const first = yield* makeTestDeliveryExecution()
@@ -122,9 +134,25 @@ describe('Linear Agent Session processing', () => {
 			const retry = yield* first.retry
 			const result = yield* processor.process([admission], retry.execution).pipe(Effect.provide(layer))
 			expect(result).toEqual(ProviderEventHandled.make({}))
+			expect(yield* Ref.get(attempts)).toEqual(2)
 			const captured = yield* Ref.get(requests)
-			expect(captured).toHaveLength(2)
-			for (const capturedRequest of captured) expect(capturedRequest).not.toHaveProperty('activityId')
+			expect(captured.map(({ activityId }) => activityId)).toEqual([
+				TEST_DELIVERY_IDEMPOTENCY_KEY,
+				TEST_DELIVERY_IDEMPOTENCY_KEY,
+			])
+			expect(yield* Ref.get(posted)).toEqual([TEST_DELIVERY_IDEMPOTENCY_KEY])
+		}),
+	)
+
+	it.effect('fails the attempt as retryable when the automatic thought cannot reach Linear', ({ expect }) =>
+		Effect.gen(function* () {
+			const layer = makeLayer({ onAgentSessionCreated: () => Effect.die('must not run') }, () =>
+				Effect.fail(LinearApiError.make({ operation: 'create_agent_activity', reason: 'unavailable', retryable: true })),
+			)
+			const result = yield* processor
+				.process([yield* linearAgentSessionAdmission(agentSessionPayloads[0])], yield* firstAttempt())
+				.pipe(Effect.provide(layer), Effect.flip)
+			expect(result).toMatchObject({ _tag: 'ProviderEventExecutionFailed', retryable: true, safeCode: 'initial_thought_failed' })
 		}),
 	)
 

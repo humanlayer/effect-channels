@@ -55,6 +55,9 @@
       "devDependencies": {
         "@effect/platform-node": "catalog:",
         "@effect/vitest": "catalog:",
+        "@humanlayer/channels-github-next": "workspace:*",
+        "@humanlayer/channels-linear-next": "workspace:*",
+        "@humanlayer/channels-slack-next": "workspace:*",
         "typescript": "catalog:",
       },
     },

@@ -60,6 +60,7 @@ import {
 } from './LinearDeliveryDestination'
 import { discoverLinearFiles, LinearFileRef } from './LinearFiles'
 import {
+	LinearAgentActivityId,
 	LinearAgentSessionId,
 	LinearIssueId,
 	LinearTeamId,
@@ -570,7 +571,7 @@ const callbackFailure = <A>(effect: Effect.Effect<A, LinearCallbackError>) =>
 /** A selected callback: what to save before it runs, and how to run it with its delivery context. */
 type LinearCallbackInvocation = {
 	readonly preparation: LinearDeliveryPreparation
-	readonly invoke: (delivery: DeliveryContext) => Effect.Effect<void, ProviderEventExecutionFailed, LinearApi>
+	readonly invoke: (execution: ProviderDeliveryExecution) => Effect.Effect<void, ProviderEventExecutionFailed, LinearApi>
 }
 
 const issueActivationTarget = (issue: LinearIssue) =>
@@ -613,7 +614,7 @@ const prepareDelivery = Effect.fn('linear.prepare_delivery')(function* (
 /** First attempt: save the selection before any provider side effect or application code runs. */
 const runSelectedInvocation = (execution: ProviderDeliveryExecution, invocation: LinearCallbackInvocation) =>
 	prepareDelivery(execution, invocation.preparation).pipe(
-		Effect.andThen(invocation.invoke(execution.context)),
+		Effect.andThen(invocation.invoke(execution)),
 		Effect.as(ProviderEventHandled.make({})),
 	)
 
@@ -632,7 +633,7 @@ const runPreparedInvocation = <R>(
 	decodePreparedCallback(prepared).pipe(
 		Effect.flatMap(build),
 		Effect.tapError((error) => Effect.logError('Prepared Linear callback could not run', error)),
-		Effect.flatMap((invocation) => invocation.invoke(execution.context)),
+		Effect.flatMap((invocation) => invocation.invoke(execution)),
 		Effect.as(ProviderEventHandled.make({})),
 		Effect.annotateLogs({ callback: prepared.callback }),
 	)
@@ -677,9 +678,21 @@ const promptedWebhook = (normalized: LinearNormalizedAgentSessionWebhook) =>
 	)
 
 /**
- * Builds a session callback. `onAgentSessionCreated` posts Linear's automatic thought before the callback;
- * that thought posts again on every retry until activities carry an ID derived from the delivery ID.
+ * Linear's automatic thought, posted before `onAgentSessionCreated` so the session gets an activity
+ * within Linear's 10 seconds. Its ID is the delivery's idempotency key, made from the delivery ID, so a
+ * callback retry finds it already posted instead of posting it again.
  */
+const postInitialThought = (session: LinearAgentSession, execution: ProviderDeliveryExecution) =>
+	session.thought('Working on this…', { activityId: LinearAgentActivityId.make(execution.idempotencyKey) }).pipe(
+		Effect.asVoid,
+		Effect.catchIf(
+			(error) => error.reason === 'already_exists',
+			() => Effect.logInfo('Linear automatic thought already posted by an earlier attempt'),
+		),
+		Effect.mapError((error) => executionFailure('initial_thought_failed', error.retryable)),
+	)
+
+/** Builds a session callback. `onAgentSessionCreated` posts Linear's automatic thought before the callback. */
 const agentSessionInvocation = (batch: LinearAgentSessionBatch, callback: LinearCallbackName) => {
 	const { callbacks, normalized, session, issue, deliveryId } = batch
 	return Match.value(callback).pipe(
@@ -700,10 +713,9 @@ const agentSessionInvocation = (batch: LinearAgentSessionBatch, callback: Linear
 				})
 				return {
 					preparation: agentSessionPreparation(name, session),
-					invoke: (delivery: DeliveryContext) =>
-						session.thought('Working on this…').pipe(
-							Effect.mapError((error) => executionFailure('initial_thought_failed', error.retryable)),
-							Effect.andThen(callbackFailure(handler(event, delivery))),
+					invoke: (execution: ProviderDeliveryExecution) =>
+						postInitialThought(session, execution).pipe(
+							Effect.andThen(callbackFailure(handler(event, execution.context))),
 						),
 				}
 			}),
@@ -726,7 +738,7 @@ const agentSessionInvocation = (batch: LinearAgentSessionBatch, callback: Linear
 				})
 				return {
 					preparation: agentSessionPreparation(name, session),
-					invoke: (delivery: DeliveryContext) => callbackFailure(handler(event, delivery)),
+					invoke: (execution: ProviderDeliveryExecution) => callbackFailure(handler(event, execution.context)),
 				}
 			}),
 		),
@@ -942,7 +954,7 @@ const issueCallbackInvocation = (
 		LinearIssueDestination.make({ organizationId: issue.ref.organizationId, issueId: issue.ref.issueId }),
 		activationTarget,
 	),
-	invoke: (delivery) => callbackFailure(run(delivery)),
+	invoke: (execution) => callbackFailure(run(execution.context)),
 })
 
 /** The issue snapshot and events for `onSubscribedEvent`, when the batch has any. */

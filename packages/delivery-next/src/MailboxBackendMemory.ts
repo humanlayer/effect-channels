@@ -323,7 +323,12 @@ export const MailboxBackendMemory = Layer.effectContext(
 								const current = store.mailboxes.get(input.mailboxKey)
 								if (current === undefined) return [Option.none(), store]
 								const claimId = `output-claim-${store.claimsMade + 1}`
-								const { slot, claimed } = claimDeliveryOutput(current.deliveries, { claimId, leaseMs: input.leaseMs, now })
+								const { slot, claimed } = claimDeliveryOutput(current.deliveries, {
+									claimId,
+									leaseMs: input.leaseMs,
+									now,
+									idempotencyKey: input.idempotencyKey,
+								})
 								if (claimed === null) return [Option.none(), store]
 								return [
 									Option.some(toClaimedDeliveryOutput({ mailboxKey: input.mailboxKey, claimId, ...claimed })),

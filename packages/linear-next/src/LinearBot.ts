@@ -12,6 +12,7 @@ import { LinearApiLiveOptions, makeLinearApiLive } from './LinearApiLive'
 import type { AuthenticationInput } from './LinearAuth'
 import * as LinearAuth from './LinearAuth'
 import { LinearCallbacks, type LinearCallbackHandlers } from './LinearCallbacks'
+import { makeLinearOutputProcessor } from './LinearDeliveryOutput'
 import { makeLinearEventProcessor } from './LinearEventProcessor'
 import { LinearOrganizationId, LinearUserId } from './LinearIdentity'
 import { makeLinearWebhookProvider } from './LinearWebhookProvider'
@@ -105,6 +106,12 @@ export const make = <E, R, ApiError = never, ApiRequirements = never>(
 				process: (admissions: DeliveryAdmissionBatch, execution: ProviderDeliveryExecution) =>
 					processor.process(admissions, execution).pipe(Effect.provide(callbacks), Effect.provide(linearApi)),
 			}
+		}),
+		/** Sends a handed-off delivery's output: Agent Activities for a session, comments for an issue. */
+		outputProcessor: Effect.fn('linear.bot.build_output_processor')(function* ({ namespace }) {
+			const bot = yield* readBotConfiguration
+			const linearApi = yield* buildLinearApi
+			return yield* makeLinearOutputProcessor({ namespace, bot }).pipe(Effect.provide(linearApi))
 		}),
 	}
 }

@@ -1,8 +1,13 @@
-import { Effect, Schema } from 'effect'
+/**
+ * `agentActivityCreate`: post one activity to an Agent Session.
+ *
+ * With a caller-chosen `id`, Linear refuses a second activity with the same ID (`conflict on insert of
+ * AgentActivity`, which `LinearGraphql` reports as `LinearAlreadyExistsError`), so a retry cannot post twice.
+ */
+import { Array as Arr, Effect, Match, Predicate, Schema } from 'effect'
 
 import { LinearAgentActivityId, LinearAgentSessionId } from '../LinearIdentity'
 import {
-	LinearActivityContent,
 	LinearAgentActivityReceipt,
 	type LinearCreateAgentActivityRequest,
 } from '../LinearModels'
@@ -10,17 +15,24 @@ import { failLinearMutation } from './LinearApiErrors'
 import { linearGraphql } from './LinearGraphql'
 
 const AgentActivityContentInput = Schema.Struct({
-	type: Schema.Literals(['thought', 'response']),
+	type: Schema.Literals(['thought', 'response', 'error', 'elicitation']),
 	body: Schema.String,
 })
 
+/** One choice of a `select` elicitation. */
+const SelectOption = Schema.Struct({ label: Schema.String, value: Schema.String })
+
 export const CreateAgentActivityVariables = Schema.Struct({
 	input: Schema.Struct({
+		id: Schema.optionalKey(LinearAgentActivityId),
 		agentSessionId: LinearAgentSessionId,
 		content: AgentActivityContentInput,
 		ephemeral: Schema.Boolean,
+		signal: Schema.optionalKey(Schema.Literal('select')),
+		signalMetadata: Schema.optionalKey(Schema.Struct({ options: Schema.Array(SelectOption) })),
 	}),
 })
+type CreateAgentActivityInput = (typeof CreateAgentActivityVariables.Type)['input']
 
 const CreateAgentActivityResponse = Schema.Struct({
 	agentActivityCreate: Schema.Struct({
@@ -42,22 +54,37 @@ const mutation = `mutation LinearAgentActivityCreate($input: AgentActivityCreate
   }
 }`
 
-export const createAgentActivity = (request: LinearCreateAgentActivityRequest) => {
-	const content = LinearActivityContent.match(request.content, {
-		Thought: ({ body }) => AgentActivityContentInput.make({ type: 'thought', body }),
-		Response: ({ body }) => AgentActivityContentInput.make({ type: 'response', body }),
-	})
-	return linearGraphql({
+/** The GraphQL input for a request: content type and body, and the `select` signal for an elicitation with options. */
+const activityInput = (request: LinearCreateAgentActivityRequest): CreateAgentActivityInput => {
+	const session = { agentSessionId: request.sessionId, ephemeral: request.ephemeral }
+	const base = Predicate.isUndefined(request.activityId) ? session : { ...session, id: request.activityId }
+	return Match.value(request.content).pipe(
+		Match.withReturnType<CreateAgentActivityInput>(),
+		Match.tagsExhaustive({
+			Thought: ({ body }) => ({ ...base, content: AgentActivityContentInput.make({ type: 'thought', body }) }),
+			Response: ({ body }) => ({ ...base, content: AgentActivityContentInput.make({ type: 'response', body }) }),
+			Error: ({ body }) => ({ ...base, content: AgentActivityContentInput.make({ type: 'error', body }) }),
+			Elicitation: ({ body, options }) => {
+				const content = AgentActivityContentInput.make({ type: 'elicitation', body })
+				const choices = options ?? []
+				if (!Arr.isReadonlyArrayNonEmpty(choices)) return { ...base, content }
+				return {
+					...base,
+					content,
+					signal: 'select',
+					signalMetadata: { options: choices.map((option) => SelectOption.make({ label: option, value: option })) },
+				}
+			},
+		}),
+	)
+}
+
+export const createAgentActivity = (request: LinearCreateAgentActivityRequest) =>
+	linearGraphql({
 		operation: 'create_agent_activity',
 		query: mutation,
 		variables: CreateAgentActivityVariables,
-		input: {
-			input: {
-				agentSessionId: request.sessionId,
-				content,
-				ephemeral: request.ephemeral,
-			},
-		},
+		input: { input: activityInput(request) },
 		response: CreateAgentActivityResponse,
 	}).pipe(
 		Effect.flatMap((data) => {
@@ -73,4 +100,3 @@ export const createAgentActivity = (request: LinearCreateAgentActivityRequest) =
 			)
 		}),
 	)
-}

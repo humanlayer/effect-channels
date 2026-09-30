@@ -92,6 +92,28 @@ export const makeDeliveryAccessToken = Effect.gen(function* () {
 	return DeliveryAccessToken.make(Encoding.encodeBase64Url(yield* crypto.randomBytes(32)))
 })
 
+/** Sixteen bytes as a UUID v4 string: sets the version and variant bits, then formats them. */
+const formatUuidV4 = (bytes: Uint8Array) => {
+	const hex = Array.from(bytes.subarray(0, 16), (byte, index) => {
+		if (index === 6) return ((byte & 0x0f) | 0x40).toString(16).padStart(2, '0')
+		if (index === 8) return ((byte & 0x3f) | 0x80).toString(16).padStart(2, '0')
+		return byte.toString(16).padStart(2, '0')
+	}).join('')
+	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`
+}
+
+/**
+ * A UUID made from a delivery ID: the same on every attempt at the delivery, and different for every
+ * delivery. It has the UUID v4 layout, because providers that take a client-chosen ID, such as Linear,
+ * ask for one. A provider sends it with output it makes before the callback runs, so a retry cannot
+ * make that output twice.
+ */
+export const makeDeliveryIdempotencyKey = Effect.fn('delivery.make_idempotency_key')(function* (deliveryId: DeliveryId) {
+	const crypto = yield* Crypto.Crypto
+	const digest = yield* crypto.digest('SHA-256', new TextEncoder().encode(`delivery-idempotency:v1:${deliveryId}`))
+	return formatUuidV4(digest)
+})
+
 /**
  * Compare a presented token with the saved one. Takes the same time for any presented token of the
  * saved token's length, so the comparison does not reveal how much of a guess was right.

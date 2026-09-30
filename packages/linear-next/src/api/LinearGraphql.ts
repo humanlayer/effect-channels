@@ -3,6 +3,7 @@ import * as HttpClientRequest from 'effect/unstable/http/HttpClientRequest'
 
 import type { LinearApiError, LinearApiOperation } from '../LinearApi'
 import {
+	LinearAlreadyExistsError,
 	LinearAuthenticationError,
 	LinearForbiddenError,
 	LinearGraphqlRequestError,
@@ -71,9 +72,20 @@ const LinearGraphqlErrorPayload = Schema.Struct({
 			statusCode: Schema.optionalKey(Schema.Int),
 			retryAfter: Schema.optionalKey(Schema.Finite),
 			retryAfterMs: Schema.optionalKey(Schema.Finite),
+			userPresentableMessage: Schema.optionalKey(Schema.String),
 		}),
 	),
 })
+
+/**
+ * Whether Linear refused to create an entity because one with the caller's chosen ID exists. Linear
+ * answers `INPUT_ERROR` with `conflict on insert of <Entity>` and "Entity <Entity> with id <id> already
+ * exists."; seen live for Agent Activities (artifact 29).
+ */
+const isAlreadyExists = (code: string | undefined, payload: typeof LinearGraphqlErrorPayload.Type) =>
+	code === 'INPUT_ERROR' &&
+	(/conflict on insert/i.test(payload.message ?? '') ||
+		/already exists/i.test(payload.extensions?.userPresentableMessage ?? ''))
 
 const LinearGraphqlErrorResponse = Schema.Struct({ errors: Schema.Array(LinearGraphqlErrorPayload) })
 
@@ -119,6 +131,7 @@ const failGraphqlResponseError = (
 		retryAfterMs: headerRetryAfterMs ?? extensionRetryAfterMs,
 	})
 	const code = payload.extensions?.code?.toUpperCase()
+	if (isAlreadyExists(code, payload)) return Effect.fail(new LinearAlreadyExistsError(details))
 	if (code === undefined || !Schema.is(LinearKnownGraphqlCode)(code)) {
 		return Effect.fail(new LinearGraphqlRequestError(details))
 	}

@@ -68,15 +68,20 @@ export const LinearDeliveryPreparation = Schema.Struct({
 })
 export type LinearDeliveryPreparation = typeof LinearDeliveryPreparation.Type
 
-/** `SetActivity` (an ephemeral thought) is left out until Linear has an output processor that shows it. */
+/**
+ * A session shows `SetActivity` as an ephemeral thought. It has no message update or delete: Linear
+ * activities cannot be edited or removed.
+ */
 const agentSessionOperations: ReadonlyArray<DeliveryOperationKind> = [
 	'PresentOutcome',
 	'CreateMessage',
 	'SetMessageReaction',
+	'SetActivity',
 	'RenderPlan',
 	'AddExternalLink',
 ]
 
+/** An issue has no session to show activity in, so it has no `SetActivity`. */
 const issueOperations: ReadonlyArray<DeliveryOperationKind> = [
 	'PresentOutcome',
 	'CreateMessage',

@@ -46,12 +46,15 @@ export type ProviderOutputOperation = typeof ProviderOutputOperation.Type
  *
  * @property prepared - the callback, destination, and presentation version the provider saved
  * @property hadAmbiguousAttempt - an earlier attempt may already have applied this operation
+ * @property idempotencyKey - a UUID v4 that is the same on every attempt at this operation. A provider
+ * that takes a client-chosen ID sends it, and treats the provider's "already exists" answer as applied.
  */
 export const ProviderOutputAttempt = Schema.Struct({
 	deliveryId: DeliveryId,
 	operationId: DeliveryOperationId,
 	attempt: Schema.Int.check(Schema.isGreaterThan(0)),
 	hadAmbiguousAttempt: Schema.Boolean,
+	idempotencyKey: Schema.NonEmptyString,
 	prepared: PreparedDeliveryInvocation,
 	operation: ProviderOutputOperation,
 })

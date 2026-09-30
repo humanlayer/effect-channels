@@ -68,6 +68,25 @@ Linear keeps three representations separate:
 
 `file.download()` streams bytes; `file.downloadBytes({ maxBytes })` fails with `LinearFileSizeLimitExceeded` from the declared size, `Content-Length`, or the running byte count. Downloads send the workspace credential only to `https://uploads.linear.app`, follow redirects manually within `LinearApiLiveOptions.filePolicy` (default three hops and a 60-second response timeout), and never forward the credential to another origin. Uploads call Linear's `fileUpload` mutation, then `PUT` the exact bytes to the signed target with only the returned headers and declared content type. The signed target URL and bearer token never appear in public values or logs. Uploads are limited to 50 MiB.
 
+## Remote delivery
+
+Every callback receives a `DeliveryContext` and may hand its delivery to a remote worker. The remote worker then drives the output through the delivery API; `LinearBot` sends it to Linear.
+
+| Operation | Agent Session (`onAgentSessionCreated`, `onAgentSessionPrompted`) | Issue (the other callbacks) |
+| --- | --- | --- |
+| `complete` / `fail` (`PresentOutcome`) | one `response`, `error`, or `elicitation` (with `select` choices for `awaitingInput` options); a short default text without Markdown | a comment when there is Markdown, otherwise nothing |
+| `activity.set` `Working` | ephemeral thought, replaced by the next activity | not supported (409) |
+| `activity.set` `Idle` | nothing: Linear sets the session's state from its last activity | not supported (409) |
+| `messages.create` | lasting thought | comment |
+| `messages.update` / `delete` | not supported (409): activities cannot change | edit or delete the comment |
+| `links.add` | a labeled link on the session (`agentSessionUpdate`) | nothing |
+
+`GET /deliveries/<id>` lists what the delivery supports in `supportedOperations`. The final activity replaces any ephemeral thought, so a session turn needs no separate step to clear its activity. Linear marks a session stale after 30 minutes without an activity, and any later activity revives it; on long turns, send `Working` every few minutes.
+
+Session output is exactly-once. Each activity carries a UUID that stays the same on every attempt, and Linear refuses a second activity with an ID it has seen (`LinearApiError` reason `already_exists`), which counts as done. The automatic `Working on this…` thought before `onAgentSessionCreated` uses an ID made from the delivery ID, so a callback retry does not post it twice. Issue comments stay at-least-once.
+
+Stop arrives as a `prompted` event with `signal: stop`. It marks the handed-off turn, and the remote worker sees `interruptRequested: true` in the status, stops, and calls `fail` or `complete`; that posts the final activity Linear expects. The stop prompt then runs `onAgentSessionPrompted` as the next turn, with `prompt.signal` set to `stop`. A question (`complete` with `awaitingInput`) ends the turn; the user's reply is a new delivery.
+
 ## Live API smoke
 
 See [`scripts/README.md`](scripts/README.md). The smokes are opt-in and never print access tokens.

@@ -33,7 +33,7 @@ When both authentication forms are configured, `LINEAR_DEVELOPER_TOKEN` takes pr
 
 `AgentSessionEvent.created` and `AgentSessionEvent.prompted` are the authoritative agent entry points. Created sessions receive an automatic ephemeral thought before application code runs; both example callbacks then emit a terminal response activity so the Linear card completes. The corresponding Inbox Notification mention and assignment events are still authenticated and decoded, but are acknowledged as supplemental signals instead of starting duplicate work.
 
-Agent activities are at-least-once side effects. The package lets Linear generate activity IDs because Linear's published API does not establish that retrying `agentActivityCreate` with the same caller ID is idempotent. A mailbox retry after a successful activity followed by a callback failure can therefore produce another ephemeral thought or terminal response; the package does not claim exactly-once cards or perform blanket mutation retries.
+The automatic thought, and every activity a handed-off session turn posts through the delivery API, carries its own UUID. Linear refuses a second activity with an ID it has seen, and the package counts that refusal as done, so a retry never posts one twice. Activities a callback posts itself (`session.thought`, `session.respond`) let Linear choose the ID and stay at-least-once: a retry after one succeeded can post it again.
 
 For a live check, use a unique `channels-live-p2-<timestamp>` marker: mention the app on one issue and delegate a second issue to it. Each action should create one session-scoped mailbox, show an ephemeral thought within ten seconds, invoke `onAgentSessionCreated` once, and finish with the example's terminal response. Send a follow-up message in the session and confirm `onAgentSessionPrompted` uses the same mailbox and produces one response. Corresponding Inbox Notification deliveries must not invoke the legacy mention or assignment callbacks. Logs include only organization, session, issue, delivery, and prompt activity IDs—never prompts, guidance, credentials, signatures, or payload bodies.
 
@@ -196,6 +196,24 @@ In the Slack test channel:
   ```
 
 - Confirm no access token appears in the logs.
+
+### Linear
+
+The same fake remote agent runs Linear Agent Session turns and Linear issue deliveries. It asks each delivery what it supports (`GET /deliveries/<id>`, `supportedOperations`), so it shows activity only where it can.
+
+- **Session.** A session whose prompt context, or whose issue's title or description, says `handoff [seconds] [ask]` hands its turn off, with a link named `Fake remote agent run log` that Linear shows on the session. A reply in the session thread that says `handoff [seconds] [ask]` hands that turn off too. The remote agent's `Working` activity shows as an ephemeral thought, which the next activity replaces; its summary shows as a lasting thought; and the turn ends with one `response` (`Fake remote agent finished after <n>s.`). With `ask` it ends instead with an `elicitation`, `Which environment should I deploy to?`, offering `staging` and `production`; the reply starts a new turn. The agent reads the delivery's status at least every 5 seconds; after Stop it fails the turn with one `error` activity, `Stopped as requested.`, and the stop prompt then reaches `onAgentSessionPrompted` with `signal: stop`, which does nothing more.
+- **Issue.** A new issue whose title or description says `issue-handoff [seconds]` is handed off. An issue has no activity, so the agent skips it; the summary and the final message are comments. The keyword differs so that an issue titled `handoff 30` and delegated to the app starts only the session's handoff.
+- The run-log link opens `/fake-agent/runs/<deliveryId>` on the Worker, a plain-text line naming the job's step. It never shows the token.
+
+Checks, in the `FAKE` team of the HumanLayer workspace. Use a `channels-live-p4-<timestamp>` marker in each title, and delete the test issues afterwards. People prompt a session by replying in its comment thread; the API does not let a person create activities.
+
+1. **Handoff, activity, a lasting thought, and one response.** Create an issue titled `channels-live-p4-<timestamp> handoff 30` and delegate it to the app. Within 10 seconds the session shows the thought `Working on this…` and the link `Fake remote agent run log`. About a second later the thought `Looking into it, about 29s to go` replaces it; about 15 seconds later `Halfway there, about 15s to go` replaces that. At 30 seconds the session gets the lasting thought `Summary: the fake remote agent waited 30s and did no real work.`, then the response `Fake remote agent finished after 30s.`, and its state is `complete`. No ephemeral thought is left. The logs show `Linear session turn handed off`, `Mailbox delivery handed off; waiting for its remote worker`, then `Delivery output applied` for `AddExternalLink`, `SetActivity`, `SetActivity`, `CreateMessage`, and `PresentOutcome`, in that order, each once.
+2. **The run-log link.** Open the link on the session while a turn runs: it reads `Fake remote agent job for delivery:v1:…: step …, about <n>s to go.` After the turn it reads `No job is running here. …`.
+3. **The next reply is a new delivery.** Reply `thanks` in the session thread. The logs show `Linear agent session prompted` with a new `delivery_id`, and the session gets the example's local response.
+4. **A question ends the turn.** Reply `handoff 20 ask`. After the thoughts and the summary, the session shows the question `Which environment should I deploy to?` with the choices `staging` and `production`, and its state is `awaitingInput`. Pick `staging`: the logs show a new `Linear agent session prompted` delivery, and the session gets the example's local response.
+5. **Stop.** Reply `handoff 120`. Once `Looking into it…` shows, press Stop. Within about 5 seconds the logs show `Fake remote agent stopped because the delivery asked it to`, the session shows one `error` activity, `Stopped as requested.`, and then `Linear agent session prompted` with `prompt_signal: stop`, after which nothing more is posted.
+6. **Issue delivery.** Create an issue titled `channels-live-p4-<timestamp> issue-handoff 20`, not delegated. The logs show `Linear issue delivery handed off`. About 20 seconds later the issue gets the comment `Summary: the fake remote agent waited 20s and did no real work.`, then the comment `Fake remote agent finished after 20s.`. The logs show no `Fake remote agent set its activity` for it.
+7. Confirm no access token appears in the logs.
 
 ## Runtime behavior
 

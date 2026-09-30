@@ -192,7 +192,7 @@ it.effect(
 			})
 			expect(yield* alarm.scheduledAt).toEqual(500)
 
-			const output = Option.getOrThrow(yield* backend.claimDeliveryOutput({ mailboxKey, leaseMs }))
+			const output = Option.getOrThrow(yield* backend.claimDeliveryOutput({ mailboxKey, leaseMs, idempotencyKey: '00000000-0000-4000-8000-000000000001' }))
 			expect(yield* alarm.scheduledAt).toEqual(500 + leaseMs)
 			yield* TestClock.adjust(100)
 			yield* backend.settleDeliveryOutput({

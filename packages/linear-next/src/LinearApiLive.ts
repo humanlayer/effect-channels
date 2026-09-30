@@ -26,6 +26,7 @@ import {
 	listIssueComments,
 	readBoundedLinearFileBytes,
 	requestLinearFileUpload,
+	updateAgentSession,
 	updateAttachment,
 	updateComment,
 	updateIssue,
@@ -136,6 +137,7 @@ const apiService = (
 
 	return LinearApi.of({
 		createAgentActivity: (request) => executeMutation(request.organizationId, createAgentActivity(request)),
+		updateAgentSession: (request) => executeMutation(request.organizationId, updateAgentSession(request)),
 		getIssue: (request) => executeRead(request.issue.organizationId, getIssue(request)),
 		updateIssue: (request) => executeMutation(request.issue.organizationId, updateIssue(request)),
 		listAssignableUsers: (request) => executeRead(request.issue.organizationId, listAssignableUsers(request)),

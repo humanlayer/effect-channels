@@ -45,7 +45,14 @@ const organizationId = '6c5940f1-4f77-4f0b-8517-45b58f3c7d21'
 const issueId = 'b33fb278-fbe0-45e4-b4eb-94b0839f51b9'
 const sessionId = '71000000-0000-4000-8000-000000000001'
 
-const sessionOperations = ['PresentOutcome', 'CreateMessage', 'SetMessageReaction', 'RenderPlan', 'AddExternalLink']
+const sessionOperations = [
+	'PresentOutcome',
+	'CreateMessage',
+	'SetMessageReaction',
+	'SetActivity',
+	'RenderPlan',
+	'AddExternalLink',
+]
 const issueOperations = [
 	'PresentOutcome',
 	'CreateMessage',
@@ -68,6 +75,7 @@ const makeOrderLog = Ref.make<ReadonlyArray<string>>([])
 const recordingExecution = (execution: ProviderDeliveryExecution, order: Ref.Ref<ReadonlyArray<string>>) =>
 	new ProviderDeliveryExecution({
 		deliveryId: execution.deliveryId,
+		idempotencyKey: execution.idempotencyKey,
 		prepared: execution.prepared,
 		context: execution.context,
 		prepare: (invocation) =>
@@ -80,6 +88,7 @@ const failingExecution = (
 ) =>
 	new ProviderDeliveryExecution({
 		deliveryId: execution.deliveryId,
+		idempotencyKey: execution.idempotencyKey,
 		prepared: execution.prepared,
 		context: execution.context,
 		prepare: () => Effect.fail(error),

@@ -55,6 +55,7 @@ import {
 	makeConversationId,
 	makeDeliveryAccessToken,
 	makeDeliveryId,
+	makeDeliveryIdempotencyKey,
 } from './DeliveryReference'
 
 import {
@@ -190,10 +191,16 @@ export const HandOffMailboxDelivery = Schema.Struct({
 })
 export type HandOffMailboxDelivery = typeof HandOffMailboxDelivery.Type
 
-/** Claim the next due output operation of a mailbox's active delivery. */
+/**
+ * Claim the next due output operation of a mailbox's active delivery.
+ *
+ * @property idempotencyKey - a new random UUID, made by the caller so no store needs a random source.
+ * The store gives it to the operation at its first claim, and keeps the operation's own after that.
+ */
 export const ClaimDeliveryOutput = Schema.Struct({
 	mailboxKey: Schema.NonEmptyString,
 	leaseMs: LeaseMilliseconds,
+	idempotencyKey: Schema.NonEmptyString,
 })
 export type ClaimDeliveryOutput = typeof ClaimDeliveryOutput.Type
 
@@ -206,6 +213,7 @@ export type ClaimDeliveryOutput = typeof ClaimDeliveryOutput.Type
  * @property clearActivity - the delivery's last activity was `Working`; its `PresentOutcome` must clear it
  * @property messageReference - for an update or deletion, the provider's reference to the message; missing when its create failed
  * @property hadAmbiguousAttempt - an earlier attempt's lease ran out, so the provider may already have applied it
+ * @property idempotencyKey - the operation's key, the same on every attempt at it
  */
 export const ClaimedDeliveryOutput = Schema.Struct({
 	mailboxKey: Schema.NonEmptyString,
@@ -220,6 +228,7 @@ export const ClaimedDeliveryOutput = Schema.Struct({
 	clearActivity: Schema.Boolean,
 	attempt: Schema.Int.check(Schema.isGreaterThan(0)),
 	hadAmbiguousAttempt: Schema.Boolean,
+	idempotencyKey: Schema.NonEmptyString,
 })
 export type ClaimedDeliveryOutput = typeof ClaimedDeliveryOutput.Type
 
@@ -229,6 +238,7 @@ export const toClaimedDeliveryOutput = (input: {
 	readonly claimId: string
 	readonly active: ActiveDelivery
 	readonly operation: DeliveryOperation
+	readonly idempotencyKey: string
 }) => {
 	const { active, operation } = input
 	const first = active.admissions[0]
@@ -248,6 +258,7 @@ export const toClaimedDeliveryOutput = (input: {
 		clearActivity: activityToClear(active),
 		attempt: operation.attempt,
 		hadAmbiguousAttempt: operation.hadAmbiguousAttempt,
+		idempotencyKey: input.idempotencyKey,
 	}
 	const withReference = Predicate.isUndefined(messageReference) ? claimed : { ...claimed, messageReference }
 	return ClaimedDeliveryOutput.make(
@@ -551,6 +562,7 @@ const makeProviderDeliveryExecution = (input: {
 		const { claim } = input
 		const backend = yield* MailboxProcessingBackend
 		const deliveryId = makeDeliveryId({ mailboxKey: claim.mailboxKey, batchId: claim.batchId })
+		const idempotencyKey = yield* makeDeliveryIdempotencyKey(deliveryId)
 		const owner = { mailboxKey: claim.mailboxKey, claimId: claim.claimId }
 
 		const prepare = (prepared: PreparedDeliveryInvocation) =>
@@ -589,6 +601,7 @@ const makeProviderDeliveryExecution = (input: {
 
 		return new ProviderDeliveryExecution({
 			deliveryId,
+			idempotencyKey,
 			prepared: Option.fromUndefinedOr(claim.prepared),
 			prepare,
 			context: new DeliveryContext({
@@ -630,6 +643,12 @@ export const processClaim = Effect.fn('delivery.process_mailbox_claim')(function
 			keepClaimLeaseAlive({ claim, leaseMs }),
 		)
 	}).pipe(
+		Effect.catchTag('PlatformError', (error) =>
+			Effect.logError('Delivery idempotency key could not be made', error).pipe(
+				Effect.annotateLogs(claimAnnotations),
+				Effect.as(MailboxProcessingAttemptRetryableFailure.make({ safeCode: 'idempotency_key_unavailable' })),
+			),
+		),
 		Effect.tapError((error) =>
 			Effect.logWarning('Mailbox claim was lost while its callback ran; callback interrupted', error).pipe(
 				Effect.annotateLogs(claimAnnotations),
@@ -792,6 +811,7 @@ export const processOutputClaim = Effect.fn('delivery.process_output_claim')(fun
 						operationId: claim.operationId,
 						attempt: claim.attempt,
 						hadAmbiguousAttempt: claim.hadAmbiguousAttempt,
+						idempotencyKey: claim.idempotencyKey,
 						prepared,
 						operation,
 					}),
@@ -901,12 +921,20 @@ export const claimOrDeferReadyMailbox = Effect.fn('delivery.claim_or_defer_ready
 	return yield* Match.value(input.mailbox).pipe(
 		Match.tagsExhaustive({
 			OutputReadyMailbox: ({ mailboxKey }) =>
-				mailboxProcessingBackend.claimDeliveryOutput(ClaimDeliveryOutput.make({ mailboxKey, leaseMs })).pipe(
-					Effect.map(
-						Option.match({
-							onNone: () => ReadyMailboxOutcome.Skipped(),
-							onSome: (claim) => ReadyMailboxOutcome.Output({ claim }),
-						}),
+				Effect.gen(function* () {
+					const idempotencyKey = yield* (yield* Crypto.Crypto).randomUUIDv4
+					const claimed = yield* mailboxProcessingBackend.claimDeliveryOutput(
+						ClaimDeliveryOutput.make({ mailboxKey, leaseMs, idempotencyKey }),
+					)
+					return Option.match(claimed, {
+						onNone: () => ReadyMailboxOutcome.Skipped(),
+						onSome: (claim) => ReadyMailboxOutcome.Output({ claim }),
+					})
+				}).pipe(
+					Effect.catchTag('PlatformError', (error) =>
+						Effect.logError('Random output idempotency key could not be made', error).pipe(
+							Effect.andThen(Effect.fail(new MailboxProcessingUnavailable({ reason: 'random_unavailable' }))),
+						),
 					),
 				),
 			RecoverableMailbox: ({ mailboxKey }) =>
@@ -951,13 +979,14 @@ export const makeMailboxProcessing = (options: MailboxProcessingOptions) =>
 		const processingBackend = yield* MailboxProcessingBackend
 		const providerEventDispatcher = yield* ProviderEventDispatcher
 		const providerOutputDispatcher = yield* ProviderOutputDispatcher
-		/** Makes each new batch's ID and remote-worker token. */
+		/** Makes each new batch's ID and remote-worker token, and each output operation's idempotency key. */
 		const crypto = yield* Crypto.Crypto
 
 		const runClaim = (claim: ClaimedMailboxBatch) =>
 			processClaim({ claim, maxAttempts: options.maxAttempts ?? 5, leaseMs: options.leaseMs }).pipe(
 				Effect.provideService(MailboxProcessingBackend, processingBackend),
 				Effect.provideService(ProviderEventDispatcher, providerEventDispatcher),
+				Effect.provideService(Crypto.Crypto, crypto),
 			)
 
 		const runOutput = (claim: ClaimedDeliveryOutput) =>

@@ -3,15 +3,41 @@
  * The Worker and the Durable Object both build their half from this one value.
  */
 import { ChannelsCloudflare } from '@humanlayer/channels-alchemy-cloudflare'
-import { DebounceDeliveryMode, type DeliveryContext } from '@humanlayer/channels-delivery-next'
+import { DebounceDeliveryMode, ExternalLink, type DeliveryContext } from '@humanlayer/channels-delivery-next'
 import { GitHubBot, GitHubContent, GitHubId, GitHubReaction } from '@humanlayer/channels-github-next'
-import { LinearAuth, LinearBot, LinearOrganizationId, LinearUserId } from '@humanlayer/channels-linear-next'
+import {
+	LinearAuth,
+	LinearBot,
+	LinearOrganizationId,
+	LinearUserId,
+	type LinearAgentSessionCreated,
+	type LinearAgentSessionPrompted,
+	type LinearIssueCreated,
+} from '@humanlayer/channels-linear-next'
 import { SlackBot, SlackContent, SlackReaction, type SlackNewMention } from '@humanlayer/channels-slack-next'
 import { Config, Effect, Option, Predicate, Duration, Redacted } from 'effect'
 
 import { FakeRemoteAgent } from './FakeRemoteAgentDO'
 import { FlakySlackApiLive } from './FlakySlackApi'
-import { parseHandoffCommand, type HandoffCommand } from './SlackTestHandoffCommand'
+import { parseHandoffCommand, parseHandoffText, parseIssueHandoffText, type HandoffCommand } from './HandoffCommand'
+
+/**
+ * Start a job for this delivery on the fake remote agent. The delivery ID is the job's idempotency key,
+ * so a callback retry gets the job already started. Answers the job, with its run-log URL.
+ */
+const startRemoteJob = Effect.fn('example.start_remote_job')(function* (
+	delivery: DeliveryContext,
+	command: HandoffCommand,
+) {
+	const agents = yield* FakeRemoteAgent
+	return yield* agents.getByName(delivery.deliveryId).start({
+		deliveryId: delivery.deliveryId,
+		accessToken: Redacted.value(delivery.accessToken),
+		delaySeconds: command.delaySeconds,
+		flakyOutput: command.flakyOutput,
+		askForInput: command.askForInput,
+	})
+})
 
 /** The reply to any other mention. */
 const replyToMention = Effect.fn('example.slack.reply_to_mention')(function* (event: SlackNewMention) {
@@ -31,13 +57,7 @@ const handOffMention = Effect.fn('example.slack.hand_off_mention')(function* (
 	command: HandoffCommand,
 ) {
 	const { delaySeconds, flakyOutput } = command
-	const agents = yield* FakeRemoteAgent
-	yield* agents.getByName(delivery.deliveryId).start({
-		deliveryId: delivery.deliveryId,
-		accessToken: Redacted.value(delivery.accessToken),
-		delaySeconds,
-		flakyOutput,
-	})
+	yield* startRemoteJob(delivery, command)
 	const flakyNote = flakyOutput ? ' Slack will refuse the final message for 20s, then it retries.' : ''
 	yield* event.thread.post(
 		SlackContent.make({
@@ -206,6 +226,48 @@ const github = GitHubBot.make({
 	},
 })
 
+/**
+ * A Linear session turn that asks for `handoff [seconds] [ask]`: start a job on the fake remote agent and
+ * hand the turn off with a link to the job's run log, which Linear shows on the session. The automatic
+ * thought has already answered Linear within its 10 seconds. The remote agent then shows its activity
+ * as ephemeral thoughts, posts one lasting thought, and ends the turn with a response, or with a
+ * question for `ask`. Stop in the session makes it end the turn with an error.
+ */
+const handOffSessionTurn = Effect.fn('example.linear.hand_off_session_turn')(function* (
+	event: LinearAgentSessionCreated | LinearAgentSessionPrompted,
+	delivery: DeliveryContext,
+	command: HandoffCommand,
+) {
+	const started = yield* startRemoteJob(delivery, command)
+	yield* Effect.logInfo('Linear session turn handed off').pipe(
+		Effect.annotateLogs({
+			agent_session_id: event.session.ref.sessionId,
+			delivery_id: delivery.deliveryId,
+			delay_seconds: command.delaySeconds,
+			ask_for_input: command.askForInput,
+		}),
+	)
+	return yield* delivery.handoff({
+		links: [ExternalLink.make({ label: 'Fake remote agent run log', url: started.runLogUrl })],
+	})
+})
+
+/** A Linear issue that asked for `issue-handoff [seconds]`: start a job and hand the delivery off. Its output is comments. */
+const handOffIssue = Effect.fn('example.linear.hand_off_issue')(function* (
+	event: LinearIssueCreated,
+	delivery: DeliveryContext,
+	command: HandoffCommand,
+) {
+	yield* startRemoteJob(delivery, command)
+	yield* Effect.logInfo('Linear issue delivery handed off').pipe(
+		Effect.annotateLogs({ issue_id: event.issue.ref.issueId, delivery_id: delivery.deliveryId }),
+	)
+	return yield* delivery.handoff()
+})
+
+/** Lines of text, without the missing ones, as one string to look for a handoff command in. */
+const joinText = (lines: ReadonlyArray<string | null>) => lines.filter(Predicate.isNotNull).join('\n')
+
 /** Linear Application callbacks for one explicitly configured workspace. */
 const linear = LinearBot.make({
 	webhookSecret: Config.redacted('LINEAR_WEBHOOK_SECRET'),
@@ -215,7 +277,7 @@ const linear = LinearBot.make({
 	}),
 	auth: LinearAuth.fromEnvironment,
 	handlers: {
-		onAgentSessionCreated: (event) =>
+		onAgentSessionCreated: (event, delivery) =>
 			Effect.gen(function* () {
 				yield* Effect.logInfo('Linear agent session created').pipe(
 					Effect.annotateLogs({
@@ -227,12 +289,24 @@ const linear = LinearBot.make({
 					}),
 				)
 				if (!(yield* event.issue.isSubscribed())) yield* event.issue.subscribe()
-				yield* Effect.sleep(Duration.seconds(2))
-				yield* event.session.thought('thinking about session created...')
-				yield* Effect.sleep(Duration.seconds(2))
-				yield* event.session.respond('The example agent received this session and completed its callback.')
+				/** The command may be in the mentioning comment (part of the prompt context) or the issue itself. */
+				const command = parseHandoffText(
+					joinText([event.promptContext, event.issue.title, event.issue.description]),
+				)
+				return yield* Option.match(command, {
+					onSome: (handoff) => handOffSessionTurn(event, delivery, handoff),
+					onNone: () =>
+						Effect.gen(function* () {
+							yield* Effect.sleep(Duration.seconds(2))
+							yield* event.session.thought('thinking about session created...')
+							yield* Effect.sleep(Duration.seconds(2))
+							yield* event.session.respond(
+								'The example agent received this session and completed its callback.',
+							)
+						}),
+				})
 			}),
-		onAgentSessionPrompted: (event) =>
+		onAgentSessionPrompted: (event, delivery) =>
 			Effect.gen(function* () {
 				yield* Effect.logInfo('Linear agent session prompted').pipe(
 					Effect.annotateLogs({
@@ -241,17 +315,31 @@ const linear = LinearBot.make({
 						issue_id: event.issue.ref.issueId,
 						issue_identifier: event.issue.identifier,
 						prompt_activity_id: event.prompt.id,
+						prompt_signal: event.prompt.signal ?? 'none',
 						delivery_id: event.deliveryId,
 					}),
 				)
-				yield* Effect.sleep(Duration.seconds(2))
-				yield* event.session.thought('Thinking about session continuation...')
-				yield* Effect.sleep(Duration.seconds(2))
-				yield* event.session.respond(
-					'The example agent received the follow-up prompt and completed its callback.',
-				)
+				/**
+				 * Stop was handled before this ran: it marked the handed-off turn, and the remote agent
+				 * ended that turn with an error. There is nothing left to stop.
+				 */
+				if (event.prompt.signal === 'stop') {
+					return yield* Effect.logInfo('Linear stop prompt reached its callback; nothing is left to stop')
+				}
+				return yield* Option.match(parseHandoffText(event.prompt.body), {
+					onSome: (handoff) => handOffSessionTurn(event, delivery, handoff),
+					onNone: () =>
+						Effect.gen(function* () {
+							yield* Effect.sleep(Duration.seconds(2))
+							yield* event.session.thought('Thinking about session continuation...')
+							yield* Effect.sleep(Duration.seconds(2))
+							yield* event.session.respond(
+								'The example agent received the follow-up prompt and completed its callback.',
+							)
+						}),
+				})
 			}),
-		onIssueCreated: (event) =>
+		onIssueCreated: (event, delivery) =>
 			Effect.gen(function* () {
 				yield* Effect.logInfo('Linear issue created').pipe(
 					Effect.annotateLogs({
@@ -262,6 +350,10 @@ const linear = LinearBot.make({
 					}),
 				)
 				yield* event.issue.subscribe()
+				return yield* Option.match(parseIssueHandoffText(joinText([event.issue.title, event.issue.description])), {
+					onSome: (handoff) => handOffIssue(event, delivery, handoff),
+					onNone: () => Effect.void,
+				})
 			}),
 		onSubscribedEvent: (event) =>
 			Effect.logInfo('Linear subscribed issue events received').pipe(
