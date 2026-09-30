@@ -6,7 +6,6 @@
  * client, already supplied. What it still needs comes from the host: `Crypto` for the webhook half and
  * `MailboxSubscriptions` for the callback half.
  */
-import { Schema } from 'effect'
 import type { Crypto, Effect, Scope } from 'effect'
 
 import type { DeliveryMode } from './MailboxPolicy'
@@ -14,25 +13,21 @@ import type { MailboxSubscriptions } from './MailboxSubscriptions'
 import type { ProviderEventProcessor } from './ProviderEventProcessing'
 import type { WebhookProvider } from './ProviderWebhooks'
 
-/** The provider could not be built, for example because a secret is missing from the configuration. */
-export class ChannelsProviderUnavailable extends Schema.TaggedError<ChannelsProviderUnavailable>()(
-	'ChannelsProviderUnavailable',
-	{ provider: Schema.NonEmptyString },
-) {}
-
 export type ChannelsProviderBuildInput = {
 	readonly namespace: string
 }
 
 /**
- * What a provider needs from the application.
+ * What a provider needs from the application, and how building it can fail.
  *
  * @property build - needed to build either half, such as what a custom API layer requires
  * @property process - needed by the application's callbacks while a batch runs
+ * @property error - why building either half failed, such as a `ConfigError` for a missing secret
  */
 export type ChannelsProviderRequirements = {
 	readonly build: unknown
 	readonly process: unknown
+	readonly error: unknown
 }
 
 /**
@@ -46,18 +41,18 @@ export type ChannelsProviderRequirements = {
  * @property eventProcessor - builds the half that runs the application's callbacks
  */
 export type ChannelsProvider<
-	R extends ChannelsProviderRequirements = { readonly build: never; readonly process: never },
+	R extends ChannelsProviderRequirements = { readonly build: never; readonly process: never; readonly error: never },
 > = {
 	readonly providerName: string
 	readonly deliveryMode: DeliveryMode
 	readonly webhookProvider: (
 		input: ChannelsProviderBuildInput,
-	) => Effect.Effect<WebhookProvider<Crypto.Crypto>, ChannelsProviderUnavailable, R['build'] | Scope.Scope>
+	) => Effect.Effect<WebhookProvider<Crypto.Crypto>, R['error'], R['build'] | Scope.Scope>
 	readonly eventProcessor: (
 		input: ChannelsProviderBuildInput,
 	) => Effect.Effect<
 		ProviderEventProcessor<R['process'] | MailboxSubscriptions>,
-		ChannelsProviderUnavailable,
+		R['error'],
 		R['build'] | Scope.Scope
 	>
 }

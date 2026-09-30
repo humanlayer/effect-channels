@@ -2,7 +2,6 @@
  * This file defines `GitHubBot.make`: the GitHub provider as `Channels.make` takes it.
  */
 import {
-	ChannelsProviderUnavailable,
 	type ChannelsProvider,
 	type DeliveryMode,
 	type DeliveryAdmissionBatch,
@@ -34,30 +33,26 @@ export type MakeOptions<E, R, ApiError, ApiRequirements> = {
 	readonly gitHubApi?: Layer.Layer<GitHubApi, ApiError, ApiRequirements>
 }
 
-const unavailable = <A, E, R>(step: string, effect: Effect.Effect<A, E, R>) =>
-	effect.pipe(
-		Effect.tapError((error) =>
-			Effect.logError('GitHub bot could not be built', error).pipe(Effect.annotateLogs({ step })),
-		),
-		Effect.mapError(() => ChannelsProviderUnavailable.make({ provider: 'github' })),
-	)
-
 export const make = <E, R, ApiError = never, ApiRequirements = never>(
 	options: MakeOptions<E, R, ApiError, ApiRequirements>,
-): ChannelsProvider<{ readonly build: ApiRequirements; readonly process: Exclude<R, GitHubApi> }> => {
+): ChannelsProvider<{
+	readonly build: ApiRequirements
+	readonly process: Exclude<R, GitHubApi>
+	readonly error: Config.ConfigError | ApiError
+}> => {
 	const callbacks = GitHubCallbacks.layer(options.handlers)
 	const readBotConfiguration = Schema.is(GitHubBotConfiguration)(options.bot)
 		? Effect.succeed(options.bot)
-		: unavailable('read_bot_configuration', options.bot)
+		: options.bot
 	const buildGitHubApi = Predicate.isUndefined(options.gitHubApi)
-		? unavailable('build_github_api', Layer.build(GitHubApiLive))
-		: unavailable('build_github_api', Layer.build(options.gitHubApi))
+		? Layer.build(GitHubApiLive)
+		: Layer.build(options.gitHubApi)
 
 	return {
 		providerName: 'github',
 		deliveryMode: options.deliveryMode,
 		webhookProvider: Effect.fn('github.bot.build_webhook_provider')(function* ({ namespace }) {
-			const webhookSecret = yield* unavailable('read_webhook_secret', options.webhookSecret)
+			const webhookSecret = yield* options.webhookSecret
 			/**
 			 * Split hosts build only this half in the Worker construction phase. Resolve the callback half's
 			 * configuration here too, so Alchemy can discover and bind it for the Durable Object runtime.

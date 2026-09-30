@@ -32,8 +32,8 @@ import { MailboxSubscriptionsFromDurableObjectStorage } from './MailboxSubscript
  * The Durable Object half over the given `MailboxStorage`. `make` runs it over the Durable Object's own storage.
  *
  * Needs `Crypto` to make each new batch's ID and token; a Durable Object can provide `NodeCrypto.layer`.
- * A provider that cannot be built, such as one with a missing secret, is logged by the provider
- * and then dies here: a Durable Object has no caller that could handle the failure.
+ * A provider that cannot be built, such as one with a missing secret, dies here: a Durable Object has
+ * no caller that could handle the failure. The Worker half reports the same failure at deploy.
  */
 export const makeMailbox = <const Requirements extends ReadonlyArray<ChannelsProviderRequirements>, R>(
 	options: Channels.Options<Requirements>,
@@ -112,12 +112,9 @@ export const make = <const Requirements extends ReadonlyArray<ChannelsProviderRe
 
 /**
  * A Worker's `fetch` from the bot's routes. Raises the router's path-parameter limit, because a
- * delivery ID is longer than the default 100 characters. A provider that cannot be built is logged
- * by the provider and then dies here: a Worker has no caller that could handle the failure.
+ * delivery ID is longer than the default 100 characters. Fails as the providers do when they cannot
+ * be built, such as with a `ConfigError` for a missing secret, so Alchemy reports it at deploy.
  */
 export const serve = <E, R>(routes: Layer.Layer<never, E, R | HttpRouter.HttpRouter>) =>
-	HttpRouter.toHttpEffect(routes).pipe(
-		Effect.provideService(HttpRouter.RouterConfig, Channels.routerConfig),
-		Effect.orDie,
-	)
+	HttpRouter.toHttpEffect(routes).pipe(Effect.provideService(HttpRouter.RouterConfig, Channels.routerConfig))
 

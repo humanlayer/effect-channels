@@ -94,7 +94,7 @@ const decodeBody = <S extends Schema.Decoder<unknown>>(schema: S, text: string) 
 
 const makeOptions = (
 	provider: ChannelsProvider,
-): Channels.Options<ReadonlyArray<{ readonly build: never; readonly process: never }>> => ({
+): Channels.Options<ReadonlyArray<{ readonly build: never; readonly process: never; readonly error: never }>> => ({
 	namespace: 'channels-cloudflare-test',
 	basePath: '/api/channels',
 	providers: [provider],

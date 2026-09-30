@@ -2,7 +2,6 @@
  * This file defines `SlackBot.make`: the Slack provider as `Channels.make` takes it.
  */
 import {
-	ChannelsProviderUnavailable,
 	type ChannelsProvider,
 	type DeliveryMode,
 	type DeliveryAdmissionBatch,
@@ -33,27 +32,23 @@ export type MakeOptions<E, R, ApiError, ApiRequirements> = {
 	readonly slackApi?: Layer.Layer<SlackApi, ApiError, ApiRequirements>
 }
 
-const unavailable = <A, E, R>(step: string, effect: Effect.Effect<A, E, R>) =>
-	effect.pipe(
-		Effect.tapError((error) =>
-			Effect.logError('Slack bot could not be built', error).pipe(Effect.annotateLogs({ step })),
-		),
-		Effect.mapError(() => ChannelsProviderUnavailable.make({ provider: 'slack' })),
-	)
-
 export const make = <E, R, ApiError = never, ApiRequirements = never>(
 	options: MakeOptions<E, R, ApiError, ApiRequirements>,
-): ChannelsProvider<{ readonly build: ApiRequirements; readonly process: Exclude<R, SlackApi> }> => {
+): ChannelsProvider<{
+	readonly build: ApiRequirements
+	readonly process: Exclude<R, SlackApi>
+	readonly error: Config.ConfigError | ApiError
+}> => {
 	const callbacks = SlackCallbacks.layer(options.handlers)
 	const buildSlackApi = Predicate.isUndefined(options.slackApi)
-		? unavailable('build_slack_api', Layer.build(SlackApiLive))
-		: unavailable('build_slack_api', Layer.build(options.slackApi))
+		? Layer.build(SlackApiLive)
+		: Layer.build(options.slackApi)
 
 	return {
 		providerName: 'slack',
 		deliveryMode: options.deliveryMode,
 		webhookProvider: Effect.fn('slack.bot.build_webhook_provider')(function* ({ namespace }) {
-			const signingSecret = yield* unavailable('read_signing_secret', options.signingSecret)
+			const signingSecret = yield* options.signingSecret
 			const slackApi = yield* buildSlackApi
 			const webhookProvider = makeSlackWebhookProvider({ namespace, signingSecret })
 			return {
