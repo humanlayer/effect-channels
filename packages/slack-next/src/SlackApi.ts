@@ -33,6 +33,21 @@ export type SlackListChannelMessagesBeforeThreadRequest = typeof SlackListChanne
 export const SlackPostToThreadRequest = Schema.Struct({ thread: SlackThreadRef, content: SlackContent })
 export type SlackPostToThreadRequest = typeof SlackPostToThreadRequest.Type
 
+/** Replace the text of a message the bot posted. */
+export const SlackUpdateMessageRequest = Schema.Struct({ message: SlackMessageRef, content: SlackContent })
+export type SlackUpdateMessageRequest = typeof SlackUpdateMessageRequest.Type
+
+/** Remove a message the bot posted. */
+export const SlackDeleteMessageRequest = Schema.Struct({ message: SlackMessageRef })
+export type SlackDeleteMessageRequest = typeof SlackDeleteMessageRequest.Type
+
+/** Show a status line under the thread, such as `Running tests…`, while the agent works. */
+export const SlackThreadStatusRequest = Schema.Struct({
+	thread: SlackThreadRef,
+	status: Schema.NonEmptyString,
+})
+export type SlackThreadStatusRequest = typeof SlackThreadStatusRequest.Type
+
 export const SlackPostToChannelRequest = Schema.Struct({ channel: SlackChannelRef, content: SlackContent })
 export type SlackPostToChannelRequest = typeof SlackPostToChannelRequest.Type
 
@@ -90,6 +105,10 @@ export const SlackApiOperation = Schema.Literals([
 	'list_channel_messages_before_thread',
 	'post',
 	'post_to_channel',
+	'update_message',
+	'delete_message',
+	'set_thread_status',
+	'clear_thread_status',
 	'start_typing',
 	'stream',
 	'add_reaction',
@@ -154,7 +173,15 @@ export class SlackApi extends Context.Service<
 		) => Effect.Effect<SlackMessages, SlackApiError>
 		readonly postToThread: (request: SlackPostToThreadRequest) => Effect.Effect<SlackSentMessage, SlackApiError>
 		readonly postToChannel: (request: SlackPostToChannelRequest) => Effect.Effect<SlackSentMessage, SlackApiError>
+		/** `chat.update`: replace the text of a message the bot posted. */
+		readonly updateMessage: (request: SlackUpdateMessageRequest) => Effect.Effect<void, SlackApiError>
+		/** `chat.delete`: remove a message the bot posted. */
+		readonly deleteMessage: (request: SlackDeleteMessageRequest) => Effect.Effect<void, SlackApiError>
 		readonly startTyping: (request: SlackThreadRequest) => Effect.Effect<void, SlackApiError>
+		/** `assistant.threads.setStatus`: show a status line under the thread while the agent works. */
+		readonly setThreadStatus: (request: SlackThreadStatusRequest) => Effect.Effect<void, SlackApiError>
+		/** `agents.sessions.setStatus` `active`: clear the thread's status line and typing indicator. */
+		readonly clearThreadStatus: (request: SlackThreadRequest) => Effect.Effect<void, SlackApiError>
 		readonly stream: <E, R>(
 			thread: SlackThreadRef,
 			chunks: Stream.Stream<SlackStreamChunk, E, R>,

@@ -13,7 +13,9 @@ import {
 	ChannelsMemory,
 	DeliveryAdmission,
 	DeliveryOutputApplied,
+	DeliveryActivity,
 	DeliveryOutputFailed,
+	MessageId,
 	PreparedDeliveryInvocation,
 	ProviderEventHandled,
 	ProviderWebhookEvent,
@@ -23,6 +25,7 @@ import {
 	type DeliveryClient,
 	type DeliveryClientTarget,
 	type DeliveryContext,
+	type DeliveryOperationKind,
 	type ProviderOutputAttempt,
 } from '../src'
 
@@ -36,6 +39,7 @@ const handingOffProvider = (
 	contexts: Queue.Queue<DeliveryContext>,
 	output: Queue.Queue<ProviderOutputAttempt>,
 	failuresLeft: Ref.Ref<number>,
+	supportedOperations: ReadonlyArray<DeliveryOperationKind>,
 ): ChannelsProvider => ({
 	providerName: 'example',
 	deliveryMode: QueueDeliveryMode.make({}),
@@ -68,7 +72,7 @@ const handingOffProvider = (
 								callback: 'onEvent',
 								presentationVersion: 1,
 								destination: { resource: 'resource' },
-								supportedOperations: ['CreateMessage'],
+								supportedOperations,
 							}),
 						)
 					}
@@ -98,14 +102,14 @@ const handingOffProvider = (
 		}),
 })
 
-const startBot = Effect.gen(function* () {
+const startBotWith = (supportedOperations: ReadonlyArray<DeliveryOperationKind>) => Effect.gen(function* () {
 	const contexts = yield* Queue.unbounded<DeliveryContext>()
 	const output = yield* Queue.unbounded<ProviderOutputAttempt>()
 	const outputFailuresLeft = yield* Ref.make(0)
 	const bot = Channels.make({
 		namespace: 'channels-test',
 		basePath,
-		providers: [handingOffProvider(contexts, output, outputFailuresLeft)],
+		providers: [handingOffProvider(contexts, output, outputFailuresLeft, supportedOperations)],
 		eventProcessing: { concurrency: 1, leaseMs: 30_000 },
 		storage: ChannelsMemory.make({ polling: { intervalMs: 10 } }),
 	})
@@ -135,6 +139,8 @@ const startBot = Effect.gen(function* () {
 	return { contexts, output, outputFailuresLeft, webhook, client, raw }
 })
 
+const startBot = startBotWith(['PresentOutcome', 'AddExternalLink', 'CreateMessage'])
+
 /** Read the delivery's status until it retires. */
 const awaitRetired = (client: DeliveryClient, target: DeliveryClientTarget) =>
 	client.status(target).pipe(
@@ -156,7 +162,7 @@ describe('delivery API', () => {
 			const delivery = { deliveryId: first.deliveryId, accessToken: first.accessToken }
 			const waiting = yield* client.status(delivery)
 			expect(waiting.stage).toBe('ExternalWaiting')
-			expect(waiting.supportedOperations).toEqual(['CreateMessage'])
+			expect(waiting.supportedOperations).toEqual(['PresentOutcome', 'AddExternalLink', 'CreateMessage'])
 			expect(waiting.interruptRequested).toBe(false)
 
 			expect((yield* client.complete({ ...delivery, payload: { markdown: 'done' } })).status).toBe('accepted')
@@ -166,11 +172,16 @@ describe('delivery API', () => {
 			expect((yield* client.fail(delivery).pipe(Effect.flip))._tag).toBe('DeliveryTerminalConflict')
 			const presented = yield* Queue.take(output)
 			expect(presented.deliveryId).toBe(first.deliveryId)
-			expect(presented.operation).toEqual({ _tag: 'PresentOutcome', outcome: { _tag: 'Completed' }, markdown: 'done' })
+			expect(presented.operation).toEqual({
+				_tag: 'PresentOutcome',
+				outcome: { _tag: 'Completed' },
+				markdown: 'done',
+				clearActivity: false,
+			})
 			expect(presented.prepared.destination).toEqual({ resource: 'resource' })
 			const retired = yield* awaitRetired(client, delivery)
 			expect(retired.outcome?._tag).toBe('Completed')
-			expect(retired.output).toEqual([{ operationId: 'outcome', kind: 'PresentOutcome', state: 'Delivered', attempts: 1 }])
+			expect(retired.output).toEqual([{ operationId: 'outcome', kind: 'PresentOutcome', state: 'Delivered', attempts: 1, hadAmbiguousAttempt: false }])
 
 			const second = yield* Queue.take(contexts)
 			expect(second.deliveryId === first.deliveryId).toBe(false)
@@ -217,7 +228,7 @@ describe('delivery API output', () => {
 			])
 			const retired = yield* awaitRetired(client, delivery)
 			expect(retired.outcome?._tag).toBe('Failed')
-			expect(retired.output).toEqual([{ operationId: 'outcome', kind: 'PresentOutcome', state: 'Delivered', attempts: 3 }])
+			expect(retired.output).toEqual([{ operationId: 'outcome', kind: 'PresentOutcome', state: 'Delivered', attempts: 3, hadAmbiguousAttempt: false }])
 			expect(yield* Queue.size(contexts)).toBe(0)
 		}),
 	)
@@ -252,6 +263,138 @@ describe('delivery API output', () => {
 			const late = { label: 'Late', url: 'https://example.com/late' }
 			expect((yield* client.addLink({ ...delivery, link: late }).pipe(Effect.flip))._tag).toBe('DeliveryClosed')
 			expect((yield* client.addLink({ ...delivery, link: pullRequest })).status).toBe('already_recorded')
+		}),
+	)
+})
+
+describe('delivery API messages', () => {
+	it.live('creates, updates, and deletes a message through the generated client, in order', ({ expect }) =>
+		Effect.gen(function* () {
+			const { contexts, output, webhook, client } = yield* startBotWith([
+				'PresentOutcome',
+				'CreateMessage',
+				'UpdateMessage',
+				'DeleteMessage',
+			])
+			yield* webhook('first')
+			const context = yield* Queue.take(contexts)
+			const delivery = { deliveryId: context.deliveryId, accessToken: context.accessToken }
+			const messageId = MessageId.make('progress')
+
+			const created = yield* client.messages.create({ ...delivery, message: { messageId, markdown: 'Working' } })
+			expect(created.status).toBe('accepted')
+			const replayed = yield* client.messages.create({ ...delivery, message: { messageId, markdown: 'Working' } })
+			expect(replayed.status).toBe('already_recorded')
+			const reused = yield* client.messages
+				.create({ ...delivery, message: { messageId, markdown: 'Other' } })
+				.pipe(Effect.flip)
+			expect(reused._tag).toBe('DeliveryMessageConflict')
+			yield* client.messages.update({ ...delivery, messageId, message: { markdown: 'Almost' } })
+			yield* client.messages.delete({ ...delivery, messageId })
+			const unknown = yield* client.messages
+				.update({ ...delivery, messageId: MessageId.make('unknown'), message: { markdown: 'x' } })
+				.pipe(Effect.flip)
+			expect(unknown._tag).toBe('DeliveryMessageNotFound')
+
+			const sent = [yield* Queue.take(output), yield* Queue.take(output), yield* Queue.take(output)]
+			expect(sent.map(({ operation }) => operation)).toEqual([
+				{ _tag: 'CreateMessage', messageId, markdown: 'Working' },
+				{ _tag: 'UpdateMessage', messageId, markdown: 'Almost', reference: { sent: 'message-1' } },
+				{ _tag: 'DeleteMessage', messageId, reference: { sent: 'message-1' } },
+			])
+			const status = yield* client.status(delivery)
+			expect(status.output.map(({ kind, messageId, state }) => [kind, messageId, state])).toEqual([
+				['CreateMessage', 'progress', 'Delivered'],
+				['UpdateMessage', 'progress', 'Delivered'],
+				['DeleteMessage', 'progress', 'Delivered'],
+			])
+
+			yield* client.complete(delivery)
+			yield* awaitRetired(client, delivery)
+			const late = yield* client.messages
+				.create({ ...delivery, message: { messageId: MessageId.make('late'), markdown: 'x' } })
+				.pipe(Effect.flip)
+			expect(late._tag).toBe('DeliveryClosed')
+		}),
+	)
+
+	it.live('answers 409 for an operation the destination cannot do, and 400 for a bad message ID', ({ expect }) =>
+		Effect.gen(function* () {
+			const { contexts, webhook, client, raw } = yield* startBot
+			yield* webhook('first')
+			const context = yield* Queue.take(contexts)
+			const delivery = { deliveryId: context.deliveryId, accessToken: context.accessToken }
+			const messageId = MessageId.make('progress')
+			yield* client.messages.create({ ...delivery, message: { messageId, markdown: 'Working' } })
+
+			const refused = yield* client.messages
+				.update({ ...delivery, messageId, message: { markdown: 'Almost' } })
+				.pipe(Effect.flip)
+			expect(refused).toMatchObject({ _tag: 'DeliveryOperationUnsupported', operation: 'UpdateMessage' })
+			const messages = `/deliveries/${encodeURIComponent(context.deliveryId)}/messages`
+			const authorization = `Bearer ${Redacted.value(context.accessToken)}`
+			const deleted = yield* raw(`${messages}/progress`, { method: 'DELETE', headers: { authorization } })
+			expect(deleted.status).toBe(409)
+			const badId = yield* raw(messages, {
+				method: 'POST',
+				headers: { authorization, 'content-type': 'application/json' },
+				body: JSON.stringify({ messageId: 'has spaces', markdown: 'x' }),
+			})
+			expect(badId.status).toBe(400)
+			const empty = yield* raw(messages, {
+				method: 'POST',
+				headers: { authorization, 'content-type': 'application/json' },
+				body: JSON.stringify({ messageId: 'other', markdown: '' }),
+			})
+			expect(empty.status).toBe(400)
+			expect((yield* client.status(delivery)).output.map(({ kind }) => kind)).toEqual(['CreateMessage'])
+		}),
+	)
+})
+
+describe('delivery API activity and supported operations', () => {
+	it.live('sets activity through the generated client, keeps only the latest, and a result clears it', ({ expect }) =>
+		Effect.gen(function* () {
+			const { contexts, output, webhook, client } = yield* startBotWith(['PresentOutcome', 'SetActivity'])
+			yield* webhook('first')
+			const context = yield* Queue.take(contexts)
+			const delivery = { deliveryId: context.deliveryId, accessToken: context.accessToken }
+			const working = DeliveryActivity.cases.Working.make({ message: 'Running tests' })
+
+			expect((yield* client.activity.set({ ...delivery, activity: working })).status).toBe('accepted')
+			expect((yield* client.activity.set({ ...delivery, activity: working })).status).toBe('already_recorded')
+			const shown = yield* Queue.take(output)
+			expect(shown.operation).toEqual({ _tag: 'SetActivity', activity: working })
+			expect((yield* client.status(delivery)).activity).toEqual(working)
+
+			yield* client.complete(delivery)
+			const presented = yield* Queue.take(output)
+			expect(presented.operation).toMatchObject({ _tag: 'PresentOutcome', clearActivity: true })
+			const retired = yield* awaitRetired(client, delivery)
+			expect(retired.output.map(({ kind }) => kind)).toEqual(['SetActivity', 'PresentOutcome'])
+		}),
+	)
+
+	it.live('answers 409 for a link or activity the destination does not list, and saves nothing', ({ expect }) =>
+		Effect.gen(function* () {
+			const { contexts, webhook, client, raw } = yield* startBotWith(['PresentOutcome'])
+			yield* webhook('first')
+			const context = yield* Queue.take(contexts)
+			const delivery = { deliveryId: context.deliveryId, accessToken: context.accessToken }
+			const link = yield* raw(`/deliveries/${encodeURIComponent(context.deliveryId)}/links`, {
+				method: 'POST',
+				headers: {
+					'content-type': 'application/json',
+					authorization: `Bearer ${Redacted.value(context.accessToken)}`,
+				},
+				body: JSON.stringify({ label: 'Run', url: 'https://example.com/run/1' }),
+			})
+			expect(link.status).toBe(409)
+			const activity = yield* client.activity
+				.set({ ...delivery, activity: DeliveryActivity.cases.Working.make({ message: 'x' }) })
+				.pipe(Effect.flip)
+			expect(activity).toMatchObject({ _tag: 'DeliveryOperationUnsupported', operation: 'SetActivity' })
+			expect((yield* client.status(delivery)).output).toEqual([])
 		}),
 	)
 })

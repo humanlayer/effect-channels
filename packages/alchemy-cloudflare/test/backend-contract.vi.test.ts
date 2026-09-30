@@ -27,6 +27,7 @@ import {
 	DeliveryControlBackendFromDurableObjectStorage,
 	MailboxProcessingBackendFromDurableObjectStorage,
 	makeDeliverFromDurableObjectStorage,
+	MailboxStorage,
 	makeMailboxAlarmHandler,
 } from '../src'
 import { DurableObjectFake, DurableObjectFakeAlarm } from './DurableObjectFake'
@@ -205,6 +206,23 @@ it.effect(
 		}).pipe(Effect.provide(makeEmptyStore())),
 )
 
+it.effect('Durable Object: a new event puts back the alarm of a busy mailbox that lost it', ({ expect }) =>
+	Effect.gen(function* () {
+		const delivery = yield* MailboxDelivery
+		const backend = yield* MailboxProcessingBackend
+		const alarm = yield* DurableObjectFakeAlarm
+		yield* delivery.deliver(event('a'))
+		yield* backend.claimMailbox(
+			ClaimWaitingEvents.make({ mailboxKey, upToSequence: 0, leaseMs, ...nextBatchIdentity() }),
+		)
+		expect(yield* alarm.scheduledAt).toEqual(leaseMs)
+		yield* alarm.clearAsCloudflareDoesBeforeTheHandler
+		yield* TestClock.adjust(leaseMs * 2)
+		yield* delivery.deliver(event('b'))
+		expect(yield* alarm.scheduledAt).toEqual(leaseMs)
+	}).pipe(Effect.provide(makeEmptyStore())),
+)
+
 /** A processing pass that does nothing, as when the storage refuses the claim and the mailbox is skipped. */
 const processingThatSkipsEverything = Layer.succeed(
 	MailboxProcessing,
@@ -223,7 +241,8 @@ const alarmHandlerOver = (processing: Layer.Layer<MailboxProcessing>) =>
 		const delivery = yield* MailboxDelivery
 		const alarm = yield* DurableObjectFakeAlarm
 		const runMailboxAlarm = yield* makeMailboxAlarmHandler({ rearmAfterMs: 1_000 })
-		return { delivery, alarm, runMailboxAlarm }
+		const storage = yield* MailboxStorage
+		return { delivery, alarm, runMailboxAlarm, storage }
 	}).pipe(Effect.provide(Layer.merge(processing, makeEmptyStore())))
 
 it.effect('Durable Object alarm: puts the alarm back when a due mailbox was not worked on', ({ expect }) =>
@@ -247,13 +266,26 @@ it.effect('Durable Object alarm: puts the alarm back when the pass fails, and do
 	}),
 )
 
-it.effect('Durable Object alarm: leaves a quiet mailbox, and an alarm the store already set, alone', ({ expect }) =>
+it.effect('Durable Object alarm: leaves a quiet mailbox, and a future alarm the store already set, alone', ({ expect }) =>
 	Effect.gen(function* () {
-		const { delivery, alarm, runMailboxAlarm } = yield* alarmHandlerOver(processingThatSkipsEverything)
+		const { delivery, alarm, runMailboxAlarm, storage } = yield* alarmHandlerOver(processingThatSkipsEverything)
 		yield* runMailboxAlarm()
 		expect(yield* alarm.scheduledAt).toBe(null)
+		yield* TestClock.adjust(10_000)
 		yield* delivery.deliver(event('a'))
+		yield* storage.setAlarm(20_000)
 		yield* runMailboxAlarm()
-		expect(yield* alarm.scheduledAt).toBe(0)
+		expect(yield* alarm.scheduledAt).toBe(20_000)
+	}),
+)
+
+it.effect('Durable Object alarm: moves forward an alarm the handler left at or before now, which Cloudflare would drop', ({ expect }) =>
+	Effect.gen(function* () {
+		const { delivery, alarm, runMailboxAlarm } = yield* alarmHandlerOver(processingThatSkipsEverything)
+		yield* TestClock.adjust(5_000)
+		yield* delivery.deliver(event('a'))
+		expect(yield* alarm.scheduledAt).toBe(5_000)
+		yield* runMailboxAlarm()
+		expect(yield* alarm.scheduledAt).toBe(6_000)
 	}),
 )

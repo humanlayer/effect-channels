@@ -10,17 +10,24 @@
 import { Schema } from 'effect'
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from 'effect/unstable/httpapi'
 
+import { DeliveryActivity } from './DeliveryActivity'
 import {
 	AwaitingInputRequest,
 	DeliveryClosed,
 	DeliveryControlUnavailable,
 	DeliveryMarkdown,
+	DeliveryMessageConflict,
+	DeliveryMessageDeleted,
+	DeliveryMessageMarkdown,
+	DeliveryMessageNotFound,
 	DeliveryMutationReceipt,
 	DeliveryNotFound,
+	DeliveryOperationUnsupported,
 	DeliveryStatus,
 	DeliveryTerminalConflict,
 } from './DeliveryControl'
 import { ExternalLink } from './DeliveryLink'
+import { MessageId } from './DeliveryMessage'
 
 /** The request had no `Authorization: Bearer` token. */
 export class DeliveryCredentialMissing extends Schema.TaggedError<DeliveryCredentialMissing>()(
@@ -29,6 +36,7 @@ export class DeliveryCredentialMissing extends Schema.TaggedError<DeliveryCreden
 ) {}
 
 const Params = Schema.Struct({ deliveryId: Schema.String })
+const MessageParams = Schema.Struct({ deliveryId: Schema.String, messageId: MessageId })
 
 export const CompleteDeliveryPayload = Schema.Struct({
 	markdown: Schema.optionalKey(DeliveryMarkdown),
@@ -48,6 +56,25 @@ export const AddLinkPayload = Schema.Struct({
 })
 export type AddLinkPayload = typeof AddLinkPayload.Type
 
+/** A message to post: the remote worker's name for it, and its text. */
+export const CreateMessagePayload = Schema.Struct({
+	messageId: MessageId,
+	markdown: DeliveryMessageMarkdown,
+})
+export type CreateMessagePayload = typeof CreateMessagePayload.Type
+
+/** A message's new text. */
+export const UpdateMessagePayload = Schema.Struct({
+	markdown: DeliveryMessageMarkdown,
+})
+export type UpdateMessagePayload = typeof UpdateMessagePayload.Type
+
+/** The activity to show: `{ "_tag": "Working", "message": "…" }` or `{ "_tag": "Idle" }`. */
+export const SetActivityPayload = Schema.Struct({
+	activity: DeliveryActivity,
+})
+export type SetActivityPayload = typeof SetActivityPayload.Type
+
 const Accepted = DeliveryMutationReceipt.pipe(HttpApiSchema.status(202))
 
 const statusErrors = [
@@ -60,6 +87,10 @@ const mutationErrors = [
 	...statusErrors,
 	DeliveryTerminalConflict.pipe(HttpApiSchema.status(409)),
 	DeliveryClosed.pipe(HttpApiSchema.status(409)),
+	DeliveryOperationUnsupported.pipe(HttpApiSchema.status(409)),
+	DeliveryMessageNotFound.pipe(HttpApiSchema.status(409)),
+	DeliveryMessageDeleted.pipe(HttpApiSchema.status(409)),
+	DeliveryMessageConflict.pipe(HttpApiSchema.status(409)),
 ] as const
 
 export const DeliveryHttpApi = HttpApi.make('ChannelsDeliveryApi').add(
@@ -84,6 +115,29 @@ export const DeliveryHttpApi = HttpApi.make('ChannelsDeliveryApi').add(
 		HttpApiEndpoint.post('addLink', '/deliveries/:deliveryId/links', {
 			params: Params,
 			payload: AddLinkPayload,
+			success: Accepted,
+			error: mutationErrors,
+		}),
+		HttpApiEndpoint.put('setActivity', '/deliveries/:deliveryId/activity', {
+			params: Params,
+			payload: SetActivityPayload,
+			success: Accepted,
+			error: mutationErrors,
+		}),
+		HttpApiEndpoint.post('createMessage', '/deliveries/:deliveryId/messages', {
+			params: Params,
+			payload: CreateMessagePayload,
+			success: Accepted,
+			error: mutationErrors,
+		}),
+		HttpApiEndpoint.patch('updateMessage', '/deliveries/:deliveryId/messages/:messageId', {
+			params: MessageParams,
+			payload: UpdateMessagePayload,
+			success: Accepted,
+			error: mutationErrors,
+		}),
+		HttpApiEndpoint.delete('deleteMessage', '/deliveries/:deliveryId/messages/:messageId', {
+			params: MessageParams,
 			success: Accepted,
 			error: mutationErrors,
 		}),

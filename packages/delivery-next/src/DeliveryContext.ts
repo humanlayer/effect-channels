@@ -28,8 +28,12 @@ export type DeliveryHandoff = typeof DeliveryHandoff.Type
 /** What an application callback may return. */
 export type DeliveryCallbackResult = void | DeliveryHandoff
 
-/** The operations a remote worker may ask for, beyond ending the delivery. */
+/**
+ * The output operations a destination can show. Every request a remote worker makes needs its
+ * operation listed, including `PresentOutcome` for `complete` and `fail`.
+ */
 export const DeliveryOperationKind = Schema.Literals([
+	'PresentOutcome',
 	'CreateMessage',
 	'UpdateMessage',
 	'DeleteMessage',

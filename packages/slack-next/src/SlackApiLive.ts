@@ -261,7 +261,7 @@ const SlackApiService = Layer.effect(
 			}),
 		)
 		const setSessionStatus = (
-			operation: 'post' | 'start_typing',
+			operation: 'post' | 'start_typing' | 'clear_thread_status',
 			thread: SlackThreadRef,
 			status: 'active' | 'processing',
 		): Effect.Effect<void, SlackApiError> =>
@@ -591,7 +591,37 @@ const SlackApiService = Layer.effect(
 					content,
 				}),
 			postToChannel: ({ channel, content }) => postMessage({ operation: 'post_to_channel', channel, content }),
+			updateMessage: ({ message, content }) =>
+				callSlack(
+					'update_message',
+					'chat.update',
+					{ channel: message.channelId, ts: message.messageTs, text: contentText(content) },
+					SlackResponse,
+				).pipe(Effect.asVoid, Effect.withSpan('slack.api.update_message')),
+			deleteMessage: ({ message }) =>
+				callSlack(
+					'delete_message',
+					'chat.delete',
+					{ channel: message.channelId, ts: message.messageTs },
+					SlackResponse,
+				).pipe(Effect.asVoid, Effect.withSpan('slack.api.delete_message')),
 			startTyping: ({ thread }) => setSessionStatus('start_typing', thread, 'processing'),
+			/**
+			 * Status text goes through the Assistants API, whose bridge shows it in the agent-session
+			 * loading line; `agents.sessions.setStatus` only knows lifecycle states.
+			 */
+			setThreadStatus: ({ thread, status }) =>
+				callSlack(
+					'set_thread_status',
+					'assistant.threads.setStatus',
+					{ channel_id: thread.channelId, thread_ts: thread.threadTs, status, loading_messages: [status] },
+					SlackResponse,
+				).pipe(Effect.asVoid, Effect.withSpan('slack.api.set_thread_status')),
+			/** The agent-session lifecycle has no "clear"; `active` ends the loading state. */
+			clearThreadStatus: ({ thread }) =>
+				setSessionStatus('clear_thread_status', thread, 'active').pipe(
+					Effect.withSpan('slack.api.clear_thread_status'),
+				),
 			stream: (thread, chunks) =>
 				Effect.gen(function* () {
 					const recipient = yield* thread.isDm

@@ -3,13 +3,16 @@ import { it } from '@effect/vitest'
 import {
 	type Channels,
 	DeliveryAdmission,
+	DeliveryMessageConflict,
 	DeliveryMutationReceipt,
 	DeliveryNotFound,
 	DeliveryOutcome,
 	DeliveryOutputApplied,
 	DeliveryStatus,
+	MessageId,
 	PreparedDeliveryInvocation,
 	ProviderEventHandled,
+	type SetActivityPayload,
 	deliveryMailboxKey,
 	type ProviderDeliveryExecution,
 	ProviderWebhookEvent,
@@ -17,10 +20,12 @@ import {
 	type ChannelsProvider,
 	type AddLinkPayload,
 	type CompleteDeliveryPayload,
+	type CreateMessagePayload,
 	type DeliveryAdmissionBatch,
-	type DeliveryOutputOperation,
+	type ProviderOutputOperation,
+	type UpdateMessagePayload,
 } from '@humanlayer/channels-delivery-next'
-import { Context, Effect, Layer, Option, Predicate, Redacted, Ref, Schema } from 'effect'
+import { Clock, Context, Effect, Layer, Option, Predicate, Redacted, Ref, Schema } from 'effect'
 import { HttpServerRequest, HttpServerResponse } from 'effect/unstable/http'
 
 import { ChannelsCloudflare, DeliveryMailboxes } from '../src'
@@ -70,7 +75,7 @@ type HandedOff = { readonly deliveryId: string; readonly accessToken: Redacted.R
  */
 const makeHandOffProvider = (
 	handedOff: Ref.Ref<Option.Option<HandedOff>>,
-	sent: Ref.Ref<ReadonlyArray<DeliveryOutputOperation>>,
+	sent: Ref.Ref<ReadonlyArray<ProviderOutputOperation>>,
 ): ChannelsProvider => ({
 	...exampleWebhooks,
 	eventProcessor: ({ namespace }) =>
@@ -84,7 +89,14 @@ const makeHandOffProvider = (
 							callback: 'onExample',
 							presentationVersion: 1,
 							destination: { thread: 'thread-1' },
-							supportedOperations: [],
+							supportedOperations: [
+								'PresentOutcome',
+								'AddExternalLink',
+								'CreateMessage',
+								'UpdateMessage',
+								'DeleteMessage',
+								'SetActivity',
+							],
 						}),
 					)
 					yield* execution.context.handoff()
@@ -100,7 +112,9 @@ const makeHandOffProvider = (
 			namespace,
 			providerName: 'example',
 			process: ({ operation }) =>
-				Ref.update(sent, (all) => [...all, operation]).pipe(Effect.as(DeliveryOutputApplied.make({}))),
+				Ref.update(sent, (all) => [...all, operation]).pipe(
+					Effect.as(DeliveryOutputApplied.make({ receipt: { posted: operation._tag } })),
+				),
 		}),
 })
 
@@ -176,7 +190,7 @@ it.effect(
 	({ expect }) =>
 		Effect.gen(function* () {
 			const handedOff = yield* Ref.make(Option.none<HandedOff>())
-			const sent = yield* Ref.make<ReadonlyArray<DeliveryOutputOperation>>([])
+			const sent = yield* Ref.make<ReadonlyArray<ProviderOutputOperation>>([])
 			const options = makeOptions(makeHandOffProvider(handedOff, sent))
 			const durableObject = yield* Layer.build(DurableObjectFake)
 			const mailbox = yield* ChannelsCloudflare.makeMailbox(
@@ -209,13 +223,19 @@ it.effect(
 			const call = (input: {
 				readonly path: string
 				readonly token: string
-				readonly payload?: CompleteDeliveryPayload | AddLinkPayload
+				readonly method?: 'POST' | 'PUT' | 'PATCH' | 'DELETE'
+				readonly payload?:
+					| CompleteDeliveryPayload
+					| AddLinkPayload
+					| CreateMessagePayload
+					| UpdateMessagePayload
+					| typeof SetActivityPayload.Encoded
 			}) => {
 				const url = `http://localhost/api/channels/deliveries/${deliveryId}${input.path}`
 				const headers = { authorization: `Bearer ${input.token}`, 'content-type': 'application/json' }
-				const request = Predicate.isUndefined(input.payload)
-					? new Request(url, { headers })
-					: new Request(url, { method: 'POST', headers, body: JSON.stringify(input.payload) })
+				const body = Predicate.isUndefined(input.payload) ? undefined : JSON.stringify(input.payload)
+				const method = input.method ?? (Predicate.isUndefined(body) ? 'GET' : 'POST')
+				const request = new Request(url, Predicate.isUndefined(body) ? { method, headers } : { method, headers, body })
 				return fetch.pipe(
 					Effect.provideService(HttpServerRequest.HttpServerRequest, HttpServerRequest.fromWeb(request)),
 					Effect.flatMap((response) => {
@@ -237,6 +257,17 @@ it.effect(
 			const link = { label: 'Run', url: 'https://example.com/run/1' }
 			expect((yield* call({ path: '/links', token, payload: link })).status).toEqual(202)
 			expect(yield* alarm.scheduledAt).toEqual(0)
+			const activity = { activity: { _tag: 'Working', message: 'Running tests' } } as const
+			expect((yield* call({ path: '/activity', token, method: 'PUT', payload: activity })).status).toEqual(202)
+			const progress = MessageId.make('progress')
+			const created = yield* call({ path: '/messages', token, payload: { messageId: progress, markdown: 'Working' } })
+			expect(created.status).toEqual(202)
+			const patch = { path: '/messages/progress', token, method: 'PATCH', payload: { markdown: 'Almost' } } as const
+			expect((yield* call(patch)).status).toEqual(202)
+			expect((yield* call({ path: '/messages/progress', token, method: 'DELETE' })).status).toEqual(202)
+			const conflict = yield* call({ path: '/messages', token, payload: { messageId: progress, markdown: 'Other' } })
+			expect(conflict.status).toEqual(409)
+			expect(yield* decodeBody(DeliveryMessageConflict, conflict.text)).toBeInstanceOf(DeliveryMessageConflict)
 
 			const completed = yield* call({ path: '/complete', token, payload: { markdown: 'done' } })
 			expect(completed.status).toEqual(202)
@@ -248,24 +279,166 @@ it.effect(
 			const finishing = yield* decodeBody(DeliveryStatus, (yield* call({ path: '', token })).text)
 			expect(finishing.stage).toEqual('Finishing')
 
-			yield* mailbox.alarm()
-			yield* mailbox.alarm()
+			for (let pass = 0; pass < 6; pass++) yield* mailbox.alarm()
+			const reference = { posted: 'CreateMessage' }
 			expect(yield* Ref.get(sent)).toEqual([
 				{ _tag: 'AddExternalLink', link: { _tag: 'ExternalLink', ...link } },
-				{ _tag: 'PresentOutcome', outcome: { _tag: 'Completed' }, markdown: 'done' },
+				{ _tag: 'SetActivity', ...activity },
+				{ _tag: 'CreateMessage', messageId: progress, markdown: 'Working' },
+				{ _tag: 'UpdateMessage', messageId: progress, markdown: 'Almost', reference },
+				{ _tag: 'DeleteMessage', messageId: progress, reference },
+				{ _tag: 'PresentOutcome', outcome: { _tag: 'Completed' }, markdown: 'done', clearActivity: true },
 			])
 			expect(yield* alarm.scheduledAt).toEqual(null)
 
 			const retired = yield* decodeBody(DeliveryStatus, (yield* call({ path: '', token })).text)
 			expect(retired.stage).toEqual('Retired')
 			expect(retired.outcome).toEqual(DeliveryOutcome.cases.Completed.make({}))
-			expect(retired.output.map(({ state }) => state)).toEqual(['Delivered', 'Delivered'])
+			expect(retired.output.map(({ state }) => state)).toEqual(Array.from({ length: 6 }, () => 'Delivered'))
 
 			const wrongToken = yield* call({ path: '', token: 'wrong-token' })
 			expect(wrongToken.status).toEqual(404)
 			expect(yield* decodeBody(DeliveryNotFound, wrongToken.text)).toBeInstanceOf(DeliveryNotFound)
 
 			const mailboxKey = deliveryMailboxKey(admission('channels-cloudflare-test'))
-			expect(yield* Ref.get(routedTo)).toEqual(Array.from({ length: 6 }, () => mailboxKey))
+			expect(yield* Ref.get(routedTo)).toEqual(Array.from({ length: 11 }, () => mailboxKey))
+		}),
+)
+
+/**
+ * A provider whose callback hands off every batch and records each delivery, and whose output
+ * processor runs `duringCreate` while it sends a `CreateMessage`, as a remote worker's request can
+ * arrive while the mailbox object waits on Slack.
+ */
+const makeInterleavingProvider = (
+	handedOff: Ref.Ref<ReadonlyArray<HandedOff>>,
+	sent: Ref.Ref<ReadonlyArray<string>>,
+	duringCreate: Ref.Ref<Effect.Effect<void>>,
+): ChannelsProvider => ({
+	...exampleWebhooks,
+	eventProcessor: ({ namespace }) =>
+		Effect.succeed({
+			namespace,
+			providerName: 'example',
+			process: (_admissions: DeliveryAdmissionBatch, execution: ProviderDeliveryExecution) =>
+				Effect.gen(function* () {
+					yield* execution.prepare(
+						PreparedDeliveryInvocation.make({
+							callback: 'onExample',
+							presentationVersion: 1,
+							destination: { thread: 'thread-1' },
+							supportedOperations: ['PresentOutcome', 'CreateMessage', 'SetActivity'],
+						}),
+					)
+					yield* execution.context.handoff()
+					yield* Ref.update(handedOff, (all) => [
+						...all,
+						{ deliveryId: execution.deliveryId, accessToken: execution.context.accessToken },
+					])
+					return ProviderEventHandled.make({})
+				}).pipe(Effect.orDie),
+		}),
+	outputProcessor: ({ namespace }) =>
+		Effect.succeed({
+			namespace,
+			providerName: 'example',
+			process: ({ operation }) =>
+				Effect.gen(function* () {
+					if (Predicate.isTagged(operation, 'CreateMessage')) yield* Effect.flatten(Ref.getAndSet(duringCreate, Effect.void))
+					yield* Ref.update(sent, (all) => [...all, operation._tag])
+					return DeliveryOutputApplied.make({ receipt: { posted: operation._tag } })
+				}),
+		}),
+})
+
+const interleaving = (request: { readonly path: string; readonly method: 'POST' | 'PUT'; readonly body: unknown }) =>
+	Effect.gen(function* () {
+		const handedOff = yield* Ref.make<ReadonlyArray<HandedOff>>([])
+		const sent = yield* Ref.make<ReadonlyArray<string>>([])
+		const duringCreate = yield* Ref.make<Effect.Effect<void>>(Effect.void)
+		const options = makeOptions(makeInterleavingProvider(handedOff, sent, duringCreate))
+		const durableObject = yield* Layer.build(DurableObjectFake)
+		const mailbox = yield* ChannelsCloudflare.makeMailbox(
+			options,
+			{ rearmAfterMs: 1_000 },
+			Layer.succeedContext(durableObject),
+		).pipe(Effect.provide(NodeCrypto.layer))
+		const alarm = Context.get(durableObject, DurableObjectFakeAlarm)
+		const mailboxes = DeliveryMailboxes.of({
+			getByName: () => ({ deliver: mailbox.deliver, deliveryRequest: mailbox.deliveryRequest }),
+		})
+		const bot = ChannelsCloudflare.make(options)
+		const fetch = yield* ChannelsCloudflare.serve(Layer.merge(bot.routes, bot.deliveryApi)).pipe(
+			Effect.provide(Layer.merge(NodeCrypto.layer, Layer.succeed(DeliveryMailboxes, mailboxes))),
+		)
+		const call = (target: HandedOff, input: { readonly path: string; readonly method: string; readonly body?: unknown }) => {
+			const url = `http://localhost/api/channels/deliveries/${target.deliveryId}${input.path}`
+			const headers = {
+				authorization: `Bearer ${Redacted.value(target.accessToken)}`,
+				'content-type': 'application/json',
+			}
+			const init = Predicate.isUndefined(input.body)
+				? { method: input.method, headers }
+				: { method: input.method, headers, body: JSON.stringify(input.body) }
+			return fetch.pipe(
+				Effect.provideService(HttpServerRequest.HttpServerRequest, HttpServerRequest.fromWeb(new Request(url, init))),
+				Effect.map((response) => HttpServerResponse.toWeb(response).status),
+				Effect.orDie,
+			)
+		}
+
+		yield* mailbox.deliver(admission('channels-cloudflare-test'))
+		yield* mailbox.alarm()
+		const [first] = yield* Ref.get(handedOff)
+		if (first === undefined) return yield* Effect.die(new Error('the first delivery did not hand off'))
+		const summary = { messageId: 'summary', markdown: 'Summary' }
+		const created = yield* call(first, { path: '/messages', method: 'POST', body: summary })
+		yield* mailbox.deliver(DeliveryAdmission.make({ ...admission('channels-cloudflare-test'), eventId: 'event-2' }))
+		const statuses = yield* Ref.make<ReadonlyArray<number>>([])
+		yield* Ref.set(
+			duringCreate,
+			call(first, request).pipe(
+				Effect.flatMap((code) => Ref.update(statuses, (all) => [...all, code])),
+				Effect.scoped,
+			),
+		)
+
+		yield* alarm.clearAsCloudflareDoesBeforeTheHandler
+		yield* mailbox.alarm()
+		return { first, created, handedOff, sent, statuses, alarm, call }
+	})
+
+it.effect(
+	'ChannelsCloudflare delivery API: a result accepted while an earlier output is being sent runs in the same alarm, retires the delivery, and runs the next event',
+	({ expect }) =>
+		Effect.gen(function* () {
+			const { first, created, handedOff, sent, statuses, alarm, call } = yield* interleaving({
+				path: '/complete',
+				method: 'POST',
+				body: { markdown: 'done' },
+			})
+			expect([created, ...(yield* Ref.get(statuses))]).toEqual([202, 202])
+			expect(yield* Ref.get(sent)).toEqual(['CreateMessage', 'PresentOutcome'])
+			const deliveries = yield* Ref.get(handedOff)
+			expect(deliveries).toHaveLength(2)
+			expect(deliveries[1]?.deliveryId === first.deliveryId).toBe(false)
+			expect(yield* call(first, { path: '', method: 'GET' })).toEqual(200)
+			const left = yield* alarm.scheduledAt
+			expect(left === null || left > (yield* Clock.currentTimeMillis)).toBe(true)
+		}),
+)
+
+it.effect(
+	'ChannelsCloudflare delivery API: activity accepted while an earlier output is being sent runs in the same alarm',
+	({ expect }) =>
+		Effect.gen(function* () {
+			const { created, statuses, sent, handedOff } = yield* interleaving({
+				path: '/activity',
+				method: 'PUT',
+				body: { activity: { _tag: 'Working', message: 'Running tests' } },
+			})
+			expect([created, ...(yield* Ref.get(statuses))]).toEqual([202, 202])
+			expect(yield* Ref.get(sent)).toEqual(['CreateMessage', 'SetActivity'])
+			expect(yield* Ref.get(handedOff)).toHaveLength(1)
 		}),
 )

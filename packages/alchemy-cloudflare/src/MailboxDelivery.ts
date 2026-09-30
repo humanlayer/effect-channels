@@ -13,6 +13,7 @@ import { Clock, Context, Effect, Layer, Predicate, Schema } from 'effect'
 import type { DeliveryRequest, DeliveryResponse } from './DeliveryControl'
 import { DurableMailboxState, emptyMailboxState, mailboxStateKey } from './MailboxState'
 import { MailboxStorage } from './MailboxStorage'
+import { writeMailboxState } from './MailboxTransaction'
 
 const unavailable = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
 	effect.pipe(
@@ -56,7 +57,10 @@ export const makeDeliverFromDurableObjectStorage = Effect.gen(function* () {
 				const deliveries = Predicate.isNotUndefined(admission.interrupt)
 					? requestDeliveryInterrupt(current.deliveries, now)
 					: current.deliveries
-				/** A mailbox with an active delivery is woken by that delivery ending, not by new events. */
+				/**
+				 * A mailbox with an active delivery is woken by that delivery ending, not by new events. Its
+				 * alarm is still put back to `readyAt`, so an event reaches a mailbox that lost its alarm.
+				 */
 				const wakesMailbox = Predicate.isNull(deliveries.active)
 				const next = DurableMailboxState.make({
 					...current,
@@ -65,8 +69,7 @@ export const makeDeliverFromDurableObjectStorage = Effect.gen(function* () {
 					deliveries: wakesMailbox ? { ...deliveries, readyAt: now } : deliveries,
 				})
 				yield* transaction.put(eventKey, current.nextSequence)
-				yield* transaction.put(mailboxStateKey, next)
-				if (wakesMailbox) yield* transaction.setAlarm(now)
+				yield* writeMailboxState(transaction, next)
 				return { accepted: true }
 			}),
 		)

@@ -116,7 +116,7 @@ export const preparation = (callback: string) =>
 		callback,
 		presentationVersion: 1,
 		destination: { thread: 'thread-1' },
-		supportedOperations: ['CreateMessage'],
+		supportedOperations: ['PresentOutcome', 'AddExternalLink', 'CreateMessage'],
 	})
 
 export const mailboxBackendContract = <E>(

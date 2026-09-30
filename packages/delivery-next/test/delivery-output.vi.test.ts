@@ -13,6 +13,7 @@ import {
 	DeliveryControlBackend,
 	DeliveryOutputApplied,
 	DeliveryOutputFailed,
+	ExternalLink,
 	MailboxDelivery,
 	MailboxProcessing,
 	MailboxProcessingLive,
@@ -56,11 +57,16 @@ const handingOffDispatcher = (input: {
 								callback: 'onEvent',
 								presentationVersion: 1,
 								destination: { thread: 'thread-1' },
-								supportedOperations: [],
+								supportedOperations: ['PresentOutcome'],
 							}),
 						)
 					}
-					yield* execution.context.handoff()
+					/** An unprepared delivery hands off with a link, the one output it can still owe. */
+					yield* execution.context.handoff(
+						input.prepare
+							? undefined
+							: { links: [ExternalLink.make({ label: 'Run', url: 'https://example.com/run/1' })] },
+					)
 					yield* Queue.offer(input.deliveries, {
 						deliveryId: execution.deliveryId,
 						accessToken: Redacted.value(execution.context.accessToken),
@@ -165,7 +171,13 @@ describe('delivery output processing', () => {
 				expect(retired.stage).toBe('Retired')
 				expect(retired.outcome?._tag).toBe('Completed')
 				expect(retired.output).toEqual([
-					{ operationId: 'outcome', kind: 'PresentOutcome', state: 'Failed', attempts: 3 },
+					{
+						operationId: 'outcome',
+						kind: 'PresentOutcome',
+						state: 'Failed',
+						attempts: 3,
+						hadAmbiguousAttempt: false,
+					},
 				])
 				expect(yield* Ref.get(callbacks)).toBe(1)
 			}).pipe(Effect.provide(layer))
@@ -200,19 +212,36 @@ describe('delivery output processing', () => {
 		}),
 	)
 
-	it.effect('fails the output of a delivery that was never prepared, without calling the provider', ({ expect }) =>
-		Effect.gen(function* () {
-			const script = yield* Ref.make<ReadonlyArray<'applied' | 'retryable' | 'permanent'>>([])
-			const { deliveries, attempts, layer } = yield* setup({
-				prepare: false,
-				output: (attempts) => ProviderOutputDispatcherLive([scriptedProcessor(attempts, script)]),
-			})
-			yield* Effect.gen(function* () {
-				const { status } = yield* handOffAndComplete(deliveries)
-				yield* processReady
-				expect((yield* status).stage).toBe('Retired')
-				expect(yield* Queue.size(attempts)).toBe(0)
-			}).pipe(Effect.provide(layer))
-		}),
+	it.effect(
+		'a delivery that was never prepared takes no result, and fails its output without calling the provider',
+		({ expect }) =>
+			Effect.gen(function* () {
+				const script = yield* Ref.make<ReadonlyArray<'applied' | 'retryable' | 'permanent'>>([])
+				const { deliveries, attempts, layer } = yield* setup({
+					prepare: false,
+					output: (attempts) => ProviderOutputDispatcherLive([scriptedProcessor(attempts, script)]),
+				})
+				yield* Effect.gen(function* () {
+					yield* (yield* MailboxDelivery).deliver(admission)
+					yield* processReady
+					const delivery = yield* Queue.take(deliveries)
+					const reference = Option.getOrThrow(parseDeliveryId(delivery.deliveryId))
+					const control = yield* DeliveryControlBackend
+					const refused = yield* control
+						.applyDeliveryMutation({
+							reference,
+							accessToken: delivery.accessToken,
+							mutation: CompleteDelivery.make({}),
+						})
+						.pipe(Effect.flip)
+					expect(refused).toMatchObject({ _tag: 'DeliveryOperationUnsupported', operation: 'PresentOutcome' })
+					yield* processReady
+					const status = yield* control.readDeliveryStatus({ reference, accessToken: delivery.accessToken })
+					expect(status.output.map(({ kind, state }) => `${kind}:${state}`)).toEqual([
+						'AddExternalLink:Failed',
+					])
+					expect(yield* Queue.size(attempts)).toBe(0)
+				}).pipe(Effect.provide(layer))
+			}),
 	)
 })

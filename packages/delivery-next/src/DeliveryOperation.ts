@@ -13,9 +13,11 @@
  *                        └── not retryable, or out of attempts ──▶ Failed
  * ```
  */
-import { Schema } from 'effect'
+import { Effect, Match, Predicate, Schema } from 'effect'
 
+import { SetActivity } from './DeliveryActivity'
 import { AddExternalLink } from './DeliveryLink'
+import { CreateMessage, DeleteMessage, MessageId, UpdateMessage } from './DeliveryMessage'
 import { PresentOutcome } from './DeliveryOutcome'
 import { Timestamp } from './MailboxPolicy'
 
@@ -27,7 +29,14 @@ export const DeliveryOperationId = Schema.NonEmptyString.check(
 export type DeliveryOperationId = typeof DeliveryOperationId.Type
 
 /** Provider output a delivery owes. */
-export const DeliveryOutputOperation = Schema.Union([PresentOutcome, AddExternalLink])
+export const DeliveryOutputOperation = Schema.Union([
+	PresentOutcome,
+	AddExternalLink,
+	CreateMessage,
+	UpdateMessage,
+	DeleteMessage,
+	SetActivity,
+])
 export type DeliveryOutputOperation = typeof DeliveryOutputOperation.Type
 
 /**
@@ -61,22 +70,54 @@ export const DeliveryOperation = Schema.Struct({
 })
 export type DeliveryOperation = typeof DeliveryOperation.Type
 
-/** What a remote worker may read about one operation. */
+/**
+ * What a remote worker may read about one operation.
+ *
+ * @property messageId - the message a message operation acts on
+ * @property hadAmbiguousAttempt - an attempt's lease ran out, so the provider may have applied it more than once
+ */
 export const DeliveryOutputStatus = Schema.Struct({
 	operationId: DeliveryOperationId,
-	kind: Schema.Literals(['PresentOutcome', 'AddExternalLink']),
+	kind: Schema.Literals([
+		'PresentOutcome',
+		'AddExternalLink',
+		'CreateMessage',
+		'UpdateMessage',
+		'DeleteMessage',
+		'SetActivity',
+	]),
+	messageId: Schema.optionalKey(MessageId),
 	state: Schema.Literals(['Pending', 'Delivering', 'Delivered', 'Failed']),
 	attempts: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+	/** Stores written before this field existed read it as false. */
+	hadAmbiguousAttempt: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
 })
 export type DeliveryOutputStatus = typeof DeliveryOutputStatus.Type
 
-export const deliveryOutputStatus = (operation: DeliveryOperation) =>
-	DeliveryOutputStatus.make({
+/** The message a saved operation acts on, when it acts on one. */
+export const operationMessageId = (operation: DeliveryOutputOperation): MessageId | undefined =>
+	Match.value(operation).pipe(
+		Match.tagsExhaustive({
+			PresentOutcome: () => undefined,
+			AddExternalLink: () => undefined,
+			SetActivity: () => undefined,
+			CreateMessage: ({ messageId }) => messageId,
+			UpdateMessage: ({ messageId }) => messageId,
+			DeleteMessage: ({ messageId }) => messageId,
+		}),
+	)
+
+export const deliveryOutputStatus = (operation: DeliveryOperation) => {
+	const status = {
 		operationId: operation.operationId,
 		kind: operation.operation._tag,
 		state: operation.state._tag,
 		attempts: operation.attempt,
-	})
+		hadAmbiguousAttempt: operation.hadAmbiguousAttempt,
+	}
+	const messageId = operationMessageId(operation.operation)
+	return DeliveryOutputStatus.make(Predicate.isUndefined(messageId) ? status : { ...status, messageId })
+}
 
 /** Whether an operation still needs a provider. */
 export const isUnsettledOperation = (operation: DeliveryOperation) =>

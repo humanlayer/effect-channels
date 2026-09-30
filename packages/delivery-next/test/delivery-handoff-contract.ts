@@ -13,14 +13,21 @@ import {
 	AddDeliveryLink,
 	BatchId,
 	CompleteDelivery,
+	CreateDeliveryMessage,
+	DeleteDeliveryMessage,
 	DELIVERY_RETENTION_MS,
 	DeliveryAdmission,
 	DeliveryControlBackend,
 	DeliveryOutcome,
 	DeliveryOutputSettlement,
 	ExternalLink,
+	DeliveryActivity,
 	FailDelivery,
 	MailboxDelivery,
+	MessageId,
+	PreparedDeliveryInvocation,
+	SetDeliveryActivity,
+	UpdateDeliveryMessage,
 	MailboxProcessingBackend,
 	OutputReadyMailbox,
 	RecoverableMailbox,
@@ -104,14 +111,23 @@ const sendOutput = Effect.gen(function* () {
 	return claim
 })
 
+/** Claim the one waiting batch and prepare it, as a provider does before its callback runs. */
+const claimPreparedWith = (prepared: PreparedDeliveryInvocation) =>
+	Effect.gen(function* () {
+		const claim = yield* claimAll(yield* findWaiting)
+		yield* (yield* MailboxProcessingBackend).prepareDelivery({
+			mailboxKey: claim.mailboxKey,
+			claimId: claim.claimId,
+			prepared,
+		})
+		return claim
+	})
+
+const claimPrepared = claimPreparedWith(preparation('onNewMention'))
+
 /** Claim the one waiting batch, prepare it, and hand it off. */
 const claimAndHandOff = Effect.gen(function* () {
-	const claim = yield* claimAll(yield* findWaiting)
-	yield* (yield* MailboxProcessingBackend).prepareDelivery({
-		mailboxKey: claim.mailboxKey,
-		claimId: claim.claimId,
-		prepared: preparation('onNewMention'),
-	})
+	const claim = yield* claimPrepared
 	yield* handOff(claim)
 	return claim
 })
@@ -123,6 +139,43 @@ const waitingDelivery = Effect.gen(function* () {
 	yield* settle(claim, 'completed')
 	return claim
 })
+
+/** A destination that supports the whole message lifecycle. */
+const messagePreparation = PreparedDeliveryInvocation.make({
+	callback: 'onNewMention',
+	presentationVersion: 1,
+	destination: { thread: 'thread-1' },
+	supportedOperations: ['PresentOutcome', 'AddExternalLink', 'CreateMessage', 'UpdateMessage', 'DeleteMessage', 'SetActivity'],
+})
+
+/** A delivery whose destination supports messages, handed off, whose callback has returned. */
+const messageDelivery = Effect.gen(function* () {
+	yield* deliver('a')
+	const claim = yield* claimPreparedWith(messagePreparation)
+	yield* handOff(claim)
+	yield* settle(claim, 'completed')
+	return claim
+})
+
+const progress = MessageId.make('progress')
+const createProgress = (markdown: string) => CreateDeliveryMessage.make({ messageId: progress, markdown })
+const updateProgress = (markdown: string) => UpdateDeliveryMessage.make({ messageId: progress, markdown })
+const deleteProgress = DeleteDeliveryMessage.make({ messageId: progress })
+const working = (message: string) =>
+	SetDeliveryActivity.make({ activity: DeliveryActivity.cases.Working.make({ message }) })
+const idle = SetDeliveryActivity.make({ activity: DeliveryActivity.cases.Idle.make({}) })
+
+/** A delivery prepared for a destination that supports only `supportedOperations`, handed off and waiting. */
+const deliveryFor = (supportedOperations: PreparedDeliveryInvocation['supportedOperations']) =>
+	Effect.gen(function* () {
+		yield* deliver('a')
+		const claim = yield* claimPreparedWith(PreparedDeliveryInvocation.make({ ...messagePreparation, supportedOperations }))
+		yield* handOff(claim)
+		yield* settle(claim, 'completed')
+		return claim
+	})
+
+const postedReceipt = (ts: string) => DeliveryOutputSettlement.cases.Applied.make({ receipt: { ts } })
 
 export const deliveryHandoffContract = <E>(storeName: string, makeEmptyStore: () => Layer.Layer<HandoffStore, E>) => {
 	const contract = <TestError>(name: string, test: Effect.Effect<void, TestError, HandoffStore>) =>
@@ -136,7 +189,7 @@ export const deliveryHandoffContract = <E>(storeName: string, makeEmptyStore: ()
 			expect((yield* status(claim)).stage).toEqual('ExternalCleaning')
 			yield* settle(claim, 'completed')
 			expect((yield* status(claim)).stage).toEqual('ExternalWaiting')
-			expect((yield* status(claim)).supportedOperations).toEqual(['CreateMessage'])
+			expect((yield* status(claim)).supportedOperations).toEqual(['PresentOutcome', 'AddExternalLink', 'CreateMessage'])
 			yield* deliver('follow-up')
 			yield* TestClock.adjust(60 * leaseMs)
 			expect(yield* findReady).toEqual([])
@@ -159,7 +212,7 @@ export const deliveryHandoffContract = <E>(storeName: string, makeEmptyStore: ()
 			yield* finish(claim, CompleteDelivery.make({ awaitingInput: { options: ['staging', 'production'] } }))
 			yield* finish(claim, CompleteDelivery.make({ awaitingInput: { options: ['staging', 'production'] } }))
 			expect((yield* status(claim)).output).toEqual([
-				{ operationId: 'outcome', kind: 'PresentOutcome', state: 'Pending', attempts: 0 },
+				{ operationId: 'outcome', kind: 'PresentOutcome', state: 'Pending', attempts: 0, hadAmbiguousAttempt: false },
 			])
 			const output = yield* sendOutput
 			expect(output.operationId).toEqual('outcome')
@@ -170,7 +223,7 @@ export const deliveryHandoffContract = <E>(storeName: string, makeEmptyStore: ()
 			expect(output.provider).toEqual('example')
 			expect(output.prepared).toEqual(preparation('onNewMention'))
 			expect((yield* status(claim)).output).toEqual([
-				{ operationId: 'outcome', kind: 'PresentOutcome', state: 'Delivered', attempts: 1 },
+				{ operationId: 'outcome', kind: 'PresentOutcome', state: 'Delivered', attempts: 1, hadAmbiguousAttempt: false },
 			])
 		}),
 	)
@@ -255,7 +308,7 @@ export const deliveryHandoffContract = <E>(storeName: string, makeEmptyStore: ()
 			const retired = yield* status(claim)
 			expect(retired.stage).toEqual('Retired')
 			expect(retired.outcome).toEqual(DeliveryOutcome.cases.Completed.make({}))
-			expect(retired.output).toEqual([{ operationId: 'outcome', kind: 'PresentOutcome', state: 'Failed', attempts: 1 }])
+			expect(retired.output).toEqual([{ operationId: 'outcome', kind: 'PresentOutcome', state: 'Failed', attempts: 1, hadAmbiguousAttempt: false }])
 		}),
 	)
 
@@ -285,7 +338,7 @@ export const deliveryHandoffContract = <E>(storeName: string, makeEmptyStore: ()
 		'keeps a result that arrives before handoff, and sends its output once the callback returns',
 		Effect.gen(function* () {
 			yield* deliver('a')
-			const claim = yield* claimAll(yield* findWaiting)
+			const claim = yield* claimPrepared
 			expect((yield* finish(claim)).status).toEqual('accepted')
 			expect((yield* status(claim)).stage).toEqual('Finishing')
 			expect(Option.isNone(yield* claimOutput)).toEqual(true)
@@ -331,7 +384,7 @@ export const deliveryHandoffContract = <E>(storeName: string, makeEmptyStore: ()
 		'a lease that runs out after a result sends the output without running the callback again',
 		Effect.gen(function* () {
 			yield* deliver('a')
-			const claim = yield* claimAll(yield* findWaiting)
+			const claim = yield* claimPrepared
 			yield* finish(claim)
 			yield* TestClock.adjust(leaseMs)
 			expect(Option.isNone(yield* claimFrozen)).toEqual(true)
@@ -345,7 +398,7 @@ export const deliveryHandoffContract = <E>(storeName: string, makeEmptyStore: ()
 		'a result that arrives while waiting to retry sends its output instead of retrying',
 		Effect.gen(function* () {
 			yield* deliver('a')
-			const claim = yield* claimAll(yield* findWaiting)
+			const claim = yield* claimPrepared
 			yield* settle(claim, { retryAfterMs: 5_000 })
 			yield* finish(claim)
 			expect(yield* findReady).toEqual([OutputReadyMailbox.make({ mailboxKey })])
@@ -390,7 +443,7 @@ export const deliveryHandoffContract = <E>(storeName: string, makeEmptyStore: ()
 		'a delivery that finished without handoff takes no remote result and sends nothing',
 		Effect.gen(function* () {
 			yield* deliver('a')
-			const claim = yield* claimAll(yield* findWaiting)
+			const claim = yield* claimPrepared
 			yield* settle(claim, 'completed')
 			expect((yield* status(claim)).stage).toEqual('Retired')
 			expect((yield* status(claim)).output).toEqual([])
@@ -430,7 +483,7 @@ export const deliveryHandoffContract = <E>(storeName: string, makeEmptyStore: ()
 		Effect.gen(function* () {
 			const delivery = yield* MailboxDelivery
 			yield* delivery.deliver(DeliveryAdmission.make({ ...event('stop'), interrupt: true }))
-			const claim = yield* claimAll(yield* findWaiting)
+			const claim = yield* claimPrepared
 			expect((yield* status(claim)).interruptRequested).toEqual(false)
 		}),
 	)
@@ -452,7 +505,7 @@ export const deliveryHandoffContract = <E>(storeName: string, makeEmptyStore: ()
 		'saves each new link given at handoff once, and sends it after the callback returns',
 		Effect.gen(function* () {
 			yield* deliver('a')
-			const claim = yield* claimAll(yield* findWaiting)
+			const claim = yield* claimPrepared
 			const run = link('https://example.com/run/1')
 			yield* handOff(claim, [run, run, link('https://example.com/run/2')])
 			yield* handOff(claim, [link('https://example.com/run/3')])
@@ -494,7 +547,7 @@ export const deliveryHandoffContract = <E>(storeName: string, makeEmptyStore: ()
 		'holds output while the callback runs, and sends it before a local delivery retires',
 		Effect.gen(function* () {
 			yield* deliver('a')
-			const claim = yield* claimAll(yield* findWaiting)
+			const claim = yield* claimPrepared
 			yield* apply(claim, AddDeliveryLink.make({ link: link('https://example.com/run/1') }))
 			expect(Option.isNone(yield* claimOutput)).toEqual(true)
 			yield* deliver('b')
@@ -504,6 +557,281 @@ export const deliveryHandoffContract = <E>(storeName: string, makeEmptyStore: ()
 			yield* sendOutput
 			expect((yield* status(claim)).stage).toEqual('Retired')
 			expect((yield* findWaiting).waiting.count).toEqual(1)
+		}),
+	)
+
+	contract(
+		'runs a message\'s create, update, and delete in order, handing later changes the create\'s receipt',
+		Effect.gen(function* () {
+			const claim = yield* messageDelivery
+			expect((yield* apply(claim, createProgress('Running tests…'))).status).toEqual('accepted')
+			expect(yield* findReady).toEqual([OutputReadyMailbox.make({ mailboxKey })])
+			expect((yield* apply(claim, updateProgress('Tests passed.'))).status).toEqual('accepted')
+			expect((yield* apply(claim, deleteProgress)).status).toEqual('accepted')
+			expect((yield* status(claim)).output).toEqual([
+				{ operationId: 'message-1', kind: 'CreateMessage', messageId: progress, state: 'Pending', attempts: 0, hadAmbiguousAttempt: false },
+				{ operationId: 'message-2', kind: 'UpdateMessage', messageId: progress, state: 'Pending', attempts: 0, hadAmbiguousAttempt: false },
+				{ operationId: 'message-3', kind: 'DeleteMessage', messageId: progress, state: 'Pending', attempts: 0, hadAmbiguousAttempt: false },
+			])
+
+			const create = Option.getOrThrow(yield* claimOutput)
+			expect(create.operation).toEqual({ _tag: 'CreateMessage', messageId: progress, markdown: 'Running tests…' })
+			expect(create.messageReference).toBeUndefined()
+			expect(Option.isNone(yield* claimOutput)).toEqual(true)
+			yield* settleOutput(create, postedReceipt('1'))
+
+			const update = Option.getOrThrow(yield* claimOutput)
+			expect(update.operation).toEqual({ _tag: 'UpdateMessage', messageId: progress, markdown: 'Tests passed.' })
+			expect(update.messageReference).toEqual({ ts: '1' })
+			yield* settleOutput(update)
+			const deletion = yield* sendOutput
+			expect(deletion.operation).toEqual({ _tag: 'DeleteMessage', messageId: progress })
+			expect(deletion.messageReference).toEqual({ ts: '1' })
+			expect(yield* findReady).toEqual([])
+			expect((yield* status(claim)).stage).toEqual('ExternalWaiting')
+		}),
+	)
+
+	contract(
+		'replays repeated message changes, and refuses a reused ID with other text or a change to a removed message',
+		Effect.gen(function* () {
+			const claim = yield* messageDelivery
+			yield* apply(claim, createProgress('a'))
+			expect((yield* apply(claim, createProgress('a'))).status).toEqual('already_recorded')
+			expect((yield* apply(claim, createProgress('b')).pipe(Effect.flip))._tag).toEqual('DeliveryMessageConflict')
+			expect((yield* apply(claim, updateProgress('a'))).status).toEqual('already_recorded')
+			expect((yield* apply(claim, updateProgress('b'))).status).toEqual('accepted')
+			expect((yield* apply(claim, updateProgress('b'))).status).toEqual('already_recorded')
+			expect((yield* apply(claim, deleteProgress)).status).toEqual('accepted')
+			expect((yield* apply(claim, deleteProgress)).status).toEqual('already_recorded')
+			expect((yield* apply(claim, updateProgress('c')).pipe(Effect.flip))._tag).toEqual('DeliveryMessageDeleted')
+			expect((yield* status(claim)).output.map(({ kind }) => kind)).toEqual([
+				'CreateMessage',
+				'UpdateMessage',
+				'DeleteMessage',
+			])
+		}),
+	)
+
+	contract(
+		'refuses changes to a message never created, and fails a change whose message could not be posted',
+		Effect.gen(function* () {
+			const claim = yield* messageDelivery
+			const unknown = UpdateDeliveryMessage.make({ messageId: MessageId.make('unknown'), markdown: 'x' })
+			expect((yield* apply(claim, unknown).pipe(Effect.flip))._tag).toEqual('DeliveryMessageNotFound')
+			yield* apply(claim, createProgress('a'))
+			yield* apply(claim, updateProgress('b'))
+			const create = Option.getOrThrow(yield* claimOutput)
+			yield* settleOutput(create, DeliveryOutputSettlement.cases.Failed.make({ safeCode: 'slack_post_failed' }))
+			const update = Option.getOrThrow(yield* claimOutput)
+			expect(update.operation._tag).toEqual('UpdateMessage')
+			expect(update.messageReference).toBeUndefined()
+			expect((yield* apply(claim, updateProgress('c')).pipe(Effect.flip))._tag).toEqual('DeliveryMessageNotFound')
+			expect((yield* apply(claim, deleteProgress).pipe(Effect.flip))._tag).toEqual('DeliveryMessageNotFound')
+		}),
+	)
+
+	contract(
+		'refuses an operation the destination does not support, and saves nothing',
+		Effect.gen(function* () {
+			const claim = yield* waitingDelivery
+			expect((yield* apply(claim, createProgress('a'))).status).toEqual('accepted')
+			const refused = yield* apply(claim, updateProgress('b')).pipe(Effect.flip)
+			expect(refused).toMatchObject({ _tag: 'DeliveryOperationUnsupported', operation: 'UpdateMessage' })
+			expect((yield* status(claim)).output.map(({ kind }) => kind)).toEqual(['CreateMessage'])
+
+			yield* deliver('b')
+			yield* sendOutput
+			yield* finish(claim)
+			yield* sendOutput
+			const unprepared = yield* claimAll(yield* findWaiting)
+			const refusedUnprepared = yield* apply(unprepared, createProgress('a')).pipe(Effect.flip)
+			expect(refusedUnprepared).toMatchObject({ _tag: 'DeliveryOperationUnsupported', operation: 'CreateMessage' })
+		}),
+	)
+
+	contract(
+		'refuses new message changes once the delivery ends, and still replays saved ones until it retires',
+		Effect.gen(function* () {
+			const claim = yield* messageDelivery
+			yield* apply(claim, createProgress('a'))
+			yield* finish(claim)
+			expect((yield* apply(claim, createProgress('a'))).status).toEqual('already_recorded')
+			expect((yield* apply(claim, updateProgress('b')).pipe(Effect.flip))._tag).toEqual('DeliveryClosed')
+			expect((yield* apply(claim, deleteProgress).pipe(Effect.flip))._tag).toEqual('DeliveryClosed')
+			const other = CreateDeliveryMessage.make({ messageId: MessageId.make('other'), markdown: 'x' })
+			expect((yield* apply(claim, other).pipe(Effect.flip))._tag).toEqual('DeliveryClosed')
+			yield* settleOutput(Option.getOrThrow(yield* claimOutput), postedReceipt('1'))
+			yield* sendOutput
+			expect((yield* status(claim)).stage).toEqual('Retired')
+			expect((yield* apply(claim, deleteProgress).pipe(Effect.flip))._tag).toEqual('DeliveryClosed')
+		}),
+	)
+
+	contract(
+		'posts a create again after its lease runs out, shows the ambiguity, and updates the message that settled',
+		Effect.gen(function* () {
+			const claim = yield* messageDelivery
+			yield* apply(claim, createProgress('a'))
+			yield* apply(claim, updateProgress('b'))
+			const first = Option.getOrThrow(yield* claimOutput)
+			yield* TestClock.adjust(leaseMs)
+			const second = Option.getOrThrow(yield* claimOutput)
+			expect(second.operationId).toEqual(first.operationId)
+			expect(second.hadAmbiguousAttempt).toEqual(true)
+			expect((yield* settleOutput(first, postedReceipt('1')).pipe(Effect.flip))._tag).toEqual(
+				'MailboxProcessingClaimLost',
+			)
+			yield* settleOutput(second, postedReceipt('2'))
+			expect((yield* status(claim)).output[0]).toMatchObject({
+				kind: 'CreateMessage',
+				state: 'Delivered',
+				attempts: 2,
+				hadAmbiguousAttempt: true,
+			})
+			const update = Option.getOrThrow(yield* claimOutput)
+			expect(update.messageReference).toEqual({ ts: '2' })
+		}),
+	)
+
+	contract(
+		'refuses a link or a result the destination cannot show, and saves nothing',
+		Effect.gen(function* () {
+			const claim = yield* deliveryFor(['PresentOutcome'])
+			const link = AddDeliveryLink.make({ link: ExternalLink.make({ label: 'Run', url: 'https://example.com/run/1' }) })
+			const refused = yield* apply(claim, link).pipe(Effect.flip)
+			expect(refused).toMatchObject({ _tag: 'DeliveryOperationUnsupported', operation: 'AddExternalLink' })
+			const activity = yield* apply(claim, working('x')).pipe(Effect.flip)
+			expect(activity).toMatchObject({ _tag: 'DeliveryOperationUnsupported', operation: 'SetActivity' })
+			expect((yield* status(claim)).output).toEqual([])
+			expect(yield* findReady).toEqual([])
+			expect((yield* finish(claim)).status).toEqual('accepted')
+		}),
+	)
+
+	contract(
+		'refuses a result for a destination that cannot present it',
+		Effect.gen(function* () {
+			const claim = yield* deliveryFor([])
+			const refused = yield* finish(claim).pipe(Effect.flip)
+			expect(refused).toMatchObject({ _tag: 'DeliveryOperationUnsupported', operation: 'PresentOutcome' })
+			const unchanged = yield* status(claim)
+			expect(unchanged.stage).toEqual('ExternalWaiting')
+			expect(unchanged.outcome).toBeUndefined()
+		}),
+	)
+
+	contract(
+		'keeps only the latest desired activity: a waiting SetActivity is replaced, one being sent is followed',
+		Effect.gen(function* () {
+			const claim = yield* messageDelivery
+			expect((yield* apply(claim, idle)).status).toEqual('already_recorded')
+			expect((yield* status(claim)).output).toEqual([])
+			expect((yield* apply(claim, working('Reading logs'))).status).toEqual('accepted')
+			expect(yield* findReady).toEqual([OutputReadyMailbox.make({ mailboxKey })])
+			expect((yield* apply(claim, working('Running tests'))).status).toEqual('accepted')
+			expect((yield* apply(claim, working('Running tests'))).status).toEqual('already_recorded')
+			expect((yield* status(claim)).activity).toEqual(DeliveryActivity.cases.Working.make({ message: 'Running tests' }))
+			expect((yield* status(claim)).output.map(({ operationId }) => operationId)).toEqual(['activity-1'])
+
+			const first = Option.getOrThrow(yield* claimOutput)
+			expect(first.operation).toEqual({ _tag: 'SetActivity', activity: { _tag: 'Working', message: 'Running tests' } })
+			yield* apply(claim, working('Fixing'))
+			yield* apply(claim, idle)
+			yield* settleOutput(first)
+			const second = yield* sendOutput
+			expect(second.operationId).toEqual('activity-2')
+			expect(second.operation).toEqual({ _tag: 'SetActivity', activity: { _tag: 'Idle' } })
+			expect((yield* status(claim)).activity).toEqual(DeliveryActivity.cases.Idle.make({}))
+			expect(yield* findReady).toEqual([])
+		}),
+	)
+
+	contract(
+		'a retried or lost SetActivity is sent again with the latest activity',
+		Effect.gen(function* () {
+			const claim = yield* messageDelivery
+			yield* apply(claim, working('a'))
+			const first = Option.getOrThrow(yield* claimOutput)
+			const now = yield* Clock.currentTimeMillis
+			yield* settleOutput(first, DeliveryOutputSettlement.cases.Retry.make({ readyAt: Timestamp.make(now + 5_000) }))
+			yield* apply(claim, working('b'))
+			expect((yield* status(claim)).output.map(({ operationId }) => operationId)).toEqual(['activity-1'])
+			yield* TestClock.adjust(5_000)
+			const retried = Option.getOrThrow(yield* claimOutput)
+			expect(retried.attempt).toEqual(2)
+			expect(retried.operation).toEqual({ _tag: 'SetActivity', activity: { _tag: 'Working', message: 'b' } })
+
+			yield* TestClock.adjust(leaseMs)
+			const recovered = Option.getOrThrow(yield* claimOutput)
+			expect(recovered.operationId).toEqual('activity-1')
+			expect(recovered.hadAmbiguousAttempt).toEqual(true)
+			yield* settleOutput(recovered)
+			expect((yield* status(claim)).output[0]).toMatchObject({ state: 'Delivered', attempts: 3, hadAmbiguousAttempt: true })
+		}),
+	)
+
+	contract(
+		'a result clears the activity: status shows Idle, its outcome asks the provider to clear, and new activity is refused',
+		Effect.gen(function* () {
+			const claim = yield* messageDelivery
+			yield* apply(claim, working('Running tests'))
+			yield* sendOutput
+			yield* finish(claim)
+			expect((yield* status(claim)).activity).toEqual(DeliveryActivity.cases.Idle.make({}))
+			expect((yield* apply(claim, working('Running tests'))).status).toEqual('already_recorded')
+			expect((yield* apply(claim, working('More')).pipe(Effect.flip))._tag).toEqual('DeliveryClosed')
+			const outcome = yield* sendOutput
+			expect(outcome.operation._tag).toEqual('PresentOutcome')
+			expect(outcome.clearActivity).toEqual(true)
+			expect((yield* status(claim)).stage).toEqual('Retired')
+			expect((yield* apply(claim, idle).pipe(Effect.flip))._tag).toEqual('DeliveryClosed')
+		}),
+	)
+
+	contract(
+		'a result after Idle, or with no activity, has nothing to clear',
+		Effect.gen(function* () {
+			const claim = yield* messageDelivery
+			yield* apply(claim, working('a'))
+			yield* apply(claim, idle)
+			yield* sendOutput
+			yield* finish(claim)
+			expect((yield* sendOutput).clearActivity).toEqual(false)
+		}),
+	)
+
+	contract(
+		'a result accepted while an earlier output is being sent runs after it, then the delivery retires and the next event runs',
+		Effect.gen(function* () {
+			const claim = yield* messageDelivery
+			yield* apply(claim, createProgress('Summary'))
+			const create = Option.getOrThrow(yield* claimOutput)
+			yield* deliver('follow-up')
+			expect((yield* finish(claim)).status).toEqual('accepted')
+			expect((yield* status(claim)).stage).toEqual('Finishing')
+			yield* settleOutput(create, postedReceipt('1'))
+			expect(yield* findReady).toEqual([OutputReadyMailbox.make({ mailboxKey })])
+			const outcome = yield* sendOutput
+			expect(outcome.operation._tag).toEqual('PresentOutcome')
+			expect((yield* status(claim)).stage).toEqual('Retired')
+			expect((yield* findWaiting).waiting.count).toEqual(1)
+		}),
+	)
+
+	contract(
+		'a message or activity accepted while an earlier output is being sent runs after it',
+		Effect.gen(function* () {
+			const claim = yield* messageDelivery
+			yield* apply(claim, working('a'))
+			const first = Option.getOrThrow(yield* claimOutput)
+			yield* apply(claim, createProgress('Summary'))
+			yield* apply(claim, working('b'))
+			yield* settleOutput(first)
+			expect(yield* findReady).toEqual([OutputReadyMailbox.make({ mailboxKey })])
+			const sent = [yield* sendOutput, yield* sendOutput].map(({ operation }) => operation._tag)
+			expect(sent).toEqual(['CreateMessage', 'SetActivity'])
+			expect(yield* findReady).toEqual([])
 		}),
 	)
 }
@@ -516,7 +844,7 @@ export const handoffUnsupportedContract = <E>(
 	it.effect(`${storeName}: refuses handoff until it supports remote control`, () =>
 		Effect.gen(function* () {
 			yield* deliver('a')
-			const claim = yield* claimAll(yield* findWaiting)
+			const claim = yield* claimPrepared
 			const refused = yield* handOff(claim).pipe(Effect.flip)
 			expect(refused._tag).toEqual('DeliveryHandoffUnsupported')
 			yield* settle(claim, 'completed')

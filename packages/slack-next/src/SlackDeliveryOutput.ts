@@ -5,11 +5,19 @@
  * Slack call:
  *
  * - `PresentOutcome` posts the Markdown to the thread, with any `awaitingInput` options listed after it.
- *   With no Markdown there is nothing to show, so it is applied without a call.
+ *   A post also clears the thread's status line. With no Markdown it only clears the status line, and
+ *   only when the remote worker had set one (`clearActivity`); otherwise it is applied without a call.
+ * - `SetActivity` shows `Working` as the thread's status line (`assistant.threads.setStatus`), and
+ *   clears it for `Idle`.
+ * - `CreateMessage` posts to the thread. Its receipt is the posted message, which later updates and
+ *   deletions of the same message receive back as their reference.
+ * - `UpdateMessage` edits that message with `chat.update`; `DeleteMessage` removes it with `chat.delete`.
+ *   A message already gone counts as deleted.
  * - `AddExternalLink` is applied without a call; Slack has nowhere to show a link for now.
  *
  * A post is at-least-once: when Slack accepts it but the attempt dies before the store saves the
- * result, the next attempt posts again. The attempt then carries `hadAmbiguousAttempt`.
+ * result, the next attempt posts again, and the first post stays in the thread. The attempt then
+ * carries `hadAmbiguousAttempt`, which delivery status shows. Edits and deletions are safe to repeat.
  */
 import {
 	DeliveryOutputApplied,
@@ -39,11 +47,16 @@ export const SlackOutputReceiptJson = Schema.toCodecJson(SlackOutputReceipt)
 const permanentSlackErrors: ReadonlySet<string> = new Set([
 	'account_inactive',
 	'as_user_not_supported',
+	'cant_delete_message',
+	'cant_update_message',
 	'channel_not_found',
+	'compliance_exports_prevent_deletion',
+	'edit_window_closed',
 	'invalid_auth',
 	'invalid_blocks',
 	'invalid_thread_ts',
 	'is_archived',
+	'message_not_found',
 	'missing_scope',
 	'msg_too_long',
 	'no_text',
@@ -98,38 +111,92 @@ export const makeSlackOutputProcessor = Effect.fn('slack.make_output_processor')
 			)
 		}
 
+		/** Log a Slack failure with the operation it belongs to, then report it as retryable or not. */
+		const reportSlackFailure =
+			(message: string, safeCode: string) =>
+			<A>(effect: Effect.Effect<A, SlackApiError>) =>
+				effect.pipe(
+					Effect.tapError((error) =>
+						Effect.logWarning(message, error).pipe(
+							Effect.annotateLogs({ delivery_id: attempt.deliveryId, operation_id: attempt.operationId }),
+						),
+					),
+					Effect.mapError((error) => failed(safeCode, isRetryableSlackApiError(error))),
+				)
+
+		/** Post Markdown to the thread; the receipt is the posted message. */
+		const post = (markdown: string) =>
+			slackApi
+				.postToThread({ thread: destination.thread, content: SlackMarkdownContent.make({ markdown }) })
+				.pipe(
+					reportSlackFailure('Slack output post failed', 'slack_post_failed'),
+					Effect.flatMap(({ ref }) =>
+						Schema.encodeEffect(SlackOutputReceiptJson)(SlackOutputReceipt.make({ message: ref })).pipe(
+							Effect.mapError(() => failed('receipt_unencodable', false)),
+						),
+					),
+					Effect.map((receipt) => DeliveryOutputApplied.make({ receipt })),
+				)
+
+		/** The posted message a reference names. */
+		const postedMessage = (reference: Schema.Json) =>
+			Schema.decodeUnknownEffect(SlackOutputReceiptJson)(reference).pipe(
+				Effect.map(({ message }) => message),
+				Effect.mapError(() => failed('message_reference_invalid', false)),
+			)
+
+		const applied = DeliveryOutputApplied.make({})
+
+		/** Clear the thread's status line. */
+		const clearStatus = slackApi
+			.clearThreadStatus({ thread: destination.thread })
+			.pipe(reportSlackFailure('Slack thread status clear failed', 'slack_status_failed'), Effect.as(applied))
+
 		return yield* Match.value(attempt.operation).pipe(
 			Match.tagsExhaustive({
-				AddExternalLink: () => Effect.succeed(DeliveryOutputApplied.make({})),
-				PresentOutcome: ({ outcome, markdown }) =>
-					Predicate.isUndefined(markdown)
-						? Effect.succeed(DeliveryOutputApplied.make({}))
-						: slackApi
-								.postToThread({
-									thread: destination.thread,
-									content: SlackMarkdownContent.make({
-										markdown: outcomeMarkdown(outcome, markdown),
-									}),
-								})
-								.pipe(
-									Effect.tapError((error) =>
-										Effect.logWarning('Slack output post failed', error).pipe(
-											Effect.annotateLogs({
-												delivery_id: attempt.deliveryId,
-												operation_id: attempt.operationId,
-											}),
-										),
+				AddExternalLink: () => Effect.succeed(applied),
+				PresentOutcome: ({ outcome, markdown, clearActivity }) =>
+					Predicate.isNotUndefined(markdown)
+						? post(outcomeMarkdown(outcome, markdown))
+						: clearActivity
+							? clearStatus
+							: Effect.succeed(applied),
+				SetActivity: ({ activity }) =>
+					Match.value(activity).pipe(
+						Match.tagsExhaustive({
+							Working: ({ message }) =>
+								slackApi
+									.setThreadStatus({ thread: destination.thread, status: message })
+									.pipe(
+										reportSlackFailure('Slack thread status update failed', 'slack_status_failed'),
+										Effect.as(applied),
 									),
-									Effect.mapError((error) =>
-										failed('slack_post_failed', isRetryableSlackApiError(error)),
-									),
-									Effect.flatMap(({ ref }) =>
-										Schema.encodeEffect(SlackOutputReceiptJson)(
-											SlackOutputReceipt.make({ message: ref }),
-										).pipe(Effect.mapError(() => failed('receipt_unencodable', false))),
-									),
-									Effect.map((receipt) => DeliveryOutputApplied.make({ receipt })),
+							Idle: () => clearStatus,
+						}),
+					),
+				CreateMessage: ({ markdown }) => post(markdown),
+				UpdateMessage: ({ markdown, reference }) =>
+					postedMessage(reference).pipe(
+						Effect.flatMap((message) =>
+							slackApi
+								.updateMessage({ message, content: SlackMarkdownContent.make({ markdown }) })
+								.pipe(reportSlackFailure('Slack output update failed', 'slack_update_failed')),
+						),
+						Effect.as(applied),
+					),
+				DeleteMessage: ({ reference }) =>
+					postedMessage(reference).pipe(
+						Effect.flatMap((message) =>
+							slackApi.deleteMessage({ message }).pipe(
+								Effect.catchIf(
+									(error) => error.message === 'message_not_found',
+									() => Effect.logInfo('Slack message was already gone; counting it as deleted'),
 								),
+								reportSlackFailure('Slack output delete failed', 'slack_delete_failed'),
+							),
+						),
+						Effect.as(applied),
+					),
 			}),
 		)
 	})

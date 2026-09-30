@@ -13,8 +13,10 @@
  */
 import { Context, Effect, Layer, Match, Option, Predicate, Redacted, Schema } from 'effect'
 
+import { DeliveryActivity } from './DeliveryActivity'
 import { DeliveryOperationKind, DeliveryStage } from './DeliveryContext'
 import { ExternalLink } from './DeliveryLink'
+import { MessageId } from './DeliveryMessage'
 import { DeliveryOutputStatus } from './DeliveryOperation'
 import { DeliveryOutcome, DeliveryTerminal } from './DeliveryOutcome'
 import { DeliveryId, DeliveryReference, parseDeliveryId } from './DeliveryReference'
@@ -46,8 +48,49 @@ export const AddDeliveryLink = Schema.TaggedStruct('AddDeliveryLink', {
 })
 export type AddDeliveryLink = typeof AddDeliveryLink.Type
 
-/** A change a remote worker asks for. Later phases add message, reaction, activity, and plan changes. */
-export const DeliveryMutation = Schema.Union([CompleteDelivery, FailDelivery, AddDeliveryLink])
+/** The text of a message. Slack refuses an empty one. */
+export const DeliveryMessageMarkdown = Schema.NonEmptyString.check(Schema.isMaxLength(DELIVERY_MARKDOWN_MAX_LENGTH))
+
+/** Post a message named `messageId`. The same request again is a replay; the same ID with other text is a conflict. */
+export const CreateDeliveryMessage = Schema.TaggedStruct('CreateDeliveryMessage', {
+	messageId: MessageId,
+	markdown: DeliveryMessageMarkdown,
+})
+export type CreateDeliveryMessage = typeof CreateDeliveryMessage.Type
+
+/** Replace the text of a message this delivery created. Text it already has is a replay. */
+export const UpdateDeliveryMessage = Schema.TaggedStruct('UpdateDeliveryMessage', {
+	messageId: MessageId,
+	markdown: DeliveryMessageMarkdown,
+})
+export type UpdateDeliveryMessage = typeof UpdateDeliveryMessage.Type
+
+/** Remove a message this delivery created. Removing it again is a replay. */
+export const DeleteDeliveryMessage = Schema.TaggedStruct('DeleteDeliveryMessage', {
+	messageId: MessageId,
+})
+export type DeleteDeliveryMessage = typeof DeleteDeliveryMessage.Type
+
+/** A change to one of the delivery's messages. */
+export const DeliveryMessageMutation = Schema.Union([CreateDeliveryMessage, UpdateDeliveryMessage, DeleteDeliveryMessage])
+export type DeliveryMessageMutation = typeof DeliveryMessageMutation.Type
+
+/** Show what the agent is doing now. The latest request wins; the state already desired is a replay. */
+export const SetDeliveryActivity = Schema.TaggedStruct('SetDeliveryActivity', {
+	activity: DeliveryActivity,
+})
+export type SetDeliveryActivity = typeof SetDeliveryActivity.Type
+
+/** A change a remote worker asks for. Later phases add reaction and plan changes. */
+export const DeliveryMutation = Schema.Union([
+	CompleteDelivery,
+	FailDelivery,
+	AddDeliveryLink,
+	CreateDeliveryMessage,
+	UpdateDeliveryMessage,
+	DeleteDeliveryMessage,
+	SetDeliveryActivity,
+])
 export type DeliveryMutation = typeof DeliveryMutation.Type
 
 /**
@@ -65,12 +108,14 @@ export type DeliveryMutationReceipt = typeof DeliveryMutationReceipt.Type
  * What a remote worker may read about its delivery. Never includes the token or provider IDs.
  *
  * @property outcome - how the remote worker ended the delivery
+ * @property activity - the activity the remote worker last asked for; `Idle` once the delivery has a result
  * @property output - the provider output the delivery owes or has sent. A failed output does not change `outcome`.
  */
 export const DeliveryStatus = Schema.TaggedStruct('DeliveryStatus', {
 	deliveryId: DeliveryId,
 	stage: DeliveryStage,
 	outcome: Schema.optionalKey(DeliveryOutcome),
+	activity: Schema.optionalKey(DeliveryActivity),
 	interruptRequested: Schema.Boolean,
 	supportedOperations: Schema.Array(DeliveryOperationKind),
 	output: Schema.Array(DeliveryOutputStatus),
@@ -92,6 +137,27 @@ export class DeliveryTerminalConflict extends Schema.TaggedError<DeliveryTermina
 /** The delivery has ended, so it takes no new changes. Repeats of changes it already took are still accepted. */
 export class DeliveryClosed extends Schema.TaggedError<DeliveryClosed>()('DeliveryClosed', {}) {}
 
+/** The delivery's destination cannot do this, such as edit a message. Nothing was saved. */
+export class DeliveryOperationUnsupported extends Schema.TaggedError<DeliveryOperationUnsupported>()(
+	'DeliveryOperationUnsupported',
+	{ operation: DeliveryOperationKind },
+) {}
+
+/** The delivery has no message with this ID, or posting it failed, so there is nothing to change. */
+export class DeliveryMessageNotFound extends Schema.TaggedError<DeliveryMessageNotFound>()('DeliveryMessageNotFound', {
+	messageId: MessageId,
+}) {}
+
+/** The message was removed, so it cannot be changed. */
+export class DeliveryMessageDeleted extends Schema.TaggedError<DeliveryMessageDeleted>()('DeliveryMessageDeleted', {
+	messageId: MessageId,
+}) {}
+
+/** A message with this ID was already created with different text. */
+export class DeliveryMessageConflict extends Schema.TaggedError<DeliveryMessageConflict>()('DeliveryMessageConflict', {
+	messageId: MessageId,
+}) {}
+
 /** The store could not be reached. */
 export class DeliveryControlUnavailable extends Schema.TaggedError<DeliveryControlUnavailable>()(
 	'DeliveryControlUnavailable',
@@ -105,6 +171,10 @@ export const DeliveryMutationError = Schema.Union([
 	DeliveryNotFound,
 	DeliveryTerminalConflict,
 	DeliveryClosed,
+	DeliveryOperationUnsupported,
+	DeliveryMessageNotFound,
+	DeliveryMessageDeleted,
+	DeliveryMessageConflict,
 	DeliveryControlUnavailable,
 ])
 export type DeliveryMutationError = typeof DeliveryMutationError.Type

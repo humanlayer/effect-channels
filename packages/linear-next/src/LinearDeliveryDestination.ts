@@ -68,15 +68,17 @@ export const LinearDeliveryPreparation = Schema.Struct({
 })
 export type LinearDeliveryPreparation = typeof LinearDeliveryPreparation.Type
 
+/** `SetActivity` (an ephemeral thought) is left out until Linear has an output processor that shows it. */
 const agentSessionOperations: ReadonlyArray<DeliveryOperationKind> = [
+	'PresentOutcome',
 	'CreateMessage',
 	'SetMessageReaction',
-	'SetActivity',
 	'RenderPlan',
 	'AddExternalLink',
 ]
 
 const issueOperations: ReadonlyArray<DeliveryOperationKind> = [
+	'PresentOutcome',
 	'CreateMessage',
 	'UpdateMessage',
 	'DeleteMessage',

@@ -262,11 +262,11 @@ const pullRequestFrom = (action: string) => ({
 
 const issueRef = { installationId: 100, repositoryId: 200, owner: 'alice', repository: 'project', number: 42 }
 const discussionSupportedOperations: ReadonlyArray<DeliveryOperationKind> = [
+	'PresentOutcome',
 	'CreateMessage',
 	'UpdateMessage',
 	'DeleteMessage',
 	'SetMessageReaction',
-	'SetActivity',
 	'RenderPlan',
 	'AddExternalLink',
 ]

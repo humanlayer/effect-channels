@@ -38,11 +38,13 @@ import {
 	type HandoffOptions,
 } from './DeliveryContext'
 import { ExternalLink } from './DeliveryLink'
-import type { ActiveDelivery } from './DeliveryLifecycle'
+import { activityToClear, sentMessageReference, type ActiveDelivery } from './DeliveryLifecycle'
+import { ProviderDeleteMessage, ProviderMessageReference, ProviderUpdateMessage } from './DeliveryMessage'
 import {
 	DeliveryOperationId,
 	DeliveryOutputOperation,
 	DeliveryOutputSettlement,
+	operationMessageId,
 	type DeliveryOperation,
 } from './DeliveryOperation'
 import {
@@ -63,7 +65,12 @@ import {
 	WaitingEvents,
 	type DeliveryMode,
 } from './MailboxPolicy'
-import { ProviderOutputAttempt, ProviderOutputDispatcher } from './ProviderOutput'
+import {
+	ProviderOutputAttempt,
+	ProviderOutputDispatcher,
+	ProviderPresentOutcome,
+	type ProviderOutputOperation,
+} from './ProviderOutput'
 import {
 	DeliveryAdmissionBatch,
 	processProviderEvent,
@@ -196,6 +203,8 @@ export type ClaimDeliveryOutput = typeof ClaimDeliveryOutput.Type
  * @property claimId - new on every attempt; proves this attempt still owns the operation
  * @property namespace - with `provider`, names the provider that sends the output
  * @property prepared - where the output goes; missing when the provider never prepared the delivery
+ * @property clearActivity - the delivery's last activity was `Working`; its `PresentOutcome` must clear it
+ * @property messageReference - for an update or deletion, the provider's reference to the message; missing when its create failed
  * @property hadAmbiguousAttempt - an earlier attempt's lease ran out, so the provider may already have applied it
  */
 export const ClaimedDeliveryOutput = Schema.Struct({
@@ -207,6 +216,8 @@ export const ClaimedDeliveryOutput = Schema.Struct({
 	prepared: Schema.optionalKey(PreparedDeliveryInvocation),
 	operationId: DeliveryOperationId,
 	operation: DeliveryOutputOperation,
+	messageReference: Schema.optionalKey(ProviderMessageReference),
+	clearActivity: Schema.Boolean,
 	attempt: Schema.Int.check(Schema.isGreaterThan(0)),
 	hadAmbiguousAttempt: Schema.Boolean,
 })
@@ -221,6 +232,11 @@ export const toClaimedDeliveryOutput = (input: {
 }) => {
 	const { active, operation } = input
 	const first = active.admissions[0]
+	const messageId = operationMessageId(operation.operation)
+	const messageReference =
+		Predicate.isUndefined(messageId) || Predicate.isTagged(operation.operation, 'CreateMessage')
+			? undefined
+			: sentMessageReference(active, messageId)
 	const claimed = {
 		mailboxKey: input.mailboxKey,
 		batchId: active.batchId,
@@ -229,11 +245,13 @@ export const toClaimedDeliveryOutput = (input: {
 		provider: first.provider,
 		operationId: operation.operationId,
 		operation: operation.operation,
+		clearActivity: activityToClear(active),
 		attempt: operation.attempt,
 		hadAmbiguousAttempt: operation.hadAmbiguousAttempt,
 	}
+	const withReference = Predicate.isUndefined(messageReference) ? claimed : { ...claimed, messageReference }
 	return ClaimedDeliveryOutput.make(
-		Predicate.isUndefined(active.prepared) ? claimed : { ...claimed, prepared: active.prepared },
+		Predicate.isUndefined(active.prepared) ? withReference : { ...withReference, prepared: active.prepared },
 	)
 }
 
@@ -689,6 +707,29 @@ const outputRetryDelayMs = (attempt: number) =>
 		return Math.round(ceiling / 2 + (ceiling / 2) * (yield* Random.next))
 	})
 
+/**
+ * The operation as its provider receives it. An update or deletion takes the provider's reference to
+ * its message; there is none when the message's create failed, so it cannot be sent.
+ */
+const providerOperation = (claim: ClaimedDeliveryOutput): Option.Option<ProviderOutputOperation> => {
+	const reference = Option.fromUndefinedOr(claim.messageReference)
+	return Match.value(claim.operation).pipe(
+		Match.tagsExhaustive({
+			PresentOutcome: (operation) =>
+				Option.some<ProviderOutputOperation>(
+					ProviderPresentOutcome.make({ ...operation, clearActivity: claim.clearActivity }),
+				),
+			SetActivity: (operation) => Option.some<ProviderOutputOperation>(operation),
+			AddExternalLink: (operation) => Option.some<ProviderOutputOperation>(operation),
+			CreateMessage: (operation) => Option.some<ProviderOutputOperation>(operation),
+			UpdateMessage: ({ messageId, markdown }) =>
+				Option.map(reference, (saved) => ProviderUpdateMessage.make({ messageId, markdown, reference: saved })),
+			DeleteMessage: ({ messageId }) =>
+				Option.map(reference, (saved) => ProviderDeleteMessage.make({ messageId, reference: saved })),
+		}),
+	)
+}
+
 export type ProcessOutputClaimInput = {
 	readonly claim: ClaimedDeliveryOutput
 	readonly maxAttempts: number
@@ -740,7 +781,7 @@ export const processOutputClaim = Effect.fn('delivery.process_output_claim')(fun
 	}
 	const failed = (safeCode: string) => DeliveryOutputSettlement.cases.Failed.make({ safeCode })
 
-	const sendUnderLease = (prepared: PreparedDeliveryInvocation) =>
+	const sendUnderLease = (prepared: PreparedDeliveryInvocation, operation: ProviderOutputOperation) =>
 		Effect.raceFirst(
 			providerOutputDispatcher
 				.process({
@@ -752,7 +793,7 @@ export const processOutputClaim = Effect.fn('delivery.process_output_claim')(fun
 						attempt: claim.attempt,
 						hadAmbiguousAttempt: claim.hadAmbiguousAttempt,
 						prepared,
-						operation: claim.operation,
+						operation,
 					}),
 				})
 				.pipe(
@@ -781,12 +822,15 @@ export const processOutputClaim = Effect.fn('delivery.process_output_claim')(fun
 		)
 
 	yield* Effect.logInfo('Delivery output started').pipe(Effect.annotateLogs(annotations))
+	const operation = providerOperation(claim)
 	const settlement =
 		claim.attempt > maxAttempts
 			? failed('attempts_exhausted')
 			: Predicate.isUndefined(claim.prepared)
 				? failed('destination_missing')
-				: yield* sendUnderLease(claim.prepared)
+				: Option.isNone(operation)
+					? failed('message_not_created')
+					: yield* sendUnderLease(claim.prepared, operation.value)
 	const settledAt = Timestamp.make(yield* Clock.currentTimeMillis)
 	yield* mailboxProcessingBackend.settleDeliveryOutput({
 		mailboxKey: claim.mailboxKey,

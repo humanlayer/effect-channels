@@ -5,7 +5,17 @@ import { Effect, FileSystem, Layer, Option, Path, Redacted } from 'effect'
 import { Etag, HttpPlatform, type HttpServerRequest } from 'effect/unstable/http'
 import { HttpApiBuilder } from 'effect/unstable/httpapi'
 
-import { AddDeliveryLink, CompleteDelivery, DeliveryControl, FailDelivery } from './DeliveryControl'
+import {
+	AddDeliveryLink,
+	CompleteDelivery,
+	CreateDeliveryMessage,
+	DeleteDeliveryMessage,
+	DeliveryControl,
+	FailDelivery,
+	SetDeliveryActivity,
+	UpdateDeliveryMessage,
+	type DeliveryMutation,
+} from './DeliveryControl'
 import { DeliveryCredentialMissing, prefixedDeliveryHttpApi } from './DeliveryHttpApi'
 import { ExternalLink } from './DeliveryLink'
 
@@ -25,6 +35,17 @@ const handlers = (api: ReturnType<typeof prefixedDeliveryHttpApi>) =>
 	HttpApiBuilder.group(api, 'deliveries', (group) =>
 		Effect.gen(function* () {
 			const control = yield* DeliveryControl
+			/** Read the token, then apply the change to the named delivery. */
+			const apply = (
+				request: HttpServerRequest.HttpServerRequest,
+				deliveryId: string,
+				mutation: DeliveryMutation,
+				span: string,
+			) =>
+				Effect.gen(function* () {
+					const accessToken = yield* bearerToken(request)
+					return yield* control.apply({ deliveryId, accessToken, mutation })
+				}).pipe(Effect.withSpan(span))
 			return group
 				.handle('status', ({ params, request }) =>
 					Effect.gen(function* () {
@@ -33,34 +54,45 @@ const handlers = (api: ReturnType<typeof prefixedDeliveryHttpApi>) =>
 					}).pipe(Effect.withSpan('delivery.api.status')),
 				)
 				.handle('complete', ({ params, payload, request }) =>
-					Effect.gen(function* () {
-						const accessToken = yield* bearerToken(request)
-						return yield* control.apply({
-							deliveryId: params.deliveryId,
-							accessToken,
-							mutation: CompleteDelivery.make(payload),
-						})
-					}).pipe(Effect.withSpan('delivery.api.complete')),
+					apply(request, params.deliveryId, CompleteDelivery.make(payload), 'delivery.api.complete'),
 				)
 				.handle('fail', ({ params, payload, request }) =>
-					Effect.gen(function* () {
-						const accessToken = yield* bearerToken(request)
-						return yield* control.apply({
-							deliveryId: params.deliveryId,
-							accessToken,
-							mutation: FailDelivery.make(payload),
-						})
-					}).pipe(Effect.withSpan('delivery.api.fail')),
+					apply(request, params.deliveryId, FailDelivery.make(payload), 'delivery.api.fail'),
 				)
 				.handle('addLink', ({ params, payload, request }) =>
-					Effect.gen(function* () {
-						const accessToken = yield* bearerToken(request)
-						return yield* control.apply({
-							deliveryId: params.deliveryId,
-							accessToken,
-							mutation: AddDeliveryLink.make({ link: ExternalLink.make(payload) }),
-						})
-					}).pipe(Effect.withSpan('delivery.api.add_link')),
+					apply(
+						request,
+						params.deliveryId,
+						AddDeliveryLink.make({ link: ExternalLink.make(payload) }),
+						'delivery.api.add_link',
+					),
+				)
+				.handle('setActivity', ({ params, payload, request }) =>
+					apply(request, params.deliveryId, SetDeliveryActivity.make(payload), 'delivery.api.set_activity'),
+				)
+				.handle('createMessage', ({ params, payload, request }) =>
+					apply(
+						request,
+						params.deliveryId,
+						CreateDeliveryMessage.make(payload),
+						'delivery.api.create_message',
+					),
+				)
+				.handle('updateMessage', ({ params, payload, request }) =>
+					apply(
+						request,
+						params.deliveryId,
+						UpdateDeliveryMessage.make({ messageId: params.messageId, markdown: payload.markdown }),
+						'delivery.api.update_message',
+					),
+				)
+				.handle('deleteMessage', ({ params, request }) =>
+					apply(
+						request,
+						params.deliveryId,
+						DeleteDeliveryMessage.make({ messageId: params.messageId }),
+						'delivery.api.delete_message',
+					),
 				)
 		}),
 	)

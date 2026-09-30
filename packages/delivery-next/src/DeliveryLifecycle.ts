@@ -19,18 +19,32 @@
  */
 import { Data, Effect, Match, Predicate, Result, Schema } from 'effect'
 
+import { DeliveryActivity, SetActivity, sameDeliveryActivity } from './DeliveryActivity'
 import { DeliveryOperationKind, PreparedDeliveryInvocation, type DeliveryStage } from './DeliveryContext'
 import {
 	DeliveryClosed,
+	DeliveryMessageConflict,
+	DeliveryMessageDeleted,
+	DeliveryMessageNotFound,
 	DeliveryMutationReceipt,
 	DeliveryNotFound,
+	DeliveryOperationUnsupported,
 	DeliveryStatus,
 	DeliveryTerminalConflict,
 	sameDeliveryTerminal,
 	terminalFromMutation,
+	type DeliveryMessageMutation,
 	type DeliveryMutation,
+	type SetDeliveryActivity,
 } from './DeliveryControl'
 import { AddExternalLink, ExternalLink } from './DeliveryLink'
+import {
+	CreateMessage,
+	DeleteMessage,
+	UpdateMessage,
+	type MessageId,
+	type ProviderMessageReference,
+} from './DeliveryMessage'
 import {
 	DeliveryOperation,
 	DeliveryOperationId,
@@ -38,6 +52,7 @@ import {
 	DeliveryOutputStatus,
 	deliveryOutputStatus,
 	isUnsettledOperation,
+	operationMessageId,
 	type DeliveryOutputOperation,
 	type DeliveryOutputSettlement,
 } from './DeliveryOperation'
@@ -201,11 +216,17 @@ const withOperations = (
 	now: number,
 ): ActiveDelivery => {
 	const added = operations.reduce<ReadonlyArray<DeliveryOperation>>((saved, operation) => {
+		const links = () => saved.filter(({ operation }) => Predicate.isTagged(operation, 'AddExternalLink')).length
+		const messages = () => saved.filter(({ operation }) => isMessageOperation(operation)).length
+		const activities = () => saved.filter(({ operation }) => Predicate.isTagged(operation, 'SetActivity')).length
 		const operationId = Match.value(operation).pipe(
 			Match.tagsExhaustive({
 				PresentOutcome: () => 'outcome',
-				AddExternalLink: () =>
-					`link-${saved.filter(({ operation }) => Predicate.isTagged(operation, 'AddExternalLink')).length + 1}`,
+				AddExternalLink: () => `link-${links() + 1}`,
+				CreateMessage: () => `message-${messages() + 1}`,
+				UpdateMessage: () => `message-${messages() + 1}`,
+				DeleteMessage: () => `message-${messages() + 1}`,
+				SetActivity: () => `activity-${activities() + 1}`,
 			}),
 		)
 		return [
@@ -221,6 +242,43 @@ const withOperations = (
 	}, active.operations)
 	return ActiveDelivery.make({ ...active, operations: added })
 }
+
+const isMessageOperation = (operation: DeliveryOutputOperation) =>
+	Predicate.isTagged(operation, 'CreateMessage') ||
+	Predicate.isTagged(operation, 'UpdateMessage') ||
+	Predicate.isTagged(operation, 'DeleteMessage')
+
+/** The saved `CreateMessage` of a message, if the delivery has created it. */
+const messageCreation = (active: ActiveDelivery, messageId: MessageId) =>
+	active.operations.find(
+		({ operation }) => Predicate.isTagged(operation, 'CreateMessage') && operation.messageId === messageId,
+	)
+
+/**
+ * The provider's reference to a message the delivery posted: the receipt of its `CreateMessage`.
+ * None while the create has not been applied, or when it failed.
+ */
+export const sentMessageReference = (
+	active: ActiveDelivery,
+	messageId: MessageId,
+): ProviderMessageReference | undefined => {
+	const state = messageCreation(active, messageId)?.state
+	return state !== undefined && Predicate.isTagged(state, 'Delivered') ? state.receipt : undefined
+}
+
+/** The last saved `SetActivity`, which holds the activity the remote worker last asked for. */
+const lastActivityOperation = (active: ActiveDelivery) =>
+	active.operations.findLast(({ operation }) => Predicate.isTagged(operation, 'SetActivity'))
+
+/** The activity the remote worker last asked for. `Idle` when it never asked. */
+const desiredActivity = (active: ActiveDelivery): DeliveryActivity => {
+	const last = lastActivityOperation(active)?.operation
+	return last !== undefined && Predicate.isTagged(last, 'SetActivity') ? last.activity : DeliveryActivity.cases.Idle.make({})
+}
+
+/** Whether the delivery's last activity request was `Working`, so ending it must clear the provider's activity. */
+export const activityToClear = (active: ActiveDelivery) =>
+	Predicate.isTagged(desiredActivity(active), 'Working')
 
 /** Links not already saved, each once. A repeat of a saved URL is a replay. */
 const newLinks = (saved: ReadonlyArray<ExternalLink>, links: ReadonlyArray<ExternalLink>) =>
@@ -515,6 +573,9 @@ export const readDeliverySlotStatus = (
 					{
 						deliveryId: input.reference.deliveryId,
 						stage: publicStage(active),
+						/** A result clears the activity, so a finishing delivery shows `Idle`. */
+						activity:
+							active.terminal === undefined ? desiredActivity(active) : DeliveryActivity.cases.Idle.make({}),
 						interruptRequested: active.interruptRequestedAt !== undefined,
 						supportedOperations: active.prepared?.supportedOperations ?? [],
 						output: active.operations.map(deliveryOutputStatus),
@@ -538,7 +599,13 @@ export const readDeliverySlotStatus = (
 
 type MutationChange = Result.Result<
 	{ readonly slot: DeliverySlot; readonly receipt: DeliveryMutationReceipt },
-	DeliveryNotFound | DeliveryTerminalConflict | DeliveryClosed
+	| DeliveryNotFound
+	| DeliveryTerminalConflict
+	| DeliveryClosed
+	| DeliveryOperationUnsupported
+	| DeliveryMessageNotFound
+	| DeliveryMessageDeleted
+	| DeliveryMessageConflict
 >
 
 /**
@@ -608,6 +675,134 @@ const addLink = (
 	})
 }
 
+/** What a message change asks of the delivery: nothing new, or one more operation. */
+type MessageDecision = Result.Result<
+	'Replay' | DeliveryOutputOperation,
+	DeliveryClosed | DeliveryMessageNotFound | DeliveryMessageDeleted | DeliveryMessageConflict
+>
+
+/**
+ * Decide a message change against the operations already saved.
+ *
+ * - A repeat of a change already saved is a replay, even after the delivery ended.
+ * - Any other change after the delivery ended is refused.
+ * - A change to a message never created, or whose create failed, names no message.
+ * - An update or deletion of a message whose create has not run yet is saved behind it.
+ */
+const decideMessageChange = (active: ActiveDelivery, mutation: DeliveryMessageMutation): MessageDecision => {
+	const closed = active.terminal !== undefined || active.stage === 'Finishing'
+	const { messageId } = mutation
+	const operations = active.operations
+		.map(({ operation }) => operation)
+		.filter((operation) => operationMessageId(operation) === messageId)
+	const creation = messageCreation(active, messageId)
+	const deleted = operations.some((operation) => Predicate.isTagged(operation, 'DeleteMessage'))
+	const refuse = <E>(error: E) => Result.fail(closed ? new DeliveryClosed() : error)
+	const accept = (operation: DeliveryOutputOperation): MessageDecision =>
+		closed ? Result.fail(new DeliveryClosed()) : Result.succeed(operation)
+
+	return Match.value(mutation).pipe(
+		Match.tagsExhaustive({
+			CreateDeliveryMessage: ({ markdown }): MessageDecision => {
+				if (creation === undefined) return accept(CreateMessage.make({ messageId, markdown }))
+				return Predicate.isTagged(creation.operation, 'CreateMessage') && creation.operation.markdown === markdown
+					? Result.succeed('Replay')
+					: Result.fail(new DeliveryMessageConflict({ messageId }))
+			},
+			UpdateDeliveryMessage: ({ markdown }): MessageDecision => {
+				if (creation === undefined || Predicate.isTagged(creation.state, 'Failed')) {
+					return refuse(new DeliveryMessageNotFound({ messageId }))
+				}
+				if (deleted) return refuse(new DeliveryMessageDeleted({ messageId }))
+				const latestMarkdown = operations.reduce<string | undefined>(
+					(text, operation) =>
+						Match.value(operation).pipe(
+							Match.tag('CreateMessage', 'UpdateMessage', (change) => change.markdown),
+							Match.orElse(() => text),
+						),
+					undefined,
+				)
+				if (latestMarkdown === markdown) return Result.succeed('Replay')
+				return accept(UpdateMessage.make({ messageId, markdown }))
+			},
+			DeleteDeliveryMessage: (): MessageDecision => {
+				if (creation === undefined || Predicate.isTagged(creation.state, 'Failed')) {
+					return refuse(new DeliveryMessageNotFound({ messageId }))
+				}
+				return deleted ? Result.succeed('Replay') : accept(DeleteMessage.make({ messageId }))
+			},
+		}),
+	)
+}
+
+/** The output operation a change needs its destination to support. */
+const requiredOperation = (mutation: DeliveryMutation): DeliveryOperationKind =>
+	Match.value(mutation).pipe(
+		Match.tagsExhaustive({
+			CompleteDelivery: () => 'PresentOutcome' as const,
+			FailDelivery: () => 'PresentOutcome' as const,
+			AddDeliveryLink: () => 'AddExternalLink' as const,
+			CreateDeliveryMessage: () => 'CreateMessage' as const,
+			UpdateDeliveryMessage: () => 'UpdateMessage' as const,
+			DeleteDeliveryMessage: () => 'DeleteMessage' as const,
+			SetDeliveryActivity: () => 'SetActivity' as const,
+		}),
+	)
+
+/**
+ * Save the activity the remote worker wants shown. The activity already desired is a replay. A new
+ * one replaces a `SetActivity` still waiting to be sent, so only the latest is sent; one already being
+ * sent is followed by a new operation. A delivery with a result takes no new activity.
+ */
+const changeActivity = (
+	slot: DeliverySlot,
+	located: Located,
+	input: {
+		readonly mutation: SetDeliveryActivity
+		readonly receipt: (status: DeliveryMutationReceipt['status']) => DeliveryMutationReceipt
+	} & MailboxFacts,
+): MutationChange =>
+	Located.$match(located, {
+		Retained: () => Result.fail(new DeliveryClosed()),
+		Active: ({ active }) => {
+			const { activity } = input.mutation
+			if (sameDeliveryActivity(desiredActivity(active), activity)) {
+				return Result.succeed({ slot, receipt: input.receipt('already_recorded') })
+			}
+			if (active.terminal !== undefined || active.stage === 'Finishing') return Result.fail(new DeliveryClosed())
+			const last = lastActivityOperation(active)
+			const next =
+				last !== undefined && Predicate.isTagged(last.state, 'Pending')
+					? replaceOperation(active, DeliveryOperation.make({ ...last, operation: SetActivity.make({ activity }) }))
+					: withOperations(active, [SetActivity.make({ activity })], input.now)
+			/** A delivery waiting for its remote worker has no callback running, so the output can start now. */
+			const readyAt = active.stage === 'ExternalWaiting' ? nextOutputAt(next) : slot.readyAt
+			return Result.succeed({ slot: withActive(slot, next, readyAt), receipt: input.receipt('accepted') })
+		},
+	})
+
+/** Save a message change and the operation that shows it, in one change. A retired delivery takes none. */
+const changeMessage = (
+	slot: DeliverySlot,
+	located: Located,
+	input: {
+		readonly mutation: DeliveryMessageMutation
+		readonly receipt: (status: DeliveryMutationReceipt['status']) => DeliveryMutationReceipt
+	} & MailboxFacts,
+): MutationChange => {
+	return Located.$match(located, {
+		Retained: () => Result.fail(new DeliveryClosed()),
+		Active: ({ active }) =>
+			Result.map(decideMessageChange(active, input.mutation), (decision) => {
+				if (decision === 'Replay') return { slot, receipt: input.receipt('already_recorded') }
+				const next = withOperations(active, [decision], input.now)
+				/** A delivery waiting for its remote worker has no callback running, so the output can start now. */
+				const readyAt = active.stage === 'ExternalWaiting' ? nextOutputAt(next) : slot.readyAt
+				return { slot: withActive(slot, next, readyAt), receipt: input.receipt('accepted') }
+			}),
+	})
+}
+
 /** Apply a remote worker's change: check its token, then change the delivery and save the output it needs. */
 export const applyDeliverySlotMutation = (
 	slot: DeliverySlot,
@@ -619,6 +814,13 @@ export const applyDeliverySlotMutation = (
 ): MutationChange => {
 	const located = locate(slot, input)
 	if (located === null) return Result.fail(new DeliveryNotFound())
+	/** A destination that cannot show the change refuses it before anything is saved. */
+	const operation = requiredOperation(input.mutation)
+	const supported = Located.$match(located, {
+		Active: ({ active }) => active.prepared?.supportedOperations ?? [],
+		Retained: ({ retained }) => retained.supportedOperations,
+	})
+	if (!supported.includes(operation)) return Result.fail(new DeliveryOperationUnsupported({ operation }))
 	const receipt = (status: DeliveryMutationReceipt['status']) =>
 		DeliveryMutationReceipt.make({ deliveryId: input.reference.deliveryId, status })
 	const facts = { now: input.now, hasWaiting: input.hasWaiting, receipt }
@@ -627,6 +829,10 @@ export const applyDeliverySlotMutation = (
 			CompleteDelivery: (mutation) => recordTerminal(slot, located, { ...facts, terminal: terminalFromMutation(mutation) }),
 			FailDelivery: (mutation) => recordTerminal(slot, located, { ...facts, terminal: terminalFromMutation(mutation) }),
 			AddDeliveryLink: ({ link }) => addLink(slot, located, { ...facts, link }),
+			CreateDeliveryMessage: (mutation) => changeMessage(slot, located, { ...facts, mutation }),
+			UpdateDeliveryMessage: (mutation) => changeMessage(slot, located, { ...facts, mutation }),
+			DeleteDeliveryMessage: (mutation) => changeMessage(slot, located, { ...facts, mutation }),
+			SetDeliveryActivity: (mutation) => changeActivity(slot, located, { ...facts, mutation }),
 		}),
 	)
 }

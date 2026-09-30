@@ -8,9 +8,38 @@
  */
 import { Context, Effect, Layer, Predicate, Schema } from 'effect'
 
+import { SetActivity } from './DeliveryActivity'
 import { PreparedDeliveryInvocation } from './DeliveryContext'
-import { DeliveryOperationId, DeliveryOutputOperation } from './DeliveryOperation'
+import { AddExternalLink } from './DeliveryLink'
+import { CreateMessage, ProviderDeleteMessage, ProviderUpdateMessage } from './DeliveryMessage'
+import { DeliveryOperationId } from './DeliveryOperation'
+import { PresentOutcome } from './DeliveryOutcome'
 import { DeliveryId } from './DeliveryReference'
+
+/**
+ * `PresentOutcome` as a provider receives it.
+ *
+ * @property clearActivity - the remote worker's last activity was `Working`, so the provider must clear it
+ */
+export const ProviderPresentOutcome = Schema.TaggedStruct('PresentOutcome', {
+	...PresentOutcome.fields,
+	clearActivity: Schema.Boolean,
+})
+export type ProviderPresentOutcome = typeof ProviderPresentOutcome.Type
+
+/**
+ * A saved operation as a provider receives it. An update or deletion carries the provider's own
+ * reference to the message, taken from the receipt of the message's `CreateMessage`.
+ */
+export const ProviderOutputOperation = Schema.Union([
+	ProviderPresentOutcome,
+	AddExternalLink,
+	CreateMessage,
+	ProviderUpdateMessage,
+	ProviderDeleteMessage,
+	SetActivity,
+])
+export type ProviderOutputOperation = typeof ProviderOutputOperation.Type
 
 /**
  * One attempt at one operation, as a provider sees it.
@@ -24,7 +53,7 @@ export const ProviderOutputAttempt = Schema.Struct({
 	attempt: Schema.Int.check(Schema.isGreaterThan(0)),
 	hadAmbiguousAttempt: Schema.Boolean,
 	prepared: PreparedDeliveryInvocation,
-	operation: DeliveryOutputOperation,
+	operation: ProviderOutputOperation,
 })
 export type ProviderOutputAttempt = typeof ProviderOutputAttempt.Type
 

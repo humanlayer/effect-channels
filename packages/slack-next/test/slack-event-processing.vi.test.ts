@@ -483,6 +483,7 @@ const sharedRuntimeLayer = <E, R>(handlers: SlackCallbackHandlers<E, R>) =>
 	Layer.merge(Layer.provideMerge(SlackCallbacks.layer(handlers), MailboxSubscriptionsMemory), apiLayer)
 
 const threadSupportedOperations: ReadonlyArray<DeliveryOperationKind> = [
+	'PresentOutcome',
 	'CreateMessage',
 	'UpdateMessage',
 	'DeleteMessage',

@@ -34,13 +34,16 @@ export type GitHubActivationTarget = typeof GitHubActivationTarget.Type
 export const GitHubDeliveryDestinationJson = Schema.toCodecJson(GitHubDeliveryDestination)
 export const GitHubActivationTargetJson = Schema.toCodecJson(GitHubActivationTarget)
 
-/** The output operations a GitHub issue or pull request supports. */
+/**
+ * The output operations a GitHub issue or pull request supports. `SetActivity` (the `eyes` reaction)
+ * is left out until GitHub has an output processor that shows it.
+ */
 export const gitHubDiscussionSupportedOperations: ReadonlyArray<DeliveryOperationKind> = [
+	'PresentOutcome',
 	'CreateMessage',
 	'UpdateMessage',
 	'DeleteMessage',
 	'SetMessageReaction',
-	'SetActivity',
 	'RenderPlan',
 	'AddExternalLink',
 ]

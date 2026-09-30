@@ -12,8 +12,12 @@ import {
 	prefixedDeliveryHttpApi,
 	type AddLinkPayload,
 	type CompleteDeliveryPayload,
+	type CreateMessagePayload,
 	type FailDeliveryPayload,
+	type SetActivityPayload,
+	type UpdateMessagePayload,
 } from './DeliveryHttpApi'
+import type { MessageId } from './DeliveryMessage'
 
 /**
  * @property baseUrl - the application's public origin, such as `https://agent.example.com`
@@ -75,6 +79,63 @@ export const makeDeliveryClient = Effect.fn('delivery.client.make')(function* (o
 				),
 				Effect.withSpan('delivery.client.add_link'),
 			),
+		/**
+		 * What the agent is doing now, shown where the provider shows it, such as Slack's thread status.
+		 * Use it for progress that changes; the result clears it.
+		 */
+		activity: {
+			/** Show `Working` with a short line, or `Idle`. The latest request wins; repeating it is a replay. */
+			set: (target: DeliveryClientTarget & SetActivityPayload) =>
+				forDelivery(target).pipe(
+					Effect.flatMap((client) =>
+						client.deliveries.setActivity({
+							params: { deliveryId: target.deliveryId },
+							payload: { activity: target.activity },
+						}),
+					),
+					Effect.withSpan('delivery.client.set_activity'),
+				),
+		},
+		/**
+		 * Lasting messages the remote worker posts before it ends the delivery, named by its own `MessageId`.
+		 * Each call is saved and answered with 202; the provider shows it afterwards, in order.
+		 */
+		messages: {
+			/** Post a message. The same request again is a replay. */
+			create: (target: DeliveryClientTarget & { readonly message: CreateMessagePayload }) =>
+				forDelivery(target).pipe(
+					Effect.flatMap((client) =>
+						client.deliveries.createMessage({
+							params: { deliveryId: target.deliveryId },
+							payload: target.message,
+						}),
+					),
+					Effect.withSpan('delivery.client.create_message'),
+				),
+			/** Replace a message's text. It may be called before the provider has posted the message. */
+			update: (
+				target: DeliveryClientTarget & { readonly messageId: MessageId; readonly message: UpdateMessagePayload },
+			) =>
+				forDelivery(target).pipe(
+					Effect.flatMap((client) =>
+						client.deliveries.updateMessage({
+							params: { deliveryId: target.deliveryId, messageId: target.messageId },
+							payload: target.message,
+						}),
+					),
+					Effect.withSpan('delivery.client.update_message'),
+				),
+			/** Remove a message. Removing it again is a replay. */
+			delete: (target: DeliveryClientTarget & { readonly messageId: MessageId }) =>
+				forDelivery(target).pipe(
+					Effect.flatMap((client) =>
+						client.deliveries.deleteMessage({
+							params: { deliveryId: target.deliveryId, messageId: target.messageId },
+						}),
+					),
+					Effect.withSpan('delivery.client.delete_message'),
+				),
+		},
 	}
 })
 

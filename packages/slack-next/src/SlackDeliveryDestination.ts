@@ -28,6 +28,7 @@ export const SlackActivationTargetJson = Schema.toCodecJson(SlackActivationTarge
 
 /** The output operations a Slack thread supports. */
 export const slackThreadSupportedOperations: ReadonlyArray<DeliveryOperationKind> = [
+	'PresentOutcome',
 	'CreateMessage',
 	'UpdateMessage',
 	'DeleteMessage',
