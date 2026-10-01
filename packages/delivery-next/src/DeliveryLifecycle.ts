@@ -22,7 +22,7 @@
  * one at a time, in the order they were saved. A delivery retires once its callback has returned and
  * every operation is delivered or has failed.
  */
-import { Data, Effect, Match, Predicate, Schema, Struct } from 'effect'
+import { Array as Arr, Data, Effect, Match, Predicate, Schema, Struct } from 'effect'
 
 import { DeliveryActivity, SetActivity, sameDeliveryActivity } from './DeliveryActivity'
 import { DeliveryOperationKind, PreparedDeliveryInvocation, type DeliveryStage } from './DeliveryContext'
@@ -64,7 +64,7 @@ import {
 	type DeliveryOutputOperation,
 	type DeliveryOutputSettlement,
 } from './DeliveryOperation'
-import { DeliveryTerminal, PresentOutcome } from './DeliveryOutcome'
+import { DeliveryOutcome, DeliveryTerminal, PresentOutcome } from './DeliveryOutcome'
 import {
 	DeliveryPlanRevision,
 	DeliveryPlanState,
@@ -96,6 +96,9 @@ export const DELIVERY_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000
 /** The most finished deliveries one mailbox keeps. The oldest go first. */
 export const MAX_RETAINED_DELIVERIES = 20
 
+/** The final message of a delivery whose remote worker sent nothing before its handoff's time limit. */
+export const DELIVERY_TIMED_OUT_MARKDOWN = 'The remote worker stopped responding, so this was ended.'
+
 /** The default wait before a retryable failure runs again. */
 export const DEFAULT_RETRY_AFTER_MS = 1_000
 
@@ -125,6 +128,10 @@ export const ActiveDelivery = Schema.Struct({
 	terminal: Schema.optionalKey(DeliveryTerminal),
 	interruptRequestedAt: Schema.optionalKey(Timestamp),
 	handedOffAt: Schema.optionalKey(Timestamp),
+	/** How long the remote worker may go without a request before the delivery fails on its own. Absent means no limit. */
+	failAfterMs: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
+	/** When the delivery fails on its own, unless the remote worker sends a request first. */
+	failAt: Schema.optionalKey(Timestamp),
 	links: Schema.Array(ExternalLink),
 	plan: Schema.optionalKey(DeliveryPlanState),
 	/** Stores written before output existed read it as empty. */
@@ -219,6 +226,45 @@ const nextOutputAt = (active: ActiveDelivery): number | null => {
 	})
 }
 
+/**
+ * When a handed-off delivery fails on its own: its time limit, while it waits for its remote worker with
+ * no result. None otherwise.
+ */
+const deadline = (active: ActiveDelivery): number | null =>
+	active.stage === 'ExternalWaiting' && active.terminal === undefined ? (active.failAt ?? null) : null
+
+/** When the delivery next needs processing: its next output, or its time limit, whichever is first. */
+const nextDueAt = (active: ActiveDelivery): number | null =>
+	Arr.match([nextOutputAt(active), deadline(active)].filter(Predicate.isNotNull), {
+		onEmpty: () => null,
+		onNonEmpty: (times) => Math.min(...times),
+	})
+
+/**
+ * Fail a handed-off delivery whose remote worker sent nothing before its time limit: save the `Failed`
+ * result, with reason `TimedOut`, and the `PresentOutcome` that shows it. Any other delivery is unchanged.
+ */
+const failIfOverdue = (active: ActiveDelivery, now: number): ActiveDelivery => {
+	const due = deadline(active)
+	if (due === null || due > now) return active
+	const terminal = DeliveryTerminal.make({
+		outcome: DeliveryOutcome.cases.Failed.make({ reason: 'TimedOut' }),
+		markdown: DELIVERY_TIMED_OUT_MARKDOWN,
+	})
+	const failed = withOperations(
+		ActiveDelivery.make({ ...active, terminal }),
+		[PresentOutcome.make({ outcome: terminal.outcome, markdown: DELIVERY_TIMED_OUT_MARKDOWN })],
+		now,
+	)
+	return ActiveDelivery.make({ ...failed, stage: 'Finishing' })
+}
+
+/** Start a handed-off delivery's time limit again from `now`, after a request from its remote worker. */
+const withDeadlineFrom = (active: ActiveDelivery, now: number): ActiveDelivery =>
+	active.failAfterMs === undefined || active.handedOffAt === undefined || active.terminal !== undefined
+		? active
+		: ActiveDelivery.make({ ...active, failAt: Timestamp.make(now + active.failAfterMs) })
+
 const retire = (slot: DeliverySlot, active: ActiveDelivery, facts: MailboxFacts): DeliverySlot => {
 	const entry = {
 		batchId: active.batchId,
@@ -253,11 +299,11 @@ const withActive = (slot: DeliverySlot, active: ActiveDelivery, readyAt: number 
 const afterCallback = (slot: DeliverySlot, active: ActiveDelivery, facts: MailboxFacts): DeliverySlot => {
 	if (active.handedOffAt !== undefined && active.terminal === undefined) {
 		const waiting = ActiveDelivery.make({ ...active, stage: 'ExternalWaiting', claimId: null })
-		return withActive(slot, waiting, nextOutputAt(waiting))
+		return withActive(slot, waiting, nextDueAt(waiting))
 	}
 	if (nextOperation(active) === undefined) return retire(slot, active, facts)
 	const finishing = ActiveDelivery.make({ ...active, stage: 'Finishing', claimId: null })
-	return withActive(slot, finishing, nextOutputAt(finishing))
+	return withActive(slot, finishing, nextDueAt(finishing))
 }
 
 /** Add operations, each with the next free ID of its kind. Output is due at `now`. */
@@ -501,18 +547,28 @@ export const prepareDeliverySlot = Effect.fn('delivery.lifecycle.prepare')(funct
 })
 
 /**
- * Hand the batch off, saving any new links with an `AddExternalLink` each. Repeating it is harmless.
- * The claim stays as ownership of callback cleanup; the links are sent once the callback returns.
+ * Hand the batch off, saving any new links with an `AddExternalLink` each, and its time limit, when it
+ * has one. Repeating it is harmless. The claim stays as ownership of callback cleanup; the links are
+ * sent once the callback returns.
  */
 export const handOffDeliverySlot = Effect.fn('delivery.lifecycle.hand_off')(function* (
 	slot: DeliverySlot,
-	input: { readonly claimId: string; readonly handedOffAt: number; readonly links: ReadonlyArray<ExternalLink> },
+	input: {
+		readonly claimId: string
+		readonly handedOffAt: number
+		readonly links: ReadonlyArray<ExternalLink>
+		readonly failAfterMs?: number
+	},
 ) {
 	const active = owned(slot, input.claimId)
 	if (active === null) return yield* new ClaimNotOwned()
 	if (active.stage === 'ExternalCleaning') return slot
+	const handedOff = ActiveDelivery.make({ ...active, stage: 'ExternalCleaning', handedOffAt: Timestamp.make(input.handedOffAt) })
+	const limited = Predicate.isUndefined(input.failAfterMs)
+		? handedOff
+		: withDeadlineFrom(ActiveDelivery.make({ ...handedOff, failAfterMs: input.failAfterMs }), input.handedOffAt)
 	const next = withLinks(
-		ActiveDelivery.make({ ...active, stage: 'ExternalCleaning', handedOffAt: Timestamp.make(input.handedOffAt) }),
+		limited,
 		newLinks(active.links, input.links),
 		input.handedOffAt,
 	)
@@ -564,7 +620,8 @@ export type DeliveryOutputClaim = {
 
 /**
  * Claim the next operation when it is due. An operation whose earlier attempt's lease ran out is
- * claimed again and marked ambiguous: the provider may already have applied it.
+ * claimed again and marked ambiguous: the provider may already have applied it. A handed-off delivery
+ * past its time limit first fails on its own, and its `PresentOutcome` is claimed.
  *
  * The first claim gives the operation `idempotencyKey`, a random UUID the caller made; later claims
  * keep the one it has, so every attempt sends the same key.
@@ -575,8 +632,9 @@ export const claimDeliveryOutput = (
 ): DeliveryOutputClaim => {
 	const active = slot.active
 	if (active === null || activeDeliveryWork(active) !== 'Output') return { slot, claimed: null }
-	const next = nextOperation(active)
-	const dueAt = nextOutputAt(active)
+	const current = failIfOverdue(active, input.now)
+	const next = nextOperation(current)
+	const dueAt = nextOutputAt(current)
 	if (next === undefined || dueAt === null || dueAt > input.now) return { slot, claimed: null }
 	const idempotencyKey = next.idempotencyKey ?? input.idempotencyKey
 	const operation = DeliveryOperation.make({
@@ -589,9 +647,9 @@ export const claimDeliveryOutput = (
 		hadAmbiguousAttempt: next.hadAmbiguousAttempt || Predicate.isTagged(next.state, 'Delivering'),
 		idempotencyKey,
 	})
-	const claimed = replaceOperation(active, operation)
+	const claimed = replaceOperation(current, operation)
 	return {
-		slot: withActive(slot, claimed, nextOutputAt(claimed)),
+		slot: withActive(slot, claimed, nextDueAt(claimed)),
 		claimed: { active: claimed, operation, idempotencyKey },
 	}
 }
@@ -629,7 +687,7 @@ export const renewDeliveryOutput = Effect.fn('delivery.lifecycle.renew_output')(
 			}),
 		}),
 	)
-	return withActive(slot, active, nextOutputAt(active))
+	return withActive(slot, active, nextDueAt(active))
 })
 
 /**
@@ -661,7 +719,7 @@ export const settleDeliveryOutput = Effect.fn('delivery.lifecycle.settle_output'
 			? withRenderedPlan(settled, request, state.receipt)
 			: settled
 	if (active.stage === 'Finishing' && nextOperation(active) === undefined) return retire(slot, active, input)
-	return withActive(slot, active, nextOutputAt(active))
+	return withActive(slot, active, nextDueAt(active))
 })
 
 /** The stage a remote worker sees. A delivery with a result whose callback is still returning is finishing. */
@@ -718,6 +776,7 @@ export const readDeliverySlotStatus = Effect.fn('delivery.lifecycle.read_status'
 					interruptRequested: active.interruptRequestedAt !== undefined,
 					supportedOperations: active.prepared?.supportedOperations ?? [],
 					reactionTargets: active.prepared?.reactionTargets ?? [],
+					...(active.terminal === undefined && active.failAt !== undefined ? { failAt: active.failAt } : undefined),
 					output: active.operations.map(deliveryOutputStatus),
 				},
 				active.terminal,
@@ -812,7 +871,7 @@ const addLink = (
 			if (active.terminal !== undefined || active.stage === 'Finishing') return Effect.fail(new DeliveryClosed())
 			const next = withLinks(active, [input.link], input.now)
 			/** A delivery waiting for its remote worker has no callback running, so the output can start now. */
-			const readyAt = active.stage === 'ExternalWaiting' ? nextOutputAt(next) : slot.readyAt
+			const readyAt = active.stage === 'ExternalWaiting' ? nextDueAt(next) : slot.readyAt
 			return Effect.succeed({ slot: withActive(slot, next, readyAt), receipt: input.receipt('accepted') })
 		},
 	})
@@ -939,7 +998,7 @@ const changeActivity = (
 					? replaceOperation(active, replacedRequest(last, SetActivity.make({ activity })))
 					: withOperations(active, [SetActivity.make({ activity })], input.now)
 			/** A delivery waiting for its remote worker has no callback running, so the output can start now. */
-			const readyAt = active.stage === 'ExternalWaiting' ? nextOutputAt(next) : slot.readyAt
+			const readyAt = active.stage === 'ExternalWaiting' ? nextDueAt(next) : slot.readyAt
 			return Effect.succeed({ slot: withActive(slot, next, readyAt), receipt: input.receipt('accepted') })
 		},
 	})
@@ -1005,7 +1064,7 @@ const changeReaction = (
 						? replaceOperation(active, replacedRequest(last.saved, request))
 						: withOperations(active, [request], input.now)
 				/** A delivery waiting for its remote worker has no callback running, so the output can start now. */
-				const readyAt = active.stage === 'ExternalWaiting' ? nextOutputAt(next) : slot.readyAt
+				const readyAt = active.stage === 'ExternalWaiting' ? nextDueAt(next) : slot.readyAt
 				return { slot: withActive(slot, next, readyAt), receipt: input.receipt('accepted') }
 			}),
 	})
@@ -1051,7 +1110,7 @@ const changePlan = (
 					? replaceOperation(planned, replacedRequest(last, request))
 					: withOperations(planned, [request], input.now)
 			/** A delivery waiting for its remote worker has no callback running, so the output can start now. */
-			return accepted(next, active.stage === 'ExternalWaiting' ? nextOutputAt(next) : slot.readyAt)
+			return accepted(next, active.stage === 'ExternalWaiting' ? nextDueAt(next) : slot.readyAt)
 		},
 	})
 }
@@ -1072,7 +1131,7 @@ const changeMessage = (
 				if (decision === 'Replay') return { slot, receipt: input.receipt('already_recorded') }
 				const next = withOperations(active, [decision], input.now)
 				/** A delivery waiting for its remote worker has no callback running, so the output can start now. */
-				const readyAt = active.stage === 'ExternalWaiting' ? nextOutputAt(next) : slot.readyAt
+				const readyAt = active.stage === 'ExternalWaiting' ? nextDueAt(next) : slot.readyAt
 				return { slot: withActive(slot, next, readyAt), receipt: input.receipt('accepted') }
 			}),
 	})
@@ -1101,7 +1160,7 @@ export const applyDeliverySlotMutation = Effect.fn('delivery.lifecycle.apply_mut
 	const receipt = (status: DeliveryMutationReceipt['status']) =>
 		DeliveryMutationReceipt.make({ deliveryId: input.reference.deliveryId, status })
 	const facts = { now: input.now, hasWaiting: input.hasWaiting, receipt }
-	return yield* Match.value(input.mutation).pipe(
+	const changed = yield* Match.value(input.mutation).pipe(
 		Match.tagsExhaustive({
 			CompleteDelivery: (mutation) => recordTerminal(slot, located, { ...facts, terminal: terminalFromMutation(mutation) }),
 			FailDelivery: (mutation) => recordTerminal(slot, located, { ...facts, terminal: terminalFromMutation(mutation) }),
@@ -1114,4 +1173,17 @@ export const applyDeliverySlotMutation = Effect.fn('delivery.lifecycle.apply_mut
 			PutDeliveryPlan: (mutation) => changePlan(slot, located, { ...facts, mutation }),
 		}),
 	)
+	return { ...changed, slot: restartDeadline(changed.slot, input.reference, input.now) }
 })
+
+/**
+ * Any request the store took from a remote worker, a repeat included, shows it is still working, so the
+ * time limit of its delivery starts again. A delivery with a result has no time limit left to restart.
+ */
+const restartDeadline = (slot: DeliverySlot, reference: DeliveryReference, now: number): DeliverySlot => {
+	const active = slot.active
+	if (active === null || active.batchId !== reference.batchId) return slot
+	const restarted = withDeadlineFrom(active, now)
+	if (restarted === active) return slot
+	return withActive(slot, restarted, restarted.stage === 'ExternalWaiting' ? nextDueAt(restarted) : slot.readyAt)
+}

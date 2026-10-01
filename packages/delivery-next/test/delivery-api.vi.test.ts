@@ -5,7 +5,7 @@
  */
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto'
 import { describe, it } from '@effect/vitest'
-import { Effect, Layer, Option, Queue, Redacted, Ref, Schedule, type Schema } from 'effect'
+import { Clock, Effect, Layer, Option, Queue, Redacted, Ref, Schedule, type Schema } from 'effect'
 import { FetchHttpClient } from 'effect/unstable/http'
 
 import {
@@ -578,6 +578,29 @@ describe('delivery API plan', () => {
 			)
 			expect((yield* put({ items: [{ ...item, state: { _tag: 'Skipped' } }] })).status).toBe(400)
 			expect((yield* client.status(delivery)).plan).toEqual({ revision: 1, plan: first })
+		}),
+	)
+})
+
+describe('delivery API time limit', () => {
+	it.live('a handoff without failAfter gets 24 hours, and each request from the worker moves it later', ({ expect }) =>
+		Effect.gen(function* () {
+			const { contexts, webhook, client } = yield* startBotWith(['PresentOutcome', 'SetActivity'])
+			const before = yield* Clock.currentTimeMillis
+			yield* webhook('first')
+			const context = yield* Queue.take(contexts)
+			const delivery = { deliveryId: context.deliveryId, accessToken: context.accessToken }
+			const day = 24 * 60 * 60 * 1_000
+			const first = (yield* client.status(delivery)).failAt
+			if (first === undefined) return expect.unreachable()
+			expect(first).toBeGreaterThanOrEqual(before + day)
+			expect(first).toBeLessThanOrEqual((yield* Clock.currentTimeMillis) + day)
+
+			yield* Effect.sleep('20 millis')
+			yield* client.activity.set({ ...delivery, activity: DeliveryActivity.cases.Working.make({ message: 'Working' }) })
+			const moved = (yield* client.status(delivery)).failAt
+			if (moved === undefined) return expect.unreachable()
+			expect(moved).toBeGreaterThan(first)
 		}),
 	)
 })

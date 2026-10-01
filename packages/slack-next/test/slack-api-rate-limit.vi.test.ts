@@ -1,5 +1,5 @@
 import { describe, it } from '@effect/vitest'
-import { ConfigProvider, Effect, Fiber, Layer, Ref } from 'effect'
+import { ConfigProvider, Effect, Fiber, Layer, Logger, Ref } from 'effect'
 import { TestClock } from 'effect/testing'
 import { HttpClient, HttpClientResponse } from 'effect/unstable/http'
 
@@ -108,6 +108,32 @@ describe('SlackApi rate limits', () => {
 
 			expect(error.message).toBe('Slack rate limit persisted after retries')
 			expect(yield* Ref.get(attempts)).toBe(4)
+		}),
+	)
+})
+
+describe('SlackApi rejected token', () => {
+	it.effect('logs a refused bot token as a configuration error that names the setting', ({ expect }) =>
+		Effect.gen(function* () {
+			const logs: Array<string> = []
+			const logger = Logger.layer([Logger.make((entry) => logs.push(JSON.stringify(Logger.formatStructured.log(entry))))])
+			const httpClient = HttpClient.make((request) =>
+				Effect.succeed(HttpClientResponse.fromWeb(request, Response.json({ ok: false, error: 'invalid_auth' }))),
+			)
+			const layer = SlackApiLiveBase.pipe(
+				Layer.provide(Layer.merge(Layer.succeed(HttpClient.HttpClient, httpClient), configLayer)),
+			)
+			const error = yield* Effect.flatMap(SlackApi, (api) => api.getChannelInfo({ channel })).pipe(
+				Effect.provide(layer),
+				Effect.provide(logger),
+				Effect.flip,
+			)
+			expect(error.message).toBe('invalid_auth')
+			const output = logs.join('\n')
+			expect(output).toContain('Slack rejected the bot token; check SLACK_BOT_TOKEN')
+			expect(output).toContain('"level":"ERROR"')
+			expect(output).toContain('"credential":"bot_token"')
+			expect(output).not.toContain('xoxb-test-token')
 		}),
 	)
 })

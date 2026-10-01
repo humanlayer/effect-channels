@@ -1,5 +1,5 @@
 import { describe, it } from '@effect/vitest'
-import { Config, Effect, Layer, Predicate, Redacted, Ref, Schema } from 'effect'
+import { Config, Effect, Layer, Logger, Predicate, Redacted, Ref, Schema } from 'effect'
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http'
 
 import { GetIssueVariables } from '../src/api/GetIssue'
@@ -104,6 +104,60 @@ describe('LinearApiLive', () => {
 			)
 			expect(error.reason).toBe('identity_mismatch')
 			expect(yield* Ref.get(calls)).toBe(0)
+		}),
+	)
+
+	it.effect('logs a refused developer token as a configuration error that names it, without the token', ({ expect }) =>
+		Effect.gen(function* () {
+			const logs: Array<string> = []
+			const logger = Logger.layer([Logger.make((entry) => logs.push(JSON.stringify(Logger.formatStructured.log(entry))))])
+			const http = HttpClient.make((request) => Effect.succeed(HttpClientResponse.fromWeb(request, Response.json({}, { status: 401 }))))
+			const error = yield* Effect.flatMap(LinearApi, (api) => api.getIssue({ issue })).pipe(
+				Effect.provide(apiLayer(http)),
+				Effect.provide(logger),
+				Effect.flip,
+			)
+			expect(error).toMatchObject({ reason: 'unauthorized', retryable: false })
+			const output = logs.join('\n')
+			expect(output).toContain('Linear rejected the developer token; check LINEAR_DEVELOPER_TOKEN')
+			expect(output).toContain('"credential":"developer_token"')
+			expect(output).toContain('"level":"ERROR"')
+			expect(output).not.toContain('token-never-log')
+		}),
+	)
+
+	it.effect('logs app client credentials Linear refuses even after renewing them', ({ expect }) =>
+		Effect.gen(function* () {
+			const logs: Array<string> = []
+			const logger = Logger.layer([Logger.make((entry) => logs.push(JSON.stringify(Logger.formatStructured.log(entry))))])
+			const http = HttpClient.make((request) =>
+				Effect.gen(function* () {
+					const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie)
+					if (new URL(web.url).pathname === '/oauth/token') {
+						return HttpClientResponse.fromWeb(request, Response.json({ access_token: 'renewed', expires_in: 3600 }))
+					}
+					return HttpClientResponse.fromWeb(request, Response.json({}, { status: 401 }))
+				}),
+			)
+			const options = LinearApiLiveOptions.make({
+				auth: LinearAuth.clientCredentials({
+					clientId: Config.succeed('client'),
+					clientSecret: Config.succeed(Redacted.make('secret-never-log')),
+				}),
+				organizationId: Config.succeed(organizationId),
+				appUserId: Config.succeed(appUserId),
+			})
+			const layer = makeLinearApiLiveBase(options).pipe(Layer.provide(Layer.succeed(HttpClient.HttpClient, http)))
+			const error = yield* Effect.flatMap(LinearApi, (api) => api.getIssue({ issue })).pipe(
+				Effect.provide(layer),
+				Effect.provide(logger),
+				Effect.flip,
+			)
+			expect(error).toMatchObject({ reason: 'unauthorized' })
+			const output = logs.join('\n')
+			expect(output).toContain('Linear rejected the app client credentials; check LINEAR_CLIENT_ID and LINEAR_CLIENT_SECRET')
+			expect(output).toContain('"credential":"client_credentials"')
+			expect(output).not.toContain('secret-never-log')
 		}),
 	)
 })

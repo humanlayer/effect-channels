@@ -203,7 +203,8 @@ it.effect(
 			yield* mailbox.deliver(admission('channels-cloudflare-test'))
 			yield* mailbox.alarm()
 			const { deliveryId, accessToken } = Option.getOrThrow(yield* Ref.get(handedOff))
-			expect(yield* alarm.scheduledAt).toEqual(null)
+			/** The waiting delivery's only due time is the default 24-hour handoff limit. */
+			expect(yield* alarm.scheduledAt).toEqual(24 * 60 * 60 * 1_000)
 
 			const routedTo = yield* Ref.make<ReadonlyArray<string>>([])
 			const mailboxes = DeliveryMailboxes.of({

@@ -273,11 +273,29 @@ export const GitHubApiClientLive = Layer.effect(
 			)
 		}
 
+		/**
+		 * Try once more with a new installation token when GitHub refuses the cached one. A refusal of the new
+		 * token too means the app's own credentials are wrong, and is logged as a configuration error.
+		 */
 		const retryWithFreshToken = <A>(ref: GitHubRepositoryRef, operation: Effect.Effect<A, GitHubApiError>) =>
 			operation.pipe(
 				Effect.catchTag('GitHubApiError', (error) => {
 					if (error.reason !== 'authentication') return Effect.fail(error)
-					return Cache.invalidate(tokenCache, cacheKey(ref)).pipe(Effect.andThen(operation))
+					return Cache.invalidate(tokenCache, cacheKey(ref)).pipe(
+						Effect.andThen(operation),
+						Effect.tapError((retried) =>
+							retried.reason === 'authentication'
+								? Effect.logError('GitHub rejected the app credentials; check GITHUB_APP_ID and GITHUB_PRIVATE_KEY').pipe(
+										Effect.annotateLogs({
+											provider: 'github',
+											credential: 'app_private_key',
+											operation: retried.operation,
+											status: retried.status ?? 'none',
+										}),
+									)
+								: Effect.void,
+						),
+					)
 				}),
 			)
 		const urlWithQuery = (path: string, query: ReadonlyArray<readonly [string, string]> = []) => {

@@ -1,5 +1,5 @@
 import { describe, it } from '@effect/vitest'
-import { Array as Arr, Clock, ConfigProvider, Effect, Layer, Match, Queue, Ref } from 'effect'
+import { Array as Arr, Clock, ConfigProvider, Effect, Layer, Logger, Match, Queue, Ref } from 'effect'
 import { TestClock } from 'effect/testing'
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http'
 
@@ -134,6 +134,26 @@ describe('GitHubApiLive', () => {
 				'/repos/humanlayer/channels/issues/42/comments?per_page=100&page=2',
 			)
 			expect(yield* Queue.take(apiRequests)).toBe('/repos/humanlayer/channels/issues/42')
+		}),
+	)
+
+	it.effect('logs app credentials GitHub refuses even with a new installation token, without the key', ({ expect }) =>
+		Effect.gen(function* () {
+			const logs: Array<string> = []
+			const logger = Logger.layer([Logger.make((entry) => logs.push(JSON.stringify(Logger.formatStructured.log(entry))))])
+			const httpClient = HttpClient.make((request) =>
+				Effect.succeed(HttpClientResponse.fromWeb(request, Response.json({ message: 'Bad credentials' }, { status: 401 }))),
+			)
+			const error = yield* Effect.flatMap(GitHubApi, (api) => api.fetchIssue({ issue })).pipe(
+				Effect.provide(makeLayer(httpClient)),
+				Effect.provide(logger),
+				Effect.flip,
+			)
+			expect(error).toMatchObject({ reason: 'authentication', retryable: false })
+			const output = logs.join('\n')
+			expect(output).toContain('GitHub rejected the app credentials; check GITHUB_APP_ID and GITHUB_PRIVATE_KEY')
+			expect(output).toContain('"level":"ERROR"')
+			expect(output).not.toContain('private-key-never-log')
 		}),
 	)
 

@@ -7,10 +7,13 @@
  */
 import { Schema } from 'effect'
 
-/** How a delivery ended. `AwaitingInput` ends the turn with a question; the reply is a new delivery. */
+/**
+ * How a delivery ended. `AwaitingInput` ends the turn with a question; the reply is a new delivery.
+ * `Failed` with `reason: 'TimedOut'` means the remote worker sent nothing before its handoff's time limit.
+ */
 export const DeliveryOutcome = Schema.TaggedUnion({
 	Completed: {},
-	Failed: {},
+	Failed: { reason: Schema.optionalKey(Schema.Literal('TimedOut')) },
 	AwaitingInput: { options: Schema.optionalKey(Schema.Array(Schema.NonEmptyString)) },
 })
 export type DeliveryOutcome = typeof DeliveryOutcome.Type

@@ -16,6 +16,7 @@ import {
 	CreateDeliveryMessage,
 	DeleteDeliveryMessage,
 	DELIVERY_RETENTION_MS,
+	DELIVERY_TIMED_OUT_MARKDOWN,
 	DeliveryAdmission,
 	DeliveryControlBackend,
 	DeliveryOutcome,
@@ -64,11 +65,12 @@ type HandoffStore = MailboxDelivery | MailboxProcessingBackend | DeliveryControl
 const reference = (claim: ClaimedMailboxBatch) =>
 	Option.getOrThrow(parseDeliveryId(makeDeliveryId({ mailboxKey: claim.mailboxKey, batchId: claim.batchId })))
 
-const handOff = (claim: ClaimedMailboxBatch, links: ReadonlyArray<ExternalLink> = []) =>
+const handOff = (claim: ClaimedMailboxBatch, links: ReadonlyArray<ExternalLink> = [], failAfterMs?: number) =>
 	Effect.gen(function* () {
 		const backend = yield* MailboxProcessingBackend
 		const handedOffAt = Timestamp.make(yield* Clock.currentTimeMillis)
-		yield* backend.handOffDelivery({ mailboxKey: claim.mailboxKey, claimId: claim.claimId, handedOffAt, links })
+		const request = { mailboxKey: claim.mailboxKey, claimId: claim.claimId, handedOffAt, links }
+		yield* backend.handOffDelivery(failAfterMs === undefined ? request : { ...request, failAfterMs })
 	})
 
 const status = (claim: ClaimedMailboxBatch, accessToken = claim.accessToken) =>
@@ -1178,6 +1180,88 @@ export const deliveryHandoffContract = <E>(storeName: string, makeEmptyStore: ()
 			expect(Option.isNone(yield* claimOutput)).toEqual(true)
 			yield* settle(claim, 'completed')
 			expect((yield* sendOutput).operation).toEqual({ _tag: 'RenderPlan', revision: 1, plan: planA })
+		}),
+	)
+
+	/** A delivery prepared for `messagePreparation`, handed off with a time limit, whose callback has returned. */
+	const limitedDelivery = (failAfterMs: number | undefined) =>
+		Effect.gen(function* () {
+			yield* deliver('a')
+			const claim = yield* claimPreparedWith(messagePreparation)
+			yield* handOff(claim, [], failAfterMs)
+			yield* settle(claim, 'completed')
+			return claim
+		})
+
+	contract(
+		'a handed-off delivery whose remote worker sends nothing fails on its own at its time limit',
+		Effect.gen(function* () {
+			const startedAt = yield* Clock.currentTimeMillis
+			const claim = yield* limitedDelivery(60_000)
+			yield* deliver('follow-up')
+			const waiting = yield* status(claim)
+			expect(waiting.stage).toEqual('ExternalWaiting')
+			expect(waiting.failAt).toEqual(startedAt + 60_000)
+			expect(yield* findReady).toEqual([])
+
+			yield* TestClock.adjust(60_000)
+			expect(yield* findReady).toEqual([OutputReadyMailbox.make({ mailboxKey })])
+			const outcome = Option.getOrThrow(yield* claimOutput)
+			expect(outcome.operation).toEqual({
+				_tag: 'PresentOutcome',
+				outcome: { _tag: 'Failed', reason: 'TimedOut' },
+				markdown: DELIVERY_TIMED_OUT_MARKDOWN,
+			})
+			const finishing = yield* status(claim)
+			expect(finishing.outcome).toEqual({ _tag: 'Failed', reason: 'TimedOut' })
+			expect(finishing.failAt).toBeUndefined()
+			expect((yield* finish(claim).pipe(Effect.flip))._tag).toEqual('DeliveryTerminalConflict')
+
+			yield* settleOutput(outcome)
+			expect((yield* status(claim)).stage).toEqual('Retired')
+			expect((yield* findWaiting).waiting.count).toEqual(1)
+		}),
+	)
+
+	contract(
+		'every request from the remote worker, a repeat included, starts the time limit again; a status read does not',
+		Effect.gen(function* () {
+			const claim = yield* limitedDelivery(60_000)
+			yield* TestClock.adjust(40_000)
+			expect((yield* apply(claim, working('a'))).status).toEqual('accepted')
+			yield* sendOutput
+			yield* TestClock.adjust(40_000)
+			expect(yield* findReady).toEqual([])
+			expect((yield* apply(claim, working('a'))).status).toEqual('already_recorded')
+			expect((yield* status(claim)).failAt).toEqual((yield* Clock.currentTimeMillis) + 60_000)
+
+			yield* TestClock.adjust(40_000)
+			yield* status(claim)
+			expect(yield* findReady).toEqual([])
+			yield* TestClock.adjust(20_000)
+			expect(yield* findReady).toEqual([OutputReadyMailbox.make({ mailboxKey })])
+			expect((yield* sendOutput).operation).toMatchObject({ outcome: { _tag: 'Failed', reason: 'TimedOut' } })
+		}),
+	)
+
+	contract(
+		'a result before the time limit ends it, and a delivery handed off without a limit waits for its worker',
+		Effect.gen(function* () {
+			const limited = yield* limitedDelivery(60_000)
+			yield* finish(limited)
+			yield* sendOutput
+			yield* TestClock.adjust(120_000)
+			expect((yield* status(limited)).outcome).toEqual({ _tag: 'Completed' })
+
+			yield* deliver('b')
+			const unlimited = yield* claimPreparedWith(messagePreparation)
+			yield* handOff(unlimited)
+			yield* settle(unlimited, 'completed')
+			yield* TestClock.adjust(30 * 24 * 60 * 60 * 1_000)
+			expect(yield* findReady).toEqual([])
+			const waiting = yield* status(unlimited)
+			expect(waiting.stage).toEqual('ExternalWaiting')
+			expect(waiting.failAt).toBeUndefined()
 		}),
 	)
 }

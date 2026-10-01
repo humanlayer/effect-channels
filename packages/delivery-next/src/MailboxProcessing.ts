@@ -26,6 +26,7 @@ import {
 } from 'effect'
 
 import {
+	DEFAULT_HANDOFF_FAIL_AFTER,
 	DeliveryContext,
 	DeliveryHandoff,
 	DeliveryHandoffRejected,
@@ -202,6 +203,20 @@ export const toClaimedMailboxBatch = (input: {
 	)
 }
 
+/** A handoff's `failAfter` was not a positive duration. A programming error, so it is a defect. */
+class HandoffFailAfterInvalid extends Data.TaggedError('HandoffFailAfterInvalid')<{}> {}
+
+/** A handoff's time limit in whole milliseconds; none when it has no limit. */
+const handoffFailAfterMs = (failAfter: Duration.Input) =>
+	Option.match(Duration.fromInput(failAfter), {
+		onNone: () => Effect.die(new HandoffFailAfterInvalid()),
+		onSome: (duration) => {
+			if (!Duration.isFinite(duration)) return Effect.succeedNone
+			const ms = Math.ceil(Duration.toMillis(duration))
+			return ms > 0 ? Effect.succeedSome(ms) : Effect.die(new HandoffFailAfterInvalid())
+		},
+	})
+
 /** Save the callback choice and destination for the batch this claim owns. */
 export const PrepareMailboxDelivery = Schema.Struct({
 	mailboxKey: Schema.NonEmptyString,
@@ -216,6 +231,8 @@ export const HandOffMailboxDelivery = Schema.Struct({
 	claimId: Schema.NonEmptyString,
 	handedOffAt: Timestamp,
 	links: Schema.Array(ExternalLink),
+	/** How long the remote worker may go without a request before the delivery fails on its own. Absent means no limit. */
+	failAfterMs: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0))),
 })
 export type HandOffMailboxDelivery = typeof HandOffMailboxDelivery.Type
 
@@ -621,7 +638,11 @@ const makeProviderDeliveryExecution = (input: {
 		const handoff = (options?: HandoffOptions) =>
 			Effect.gen(function* () {
 				const handedOffAt = Timestamp.make(yield* Clock.currentTimeMillis)
-				yield* backend.handOffDelivery({ ...owner, handedOffAt, links: options?.links ?? [] }).pipe(
+				const failAfterMs = yield* handoffFailAfterMs(options?.failAfter ?? DEFAULT_HANDOFF_FAIL_AFTER)
+				const request = { ...owner, handedOffAt, links: options?.links ?? [] }
+				yield* backend
+					.handOffDelivery(Option.match(failAfterMs, { onNone: () => request, onSome: (ms) => ({ ...request, failAfterMs: ms }) }))
+					.pipe(
 					Effect.tapError((error) =>
 						Effect.logWarning('Delivery handoff failed', error).pipe(
 							Effect.annotateLogs({ mailbox_key: claim.mailboxKey, claim_id: claim.claimId }),
@@ -916,6 +937,16 @@ export const processOutputClaim = Effect.fn('delivery.process_output_claim')(fun
 		)
 
 	yield* Effect.logInfo('Delivery output started').pipe(Effect.annotateLogs(annotations))
+	if (
+		Predicate.isTagged(claim.operation, 'PresentOutcome') &&
+		Predicate.isTagged(claim.operation.outcome, 'Failed') &&
+		claim.operation.outcome.reason === 'TimedOut' &&
+		claim.attempt === 1
+	) {
+		yield* Effect.logWarning('Delivery timed out: its remote worker sent no request within the handoff time limit').pipe(
+			Effect.annotateLogs(annotations),
+		)
+	}
 	const prepared = claim.prepared
 	const settlement =
 		claim.attempt > maxAttempts

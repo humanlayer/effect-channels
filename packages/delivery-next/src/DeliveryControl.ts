@@ -21,6 +21,7 @@ import { DeliveryOutcome, DeliveryTerminal } from './DeliveryOutcome'
 import { DeliveryPlan, DeliveryPlanStatus } from './DeliveryPlan'
 import { DeliveryReactionTarget, DeliveryReactionTargetKind, PortableReaction } from './DeliveryReaction'
 import { DeliveryId, DeliveryReference, parseDeliveryId } from './DeliveryReference'
+import { Timestamp } from './MailboxPolicy'
 
 /** The longest final Markdown a remote worker may send. */
 export const DELIVERY_MARKDOWN_MAX_LENGTH = 65_536
@@ -134,6 +135,8 @@ export type DeliveryMutationReceipt = typeof DeliveryMutationReceipt.Type
  * @property activity - the activity the remote worker last asked for; `Idle` once the delivery has a result
  * @property reactionTargets - what a reaction can go on; none once the delivery retires
  * @property plan - the latest plan the remote worker sent, if it sent one, and the revision a provider last showed
+ * @property failAt - when the delivery fails on its own unless the remote worker sends a request first; every
+ * request except a status read moves it later. Absent once the delivery has a result, or when it has no limit.
  * @property output - the provider output the delivery owes or has sent. A failed output does not change `outcome`.
  */
 export const DeliveryStatus = Schema.TaggedStruct('DeliveryStatus', {
@@ -145,6 +148,7 @@ export const DeliveryStatus = Schema.TaggedStruct('DeliveryStatus', {
 	supportedOperations: Schema.Array(DeliveryOperationKind),
 	reactionTargets: Schema.Array(DeliveryReactionTargetKind),
 	plan: Schema.optionalKey(DeliveryPlanStatus),
+	failAt: Schema.optionalKey(Timestamp),
 	output: Schema.Array(DeliveryOutputStatus),
 })
 export type DeliveryStatus = typeof DeliveryStatus.Type

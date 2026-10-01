@@ -16,7 +16,7 @@ import {
 } from '@humanlayer/channels-delivery-next'
 import { Array as Arr, Data, Effect, Match, Option, Predicate, Schema, Struct } from 'effect'
 
-import { SlackApi } from './SlackApi'
+import { SlackApi, SlackApiError, isSlackTokenRejected } from './SlackApi'
 import {
 	SlackConversationStopped,
 	SlackEventId,
@@ -686,9 +686,13 @@ const processSlackBatch = (options: SlackEventProcessorOptions) =>
 			normalizeEnvelope(envelope, threadRef),
 		).pipe(
 			Effect.tapError((error) => Effect.logError('Slack event normalization failed', error)),
-			Effect.mapError((error) =>
-				Schema.is(ProviderEventInvalid)(error) ? error : providerFailure('slack_api_failed'),
-			),
+			Effect.mapError((error) => {
+				if (Schema.is(ProviderEventInvalid)(error)) return error
+				/** A refused bot token fails the same way on every attempt, so the event fails now. */
+				return Schema.is(SlackApiError)(error) && isSlackTokenRejected(error)
+					? nonRetryableFailure('slack_token_rejected')
+					: providerFailure('slack_api_failed')
+			}),
 		)
 		const normalized = normalizedOptions.flatMap(Option.toArray)
 

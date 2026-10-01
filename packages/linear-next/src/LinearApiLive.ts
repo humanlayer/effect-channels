@@ -95,6 +95,25 @@ const apiService = (
 		return procedure.pipe(Effect.provideService(LinearHttpClient, client), narrowLinearProviderErrors)
 	}
 
+	/**
+	 * Log a credential Linear refused as a configuration error that names it. A developer token cannot be
+	 * renewed; client credentials were already renewed once.
+	 */
+	const reportRejectedCredential = (error: LinearApiError) =>
+		error.reason === 'unauthorized'
+			? Effect.logError(
+					client.canRefresh
+						? 'Linear rejected the app client credentials; check LINEAR_CLIENT_ID and LINEAR_CLIENT_SECRET'
+						: 'Linear rejected the developer token; check LINEAR_DEVELOPER_TOKEN, or remove it to use the app client credentials',
+				).pipe(
+					Effect.annotateLogs({
+						provider: 'linear',
+						credential: client.canRefresh ? 'client_credentials' : 'developer_token',
+						operation: error.operation,
+					}),
+				)
+			: Effect.void
+
 	const refreshAuthentication = <A>(
 		organizationId: LinearOrganizationId,
 		procedure: Effect.Effect<A, LinearProviderError | LinearApiError, LinearHttpClient>,
@@ -104,6 +123,7 @@ const apiService = (
 				if (error.reason !== 'unauthorized' || !client.canRefresh) return Effect.fail(error)
 				return client.invalidateCredential.pipe(Effect.andThen(executeAuthenticated(organizationId, procedure)))
 			}),
+			Effect.tapError(reportRejectedCredential),
 		)
 
 	const executeRead = <A>(

@@ -21,7 +21,7 @@ import { Cause, Effect, Exit, Layer, Option, Redacted, Ref, Schema } from 'effec
 import { vi } from 'vite-plus/test'
 
 import { makeTestDeliveryExecution } from '../../delivery-next/test/delivery-execution'
-import { SlackApi } from '../src/SlackApi'
+import { SlackApi, SlackApiError } from '../src/SlackApi'
 import {
 	SlackConversationStopped,
 	SlackMessageDeleted,
@@ -394,6 +394,26 @@ describe('Slack event batch processing', () => {
 				),
 			).toEqual(ProviderEventIgnored.make({ reason: 'no_activation_event' }))
 			expect(onNewMention).not.toHaveBeenCalled()
+		}),
+	)
+
+	it.effect('fails an event at once when Slack refuses the bot token, and retries other Slack failures', ({ expect }) =>
+		Effect.gen(function* () {
+			const failingWith = (message: string) =>
+				Layer.merge(
+					Layer.mock(SlackApi, {
+						resolveParticipant: () => Effect.fail(SlackApiError.make({ operation: 'resolve_participant', message })),
+					}),
+					MailboxSubscriptionsMemory,
+				)
+			const run = (message: string) =>
+				process({ onNewMention: () => Effect.void }, mentionBatch(), failingWith(message)).pipe(Effect.flip)
+			expect(yield* run('invalid_auth')).toEqual(
+				ProviderEventExecutionFailed.make({ provider: 'slack', retryable: false, safeCode: 'slack_token_rejected' }),
+			)
+			expect(yield* run('Could not reach Slack')).toEqual(
+				ProviderEventExecutionFailed.make({ provider: 'slack', retryable: true, safeCode: 'slack_api_failed' }),
+			)
 		}),
 	)
 

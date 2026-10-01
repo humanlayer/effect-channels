@@ -9,16 +9,25 @@
  * runs, and where its output goes, before any application code runs. A retry reuses what was saved.
  */
 import { Data, Schema } from 'effect'
-import type { Effect, Option, Redacted } from 'effect'
+import type { Duration, Effect, Option, Redacted } from 'effect'
 
-import { ExternalLink } from './DeliveryLink'
+import type { ExternalLink } from './DeliveryLink'
 import { DeliveryReactionTargetKind } from './DeliveryReaction'
 import { ConversationId, DeliveryId } from './DeliveryReference'
 
-export const HandoffOptions = Schema.Struct({
-	links: Schema.optionalKey(Schema.Array(ExternalLink)),
-})
-export type HandoffOptions = typeof HandoffOptions.Type
+/** How long a handed-off delivery may go without a request from its remote worker, unless the handoff says otherwise. */
+export const DEFAULT_HANDOFF_FAIL_AFTER = '24 hours' satisfies Duration.Input
+
+/**
+ * @property links - links to show on the delivery, such as the remote job's page
+ * @property failAfter - how long the remote worker may go without a request before the delivery fails on
+ * its own, with outcome `Failed` and reason `TimedOut`. Every request it sends, except a status read,
+ * starts the time again. Defaults to 24 hours; `'Infinity'` means no limit.
+ */
+export type HandoffOptions = {
+	readonly links?: ReadonlyArray<ExternalLink>
+	readonly failAfter?: Duration.Input
+}
 
 /** Returned by a callback that handed its delivery off. The saved handoff, not this value, is authoritative. */
 export const DeliveryHandoff = Schema.TaggedStruct('DeliveryHandoff', {

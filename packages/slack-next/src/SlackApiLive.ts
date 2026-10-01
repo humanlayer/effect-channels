@@ -11,6 +11,7 @@ import { uploadSlackFileBytes } from './api/UploadSlackFileBytes'
 import {
 	SlackApi,
 	SlackApiError,
+	isSlackTokenRejected,
 	type SlackApiOperation,
 	type SlackDownloadFileRequest,
 	SlackFileAuthorizationError,
@@ -250,6 +251,23 @@ const planBlocks = (plan: SlackPlan): ReadonlyArray<Schema.Json> => [
 const planFallbackText = (plan: SlackPlan) =>
 	[plan.title, ...plan.tasks.map((task) => `- (${task.status}) ${task.title}`)].join('\n')
 
+/** Log a refused bot token as a configuration error that names the setting to check. */
+const reportRejectedToken = <A>(effect: Effect.Effect<A, SlackApiError>) =>
+	effect.pipe(
+		Effect.tapError((error) =>
+			isSlackTokenRejected(error)
+				? Effect.logError('Slack rejected the bot token; check SLACK_BOT_TOKEN').pipe(
+						Effect.annotateLogs({
+							provider: 'slack',
+							credential: 'bot_token',
+							slack_error: error.message,
+							operation: error.operation,
+						}),
+					)
+				: Effect.void,
+		),
+	)
+
 const nextCursor = (metadata: typeof SlackResponseMetadata.Type | undefined) => {
 	const cursor = metadata?.next_cursor
 	return Predicate.isUndefined(cursor) || cursor.length === 0 ? Option.none<string>() : Option.some(cursor)
@@ -270,6 +288,7 @@ const SlackApiService = Layer.effect(
 				Effect.catchTag('SlackMissingScopeError', (error) =>
 					Effect.fail(SlackApiError.make({ operation: error.operation, message: 'missing_scope' })),
 				),
+				reportRejectedToken,
 			)
 
 		const callSlack = <A>(

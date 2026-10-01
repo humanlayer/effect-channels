@@ -141,6 +141,18 @@ export class SlackApiError extends Schema.TaggedError<SlackApiError>()('SlackApi
 	message: Schema.String,
 }) {}
 
+/** Slack's answers when it refuses the bot token itself, not one request. */
+const rejectedTokenErrors: ReadonlySet<string> = new Set([
+	'account_inactive',
+	'invalid_auth',
+	'not_authed',
+	'token_expired',
+	'token_revoked',
+])
+
+/** Whether Slack refused the bot token itself. Another attempt with the same token cannot succeed. */
+export const isSlackTokenRejected = (error: SlackApiError) => rejectedTokenErrors.has(error.message)
+
 export const SlackFileScope = Schema.Literals(['files:read', 'files:write'])
 export type SlackFileScope = typeof SlackFileScope.Type
 
