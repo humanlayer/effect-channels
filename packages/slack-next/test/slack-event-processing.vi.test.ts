@@ -553,6 +553,7 @@ describe('Slack delivery preparation', () => {
 					},
 					activationTarget: { _tag: 'SlackMessage', message: { teamId, channelId, messageTs: rootTs } },
 					supportedOperations: threadSupportedOperations,
+					reactionTargets: ['ActivationTarget', 'MessageTarget'],
 				}),
 			])
 		})
@@ -580,6 +581,7 @@ describe('Slack delivery preparation', () => {
 						thread: { teamId, channelId, threadTs: rootTs, isDm: false },
 					},
 					supportedOperations: threadSupportedOperations,
+					reactionTargets: ['MessageTarget'],
 				}),
 			])
 		}),

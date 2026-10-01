@@ -13,6 +13,7 @@ import {
 	DeliveryControl,
 	FailDelivery,
 	SetDeliveryActivity,
+	SetDeliveryReaction,
 	UpdateDeliveryMessage,
 	type DeliveryMutation,
 } from './DeliveryControl'
@@ -69,6 +70,14 @@ const handlers = (api: ReturnType<typeof prefixedDeliveryHttpApi>) =>
 				)
 				.handle('setActivity', ({ params, payload, request }) =>
 					apply(request, params.deliveryId, SetDeliveryActivity.make(payload), 'delivery.api.set_activity'),
+				)
+				.handle('setReaction', ({ params, payload, request }) =>
+					apply(
+						request,
+						params.deliveryId,
+						SetDeliveryReaction.make({ reaction: params.reaction, target: payload.target, active: payload.active }),
+						'delivery.api.set_reaction',
+					),
 				)
 				.handle('createMessage', ({ params, payload, request }) =>
 					apply(

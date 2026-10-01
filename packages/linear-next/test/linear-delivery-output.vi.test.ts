@@ -10,6 +10,8 @@ import {
 	PreparedDeliveryInvocation,
 	ProviderOutputAttempt,
 	ProviderPresentOutcome,
+	ProviderReactionTarget,
+	ProviderSetMessageReaction,
 	makeDeliveryId,
 	type ProviderOutputOperation,
 } from '@humanlayer/channels-delivery-next'
@@ -18,19 +20,28 @@ import { Effect, Layer, Match, Ref, Result, Schema } from 'effect'
 import { commentOutputScenarios } from '../../delivery-next/test/comment-output-scenarios'
 
 import {
+	LinearActivationTarget,
 	LinearAgentSessionDestination,
+	LinearCommentActivationTarget,
 	LinearDeliveryDestination,
+	LinearIssueActivationTarget,
 	LinearIssueDestination,
 	linearSupportedOperations,
 } from '../src/LinearDeliveryDestination'
 import { LinearOutputReceipt, linearDefaultOutcomeText, makeLinearOutputProcessor } from '../src/LinearDeliveryOutput'
-import { LinearApi, LinearApiError } from '../src/LinearApi'
+import {
+	LinearApi,
+	LinearApiError,
+	type LinearCreateReactionRequest,
+	type LinearDeleteReactionRequest,
+} from '../src/LinearApi'
 import {
 	LinearAgentActivityId,
 	LinearAgentSessionId,
 	LinearCommentId,
 	LinearIssueId,
 	LinearOrganizationId,
+	LinearReactionId,
 	LinearUserId,
 } from '../src/LinearIdentity'
 import {
@@ -44,7 +55,7 @@ import {
 	type LinearUpdateAgentSessionRequest,
 	type LinearUpdateCommentRequest,
 } from '../src'
-import { LinearComment } from '../src/LinearResources'
+import { LinearComment, LinearReaction } from '../src/LinearResources'
 import { linearAppUserId, linearOrganizationId } from './fixtures'
 
 const idempotencyKey = '5b0c3a1e-8d2f-4c61-9a57-1f2e3d4c5b6a'
@@ -60,22 +71,36 @@ const sessionDestination = LinearAgentSessionDestination.make({
 })
 const issueDestination = LinearIssueDestination.make({ organizationId: linearOrganizationId, issueId })
 
-const prepared = (destination: LinearDeliveryDestination, presentationVersion = 1) =>
-	PreparedDeliveryInvocation.make({
+const prepared = (
+	destination: LinearDeliveryDestination,
+	presentationVersion = 1,
+	activationTarget?: LinearActivationTarget,
+) => {
+	const fields = {
 		callback: 'onAgentSessionCreated',
 		presentationVersion,
 		destination: Schema.encodeSync(Schema.toCodecJson(LinearDeliveryDestination))(destination),
 		supportedOperations: linearSupportedOperations(destination),
-	})
+	}
+	return PreparedDeliveryInvocation.make(
+		activationTarget === undefined
+			? fields
+			: { ...fields, activationTarget: Schema.encodeSync(Schema.toCodecJson(LinearActivationTarget))(activationTarget) },
+	)
+}
 
-const attempt = (operation: ProviderOutputOperation, destination: LinearDeliveryDestination = sessionDestination) =>
+const attempt = (
+	operation: ProviderOutputOperation,
+	destination: LinearDeliveryDestination = sessionDestination,
+	activationTarget?: LinearActivationTarget,
+) =>
 	ProviderOutputAttempt.make({
 		deliveryId: makeDeliveryId({ mailboxKey: 'linear:v1:agent-session:x', batchId: BatchId.make('batch-1') }),
 		operationId: DeliveryOperationId.make('outcome'),
 		attempt: 1,
 		hadAmbiguousAttempt: false,
 		idempotencyKey,
-		prepared: prepared(destination),
+		prepared: prepared(destination, 1, activationTarget),
 		operation,
 	})
 
@@ -101,6 +126,8 @@ type Calls = {
 	readonly comments: ReadonlyArray<LinearCreateCommentRequest>
 	readonly commentUpdates: ReadonlyArray<LinearUpdateCommentRequest>
 	readonly commentDeletes: ReadonlyArray<LinearDeleteCommentRequest>
+	readonly reactions: ReadonlyArray<LinearCreateReactionRequest>
+	readonly reactionDeletes: ReadonlyArray<LinearDeleteReactionRequest>
 }
 
 /**
@@ -114,6 +141,8 @@ const run = (
 		readonly deleteError?: LinearApiError
 		/** How Linear answers every comment create, update, and delete. */
 		readonly commentError?: LinearApiError
+		/** How Linear answers every reaction create and delete. */
+		readonly reactionError?: LinearApiError
 	} = {},
 ) =>
 	Effect.gen(function* () {
@@ -123,11 +152,32 @@ const run = (
 			comments: [],
 			commentUpdates: [],
 			commentDeletes: [],
+			reactions: [],
+			reactionDeletes: [],
 		})
 		const record = <K extends keyof Calls>(key: K, value: Calls[K][number]) =>
 			Ref.update(calls, (all) => ({ ...all, [key]: [...all[key], value] }))
 		const commentAnswer = options.commentError === undefined ? Effect.void : Effect.fail(options.commentError)
+		const reactionAnswer = options.reactionError === undefined ? Effect.void : Effect.fail(options.reactionError)
 		const api = Layer.mock(LinearApi, {
+			createReaction: (request) =>
+				record('reactions', request).pipe(
+					Effect.andThen(reactionAnswer),
+					Effect.as(
+						LinearReaction.make({
+							id: request.reactionId ?? LinearReactionId.make('assigned-by-linear'),
+							issueId,
+							commentId: null,
+							emoji: request.emoji,
+							author: null,
+							ref: {
+								issue: LinearIssueRef.make({ organizationId: linearOrganizationId, teamId: null, issueId }),
+								reactionId: request.reactionId ?? LinearReactionId.make('assigned-by-linear'),
+							},
+						}),
+					),
+				),
+			deleteReaction: (request) => record('reactionDeletes', request).pipe(Effect.andThen(reactionAnswer)),
 			createAgentActivity: (request) =>
 				record('activities', request).pipe(
 					Effect.andThen(
@@ -432,6 +482,113 @@ describe('Linear output: issue', () => {
 			)
 			expect(activity.result).toMatchObject({ _tag: 'Failure', failure: { safeCode: 'unsupported_operation' } })
 			expect(linearSupportedOperations(issueDestination)).not.toContain('SetActivity')
+		}),
+	)
+})
+
+describe('Linear output: portable reactions', () => {
+	const issueRef = LinearIssueRef.make({ organizationId: linearOrganizationId, teamId: null, issueId })
+	const onIssue = LinearIssueActivationTarget.make({ organizationId: linearOrganizationId, issueId })
+	const onComment = LinearCommentActivationTarget.make({
+		organizationId: linearOrganizationId,
+		issueId,
+		commentId: commentRef.commentId,
+	})
+	const onActivation = ProviderReactionTarget.cases.ActivationTarget.make({})
+	const react = (
+		target: ProviderReactionTarget,
+		reaction: ProviderSetMessageReaction['reaction'],
+		active: boolean,
+		addedReference?: Schema.Json,
+	) =>
+		ProviderSetMessageReaction.make(
+			addedReference === undefined ? { target, reaction, active } : { target, reaction, active, addedReference },
+		)
+	const reactionReceipt = { _tag: 'LinearReaction', issue: issueRef, reactionId: idempotencyKey }
+
+	it.effect("reacts on a session's source comment, else its issue, under the operation key", ({ expect }) =>
+		Effect.gen(function* () {
+			const comment = yield* run(attempt(react(onActivation, 'thumbs_up', true), sessionDestination, onComment))
+			expect(comment.result).toEqual({ _tag: 'Success', success: DeliveryOutputApplied.make({ receipt: reactionReceipt }) })
+			expect(comment.calls.reactions).toEqual([
+				{ target: { _tag: 'Comment', comment: commentRef }, emoji: '+1', reactionId: idempotencyKey },
+			])
+			const issue = yield* run(attempt(react(onActivation, 'hooray', true), sessionDestination, onIssue))
+			expect(issue.calls.reactions).toEqual([
+				{ target: { _tag: 'Issue', issue: issueRef }, emoji: 'tada', reactionId: idempotencyKey },
+			])
+		}),
+	)
+
+	it.effect('counts a reaction Linear already has under the same ID as applied', ({ expect }) =>
+		Effect.gen(function* () {
+			const again = yield* run(attempt(react(onActivation, 'eyes', true), sessionDestination, onIssue), {
+				reactionError: linearError('already_exists', false),
+			})
+			expect(again.result).toEqual({ _tag: 'Success', success: DeliveryOutputApplied.make({ receipt: reactionReceipt }) })
+		}),
+	)
+
+	it.effect('removes the reaction its add made, counts one already gone as removed, and makes no call with no add', ({ expect }) =>
+		Effect.gen(function* () {
+			const added = Schema.encodeSync(Schema.toCodecJson(LinearOutputReceipt))({
+				_tag: 'LinearReaction',
+				issue: issueRef,
+				reactionId: LinearReactionId.make('reaction-1'),
+			})
+			const removed = yield* run(attempt(react(onActivation, 'eyes', false, added), sessionDestination, onIssue))
+			expect(removed.result).toEqual({ _tag: 'Success', success: DeliveryOutputApplied.make({}) })
+			expect(removed.calls.reactionDeletes).toEqual([{ issue: issueRef, reactionId: 'reaction-1' }])
+			const gone = yield* run(attempt(react(onActivation, 'eyes', false, added), sessionDestination, onIssue), {
+				reactionError: linearError('not_found', false),
+			})
+			expect(gone.result._tag).toEqual('Success')
+			const nothing = yield* run(attempt(react(onActivation, 'eyes', false), sessionDestination, onIssue))
+			expect(nothing.result).toEqual({ _tag: 'Success', success: DeliveryOutputApplied.make({}) })
+			expect(nothing.calls.reactionDeletes).toEqual([])
+		}),
+	)
+
+	it.effect('reacts on a comment an issue delivery posted, and refuses one on a session message', ({ expect }) =>
+		Effect.gen(function* () {
+			const onPosted = ProviderReactionTarget.cases.MessageTarget.make({
+				messageId: MessageId.make('summary'),
+				reference: commentReceipt,
+			})
+			const posted = yield* run(attempt(react(onPosted, 'rocket', true), issueDestination))
+			expect(posted.calls.reactions).toEqual([
+				{ target: { _tag: 'Comment', comment: commentRef }, emoji: 'rocket', reactionId: idempotencyKey },
+			])
+			const session = yield* run(attempt(react(onPosted, 'rocket', true), sessionDestination, onIssue))
+			expect(session.result).toMatchObject({ _tag: 'Failure', failure: { safeCode: 'unsupported_operation' } })
+			expect(session.calls.reactions).toEqual([])
+		}),
+	)
+
+	it.effect('refuses an activation target in another workspace, and sorts Linear failures', ({ expect }) =>
+		Effect.gen(function* () {
+			const elsewhere = LinearIssueActivationTarget.make({
+				organizationId: LinearOrganizationId.make('other-org'),
+				issueId,
+			})
+			const mismatch = yield* run(attempt(react(onActivation, 'eyes', true), issueDestination, elsewhere))
+			expect(mismatch.result).toMatchObject({ _tag: 'Failure', failure: { safeCode: 'destination_identity_mismatch' } })
+			const missing = yield* run(attempt(react(onActivation, 'eyes', true), issueDestination))
+			expect(missing.result).toMatchObject({ _tag: 'Failure', failure: { safeCode: 'activation_target_missing' } })
+			const outage = yield* run(attempt(react(onActivation, 'eyes', true), issueDestination, onIssue), {
+				reactionError: linearError('unavailable', true, 2_000),
+			})
+			expect(outage.result).toMatchObject({
+				_tag: 'Failure',
+				failure: { safeCode: 'linear_reaction_failed', retryable: true, retryAfterMs: 2_000 },
+			})
+			const refused = yield* run(attempt(react(onActivation, 'eyes', true), issueDestination, onIssue), {
+				reactionError: linearError('forbidden', false),
+			})
+			expect(refused.result).toMatchObject({
+				_tag: 'Failure',
+				failure: { safeCode: 'linear_reaction_failed', retryable: false },
+			})
 		}),
 	)
 })

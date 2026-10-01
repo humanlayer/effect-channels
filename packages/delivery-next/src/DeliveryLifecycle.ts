@@ -34,6 +34,7 @@ import {
 	DeliveryMutationReceipt,
 	DeliveryNotFound,
 	DeliveryOperationUnsupported,
+	DeliveryReactionTargetUnavailable,
 	DeliveryStatus,
 	DeliveryTerminalConflict,
 	sameDeliveryTerminal,
@@ -41,6 +42,7 @@ import {
 	type DeliveryMessageMutation,
 	type DeliveryMutation,
 	type SetDeliveryActivity,
+	type SetDeliveryReaction,
 } from './DeliveryControl'
 import { AddExternalLink, ExternalLink } from './DeliveryLink'
 import {
@@ -62,6 +64,13 @@ import {
 	type DeliveryOutputSettlement,
 } from './DeliveryOperation'
 import { DeliveryTerminal, PresentOutcome } from './DeliveryOutcome'
+import {
+	DeliveryReactionTarget,
+	SetMessageReaction,
+	deliveryReactionTargetKind,
+	sameDeliveryReactionTarget,
+	type PortableReaction,
+} from './DeliveryReaction'
 import {
 	BatchId,
 	DeliveryAccessToken,
@@ -247,6 +256,8 @@ const withOperations = (
 		const links = () => saved.filter(({ operation }) => Predicate.isTagged(operation, 'AddExternalLink')).length
 		const messages = () => saved.filter(({ operation }) => isMessageOperation(operation)).length
 		const activities = () => saved.filter(({ operation }) => Predicate.isTagged(operation, 'SetActivity')).length
+		const reactions = () =>
+			saved.filter(({ operation }) => Predicate.isTagged(operation, 'SetMessageReaction')).length
 		const operationId = Match.value(operation).pipe(
 			Match.tagsExhaustive({
 				PresentOutcome: () => 'outcome',
@@ -255,6 +266,7 @@ const withOperations = (
 				UpdateMessage: () => `message-${messages() + 1}`,
 				DeleteMessage: () => `message-${messages() + 1}`,
 				SetActivity: () => `activity-${activities() + 1}`,
+				SetMessageReaction: () => `reaction-${reactions() + 1}`,
 			}),
 		)
 		return [
@@ -307,6 +319,41 @@ const desiredActivity = (active: ActiveDelivery): DeliveryActivity => {
 /** Whether the delivery's last activity request was `Working`, so ending it must clear the provider's activity. */
 export const activityToClear = (active: ActiveDelivery) =>
 	Predicate.isTagged(desiredActivity(active), 'Working')
+
+/** The saved `SetMessageReaction` operations for one reaction on one target, oldest first. */
+const reactionsOn = (
+	operations: ReadonlyArray<DeliveryOperation>,
+	key: { readonly target: DeliveryReactionTarget; readonly reaction: PortableReaction },
+) =>
+	operations.flatMap((saved) => {
+		const { operation } = saved
+		return Predicate.isTagged(operation, 'SetMessageReaction') &&
+			operation.reaction === key.reaction &&
+			sameDeliveryReactionTarget(operation.target, key.target)
+			? [{ saved, request: operation }]
+			: []
+	})
+
+/**
+ * For a removal, the provider's receipt for the add it undoes: the last add of the same reaction on the
+ * same target that the provider applied before this operation, unless an applied removal came after it.
+ */
+export const reactionAddedReference = (
+	active: ActiveDelivery,
+	operation: DeliveryOperation,
+): ProviderMessageReference | undefined => {
+	const request = operation.operation
+	if (!Predicate.isTagged(request, 'SetMessageReaction') || request.active) return undefined
+	const earlier = active.operations.slice(
+		0,
+		active.operations.findIndex(({ operationId }) => operationId === operation.operationId),
+	)
+	return reactionsOn(earlier, request).reduce<ProviderMessageReference | undefined>(
+		(added, { saved, request: change }) =>
+			Predicate.isTagged(saved.state, 'Delivered') ? (change.active ? saved.state.receipt : undefined) : added,
+		undefined,
+	)
+}
 
 /** Links not already saved, each once. A repeat of a saved URL is a replay. */
 const newLinks = (saved: ReadonlyArray<ExternalLink>, links: ReadonlyArray<ExternalLink>) =>
@@ -623,6 +670,7 @@ export const readDeliverySlotStatus = Effect.fn('delivery.lifecycle.read_status'
 						active.terminal === undefined ? desiredActivity(active) : DeliveryActivity.cases.Idle.make({}),
 					interruptRequested: active.interruptRequestedAt !== undefined,
 					supportedOperations: active.prepared?.supportedOperations ?? [],
+					reactionTargets: active.prepared?.reactionTargets ?? [],
 					output: active.operations.map(deliveryOutputStatus),
 				},
 				active.terminal,
@@ -634,6 +682,7 @@ export const readDeliverySlotStatus = Effect.fn('delivery.lifecycle.read_status'
 					stage: 'Retired',
 					interruptRequested: retained.interruptRequested,
 					supportedOperations: retained.supportedOperations,
+					reactionTargets: [],
 					output: retained.output,
 				},
 				retained.terminal,
@@ -650,6 +699,7 @@ type MutationChange = Effect.Effect<
 	| DeliveryMessageNotFound
 	| DeliveryMessageDeleted
 	| DeliveryMessageConflict
+	| DeliveryReactionTargetUnavailable
 >
 
 /**
@@ -791,17 +841,19 @@ const requiredOperation = (mutation: DeliveryMutation): DeliveryOperationKind =>
 			UpdateDeliveryMessage: () => 'UpdateMessage' as const,
 			DeleteDeliveryMessage: () => 'DeleteMessage' as const,
 			SetDeliveryActivity: () => 'SetActivity' as const,
+			SetDeliveryReaction: () => 'SetMessageReaction' as const,
 		}),
 	)
 
 /**
- * A waiting `SetActivity` with a new activity. It drops its idempotency key: an earlier attempt may
- * have shown the old activity under that key, so the new one needs its own.
+ * A waiting desired-state operation, such as `SetActivity`, given a new request. It drops its
+ * idempotency key: an earlier attempt may have applied the old request under that key, so the new one
+ * needs its own.
  */
-const replacedActivity = (saved: DeliveryOperation, activity: DeliveryActivity) =>
+const replacedRequest = (saved: DeliveryOperation, operation: DeliveryOutputOperation) =>
 	DeliveryOperation.make({
 		operationId: saved.operationId,
-		operation: SetActivity.make({ activity }),
+		operation,
 		state: saved.state,
 		attempt: saved.attempt,
 		hadAmbiguousAttempt: saved.hadAmbiguousAttempt,
@@ -831,12 +883,78 @@ const changeActivity = (
 			const last = lastActivityOperation(active)
 			const next =
 				last !== undefined && Predicate.isTagged(last.state, 'Pending')
-					? replaceOperation(active, replacedActivity(last, activity))
+					? replaceOperation(active, replacedRequest(last, SetActivity.make({ activity })))
 					: withOperations(active, [SetActivity.make({ activity })], input.now)
 			/** A delivery waiting for its remote worker has no callback running, so the output can start now. */
 			const readyAt = active.stage === 'ExternalWaiting' ? nextOutputAt(next) : slot.readyAt
 			return Effect.succeed({ slot: withActive(slot, next, readyAt), receipt: input.receipt('accepted') })
 		},
+	})
+
+type ReactionTargetCheck = Effect.Effect<
+	void,
+	DeliveryReactionTargetUnavailable | DeliveryMessageNotFound | DeliveryMessageDeleted
+>
+
+/**
+ * Check that a reaction's target is one the destination can react on, and that it exists: the delivery
+ * has an activation target, or the message was created and not removed. A message whose create has not
+ * run yet is fine; the reaction runs after it. No provider presents a plan yet.
+ */
+const checkReactionTarget = (active: ActiveDelivery, target: DeliveryReactionTarget): ReactionTargetCheck => {
+	const kind = deliveryReactionTargetKind(target)
+	const unavailable: ReactionTargetCheck = Effect.fail(new DeliveryReactionTargetUnavailable({ target: kind }))
+	if (!(active.prepared?.reactionTargets ?? []).includes(kind)) return unavailable
+	return DeliveryReactionTarget.match(target, {
+		ActivationTarget: (): ReactionTargetCheck => (active.prepared?.activationTarget === undefined ? unavailable : Effect.void),
+		PlanTarget: (): ReactionTargetCheck => unavailable,
+		MessageTarget: ({ messageId }): ReactionTargetCheck => {
+			const creation = messageCreation(active, messageId)
+			if (creation === undefined || Predicate.isTagged(creation.state, 'Failed')) {
+				return Effect.fail(new DeliveryMessageNotFound({ messageId }))
+			}
+			const deleted = active.operations.some(
+				({ operation }) => Predicate.isTagged(operation, 'DeleteMessage') && operation.messageId === messageId,
+			)
+			return deleted ? Effect.fail(new DeliveryMessageDeleted({ messageId })) : Effect.void
+		},
+	})
+}
+
+/**
+ * Save whether the bot's reaction should be on a target. The state already asked for is a replay, even
+ * after a result. A change replaces a `SetMessageReaction` for the same reaction and target still
+ * waiting to be sent; one already being sent is followed by a new operation. A delivery with a result
+ * takes no new change.
+ */
+const changeReaction = (
+	slot: DeliverySlot,
+	located: Located,
+	input: {
+		readonly mutation: SetDeliveryReaction
+		readonly receipt: (status: DeliveryMutationReceipt['status']) => DeliveryMutationReceipt
+	} & MailboxFacts,
+): MutationChange =>
+	Located.$match(located, {
+		Retained: () => Effect.fail(new DeliveryClosed()),
+		Active: ({ active }) =>
+			Effect.gen(function* () {
+				const { target, reaction } = input.mutation
+				const last = reactionsOn(active.operations, input.mutation).at(-1)
+				if (last !== undefined && last.request.active === input.mutation.active) {
+					return { slot, receipt: input.receipt('already_recorded') }
+				}
+				if (active.terminal !== undefined || active.stage === 'Finishing') return yield* new DeliveryClosed()
+				yield* checkReactionTarget(active, target)
+				const request = SetMessageReaction.make({ target, reaction, active: input.mutation.active })
+				const next =
+					last !== undefined && Predicate.isTagged(last.saved.state, 'Pending')
+						? replaceOperation(active, replacedRequest(last.saved, request))
+						: withOperations(active, [request], input.now)
+				/** A delivery waiting for its remote worker has no callback running, so the output can start now. */
+				const readyAt = active.stage === 'ExternalWaiting' ? nextOutputAt(next) : slot.readyAt
+				return { slot: withActive(slot, next, readyAt), receipt: input.receipt('accepted') }
+			}),
 	})
 
 /** Save a message change and the operation that shows it, in one change. A retired delivery takes none. */
@@ -891,6 +1009,7 @@ export const applyDeliverySlotMutation = Effect.fn('delivery.lifecycle.apply_mut
 			UpdateDeliveryMessage: (mutation) => changeMessage(slot, located, { ...facts, mutation }),
 			DeleteDeliveryMessage: (mutation) => changeMessage(slot, located, { ...facts, mutation }),
 			SetDeliveryActivity: (mutation) => changeActivity(slot, located, { ...facts, mutation }),
+			SetDeliveryReaction: (mutation) => changeReaction(slot, located, { ...facts, mutation }),
 		}),
 	)
 })

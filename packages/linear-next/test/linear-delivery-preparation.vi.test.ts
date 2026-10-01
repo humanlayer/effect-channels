@@ -162,6 +162,7 @@ describe('Linear delivery preparation', () => {
 					},
 					activationTarget: { _tag: 'LinearIssueActivationTarget', organizationId, issueId },
 					supportedOperations: sessionOperations,
+					reactionTargets: ['ActivationTarget'],
 				},
 			])
 		}),
@@ -209,6 +210,7 @@ describe('Linear delivery preparation', () => {
 						commentId: 'dd45e8fb-4444-4555-8666-001122334455',
 					},
 					supportedOperations: issueOperations,
+					reactionTargets: ['ActivationTarget', 'MessageTarget'],
 				},
 			])
 		}),

@@ -14,6 +14,7 @@ import { AddExternalLink } from './DeliveryLink'
 import { CreateMessage, ProviderDeleteMessage, ProviderUpdateMessage } from './DeliveryMessage'
 import { DeliveryOperationId } from './DeliveryOperation'
 import { PresentOutcome } from './DeliveryOutcome'
+import { ProviderSetMessageReaction } from './DeliveryReaction'
 import { DeliveryId } from './DeliveryReference'
 
 /**
@@ -28,8 +29,9 @@ export const ProviderPresentOutcome = Schema.TaggedStruct('PresentOutcome', {
 export type ProviderPresentOutcome = typeof ProviderPresentOutcome.Type
 
 /**
- * A saved operation as a provider receives it. An update or deletion carries the provider's own
- * reference to the message, taken from the receipt of the message's `CreateMessage`.
+ * A saved operation as a provider receives it. An update or deletion, or a reaction on a message,
+ * carries the provider's own reference to the message, taken from the receipt of the message's
+ * `CreateMessage`.
  */
 export const ProviderOutputOperation = Schema.Union([
 	ProviderPresentOutcome,
@@ -38,6 +40,7 @@ export const ProviderOutputOperation = Schema.Union([
 	ProviderUpdateMessage,
 	ProviderDeleteMessage,
 	SetActivity,
+	ProviderSetMessageReaction,
 ])
 export type ProviderOutputOperation = typeof ProviderOutputOperation.Type
 

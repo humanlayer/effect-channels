@@ -72,6 +72,7 @@ import {
 	GitHubActivationTargetJson,
 	GitHubDeliveryDestination,
 	GitHubDeliveryDestinationJson,
+	gitHubReactionTargets,
 	gitHubSupportedOperations,
 	gitHubPresentationVersion,
 } from './GitHubDeliveryDestination'
@@ -910,6 +911,7 @@ const preparedInvocation = Effect.fn('github.prepared_invocation')(function* (in
 		destination,
 		...Option.match(activationTarget, { onNone: () => ({}), onSome: (target) => ({ activationTarget: target }) }),
 		supportedOperations: gitHubSupportedOperations(target),
+		reactionTargets: gitHubReactionTargets(target),
 	})
 })
 

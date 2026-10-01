@@ -20,6 +20,7 @@ import {
 	DeliveryControlBackend,
 	DeliveryOutcome,
 	DeliveryOutputSettlement,
+	DeliveryReactionTarget,
 	ExternalLink,
 	DeliveryActivity,
 	FailDelivery,
@@ -27,6 +28,7 @@ import {
 	MessageId,
 	PreparedDeliveryInvocation,
 	SetDeliveryActivity,
+	SetDeliveryReaction,
 	UpdateDeliveryMessage,
 	MailboxProcessingBackend,
 	OutputReadyMailbox,
@@ -37,6 +39,7 @@ import {
 	type ClaimedDeliveryOutput,
 	type ClaimedMailboxBatch,
 	type DeliveryMutation,
+	type PortableReaction,
 } from '../src'
 import {
 	claimAll,
@@ -183,6 +186,29 @@ const deliveryFor = (supportedOperations: PreparedDeliveryInvocation['supportedO
 	})
 
 const postedReceipt = (ts: string) => DeliveryOutputSettlement.cases.Applied.make({ receipt: { ts } })
+
+/** A destination that reacts on what started the delivery and on its messages. */
+const reactionPreparation = PreparedDeliveryInvocation.make({
+	...messagePreparation,
+	activationTarget: { message: 'trigger-1' },
+	supportedOperations: [...messagePreparation.supportedOperations, 'SetMessageReaction'],
+	reactionTargets: ['ActivationTarget', 'MessageTarget'],
+})
+
+/** A delivery prepared with `prepared`, handed off, whose callback has returned. */
+const waitingDeliveryWith = (prepared: PreparedDeliveryInvocation, eventId = 'a') =>
+	Effect.gen(function* () {
+		yield* deliver(eventId)
+		const claim = yield* claimPreparedWith(prepared)
+		yield* handOff(claim)
+		yield* settle(claim, 'completed')
+		return claim
+	})
+
+const onActivation = DeliveryReactionTarget.cases.ActivationTarget.make({})
+const onProgress = DeliveryReactionTarget.cases.MessageTarget.make({ messageId: progress })
+const react = (target: DeliveryReactionTarget, reaction: PortableReaction, active: boolean) =>
+	SetDeliveryReaction.make({ target, reaction, active })
 
 export const deliveryHandoffContract = <E>(storeName: string, makeEmptyStore: () => Layer.Layer<HandoffStore, E>) => {
 	const contract = <TestError>(name: string, test: Effect.Effect<void, TestError, HandoffStore>) =>
@@ -880,6 +906,144 @@ export const deliveryHandoffContract = <E>(storeName: string, makeEmptyStore: ()
 			const sent = [yield* sendOutput, yield* sendOutput].map(({ operation }) => operation._tag)
 			expect(sent).toEqual(['CreateMessage', 'SetActivity'])
 			expect(yield* findReady).toEqual([])
+		}),
+	)
+
+	contract(
+		'replays the reaction state already asked for; an opposite request replaces a waiting one and follows one being sent',
+		Effect.gen(function* () {
+			const claim = yield* waitingDeliveryWith(reactionPreparation)
+			expect((yield* status(claim)).reactionTargets).toEqual(['ActivationTarget', 'MessageTarget'])
+			expect((yield* apply(claim, react(onActivation, 'eyes', true))).status).toEqual('accepted')
+			expect(yield* findReady).toEqual([OutputReadyMailbox.make({ mailboxKey })])
+			expect((yield* apply(claim, react(onActivation, 'eyes', true))).status).toEqual('already_recorded')
+			expect((yield* apply(claim, react(onActivation, 'eyes', false))).status).toEqual('accepted')
+			expect((yield* apply(claim, react(onActivation, 'eyes', false))).status).toEqual('already_recorded')
+			expect((yield* apply(claim, react(onActivation, 'eyes', true))).status).toEqual('accepted')
+			expect((yield* status(claim)).output).toEqual([
+				{ operationId: 'reaction-1', kind: 'SetMessageReaction', state: 'Pending', attempts: 0, hadAmbiguousAttempt: false },
+			])
+
+			const first = Option.getOrThrow(yield* claimOutput)
+			expect(first.operation).toEqual({ _tag: 'SetMessageReaction', target: onActivation, reaction: 'eyes', active: true })
+			expect((yield* apply(claim, react(onActivation, 'eyes', false))).status).toEqual('accepted')
+			expect((yield* apply(claim, react(onActivation, 'rocket', true))).status).toEqual('accepted')
+			yield* settleOutput(first)
+			const removal = yield* sendOutput
+			expect(removal.operationId).toEqual('reaction-2')
+			expect(removal.operation).toEqual({ _tag: 'SetMessageReaction', target: onActivation, reaction: 'eyes', active: false })
+			const rocket = yield* sendOutput
+			expect(rocket.operationId).toEqual('reaction-3')
+			expect(rocket.operation).toMatchObject({ reaction: 'rocket', active: true })
+			expect(yield* findReady).toEqual([])
+		}),
+	)
+
+	contract(
+		'a removal carries the receipt of the add it undoes, and none when this delivery added nothing',
+		Effect.gen(function* () {
+			const claim = yield* waitingDeliveryWith(reactionPreparation)
+			yield* apply(claim, react(onActivation, 'heart', false))
+			expect((yield* sendOutput).reactionAddedReference).toBeUndefined()
+
+			yield* apply(claim, react(onActivation, 'heart', true))
+			const add = Option.getOrThrow(yield* claimOutput)
+			yield* settleOutput(add, DeliveryOutputSettlement.cases.Applied.make({ receipt: { reaction: 'r-1' } }))
+			yield* apply(claim, react(onActivation, 'eyes', true))
+			yield* sendOutput
+			yield* apply(claim, react(onActivation, 'heart', false))
+			const removal = Option.getOrThrow(yield* claimOutput)
+			expect(removal.reactionAddedReference).toEqual({ reaction: 'r-1' })
+			yield* settleOutput(removal)
+
+			yield* apply(claim, react(onActivation, 'heart', true))
+			yield* settleOutput(
+				Option.getOrThrow(yield* claimOutput),
+				DeliveryOutputSettlement.cases.Applied.make({ receipt: { reaction: 'r-2' } }),
+			)
+			yield* apply(claim, react(onActivation, 'heart', false))
+			expect((yield* sendOutput).reactionAddedReference).toEqual({ reaction: 'r-2' })
+		}),
+	)
+
+	contract(
+		"a reaction on a message waits behind the message's create and receives its receipt",
+		Effect.gen(function* () {
+			const claim = yield* waitingDeliveryWith(reactionPreparation)
+			yield* apply(claim, createProgress('Summary'))
+			expect((yield* apply(claim, react(onProgress, 'thumbs_up', true))).status).toEqual('accepted')
+			expect((yield* status(claim)).output[1]).toMatchObject({ kind: 'SetMessageReaction', messageId: progress })
+			const create = Option.getOrThrow(yield* claimOutput)
+			expect(Option.isNone(yield* claimOutput)).toEqual(true)
+			yield* settleOutput(create, postedReceipt('1'))
+			const reaction = yield* sendOutput
+			expect(reaction.operation).toEqual({
+				_tag: 'SetMessageReaction',
+				target: onProgress,
+				reaction: 'thumbs_up',
+				active: true,
+			})
+			expect(reaction.messageReference).toEqual({ ts: '1' })
+
+			const unknown = DeliveryReactionTarget.cases.MessageTarget.make({ messageId: MessageId.make('unknown') })
+			expect((yield* apply(claim, react(unknown, 'eyes', true)).pipe(Effect.flip))._tag).toEqual(
+				'DeliveryMessageNotFound',
+			)
+			yield* apply(claim, deleteProgress)
+			expect((yield* apply(claim, react(onProgress, 'eyes', true)).pipe(Effect.flip))._tag).toEqual(
+				'DeliveryMessageDeleted',
+			)
+		}),
+	)
+
+	contract(
+		'refuses a reaction target the destination cannot react on, and saves nothing',
+		Effect.gen(function* () {
+			const messagesOnly = yield* waitingDeliveryWith(
+				PreparedDeliveryInvocation.make({ ...reactionPreparation, reactionTargets: ['MessageTarget'] }),
+			)
+			const activation = yield* apply(messagesOnly, react(onActivation, 'eyes', true)).pipe(Effect.flip)
+			expect(activation).toMatchObject({ _tag: 'DeliveryReactionTargetUnavailable', target: 'ActivationTarget' })
+			const plan = yield* apply(
+				messagesOnly,
+				react(DeliveryReactionTarget.cases.PlanTarget.make({}), 'eyes', true),
+			).pipe(Effect.flip)
+			expect(plan).toMatchObject({ _tag: 'DeliveryReactionTargetUnavailable', target: 'PlanTarget' })
+			expect((yield* status(messagesOnly)).output).toEqual([])
+			yield* finish(messagesOnly)
+			yield* sendOutput
+
+			const { activationTarget: _, ...withoutActivation } = reactionPreparation
+			const noActivation = yield* waitingDeliveryWith(PreparedDeliveryInvocation.make(withoutActivation), 'b')
+			expect((yield* apply(noActivation, react(onActivation, 'eyes', true)).pipe(Effect.flip))._tag).toEqual(
+				'DeliveryReactionTargetUnavailable',
+			)
+			yield* finish(noActivation)
+			yield* sendOutput
+
+			const unsupported = yield* waitingDeliveryWith(preparation('onNewMention'), 'c')
+			const refused = yield* apply(unsupported, react(onActivation, 'eyes', true)).pipe(Effect.flip)
+			expect(refused).toMatchObject({ _tag: 'DeliveryOperationUnsupported', operation: 'SetMessageReaction' })
+			expect((yield* status(unsupported)).reactionTargets).toEqual([])
+		}),
+	)
+
+	contract(
+		'refuses new reaction changes once the delivery has a result, and still replays the state already asked for',
+		Effect.gen(function* () {
+			const claim = yield* waitingDeliveryWith(reactionPreparation)
+			yield* apply(claim, react(onActivation, 'rocket', true))
+			yield* finish(claim)
+			expect((yield* apply(claim, react(onActivation, 'rocket', true))).status).toEqual('already_recorded')
+			expect((yield* apply(claim, react(onActivation, 'rocket', false)).pipe(Effect.flip))._tag).toEqual(
+				'DeliveryClosed',
+			)
+			const sent = [yield* sendOutput, yield* sendOutput].map(({ operation }) => operation._tag)
+			expect(sent).toEqual(['SetMessageReaction', 'PresentOutcome'])
+			expect((yield* status(claim)).stage).toEqual('Retired')
+			expect((yield* apply(claim, react(onActivation, 'rocket', true)).pipe(Effect.flip))._tag).toEqual(
+				'DeliveryClosed',
+			)
 		}),
 	)
 }

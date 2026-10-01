@@ -14,23 +14,34 @@
  * - `UpdateMessage` edits that message with `chat.update`; `DeleteMessage` removes it with `chat.delete`.
  *   A message already gone counts as deleted.
  * - `AddExternalLink` is applied without a call; Slack has nowhere to show a link for now.
+ * - `SetMessageReaction` adds or removes the bot's reaction (`reactions.add`, `reactions.remove`) on the
+ *   message that started the delivery, or on a message the delivery posted. A reaction already there,
+ *   or already gone, counts as done.
  *
  * A post is at-least-once: when Slack accepts it but the attempt dies before the store saves the
  * result, the next attempt posts again, and the first post stays in the thread. The attempt then
- * carries `hadAmbiguousAttempt`, which delivery status shows. Edits and deletions are safe to repeat.
+ * carries `hadAmbiguousAttempt`, which delivery status shows. Edits, deletions, and reactions are safe to
+ * repeat.
  */
 import {
 	DeliveryOutputApplied,
 	DeliveryOutputFailed,
 	type DeliveryOutcome,
+	type PortableReaction,
 	type ProviderOutputAttempt,
 	type ProviderOutputProcessor,
+	ProviderReactionTarget,
+	type ProviderSetMessageReaction,
 } from '@humanlayer/channels-delivery-next'
-import { Array as Arr, Effect, Match, Predicate, Schema } from 'effect'
+import { Array as Arr, Effect, Match, Option, Predicate, Schema } from 'effect'
 
 import { SlackApi, type SlackApiError } from './SlackApi'
-import { SlackDeliveryDestinationJson, slackPresentationVersion } from './SlackDeliveryDestination'
-import { SlackMarkdownContent, SlackMessageRef } from './SlackModels'
+import {
+	SlackActivationTargetJson,
+	SlackDeliveryDestinationJson,
+	slackPresentationVersion,
+} from './SlackDeliveryDestination'
+import { SlackMarkdownContent, SlackMessageRef, SlackReaction } from './SlackModels'
 
 /** What Slack made for an operation: the message it posted. Saved by the store, read only here. */
 export const SlackOutputReceipt = Schema.TaggedStruct('SlackPostedMessage', {
@@ -76,6 +87,18 @@ const permanentSlackErrors: ReadonlySet<string> = new Set([
 
 /** Whether another attempt at a failed Slack call might succeed. */
 export const isRetryableSlackApiError = (error: SlackApiError) => !permanentSlackErrors.has(error.message)
+
+/** Slack's emoji name for each portable reaction. */
+export const slackPortableReactions = {
+	thumbs_up: SlackReaction.make('thumbsup'),
+	thumbs_down: SlackReaction.make('thumbsdown'),
+	laugh: SlackReaction.make('laughing'),
+	confused: SlackReaction.make('confused'),
+	heart: SlackReaction.make('heart'),
+	hooray: SlackReaction.make('tada'),
+	rocket: SlackReaction.make('rocket'),
+	eyes: SlackReaction.make('eyes'),
+} satisfies Record<PortableReaction, SlackReaction>
 
 const failed = (safeCode: string, retryable: boolean) =>
 	new DeliveryOutputFailed({ provider: 'slack', retryable, safeCode })
@@ -152,9 +175,57 @@ export const makeSlackOutputProcessor = Effect.fn('slack.make_output_processor')
 			.clearThreadStatus({ thread: destination.thread })
 			.pipe(reportSlackFailure('Slack thread status clear failed', 'slack_status_failed'), Effect.as(applied))
 
+		/** The message a reaction goes on: the one that started the delivery, or one the delivery posted. */
+		const reactionMessage = (target: ProviderReactionTarget) =>
+			ProviderReactionTarget.match(target, {
+				ActivationTarget: () =>
+					Effect.fromOption(Option.fromUndefinedOr(attempt.prepared.activationTarget)).pipe(
+						Effect.mapError(() => failed('activation_target_missing', false)),
+						Effect.flatMap((encoded) =>
+							Schema.decodeUnknownEffect(SlackActivationTargetJson)(encoded).pipe(
+								Effect.tapError((error) =>
+									Effect.logWarning('Slack output activation target could not be read', error).pipe(
+										Effect.annotateLogs({ delivery_id: attempt.deliveryId, operation_id: attempt.operationId }),
+									),
+								),
+								Effect.mapError(() => failed('activation_target_invalid', false)),
+							),
+						),
+						Effect.map(({ message }) => message),
+					),
+				MessageTarget: ({ reference }) => postedMessage(reference),
+			})
+
+		/**
+		 * Add or remove the bot's reaction. Slack answers `already_reacted` and `no_reaction` when the
+		 * reaction is already as asked, and `message_not_found` when a removal's message is gone.
+		 */
+		const setReaction = ({ target, reaction, active }: ProviderSetMessageReaction) =>
+			reactionMessage(target).pipe(
+				Effect.flatMap((message) => {
+					const request = { message, reaction: slackPortableReactions[reaction] }
+					const done: ReadonlySet<string> = active
+						? new Set(['already_reacted'])
+						: new Set(['no_reaction', 'message_not_found'])
+					return (active ? slackApi.addReaction(request) : slackApi.removeReaction(request)).pipe(
+						Effect.catchIf(
+							(error) => done.has(error.message),
+							(error) =>
+								Effect.logInfo('Slack reaction was already as asked; counting it as done').pipe(
+									Effect.annotateLogs({ slack_error: error.message }),
+								),
+						),
+						reportSlackFailure('Slack output reaction failed', 'slack_reaction_failed'),
+					)
+				}),
+				Effect.as(applied),
+				Effect.withSpan('slack.output.set_reaction', { attributes: { reaction, active } }),
+			)
+
 		return yield* Match.value(attempt.operation).pipe(
 			Match.tagsExhaustive({
 				AddExternalLink: () => Effect.succeed(applied),
+				SetMessageReaction: setReaction,
 				PresentOutcome: ({ outcome, markdown, clearActivity }) =>
 					Predicate.isNotUndefined(markdown)
 						? post(outcomeMarkdown(outcome, markdown))

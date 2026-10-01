@@ -13,6 +13,8 @@ import {
 	DeliveryActivity,
 	ProviderDeleteMessage,
 	ProviderPresentOutcome,
+	ProviderReactionTarget,
+	ProviderSetMessageReaction,
 	SetActivity,
 	ProviderOutputAttempt,
 	ProviderUpdateMessage,
@@ -43,7 +45,10 @@ import {
 	makeSlackOutputProcessor,
 	slackPresentationVersion,
 	slackThreadSupportedOperations,
+	SlackActivationTarget,
+	SlackActivationTargetJson,
 	type SlackDeleteMessageRequest,
+	type SlackReactionRequest,
 	type SlackThreadRequest,
 	type SlackThreadStatusRequest,
 	type SlackPostToThreadRequest,
@@ -82,6 +87,7 @@ type SlackCalls = {
 	readonly posts: ReadonlyArray<SlackPostToThreadRequest>
 	readonly updates: ReadonlyArray<SlackUpdateMessageRequest>
 	readonly deletes: ReadonlyArray<SlackDeleteMessageRequest>
+	readonly reactions: ReadonlyArray<{ readonly change: 'add' | 'remove'; readonly request: SlackReactionRequest }>
 }
 
 /** A `SlackApi` that records every post, edit, and deletion; posts answer with `postedRef`. Each fails with `failWith`. */
@@ -115,6 +121,18 @@ const recordingSlackApi = (calls: Ref.Ref<SlackCalls>, failWith?: string) =>
 					return yield* SlackApiError.make({ operation: 'delete_message', message: failWith })
 				}
 			}),
+		addReaction: (request) =>
+			Effect.gen(function* () {
+				yield* Ref.update(calls, (all) => ({ ...all, reactions: [...all.reactions, { change: 'add' as const, request }] }))
+				if (failWith !== undefined) return yield* SlackApiError.make({ operation: 'add_reaction', message: failWith })
+			}),
+		removeReaction: (request) =>
+			Effect.gen(function* () {
+				yield* Ref.update(calls, (all) => ({ ...all, reactions: [...all.reactions, { change: 'remove' as const, request }] }))
+				if (failWith !== undefined) {
+					return yield* SlackApiError.make({ operation: 'remove_reaction', message: failWith })
+				}
+			}),
 		postToThread: (request) =>
 			Effect.gen(function* () {
 				yield* Ref.update(calls, (all) => ({ ...all, posts: [...all.posts, request] }))
@@ -144,7 +162,14 @@ const run = (
 	options: { readonly failWith?: string; readonly invocation?: PreparedDeliveryInvocation } = {},
 ) =>
 	Effect.gen(function* () {
-		const calls = yield* Ref.make<SlackCalls>({ statuses: [], clears: [], posts: [], updates: [], deletes: [] })
+		const calls = yield* Ref.make<SlackCalls>({
+			statuses: [],
+			clears: [],
+			posts: [],
+			updates: [],
+			deletes: [],
+			reactions: [],
+		})
 		const processor = yield* makeSlackOutputProcessor({ namespace: 'slack-output-test' }).pipe(
 			Effect.provide(recordingSlackApi(calls, options.failWith)),
 		)
@@ -327,4 +352,71 @@ describe('Slack delivery output', () => {
 			expect(noScope.result.failure).toMatchObject({ retryable: false, safeCode: 'slack_status_failed' })
 		}),
 	)
+
+	describe('portable reactions', () => {
+		const triggerRef = SlackMessageRef.make({ teamId, channelId, messageTs: SlackMessageTs.make('1700000005.000005') })
+		const withTrigger = prepared({
+			activationTarget: Schema.encodeSync(SlackActivationTargetJson)(SlackActivationTarget.make({ message: triggerRef })),
+		})
+		const onActivation = ProviderReactionTarget.cases.ActivationTarget.make({})
+		const react = (target: ProviderReactionTarget, reaction: ProviderSetMessageReaction['reaction'], active: boolean) =>
+			ProviderSetMessageReaction.make({ target, reaction, active })
+
+		it.effect("adds and removes Slack's emoji on the message that started the delivery", ({ expect }) =>
+			Effect.gen(function* () {
+				const added = yield* run(react(onActivation, 'thumbs_up', true), { invocation: withTrigger })
+				const removed = yield* run(react(onActivation, 'hooray', false), { invocation: withTrigger })
+				expect(Result.isSuccess(added.result)).toBe(true)
+				expect(Result.isSuccess(removed.result)).toBe(true)
+				expect([...added.reactions, ...removed.reactions]).toEqual([
+					{ change: 'add', request: { message: triggerRef, reaction: 'thumbsup' } },
+					{ change: 'remove', request: { message: triggerRef, reaction: 'tada' } },
+				])
+			}),
+		)
+
+		it.effect('reacts on a message the delivery posted, through its receipt', ({ expect }) =>
+			Effect.gen(function* () {
+				const { result, reactions } = yield* run(
+					react(ProviderReactionTarget.cases.MessageTarget.make({ messageId, reference: postedReference }), 'eyes', true),
+				)
+				expect(Result.isSuccess(result)).toBe(true)
+				expect(reactions).toEqual([{ change: 'add', request: { message: postedRef, reaction: 'eyes' } }])
+			}),
+		)
+
+		it.effect('counts a reaction already there, or already gone, as done', ({ expect }) =>
+			Effect.gen(function* () {
+				const again = yield* run(react(onActivation, 'eyes', true), { invocation: withTrigger, failWith: 'already_reacted' })
+				const gone = yield* run(react(onActivation, 'eyes', false), { invocation: withTrigger, failWith: 'no_reaction' })
+				const messageGone = yield* run(react(onActivation, 'eyes', false), {
+					invocation: withTrigger,
+					failWith: 'message_not_found',
+				})
+				expect([again, gone, messageGone].map(({ result }) => Result.isSuccess(result))).toEqual([true, true, true])
+			}),
+		)
+
+		it.effect('sorts other failures as retryable or final, and fails without an activation target', ({ expect }) =>
+			Effect.gen(function* () {
+				const unreachable = yield* run(react(onActivation, 'eyes', true), {
+					invocation: withTrigger,
+					failWith: 'Could not reach Slack',
+				})
+				const archived = yield* run(react(onActivation, 'eyes', true), { invocation: withTrigger, failWith: 'is_archived' })
+				const noTarget = yield* run(react(onActivation, 'eyes', true))
+				if (
+					!Result.isFailure(unreachable.result) ||
+					!Result.isFailure(archived.result) ||
+					!Result.isFailure(noTarget.result)
+				) {
+					return expect.unreachable()
+				}
+				expect(unreachable.result.failure).toMatchObject({ retryable: true, safeCode: 'slack_reaction_failed' })
+				expect(archived.result.failure).toMatchObject({ retryable: false, safeCode: 'slack_reaction_failed' })
+				expect(noTarget.result.failure).toMatchObject({ retryable: false, safeCode: 'activation_target_missing' })
+				expect(noTarget.reactions).toEqual([])
+			}),
+		)
+	})
 })

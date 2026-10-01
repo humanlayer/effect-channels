@@ -81,7 +81,15 @@ export const LinearReactionTarget = Schema.TaggedUnion({
 	Comment: { comment: LinearCommentRef },
 })
 export type LinearReactionTarget = typeof LinearReactionTarget.Type
-export const LinearCreateReactionRequest = Schema.Struct({ target: LinearReactionTarget, emoji: Schema.NonEmptyString })
+/**
+ * @property reactionId - the reaction's ID, chosen by the caller. Linear answers a repeat with the
+ * reaction it already has, so a retry never reacts twice.
+ */
+export const LinearCreateReactionRequest = Schema.Struct({
+	target: LinearReactionTarget,
+	emoji: Schema.NonEmptyString,
+	reactionId: Schema.optionalKey(LinearReactionId),
+})
 export type LinearCreateReactionRequest = typeof LinearCreateReactionRequest.Type
 export const LinearDeleteReactionRequest = Schema.Struct({ issue: LinearIssueRef, reactionId: LinearReactionId })
 export type LinearDeleteReactionRequest = typeof LinearDeleteReactionRequest.Type

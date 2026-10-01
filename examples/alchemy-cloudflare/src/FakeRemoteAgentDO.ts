@@ -11,6 +11,10 @@
  *   halfway through. GitHub does not show the text.
  * - Just before it finishes it posts one lasting summary message (a Slack message, a lasting thought in
  *   a Linear session, or an issue or pull request comment).
+ * - With `react`, it adds the bot's `rocket` reaction to what started the delivery when it starts (asking
+ *   twice, to show the second request is a replay), removes it halfway through (also twice), and adds
+ *   `heart` to its summary message. Each step is skipped where the delivery cannot react on that target,
+ *   such as a Linear session's messages.
  * - It then completes the delivery with a final message, or with a question and choices for `ask`.
  * - It reads the delivery's status at least every few seconds. When someone asked it to stop, such as
  *   Stop in a Linear session, it fails the delivery with `Stopped as requested.` and ends.
@@ -21,10 +25,13 @@
 import {
 	DeliveryActivity,
 	DeliveryId,
+	DeliveryReactionTarget,
 	MessageId,
+	deliveryReactionTargetKind,
 	makeDeliveryClient,
 	type DeliveryClient,
 	type DeliveryStatus,
+	type PortableReaction,
 } from '@humanlayer/channels-delivery-next'
 import * as Cloudflare from 'alchemy/Cloudflare'
 import type { RuntimeContext } from 'alchemy/RuntimeContext'
@@ -64,6 +71,7 @@ class DeliveryApi extends Context.Service<DeliveryApi, DeliveryClient>()('alchem
  *
  * @property flakyOutput - make Slack refuse the final message for a while
  * @property askForInput - end the turn with a question and choices instead of an answer
+ * @property react - add and remove portable reactions while the job runs
  */
 export const StartRemoteAgentJob = Schema.Struct({
 	deliveryId: DeliveryId,
@@ -71,6 +79,7 @@ export const StartRemoteAgentJob = Schema.Struct({
 	delaySeconds: Schema.Int.check(Schema.isGreaterThan(0)),
 	flakyOutput: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
 	askForInput: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
+	react: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
 })
 export type StartRemoteAgentJob = typeof StartRemoteAgentJob.Type
 
@@ -92,6 +101,7 @@ const RemoteAgentJob = Schema.Struct({
 	step: RemoteAgentStep.pipe(Schema.withDecodingDefaultKey(Effect.succeed('NotStarted' as const))),
 	flakyOutput: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
 	askForInput: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
+	react: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
 })
 type RemoteAgentJob = typeof RemoteAgentJob.Type
 
@@ -172,6 +182,7 @@ const handleDeliveryApiFailure =
 				DeliveryMessageNotFound: ({ _tag }) => refused(_tag),
 				DeliveryMessageDeleted: ({ _tag }) => refused(_tag),
 				DeliveryMessageConflict: ({ _tag }) => refused(_tag),
+				DeliveryReactionTargetUnavailable: ({ _tag }) => refused(_tag),
 				SchemaError: ({ _tag }) => refused(_tag),
 				DeliveryControlUnavailable: ({ _tag }) => retry(_tag),
 				HttpClientError: ({ _tag }) => retry(_tag),
@@ -202,6 +213,38 @@ const showActivity = Effect.fn('fake_remote_agent.show_activity')(function* (
 	})
 	yield* Effect.logInfo('Fake remote agent set its activity').pipe(
 		Effect.annotateLogs({ delivery_id: job.deliveryId, step: job.step, receipt_status: receipt.status }),
+	)
+})
+
+/** The reaction a `react` job adds to what started the delivery, then removes. */
+const ACTIVATION_REACTION: PortableReaction = 'rocket'
+
+/** The reaction a `react` job adds to its summary message. */
+const SUMMARY_REACTION: PortableReaction = 'heart'
+
+/**
+ * For a `react` job, make the bot's `reaction` present or absent on `target`, asking twice: the second
+ * request answers `already_recorded`. Skipped where the delivery cannot react on the target.
+ */
+const setReactionTwice = Effect.fn('fake_remote_agent.set_reaction')(function* (
+	job: RemoteAgentJob,
+	status: DeliveryStatus,
+	request: { readonly target: DeliveryReactionTarget; readonly reaction: PortableReaction; readonly active: boolean },
+) {
+	const kind = deliveryReactionTargetKind(request.target)
+	if (!job.react || !status.reactionTargets.includes(kind)) return
+	const deliveryApi = yield* DeliveryApi
+	const set = deliveryApi.reactions.set({ deliveryId: job.deliveryId, accessToken: job.accessToken, ...request })
+	const first = yield* set
+	const second = yield* set
+	yield* Effect.logInfo('Fake remote agent set a reaction').pipe(
+		Effect.annotateLogs({
+			delivery_id: job.deliveryId,
+			target: kind,
+			reaction: request.reaction,
+			active: request.active,
+			receipt_status: `${first.status},${second.status}`,
+		}),
 	)
 })
 
@@ -241,6 +284,11 @@ const completeDelivery = Effect.fn('fake_remote_agent.complete_delivery')(functi
 		yield* Effect.logInfo('Fake remote agent posted its summary message').pipe(
 			Effect.annotateLogs({ delivery_id: job.deliveryId, receipt_status: summary.status }),
 		)
+		yield* setReactionTwice(job, before, {
+			target: DeliveryReactionTarget.cases.MessageTarget.make({ messageId: SUMMARY_MESSAGE }),
+			reaction: SUMMARY_REACTION,
+			active: true,
+		})
 	}
 	const status = yield* deliveryApi.status(target)
 	yield* Effect.logInfo('Fake remote agent read delivery status').pipe(
@@ -327,6 +375,7 @@ export const FakeRemoteAgentLive = FakeRemoteAgent.make<HttpClient.HttpClient>(
 					step: 'NotStarted',
 					flakyOutput: request.flakyOutput,
 					askForInput: request.askForInput,
+					react: request.react,
 				})
 				yield* storage.put(JOB_KEY, yield* encodeJob(job))
 				yield* storage.setAlarm(Math.min(now + FIRST_ACTIVITY_DELAY_MS, job.finishAt))
@@ -336,6 +385,7 @@ export const FakeRemoteAgentLive = FakeRemoteAgent.make<HttpClient.HttpClient>(
 						finish_at: job.finishAt,
 						flaky_output: job.flakyOutput,
 						ask_for_input: job.askForInput,
+						react: job.react,
 					}),
 				)
 				return toStarted(job, baseUrl)
@@ -373,11 +423,21 @@ export const FakeRemoteAgentLive = FakeRemoteAgent.make<HttpClient.HttpClient>(
 					const now = yield* Clock.currentTimeMillis
 					if (job.step === 'NotStarted') {
 						yield* showActivity(job, status, `Looking into it, about ${secondsLeft(job, now)}s to go`)
+						yield* setReactionTwice(job, status, {
+							target: DeliveryReactionTarget.cases.ActivationTarget.make({}),
+							reaction: ACTIVATION_REACTION,
+							active: true,
+						})
 						return yield* waitUntil(job, 'Working', halfwayAt(job), now)
 					}
 					if (job.step === 'Working') {
 						if (now < halfwayAt(job)) return yield* waitUntil(job, 'Working', halfwayAt(job), now)
 						yield* showActivity(job, status, `Halfway there, about ${secondsLeft(job, now)}s to go`)
+						yield* setReactionTwice(job, status, {
+							target: DeliveryReactionTarget.cases.ActivationTarget.make({}),
+							reaction: ACTIVATION_REACTION,
+							active: false,
+						})
 						return yield* waitUntil(job, 'Halfway', job.finishAt, now)
 					}
 					if (now < job.finishAt) return yield* waitUntil(job, 'Halfway', job.finishAt, now)

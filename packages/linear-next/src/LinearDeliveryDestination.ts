@@ -4,7 +4,11 @@
  * A session callback writes to its Agent Session; an issue callback writes to the issue. The delivery
  * core stores these values as opaque JSON beside `presentationVersion`; only the Linear provider reads them.
  */
-import { DeliveryOperationKind, PreparedDeliveryInvocation } from '@humanlayer/channels-delivery-next'
+import {
+	DeliveryOperationKind,
+	DeliveryReactionTargetKind,
+	PreparedDeliveryInvocation,
+} from '@humanlayer/channels-delivery-next'
 import { Effect, Match, Predicate, Schema } from 'effect'
 
 import { LinearCallbackName } from './LinearCallbacks'
@@ -101,6 +105,22 @@ export const linearSupportedOperations = (destination: LinearDeliveryDestination
 		}),
 	)
 
+/**
+ * What a delivery's reactions can go on. A session reacts on the comment that started it, else the
+ * issue; its messages are activities, which take no reactions. An issue delivery also reacts on the
+ * comments it posted.
+ */
+export const linearReactionTargets = (preparation: LinearDeliveryPreparation) => {
+	const messages = Match.value(preparation.destination).pipe(
+		Match.withReturnType<ReadonlyArray<DeliveryReactionTargetKind>>(),
+		Match.tagsExhaustive({
+			LinearAgentSessionDestination: () => [],
+			LinearIssueDestination: () => ['MessageTarget'],
+		}),
+	)
+	return Predicate.isUndefined(preparation.activationTarget) ? messages : ['ActivationTarget' as const, ...messages]
+}
+
 const encodeDestination = Schema.encodeEffect(Schema.toCodecJson(LinearDeliveryDestination))
 const encodeActivationTarget = Schema.encodeEffect(Schema.toCodecJson(LinearActivationTarget))
 
@@ -114,6 +134,7 @@ export const encodeLinearDeliveryPreparation = Effect.fn('linear.delivery.encode
 		presentationVersion: LinearDeliveryPresentationVersion,
 		destination,
 		supportedOperations: linearSupportedOperations(preparation.destination),
+		reactionTargets: linearReactionTargets(preparation),
 	}
 	if (Predicate.isUndefined(preparation.activationTarget)) return PreparedDeliveryInvocation.make(fields)
 	const activationTarget = yield* encodeActivationTarget(preparation.activationTarget)

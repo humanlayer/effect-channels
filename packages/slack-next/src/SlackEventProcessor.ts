@@ -37,6 +37,7 @@ import {
 	SlackDeliveryDestination,
 	SlackDeliveryDestinationJson,
 	slackPresentationVersion,
+	slackReactionTargets,
 	slackThreadSupportedOperations,
 } from './SlackDeliveryDestination'
 import { SlackChannelId, SlackMessageTs, SlackTeamId, slackThreadResourceId } from './SlackIdentity'
@@ -571,8 +572,9 @@ const preparedInvocation = Effect.fn('slack.prepared_invocation')(function* (inv
 	const destination = yield* Schema.encodeEffect(SlackDeliveryDestinationJson)(
 		SlackDeliveryDestination.make({ thread: invocation.event.thread.ref }),
 	)
+	const target = invocationActivationTarget(invocation)
 	const activationTarget = yield* Effect.transposeOption(
-		Option.map(invocationActivationTarget(invocation), Schema.encodeEffect(SlackActivationTargetJson)),
+		Option.map(target, Schema.encodeEffect(SlackActivationTargetJson)),
 	)
 	return PreparedDeliveryInvocation.make({
 		callback: invocationCallbackName(invocation),
@@ -580,6 +582,7 @@ const preparedInvocation = Effect.fn('slack.prepared_invocation')(function* (inv
 		destination,
 		...Option.match(activationTarget, { onNone: () => ({}), onSome: (target) => ({ activationTarget: target }) }),
 		supportedOperations: slackThreadSupportedOperations,
+		reactionTargets: slackReactionTargets(target),
 	})
 })
 

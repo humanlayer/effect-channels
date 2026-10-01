@@ -87,6 +87,14 @@ const isAlreadyExists = (code: string | undefined, payload: typeof LinearGraphql
 	(/conflict on insert/i.test(payload.message ?? '') ||
 		/already exists/i.test(payload.extensions?.userPresentableMessage ?? ''))
 
+/**
+ * Whether Linear answered that the entity a mutation names does not exist. It uses `INPUT_ERROR`
+ * with "Entity not found: <Entity>", not `ENTITY_NOT_FOUND`; seen live deleting a reaction already
+ * deleted.
+ */
+const isEntityNotFound = (code: string | undefined, payload: typeof LinearGraphqlErrorPayload.Type) =>
+	code === 'INPUT_ERROR' && /^entity not found\b/i.test(payload.message ?? '')
+
 const LinearGraphqlErrorResponse = Schema.Struct({ errors: Schema.Array(LinearGraphqlErrorPayload) })
 
 /** The JSON body of a Linear GraphQL request whose variables follow the operation's own Schema. */
@@ -132,6 +140,7 @@ const failGraphqlResponseError = (
 	})
 	const code = payload.extensions?.code?.toUpperCase()
 	if (isAlreadyExists(code, payload)) return Effect.fail(new LinearAlreadyExistsError(details))
+	if (isEntityNotFound(code, payload)) return Effect.fail(new LinearResourceNotFoundError(details))
 	if (code === undefined || !Schema.is(LinearKnownGraphqlCode)(code)) {
 		return Effect.fail(new LinearGraphqlRequestError(details))
 	}

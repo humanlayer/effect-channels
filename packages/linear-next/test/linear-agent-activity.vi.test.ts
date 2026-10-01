@@ -4,11 +4,19 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstab
 
 import { LinearAuth } from '../src'
 import { CreateAgentActivityVariables } from '../src/api/CreateAgentActivity'
+import { CreateReactionVariables } from '../src/api/CreateReaction'
+import { DeleteReactionVariables } from '../src/api/DeleteReaction'
 import { GetViewerIdentityVariables } from '../src/api/GetViewerIdentity'
 import { UpdateAgentSessionVariables } from '../src/api/UpdateAgentSession'
-import { LinearApi, LinearApiError } from '../src/LinearApi'
+import { LinearApi, LinearApiError, LinearReactionTarget } from '../src/LinearApi'
 import { LinearApiLiveOptions, makeLinearApiLiveBase } from '../src/LinearApiLive'
-import { LinearAgentActivityId, LinearAgentSessionId, LinearWebhookDeliveryId } from '../src/LinearIdentity'
+import {
+	LinearAgentActivityId,
+	LinearAgentSessionId,
+	LinearIssueId,
+	LinearReactionId,
+	LinearWebhookDeliveryId,
+} from '../src/LinearIdentity'
 import {
 	LinearActivityContent,
 	LinearCreateAgentActivityRequest,
@@ -18,7 +26,13 @@ import { decodeGraphqlRequest } from './api-test-fixtures'
 import { linearAppUserId, linearOrganizationId } from './fixtures'
 
 const decodeAgentActivityRequest = decodeGraphqlRequest(
-	Schema.Union([GetViewerIdentityVariables, CreateAgentActivityVariables, UpdateAgentSessionVariables]),
+	Schema.Union([
+		GetViewerIdentityVariables,
+		CreateAgentActivityVariables,
+		UpdateAgentSessionVariables,
+		CreateReactionVariables,
+		DeleteReactionVariables,
+	]),
 )
 
 const sessionId = LinearAgentSessionId.make('71000000-0000-4000-8000-000000000001')
@@ -288,6 +302,60 @@ describe('Linear Agent Activity API', () => {
 				Effect.flip,
 			)
 			expect(invalid).toMatchObject({ reason: 'rejected', retryable: false })
+		}),
+	)
+
+	it.effect('sends a caller-chosen reaction ID, and reports a repeated one as already_exists', ({ expect }) =>
+		Effect.gen(function* () {
+			const issueId = LinearIssueId.make('b33fb278-fbe0-45e4-b4eb-94b0839f51b9')
+			const reactionId = LinearReactionId.make('75000000-0000-4000-8000-000000000001')
+			const reaction = {
+				target: LinearReactionTarget.cases.Issue.make({
+					issue: { organizationId: linearOrganizationId, teamId: null, issueId },
+				}),
+				emoji: 'eyes',
+				reactionId,
+			}
+			const { sent, layer } = yield* fakeLinear({
+				data: { reactionCreate: { success: true, reaction: { id: reactionId, emoji: 'eyes', user: null } } },
+			})
+			const made = yield* Effect.flatMap(LinearApi, (api) => api.createReaction(reaction)).pipe(Effect.provide(layer))
+			expect(made.ref.reactionId).toBe(reactionId)
+			expect(yield* Ref.get(sent)).toEqual([{ input: { id: reactionId, emoji: 'eyes', issueId } }])
+
+			const repeated = yield* fakeLinear({
+				errors: [
+					{
+						message: 'conflict on insert of Reaction',
+						extensions: {
+							code: 'INPUT_ERROR',
+							userPresentableMessage: `Entity Reaction with id ${reactionId} already exists.`,
+						},
+					},
+				],
+			})
+			const exists = yield* Effect.flatMap(LinearApi, (api) => api.createReaction(reaction)).pipe(
+				Effect.provide(repeated.layer),
+				Effect.flip,
+			)
+			expect(exists).toMatchObject({ reason: 'already_exists', retryable: false })
+		}),
+	)
+
+	it.effect("reports Linear's answer for a reaction already deleted as not_found", ({ expect }) =>
+		Effect.gen(function* () {
+			const gone = yield* fakeLinear({
+				errors: [{ message: 'Entity not found: Reaction', extensions: { code: 'INPUT_ERROR' } }],
+			})
+			const issue = {
+				organizationId: linearOrganizationId,
+				teamId: null,
+				issueId: LinearIssueId.make('b33fb278-fbe0-45e4-b4eb-94b0839f51b9'),
+			}
+			const deleted = yield* Effect.flatMap(LinearApi, (api) =>
+				api.deleteReaction({ issue, reactionId: LinearReactionId.make('75000000-0000-4000-8000-000000000001') }),
+			).pipe(Effect.provide(gone.layer), Effect.flip)
+			expect(deleted).toMatchObject({ reason: 'not_found', retryable: false })
 		}),
 	)
 

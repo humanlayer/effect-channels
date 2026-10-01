@@ -3,7 +3,7 @@
  * worker can reach the same issue or pull request. The delivery core stores these as opaque JSON; only
  * GitHub reads them.
  */
-import type { DeliveryOperationKind } from '@humanlayer/channels-delivery-next'
+import type { DeliveryOperationKind, DeliveryReactionTargetKind } from '@humanlayer/channels-delivery-next'
 import { Option, Schema } from 'effect'
 
 import { GitHubIssueCommentRef, GitHubIssueRef, GitHubPullRequestRef, GitHubReviewCommentRef } from './GitHubModels'
@@ -53,3 +53,12 @@ export const gitHubSupportedOperations = (
 	operations.push('RenderPlan', 'AddExternalLink')
 	return operations
 }
+
+/**
+ * What a GitHub delivery's reactions can go on: what started it, when there is one, and the comments the
+ * delivery posted.
+ */
+export const gitHubReactionTargets = (
+	activationTarget: Option.Option<GitHubActivationTarget>,
+): ReadonlyArray<DeliveryReactionTargetKind> =>
+	Option.isSome(activationTarget) ? ['ActivationTarget', 'MessageTarget'] : ['MessageTarget']

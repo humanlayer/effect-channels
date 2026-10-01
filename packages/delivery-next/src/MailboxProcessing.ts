@@ -38,7 +38,12 @@ import {
 	type HandoffOptions,
 } from './DeliveryContext'
 import { ExternalLink } from './DeliveryLink'
-import { activityToClear, sentMessageReference, type ActiveDelivery } from './DeliveryLifecycle'
+import {
+	activityToClear,
+	reactionAddedReference,
+	sentMessageReference,
+	type ActiveDelivery,
+} from './DeliveryLifecycle'
 import { ProviderDeleteMessage, ProviderMessageReference, ProviderUpdateMessage } from './DeliveryMessage'
 import {
 	DeliveryOperationId,
@@ -47,6 +52,7 @@ import {
 	operationMessageId,
 	type DeliveryOperation,
 } from './DeliveryOperation'
+import { ProviderReactionTarget, ProviderSetMessageReaction } from './DeliveryReaction'
 import {
 	BatchId,
 	DeliveryAccessToken,
@@ -231,7 +237,8 @@ export type ClaimDeliveryOutput = typeof ClaimDeliveryOutput.Type
  * @property namespace - with `provider`, names the provider that sends the output
  * @property prepared - where the output goes; missing when the provider never prepared the delivery
  * @property clearActivity - the delivery's last activity was `Working`; its `PresentOutcome` must clear it
- * @property messageReference - for an update or deletion, the provider's reference to the message; missing when its create failed
+ * @property messageReference - for an update or deletion, or a reaction on a message, the provider's reference to the message; missing when its create failed
+ * @property reactionAddedReference - for a reaction removal, the provider's receipt for the add it undoes, when this delivery made one
  * @property hadAmbiguousAttempt - an earlier attempt's lease ran out, so the provider may already have applied it
  * @property idempotencyKey - the operation's key, the same on every attempt at it
  */
@@ -245,6 +252,7 @@ export const ClaimedDeliveryOutput = Schema.Struct({
 	operationId: DeliveryOperationId,
 	operation: DeliveryOutputOperation,
 	messageReference: Schema.optionalKey(ProviderMessageReference),
+	reactionAddedReference: Schema.optionalKey(Schema.Json),
 	clearActivity: Schema.Boolean,
 	attempt: Schema.Int.check(Schema.isGreaterThan(0)),
 	hadAmbiguousAttempt: Schema.Boolean,
@@ -280,7 +288,11 @@ export const toClaimedDeliveryOutput = (input: {
 		hadAmbiguousAttempt: operation.hadAmbiguousAttempt,
 		idempotencyKey: input.idempotencyKey,
 	}
-	const withReference = Predicate.isUndefined(messageReference) ? claimed : { ...claimed, messageReference }
+	const addedReference = reactionAddedReference(active, operation)
+	const withMessage = Predicate.isUndefined(messageReference) ? claimed : { ...claimed, messageReference }
+	const withReference = Predicate.isUndefined(addedReference)
+		? withMessage
+		: { ...withMessage, reactionAddedReference: addedReference }
 	return ClaimedDeliveryOutput.make(
 		Predicate.isUndefined(active.prepared) ? withReference : { ...withReference, prepared: active.prepared },
 	)
@@ -746,25 +758,52 @@ const outputRetryDelayMs = (attempt: number) =>
 		return Math.round(ceiling / 2 + (ceiling / 2) * (yield* Random.next))
 	})
 
+/** A saved operation that cannot be given to its provider; it fails with `safeCode` without a call. */
+class OutputNotSendable extends Data.TaggedError('OutputNotSendable')<{ readonly safeCode: string }> {}
+
 /**
- * The operation as its provider receives it. An update or deletion takes the provider's reference to
- * its message; there is none when the message's create failed, so it cannot be sent.
+ * The operation as its provider receives it. An update or deletion, or a reaction on a message, takes
+ * the provider's reference to its message; there is none when the message's create failed, so it cannot
+ * be sent. A reaction removal also takes the receipt of the add it undoes, when there is one.
  */
-const providerOperation = (claim: ClaimedDeliveryOutput): Option.Option<ProviderOutputOperation> => {
-	const reference = Option.fromUndefinedOr(claim.messageReference)
+const providerOperation = (
+	claim: ClaimedDeliveryOutput,
+): Effect.Effect<ProviderOutputOperation, OutputNotSendable> => {
+	const messageReference = Effect.fromOption(Option.fromUndefinedOr(claim.messageReference)).pipe(
+		Effect.mapError(() => new OutputNotSendable({ safeCode: 'message_not_created' })),
+	)
 	return Match.value(claim.operation).pipe(
+		Match.withReturnType<Effect.Effect<ProviderOutputOperation, OutputNotSendable>>(),
 		Match.tagsExhaustive({
 			PresentOutcome: (operation) =>
-				Option.some<ProviderOutputOperation>(
-					ProviderPresentOutcome.make({ ...operation, clearActivity: claim.clearActivity }),
-				),
-			SetActivity: (operation) => Option.some<ProviderOutputOperation>(operation),
-			AddExternalLink: (operation) => Option.some<ProviderOutputOperation>(operation),
-			CreateMessage: (operation) => Option.some<ProviderOutputOperation>(operation),
+				Effect.succeed(ProviderPresentOutcome.make({ ...operation, clearActivity: claim.clearActivity })),
+			SetActivity: (operation) => Effect.succeed(operation),
+			AddExternalLink: (operation) => Effect.succeed(operation),
+			CreateMessage: (operation) => Effect.succeed(operation),
 			UpdateMessage: ({ messageId, markdown }) =>
-				Option.map(reference, (saved) => ProviderUpdateMessage.make({ messageId, markdown, reference: saved })),
+				Effect.map(messageReference, (reference) => ProviderUpdateMessage.make({ messageId, markdown, reference })),
 			DeleteMessage: ({ messageId }) =>
-				Option.map(reference, (saved) => ProviderDeleteMessage.make({ messageId, reference: saved })),
+				Effect.map(messageReference, (reference) => ProviderDeleteMessage.make({ messageId, reference })),
+			SetMessageReaction: ({ target, reaction, active }) =>
+				Effect.gen(function* () {
+					const providerTarget = yield* Match.value(target).pipe(
+						Match.withReturnType<Effect.Effect<ProviderReactionTarget, OutputNotSendable>>(),
+						Match.tagsExhaustive({
+							ActivationTarget: () => Effect.succeed(ProviderReactionTarget.cases.ActivationTarget.make({})),
+							MessageTarget: ({ messageId }) =>
+								Effect.map(messageReference, (reference) =>
+									ProviderReactionTarget.cases.MessageTarget.make({ messageId, reference }),
+								),
+							PlanTarget: () => Effect.fail(new OutputNotSendable({ safeCode: 'reaction_target_unavailable' })),
+						}),
+					)
+					const request = { target: providerTarget, reaction, active }
+					return ProviderSetMessageReaction.make(
+						Predicate.isUndefined(claim.reactionAddedReference)
+							? request
+							: { ...request, addedReference: claim.reactionAddedReference },
+					)
+				}),
 		}),
 	)
 }
@@ -862,15 +901,16 @@ export const processOutputClaim = Effect.fn('delivery.process_output_claim')(fun
 		)
 
 	yield* Effect.logInfo('Delivery output started').pipe(Effect.annotateLogs(annotations))
-	const operation = providerOperation(claim)
+	const prepared = claim.prepared
 	const settlement =
 		claim.attempt > maxAttempts
 			? failed('attempts_exhausted')
-			: Predicate.isUndefined(claim.prepared)
+			: Predicate.isUndefined(prepared)
 				? failed('destination_missing')
-				: Option.isNone(operation)
-					? failed('message_not_created')
-					: yield* sendUnderLease(claim.prepared, operation.value)
+				: yield* providerOperation(claim).pipe(
+						Effect.flatMap((operation) => sendUnderLease(prepared, operation)),
+						Effect.catchTag('OutputNotSendable', ({ safeCode }) => Effect.succeed(failed(safeCode))),
+					)
 	const settledAt = Timestamp.make(yield* Clock.currentTimeMillis)
 	yield* mailboxProcessingBackend.settleDeliveryOutput({
 		mailboxKey: claim.mailboxKey,

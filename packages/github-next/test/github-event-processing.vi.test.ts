@@ -313,6 +313,7 @@ describe('GitHub delivery preparation', () => {
 						comment: { discussion: { _tag: 'Issue', ref: issueRef }, id: 500 },
 					},
 					supportedOperations: activatedSupportedOperations,
+					reactionTargets: ['ActivationTarget', 'MessageTarget'],
 				}),
 			])
 		})
@@ -331,6 +332,7 @@ describe('GitHub delivery preparation', () => {
 					destination: { _tag: 'GitHubIssue', issue: issueRef },
 					activationTarget: { _tag: 'GitHubIssue', issue: issueRef },
 					supportedOperations: activatedSupportedOperations,
+					reactionTargets: ['ActivationTarget', 'MessageTarget'],
 				}),
 			])
 
@@ -348,6 +350,7 @@ describe('GitHub delivery preparation', () => {
 					destination: { _tag: 'GitHubPullRequest', pullRequest: issueRef },
 					activationTarget: { _tag: 'GitHubPullRequest', pullRequest: issueRef },
 					supportedOperations: activatedSupportedOperations,
+					reactionTargets: ['ActivationTarget', 'MessageTarget'],
 				}),
 			])
 
@@ -364,6 +367,7 @@ describe('GitHub delivery preparation', () => {
 					presentationVersion: 1,
 					destination: { _tag: 'GitHubPullRequest', pullRequest: issueRef },
 					supportedOperations: discussionSupportedOperations,
+					reactionTargets: ['MessageTarget'],
 				}),
 			])
 		}),

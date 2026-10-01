@@ -14,6 +14,9 @@
  * - `UpdateMessage` edits that comment; `DeleteMessage` removes it. A comment already gone counts as
  *   deleted.
  * - `AddExternalLink` is applied without a call; GitHub has nowhere to show a link for now.
+ * - `SetMessageReaction` adds or removes the bot's reaction on what started the delivery, or on a comment
+ *   the delivery posted. A reaction already there, or already gone, counts as done. The activity's `eyes`
+ *   and a portable `eyes` on the activation target are the same reaction, so `Idle` removes both.
  *
  * A comment is at-least-once: when GitHub accepts it but the attempt dies before the store saves the
  * result, the next attempt comments again, and the attempt carries `hadAmbiguousAttempt`. Reactions,
@@ -23,9 +26,12 @@ import {
 	DeliveryOutputApplied,
 	DeliveryOutputFailed,
 	type DeliveryOutcome,
+	type PortableReaction,
 	type ProviderOutputAttempt,
 	type ProviderOutputProcessor,
 	type ProviderPresentOutcome,
+	ProviderReactionTarget,
+	type ProviderSetMessageReaction,
 } from '@humanlayer/channels-delivery-next'
 import { Array as Arr, Effect, Match, Option, Predicate, Schema } from 'effect'
 
@@ -49,6 +55,18 @@ import {
 export const GitHubOutputReceipt = Schema.TaggedStruct('GitHubComment', { comment: GitHubIssueCommentRef })
 export type GitHubOutputReceipt = typeof GitHubOutputReceipt.Type
 export const GitHubOutputReceiptJson = Schema.toCodecJson(GitHubOutputReceipt)
+
+/** GitHub's reaction for each portable reaction. */
+export const gitHubPortableReactions = {
+	thumbs_up: '+1',
+	thumbs_down: '-1',
+	laugh: 'laugh',
+	confused: 'confused',
+	heart: 'heart',
+	hooray: 'hooray',
+	rocket: 'rocket',
+	eyes: 'eyes',
+} as const satisfies Record<PortableReaction, GitHubReaction>
 
 /** The reaction that shows a remote worker is working. */
 export const gitHubActivityReaction = GitHubReaction.make('eyes')
@@ -217,6 +235,45 @@ const setActivityReaction = Effect.fn('github.output.set_activity_reaction')(fun
 	return applied
 })
 
+/** What a portable reaction goes on: what started the delivery, or a comment the delivery posted. */
+const portableReactionTarget = (
+	activationTarget: Option.Option<GitHubActivationTarget>,
+	target: ProviderReactionTarget,
+) =>
+	ProviderReactionTarget.match(target, {
+		ActivationTarget: () =>
+			Effect.fromOption(activationTarget).pipe(
+				Effect.mapError(() => failed('activation_target_missing', false)),
+				Effect.map(activationReactionTarget),
+			),
+		MessageTarget: ({ reference }) =>
+			postedComment(reference).pipe(Effect.map((comment) => GitHubReactionTarget.cases.Comment.make({ comment }))),
+	})
+
+/**
+ * Add or remove the bot's reaction. GitHub answers 200 when it is already there, and removal finds
+ * nothing to delete when it is gone; a target already gone counts as removed.
+ */
+const setPortableReaction = Effect.fn('github.output.set_reaction')(function* (
+	activationTarget: Option.Option<GitHubActivationTarget>,
+	{ target, reaction, active }: ProviderSetMessageReaction,
+) {
+	const gitHubApi = yield* GitHubApi
+	const request = {
+		target: yield* portableReactionTarget(activationTarget, target),
+		reaction: gitHubPortableReactions[reaction],
+	}
+	yield* active
+		? gitHubApi
+				.addReaction(request)
+				.pipe(reportGitHubFailure('GitHub output reaction failed', 'github_reaction_failed'))
+		: gitHubApi.removeReaction(request).pipe(
+				countNotFoundAsDone('GitHub reaction target was already gone; counting the reaction as removed'),
+				reportGitHubFailure('GitHub output reaction removal failed', 'github_reaction_failed'),
+			)
+	return applied
+})
+
 /**
  * Present the result: clear `eyes` first when the worker's last activity was `Working`, so a retry after
  * a posted comment cannot leave it behind, then comment any Markdown.
@@ -265,6 +322,7 @@ export const makeGitHubOutputProcessor = Effect.fn('github.make_output_processor
 		return yield* Match.value(attempt.operation).pipe(
 			Match.tagsExhaustive({
 				AddExternalLink: () => Effect.succeed(applied),
+				SetMessageReaction: (operation) => setPortableReaction(activationTarget, operation),
 				PresentOutcome: (operation) => presentOutcome(destination, activationTarget, operation),
 				SetActivity: ({ activity }) =>
 					Match.value(activity).pipe(

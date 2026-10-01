@@ -15,6 +15,7 @@ import {
 	DeliveryOutputApplied,
 	DeliveryActivity,
 	DeliveryOutputFailed,
+	DeliveryReactionTarget,
 	MessageId,
 	PreparedDeliveryInvocation,
 	ProviderEventHandled,
@@ -40,6 +41,7 @@ const handingOffProvider = (
 	output: Queue.Queue<ProviderOutputAttempt>,
 	failuresLeft: Ref.Ref<number>,
 	supportedOperations: ReadonlyArray<DeliveryOperationKind>,
+	reactions: ReactionPreparation,
 ): ChannelsProvider => ({
 	providerName: 'example',
 	deliveryMode: QueueDeliveryMode.make({}),
@@ -73,6 +75,7 @@ const handingOffProvider = (
 								presentationVersion: 1,
 								destination: { resource: 'resource' },
 								supportedOperations,
+								...reactions,
 							}),
 						)
 					}
@@ -102,14 +105,20 @@ const handingOffProvider = (
 		}),
 })
 
-const startBotWith = (supportedOperations: ReadonlyArray<DeliveryOperationKind>) => Effect.gen(function* () {
+/** What the test provider saves for reactions: what started the delivery, and what reactions can go on. */
+type ReactionPreparation = Pick<PreparedDeliveryInvocation, 'activationTarget' | 'reactionTargets'>
+
+const startBotWith = (
+	supportedOperations: ReadonlyArray<DeliveryOperationKind>,
+	reactions: ReactionPreparation = {},
+) => Effect.gen(function* () {
 	const contexts = yield* Queue.unbounded<DeliveryContext>()
 	const output = yield* Queue.unbounded<ProviderOutputAttempt>()
 	const outputFailuresLeft = yield* Ref.make(0)
 	const bot = Channels.make({
 		namespace: 'channels-test',
 		basePath,
-		providers: [handingOffProvider(contexts, output, outputFailuresLeft, supportedOperations)],
+		providers: [handingOffProvider(contexts, output, outputFailuresLeft, supportedOperations, reactions)],
 		eventProcessing: { concurrency: 1, leaseMs: 30_000 },
 		storage: ChannelsMemory.make({ polling: { intervalMs: 10 } }),
 	})
@@ -394,6 +403,102 @@ describe('delivery API activity and supported operations', () => {
 				.set({ ...delivery, activity: DeliveryActivity.cases.Working.make({ message: 'x' }) })
 				.pipe(Effect.flip)
 			expect(activity).toMatchObject({ _tag: 'DeliveryOperationUnsupported', operation: 'SetActivity' })
+			expect((yield* client.status(delivery)).output).toEqual([])
+		}),
+	)
+})
+
+describe('delivery API reactions', () => {
+	const reactionOperations: ReadonlyArray<DeliveryOperationKind> = ['PresentOutcome', 'CreateMessage', 'SetMessageReaction']
+
+	it.live('sets reactions through the generated client on what started the delivery and on its messages', ({ expect }) =>
+		Effect.gen(function* () {
+			const { contexts, output, webhook, client } = yield* startBotWith(reactionOperations, {
+				activationTarget: { message: 'trigger' },
+				reactionTargets: ['ActivationTarget', 'MessageTarget'],
+			})
+			yield* webhook('first')
+			const context = yield* Queue.take(contexts)
+			const delivery = { deliveryId: context.deliveryId, accessToken: context.accessToken }
+			const activation = DeliveryReactionTarget.cases.ActivationTarget.make({})
+			const messageId = MessageId.make('summary')
+			const onSummary = DeliveryReactionTarget.cases.MessageTarget.make({ messageId })
+			expect((yield* client.status(delivery)).reactionTargets).toEqual(['ActivationTarget', 'MessageTarget'])
+
+			const add = { ...delivery, target: activation, reaction: 'eyes' as const, active: true }
+			expect((yield* client.reactions.set(add)).status).toBe('accepted')
+			expect((yield* Queue.take(output)).operation).toEqual({
+				_tag: 'SetMessageReaction',
+				target: { _tag: 'ActivationTarget' },
+				reaction: 'eyes',
+				active: true,
+			})
+			expect((yield* client.reactions.set(add)).status).toBe('already_recorded')
+			expect((yield* client.reactions.set({ ...add, active: false })).status).toBe('accepted')
+			expect((yield* Queue.take(output)).operation).toEqual({
+				_tag: 'SetMessageReaction',
+				target: { _tag: 'ActivationTarget' },
+				reaction: 'eyes',
+				active: false,
+				addedReference: { sent: 'reaction-1' },
+			})
+
+			yield* client.messages.create({ ...delivery, message: { messageId, markdown: 'Summary' } })
+			yield* client.reactions.set({ ...delivery, target: onSummary, reaction: 'hooray', active: true })
+			yield* Queue.take(output)
+			expect((yield* Queue.take(output)).operation).toEqual({
+				_tag: 'SetMessageReaction',
+				target: { _tag: 'MessageTarget', messageId, reference: { sent: 'message-1' } },
+				reaction: 'hooray',
+				active: true,
+			})
+
+			yield* client.complete(delivery)
+			yield* awaitRetired(client, delivery)
+			const late = yield* client.reactions.set(add).pipe(Effect.flip)
+			expect(late._tag).toBe('DeliveryClosed')
+		}),
+	)
+
+	it.live('answers 409 for a target the destination cannot react on, and 400 for a reaction outside the set', ({ expect }) =>
+		Effect.gen(function* () {
+			const { contexts, webhook, client, raw } = yield* startBotWith(reactionOperations, {
+				reactionTargets: ['MessageTarget'],
+			})
+			yield* webhook('first')
+			const context = yield* Queue.take(contexts)
+			const delivery = { deliveryId: context.deliveryId, accessToken: context.accessToken }
+			const refused = yield* client.reactions
+				.set({
+					...delivery,
+					target: DeliveryReactionTarget.cases.ActivationTarget.make({}),
+					reaction: 'eyes',
+					active: true,
+				})
+				.pipe(Effect.flip)
+			expect(refused).toMatchObject({ _tag: 'DeliveryReactionTargetUnavailable', target: 'ActivationTarget' })
+			const missing = yield* client.reactions
+				.set({
+					...delivery,
+					target: DeliveryReactionTarget.cases.MessageTarget.make({ messageId: MessageId.make('none') }),
+					reaction: 'eyes',
+					active: true,
+				})
+				.pipe(Effect.flip)
+			expect(missing._tag).toBe('DeliveryMessageNotFound')
+
+			const reactions = `/deliveries/${encodeURIComponent(context.deliveryId)}/reactions`
+			const request = (reaction: string, body: { readonly target: { readonly _tag: string }; readonly active: boolean }) =>
+				raw(`${reactions}/${reaction}`, {
+					method: 'PUT',
+					headers: {
+						authorization: `Bearer ${Redacted.value(context.accessToken)}`,
+						'content-type': 'application/json',
+					},
+					body: JSON.stringify(body),
+				})
+			expect((yield* request('eyes', { target: { _tag: 'PlanTarget' }, active: true })).status).toBe(409)
+			expect((yield* request('party_parrot', { target: { _tag: 'ActivationTarget' }, active: true })).status).toBe(400)
 			expect((yield* client.status(delivery)).output).toEqual([])
 		}),
 	)

@@ -12,6 +12,8 @@ import {
 	PreparedDeliveryInvocation,
 	ProviderOutputAttempt,
 	ProviderPresentOutcome,
+	ProviderReactionTarget,
+	ProviderSetMessageReaction,
 	SetActivity,
 	makeDeliveryId,
 	MessageId,
@@ -37,6 +39,7 @@ import {
 	GitHubReviewCommentRef,
 	type GitHubReactionTarget,
 	gitHubPresentationVersion,
+	gitHubReactionTargets,
 	gitHubSupportedOperations,
 	makeGitHubOutputProcessor,
 	type GitHubApiErrorReason,
@@ -274,4 +277,73 @@ describe('GitHub delivery output', () => {
 			expect(refused.calls).toEqual([])
 		}),
 	)
+
+	describe('portable reactions', () => {
+		const onActivation = ProviderReactionTarget.cases.ActivationTarget.make({})
+		const react = (target: ProviderReactionTarget, reaction: ProviderSetMessageReaction['reaction'], active: boolean) =>
+			ProviderSetMessageReaction.make({ target, reaction, active })
+
+		it.effect("adds and removes GitHub's reaction on the issue, pull request, or comment that started the delivery", ({ expect }) =>
+			Effect.gen(function* () {
+				const targets = [
+					[GitHubActivationTarget.cases.GitHubIssueComment.make({ comment: mentionComment }), 'issue-comment 500'],
+					[
+						GitHubActivationTarget.cases.GitHubReviewComment.make({
+							comment: GitHubReviewCommentRef.make({ pullRequest, id: GitHubId.make(700) }),
+						}),
+						'review-comment 700',
+					],
+					[GitHubActivationTarget.cases.GitHubIssue.make({ issue }), 'Issue 42'],
+					[GitHubActivationTarget.cases.GitHubPullRequest.make({ pullRequest }), 'PullRequest 43'],
+				] as const
+				for (const [activationTarget, shown] of targets) {
+					const invocation = prepared({ activationTarget })
+					const added = yield* run(react(onActivation, 'thumbs_up', true), invocation)
+					const removed = yield* run(react(onActivation, 'thumbs_down', false), invocation)
+					expect(Result.isSuccess(added.result) && Result.isSuccess(removed.result)).toBe(true)
+					expect([...added.calls, ...removed.calls]).toEqual([`react + +1 on ${shown}`, `react - -1 on ${shown}`])
+				}
+			}),
+		)
+
+		it.effect('reacts on a comment the delivery posted, through its receipt', ({ expect }) =>
+			Effect.gen(function* () {
+				const posted = Schema.encodeSync(GitHubOutputReceiptJson)(
+					GitHubOutputReceipt.make({
+						comment: GitHubIssueCommentRef.make({ discussion: { _tag: 'PullRequest', ref: pullRequest }, id: GitHubId.make(900) }),
+					}),
+				)
+				const target = ProviderReactionTarget.cases.MessageTarget.make({ messageId: MessageId.make('summary'), reference: posted })
+				const { result, calls } = yield* run(react(target, 'rocket', true), prepared({ destination: pullRequestDestination }))
+				expect(Result.isSuccess(result)).toBe(true)
+				expect(calls).toEqual(['react + rocket on issue-comment 900'])
+			}),
+		)
+
+		it.effect('counts a target already gone as removed, and sorts other failures', ({ expect }) =>
+			Effect.gen(function* () {
+				const invocation = prepared({ activationTarget: GitHubActivationTarget.cases.GitHubIssue.make({ issue }) })
+				const removed = yield* run(react(onActivation, 'heart', false), invocation, 'not_found')
+				expect(Result.isSuccess(removed.result)).toBe(true)
+				const outage = yield* run(react(onActivation, 'heart', true), invocation, 'unavailable')
+				const forbidden = yield* run(react(onActivation, 'heart', true), invocation, 'forbidden')
+				const noTarget = yield* run(react(onActivation, 'heart', true), prepared({}))
+				if (!Result.isFailure(outage.result) || !Result.isFailure(forbidden.result) || !Result.isFailure(noTarget.result)) {
+					return expect.unreachable()
+				}
+				expect(outage.result.failure).toMatchObject({ retryable: true, safeCode: 'github_reaction_failed' })
+				expect(forbidden.result.failure).toMatchObject({ retryable: false, safeCode: 'github_reaction_failed' })
+				expect(noTarget.result.failure).toMatchObject({ retryable: false, safeCode: 'activation_target_missing' })
+				expect(noTarget.calls).toEqual([])
+			}),
+		)
+
+		it('reacts on what started the delivery only when there is one, and always on its comments', ({ expect }) => {
+			expect(gitHubReactionTargets(Option.none())).toEqual(['MessageTarget'])
+			expect(gitHubReactionTargets(Option.some(GitHubActivationTarget.cases.GitHubIssue.make({ issue })))).toEqual([
+				'ActivationTarget',
+				'MessageTarget',
+			])
+		})
+	})
 })

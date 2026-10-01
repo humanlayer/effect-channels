@@ -2,8 +2,8 @@
  * Where a Slack delivery's output goes, saved before the callback runs so a later attempt or a remote
  * worker can reach the same thread. The delivery core stores these as opaque JSON; only Slack reads them.
  */
-import type { DeliveryOperationKind } from '@humanlayer/channels-delivery-next'
-import { Schema } from 'effect'
+import type { DeliveryOperationKind, DeliveryReactionTargetKind } from '@humanlayer/channels-delivery-next'
+import { Option, Schema } from 'effect'
 
 import { SlackMessageRef, SlackThreadRef } from './SlackModels'
 
@@ -37,3 +37,12 @@ export const slackThreadSupportedOperations: ReadonlyArray<DeliveryOperationKind
 	'RenderPlan',
 	'AddExternalLink',
 ]
+
+/**
+ * What a Slack delivery's reactions can go on: the message that started it, when there is one, and the
+ * messages the delivery posted.
+ */
+export const slackReactionTargets = (
+	activationTarget: Option.Option<SlackActivationTarget>,
+): ReadonlyArray<DeliveryReactionTargetKind> =>
+	Option.isSome(activationTarget) ? ['ActivationTarget', 'MessageTarget'] : ['MessageTarget']

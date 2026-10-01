@@ -19,6 +19,7 @@ import { SetActivity } from './DeliveryActivity'
 import { AddExternalLink } from './DeliveryLink'
 import { CreateMessage, DeleteMessage, MessageId, UpdateMessage } from './DeliveryMessage'
 import { PresentOutcome } from './DeliveryOutcome'
+import { DeliveryReactionTarget, SetMessageReaction } from './DeliveryReaction'
 import { Timestamp } from './MailboxPolicy'
 
 /** Names one output operation within its delivery. Stable across every attempt. */
@@ -36,6 +37,7 @@ export const DeliveryOutputOperation = Schema.Union([
 	UpdateMessage,
 	DeleteMessage,
 	SetActivity,
+	SetMessageReaction,
 ])
 export type DeliveryOutputOperation = typeof DeliveryOutputOperation.Type
 
@@ -78,7 +80,7 @@ export type DeliveryOperation = typeof DeliveryOperation.Type
 /**
  * What a remote worker may read about one operation.
  *
- * @property messageId - the message a message operation acts on
+ * @property messageId - the message a message operation, or a reaction on a message, acts on
  * @property hadAmbiguousAttempt - an attempt's lease ran out, so the provider may have applied it more than once
  */
 export const DeliveryOutputStatus = Schema.Struct({
@@ -90,6 +92,7 @@ export const DeliveryOutputStatus = Schema.Struct({
 		'UpdateMessage',
 		'DeleteMessage',
 		'SetActivity',
+		'SetMessageReaction',
 	]),
 	messageId: Schema.optionalKey(MessageId),
 	state: Schema.Literals(['Pending', 'Delivering', 'Delivered', 'Failed']),
@@ -99,7 +102,7 @@ export const DeliveryOutputStatus = Schema.Struct({
 })
 export type DeliveryOutputStatus = typeof DeliveryOutputStatus.Type
 
-/** The message a saved operation acts on, when it acts on one. */
+/** The message a saved operation acts on, when it acts on one: a message change, or a reaction on a message. */
 export const operationMessageId = (operation: DeliveryOutputOperation): MessageId | undefined =>
 	Match.value(operation).pipe(
 		Match.tagsExhaustive({
@@ -109,6 +112,12 @@ export const operationMessageId = (operation: DeliveryOutputOperation): MessageI
 			CreateMessage: ({ messageId }) => messageId,
 			UpdateMessage: ({ messageId }) => messageId,
 			DeleteMessage: ({ messageId }) => messageId,
+			SetMessageReaction: ({ target }) =>
+				DeliveryReactionTarget.match(target, {
+					ActivationTarget: () => undefined,
+					MessageTarget: ({ messageId }) => messageId,
+					PlanTarget: () => undefined,
+				}),
 		}),
 	)
 

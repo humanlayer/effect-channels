@@ -10,6 +10,7 @@ import {
 	Channels,
 	ChannelsMemory,
 	DeliveryActivity,
+	DeliveryReactionTarget,
 	MessageId,
 	QueueDeliveryMode,
 	makeDeliveryClient,
@@ -76,15 +77,16 @@ const makeFakeGitHub = (options: FakeGitHubOptions = {}) =>
 					author: null,
 				})
 			})
-		const react = (target: string, active: boolean) =>
+		const react = (reaction: string, target: string, active: boolean) =>
 			Ref.modify(reactions, (current) => {
+				const key = `${reaction} on ${target}`
 				const next = new Set(current)
-				if (active) next.add(target)
-				else next.delete(target)
-				return [current.has(target) !== active, next] as const
+				if (active) next.add(key)
+				else next.delete(key)
+				return [current.has(key) !== active, next] as const
 			}).pipe(
 				Effect.flatMap((changed) =>
-					changed ? Queue.offer(shown, `${active ? 'eyes on' : 'eyes off'} ${target}`) : Effect.void,
+					changed ? Queue.offer(shown, `${reaction} ${active ? 'on' : 'off'} ${target}`) : Effect.void,
 				),
 				Effect.asVoid,
 			)
@@ -106,8 +108,8 @@ const makeFakeGitHub = (options: FakeGitHubOptions = {}) =>
 							),
 						),
 			deleteComment: ({ comment }) => Queue.offer(shown, `delete ${describeComment(comment)}`).pipe(Effect.asVoid),
-			addReaction: ({ target }) => react(describeReactionTarget(target), true),
-			removeReaction: ({ target }) => react(describeReactionTarget(target), false),
+			addReaction: ({ target, reaction }) => react(reaction, describeReactionTarget(target), true),
+			removeReaction: ({ target, reaction }) => react(reaction, describeReactionTarget(target), false),
 		})
 		return { api, shown, reactions }
 	})
@@ -253,6 +255,50 @@ describe('GitHub remote delivery: issue and pull request', () => {
 			expect(yield* Ref.get(github.reactions)).toEqual(new Set())
 			expect(yield* Queue.size(github.shown)).toBe(0)
 			expect(yield* Queue.size(events)).toBe(0)
+		}),
+	)
+
+	it.live('adds and removes portable reactions on the mention and on a posted comment, and repeats change nothing', ({ expect }) =>
+		Effect.gen(function* () {
+			const github = yield* makeFakeGitHub()
+			const { client, delivery, target } = yield* handOffMention(github.api)
+			expect((yield* client.status(target)).reactionTargets).toEqual(['ActivationTarget', 'MessageTarget'])
+			const onMention = { ...target, target: DeliveryReactionTarget.cases.ActivationTarget.make({}) }
+			expect((yield* client.reactions.set({ ...onMention, reaction: 'thumbs_up', active: true })).status).toBe('accepted')
+			expect(yield* Queue.take(github.shown)).toBe('+1 on comment 500')
+			expect((yield* client.reactions.set({ ...onMention, reaction: 'thumbs_up', active: true })).status).toBe(
+				'already_recorded',
+			)
+
+			const summary = MessageId.make('summary')
+			yield* client.messages.create({ ...target, message: { messageId: summary, markdown: 'Summary.' } })
+			yield* client.reactions.set({
+				...target,
+				target: DeliveryReactionTarget.cases.MessageTarget.make({ messageId: summary }),
+				reaction: 'hooray',
+				active: true,
+			})
+			yield* client.reactions.set({ ...onMention, reaction: 'thumbs_up', active: false })
+			expect(yield* takeShown(github.shown, 3)).toEqual([
+				'post issue 42: Summary.',
+				'hooray on comment 901',
+				'+1 off comment 500',
+			])
+
+			yield* client.complete(target)
+			const retired = yield* awaitRetired(client, delivery)
+			expect(retired.output.map(({ kind, messageId }) => [kind, messageId])).toEqual([
+				['SetMessageReaction', undefined],
+				['CreateMessage', 'summary'],
+				['SetMessageReaction', 'summary'],
+				['SetMessageReaction', undefined],
+				['PresentOutcome', undefined],
+			])
+			/** The delivery ID holds a random batch ID, so only the rest of the status is checked for GitHub IDs. */
+			const { deliveryId: _, ...rest } = retired
+			expect(JSON.stringify(rest)).not.toMatch(/500|901|alice|project/)
+			expect(yield* Ref.get(github.reactions)).toEqual(new Set(['hooray on comment 901']))
+			expect(yield* Queue.size(github.shown)).toBe(0)
 		}),
 	)
 

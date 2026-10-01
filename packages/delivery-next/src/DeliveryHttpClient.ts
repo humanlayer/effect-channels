@@ -15,9 +15,11 @@ import {
 	type CreateMessagePayload,
 	type FailDeliveryPayload,
 	type SetActivityPayload,
+	type SetReactionPayload,
 	type UpdateMessagePayload,
 } from './DeliveryHttpApi'
 import type { MessageId } from './DeliveryMessage'
+import type { PortableReaction } from './DeliveryReaction'
 
 /**
  * @property baseUrl - the application's public origin, such as `https://agent.example.com`
@@ -94,6 +96,26 @@ export const makeDeliveryClient = Effect.fn('delivery.client.make')(function* (o
 						}),
 					),
 					Effect.withSpan('delivery.client.set_activity'),
+				),
+		},
+		/**
+		 * The bot's reactions, from a small set every provider can show, on what started the delivery or on
+		 * a message it created. Build the target with `DeliveryReactionTarget.cases`.
+		 */
+		reactions: {
+			/**
+			 * Make the bot's `reaction` present (`active: true`) or absent on `target`. The state already asked
+			 * for is a replay; a quick change replaces one not yet sent.
+			 */
+			set: (target: DeliveryClientTarget & { readonly reaction: PortableReaction } & SetReactionPayload) =>
+				forDelivery(target).pipe(
+					Effect.flatMap((client) =>
+						client.deliveries.setReaction({
+							params: { deliveryId: target.deliveryId, reaction: target.reaction },
+							payload: { target: target.target, active: target.active },
+						}),
+					),
+					Effect.withSpan('delivery.client.set_reaction'),
 				),
 		},
 		/**

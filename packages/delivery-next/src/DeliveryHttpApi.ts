@@ -23,11 +23,13 @@ import {
 	DeliveryMutationReceipt,
 	DeliveryNotFound,
 	DeliveryOperationUnsupported,
+	DeliveryReactionTargetUnavailable,
 	DeliveryStatus,
 	DeliveryTerminalConflict,
 } from './DeliveryControl'
 import { ExternalLink } from './DeliveryLink'
 import { MessageId } from './DeliveryMessage'
+import { DeliveryReactionTarget, PortableReaction } from './DeliveryReaction'
 
 /** The request had no `Authorization: Bearer` token. */
 export class DeliveryCredentialMissing extends Schema.TaggedError<DeliveryCredentialMissing>()(
@@ -37,6 +39,7 @@ export class DeliveryCredentialMissing extends Schema.TaggedError<DeliveryCreden
 
 const Params = Schema.Struct({ deliveryId: Schema.String })
 const MessageParams = Schema.Struct({ deliveryId: Schema.String, messageId: MessageId })
+const ReactionParams = Schema.Struct({ deliveryId: Schema.String, reaction: PortableReaction })
 
 export const CompleteDeliveryPayload = Schema.Struct({
 	markdown: Schema.optionalKey(DeliveryMarkdown),
@@ -75,6 +78,16 @@ export const SetActivityPayload = Schema.Struct({
 })
 export type SetActivityPayload = typeof SetActivityPayload.Type
 
+/**
+ * Where the reaction goes, and whether the bot's reaction should be there:
+ * `{ "target": { "_tag": "ActivationTarget" }, "active": true }`, or a `MessageTarget` with a `messageId`.
+ */
+export const SetReactionPayload = Schema.Struct({
+	target: DeliveryReactionTarget,
+	active: Schema.Boolean,
+})
+export type SetReactionPayload = typeof SetReactionPayload.Type
+
 const Accepted = DeliveryMutationReceipt.pipe(HttpApiSchema.status(202))
 
 const statusErrors = [
@@ -91,6 +104,7 @@ const mutationErrors = [
 	DeliveryMessageNotFound.pipe(HttpApiSchema.status(409)),
 	DeliveryMessageDeleted.pipe(HttpApiSchema.status(409)),
 	DeliveryMessageConflict.pipe(HttpApiSchema.status(409)),
+	DeliveryReactionTargetUnavailable.pipe(HttpApiSchema.status(409)),
 ] as const
 
 export const DeliveryHttpApi = HttpApi.make('ChannelsDeliveryApi').add(
@@ -121,6 +135,12 @@ export const DeliveryHttpApi = HttpApi.make('ChannelsDeliveryApi').add(
 		HttpApiEndpoint.put('setActivity', '/deliveries/:deliveryId/activity', {
 			params: Params,
 			payload: SetActivityPayload,
+			success: Accepted,
+			error: mutationErrors,
+		}),
+		HttpApiEndpoint.put('setReaction', '/deliveries/:deliveryId/reactions/:reaction', {
+			params: ReactionParams,
+			payload: SetReactionPayload,
 			success: Accepted,
 			error: mutationErrors,
 		}),
