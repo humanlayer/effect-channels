@@ -62,6 +62,9 @@ export const PreparedDeliveryInvocation = Schema.Struct({
 })
 export type PreparedDeliveryInvocation = typeof PreparedDeliveryInvocation.Type
 
+/** A preparation as JSON text, for stores that keep it as a string. */
+export const PreparedDeliveryInvocationJson = Schema.fromJsonString(PreparedDeliveryInvocation)
+
 /** Where a delivery is in its life. */
 export const DeliveryStage = Schema.Literals([
 	'Local',

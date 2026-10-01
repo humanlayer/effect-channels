@@ -174,6 +174,26 @@ export const ClaimedMailboxBatch = Schema.Struct({
 })
 export type ClaimedMailboxBatch = typeof ClaimedMailboxBatch.Type
 
+/** The claim a store returns for a batch the lifecycle has just claimed. */
+export const toClaimedMailboxBatch = (input: {
+	readonly mailboxKey: string
+	readonly claimId: string
+	readonly active: ActiveDelivery
+}) => {
+	const { active } = input
+	const claimed = {
+		mailboxKey: input.mailboxKey,
+		batchId: active.batchId,
+		claimId: input.claimId,
+		attempt: active.attempt,
+		accessToken: active.accessToken,
+		admissions: active.admissions,
+	}
+	return ClaimedMailboxBatch.make(
+		Predicate.isUndefined(active.prepared) ? claimed : { ...claimed, prepared: active.prepared },
+	)
+}
+
 /** Save the callback choice and destination for the batch this claim owns. */
 export const PrepareMailboxDelivery = Schema.Struct({
 	mailboxKey: Schema.NonEmptyString,

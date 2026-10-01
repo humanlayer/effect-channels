@@ -1,16 +1,20 @@
 import {
 	deliveryMailboxKey,
-	DeliveryAdmission,
+	DeliveryAdmissionJson,
+	type DeliveryAdmission,
 	DeliveryReceipt,
 	MailboxDelivery,
 	MailboxDeliveryUnavailable,
+	requestDeliveryInterrupt,
 } from '@humanlayer/channels-delivery-next'
-import { Clock, Effect, Layer, Schema } from 'effect'
+import { Clock, Effect, Layer, Option, Schema } from 'effect'
 import * as SqlClient from 'effect/unstable/sql/SqlClient'
 import * as SqlError from 'effect/unstable/sql/SqlError'
 
+import { loadDeliverySlot, writeDeliverySlot } from './DeliverySlot'
+import { migrate } from './Migrations'
+
 const insertedRows = Schema.Array(Schema.Struct({ event_id: Schema.NonEmptyString })).check(Schema.isMaxLength(1))
-const admissionCodec = Schema.fromJsonString(DeliveryAdmission)
 
 const unavailable = <A, R>(effect: Effect.Effect<A, Schema.SchemaError | SqlError.SqlError, R>) =>
 	effect.pipe(
@@ -21,100 +25,27 @@ const unavailable = <A, R>(effect: Effect.Effect<A, Schema.SchemaError | SqlErro
 		}),
 	)
 
-/**
- * Added after the first tables, so every statement is safe to run again on a store that has them.
- *
- * - a batch row is one frozen batch for good: its permanent ID, its remote-worker token, and the
- *   callback choice saved by its first prepare;
- * - each claim row belongs to one batch, and a retry or recovery adds a claim row for the same batch.
- *
- * A claim still live from before this migration gets a batch of its own, with a fresh token.
- */
-const migrateBatches = Effect.gen(function* () {
-	const sql = (yield* SqlClient.SqlClient).withoutTransforms()
-	yield* sql`CREATE TABLE IF NOT EXISTS delivery_next_batches (
-		batch_id text COLLATE "C" PRIMARY KEY,
-		mailbox_key text COLLATE "C" NOT NULL REFERENCES delivery_next_mailboxes(mailbox_key),
-		access_token text NOT NULL,
-		prepared_json text,
-		created_at double precision NOT NULL,
-		prepared_at double precision
-	)`
-	yield* sql`ALTER TABLE delivery_next_claims
-		ADD COLUMN IF NOT EXISTS batch_id text COLLATE "C" REFERENCES delivery_next_batches(batch_id)`
-	yield* sql`CREATE INDEX IF NOT EXISTS delivery_next_claims_batch
-		ON delivery_next_claims (batch_id, claimed_at)`
-	yield* sql`INSERT INTO delivery_next_batches (batch_id, mailbox_key, access_token, created_at)
-		SELECT 'legacy-' || md5(claim_id), mailbox_key,
-			replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', ''), claimed_at
-		FROM delivery_next_claims WHERE batch_id IS NULL AND status IN ('active', 'retry')
-		ON CONFLICT (batch_id) DO NOTHING`
-	yield* sql`UPDATE delivery_next_claims SET batch_id = 'legacy-' || md5(claim_id)
-		WHERE batch_id IS NULL AND status IN ('active', 'retry')`
-})
-
-/**
- * The mailbox store's tables.
- *
- * - a mailbox row says whether the mailbox is idle, running a claim, or waiting to retry one, and when it is next due;
- * - a claim row is one attempt at one frozen batch, kept as history;
- * - an admission row is one accepted event. It waits while `claim_id` is null.
- *   A frozen batch is the rows sharing a `claim_id`, in `sequence_id` order.
- *
- * All times are milliseconds from Effect's Clock, passed in as parameters, never the database's clock.
- */
-export const migrate = Effect.gen(function* () {
-	const sql = (yield* SqlClient.SqlClient).withoutTransforms()
-	yield* sql`CREATE TABLE IF NOT EXISTS delivery_next_mailboxes (
-		mailbox_key text COLLATE "C" PRIMARY KEY,
-		provider text NOT NULL,
-		status text NOT NULL DEFAULT 'idle' CHECK (status IN ('idle', 'active', 'retry')),
-		ready_at double precision
-	)`
-	yield* sql`CREATE INDEX IF NOT EXISTS delivery_next_mailboxes_ready
-		ON delivery_next_mailboxes (ready_at, mailbox_key) WHERE ready_at IS NOT NULL`
-	yield* sql`CREATE TABLE IF NOT EXISTS delivery_next_claims (
-		claim_id text PRIMARY KEY,
-		mailbox_key text COLLATE "C" NOT NULL REFERENCES delivery_next_mailboxes(mailbox_key),
-		attempt bigint NOT NULL CHECK (attempt > 0),
-		status text NOT NULL CHECK (status IN ('active', 'retry', 'retried', 'completed', 'failed', 'abandoned')),
-		lease_expires_at double precision NOT NULL,
-		result_json text,
-		claimed_at double precision NOT NULL,
-		finished_at double precision
-	)`
-	yield* sql`CREATE INDEX IF NOT EXISTS delivery_next_claims_mailbox
-		ON delivery_next_claims (mailbox_key, claimed_at)`
-	yield* sql`CREATE UNIQUE INDEX IF NOT EXISTS delivery_next_claims_live
-		ON delivery_next_claims (mailbox_key) WHERE status IN ('active', 'retry')`
-	yield* sql`CREATE TABLE IF NOT EXISTS delivery_next_admissions (
-		sequence_id bigserial PRIMARY KEY,
-		mailbox_key text COLLATE "C" NOT NULL REFERENCES delivery_next_mailboxes(mailbox_key),
-		namespace text NOT NULL,
-		provider text NOT NULL,
-		event_id text NOT NULL,
-		admission_json text NOT NULL,
-		arrived_at double precision NOT NULL,
-		claim_id text REFERENCES delivery_next_claims(claim_id),
-		UNIQUE (namespace, provider, event_id)
-	)`
-	yield* sql`CREATE INDEX IF NOT EXISTS delivery_next_admissions_waiting
-		ON delivery_next_admissions (mailbox_key, sequence_id) WHERE claim_id IS NULL`
-	yield* sql`CREATE INDEX IF NOT EXISTS delivery_next_admissions_claim
-		ON delivery_next_admissions (claim_id, sequence_id) WHERE claim_id IS NOT NULL`
-	yield* migrateBatches
-}).pipe(unavailable, Effect.asVoid, Effect.withSpan('delivery.sql.migrate'))
+/** Mark the active delivery, if there is one, as asked to stop. Runs under the mailbox lock. */
+const markInterrupt = (input: { readonly mailboxKey: string; readonly now: number }) =>
+	Effect.gen(function* () {
+		const loaded = yield* loadDeliverySlot({ mailboxKey: input.mailboxKey, now: input.now, withRetained: false })
+		if (Option.isNone(loaded)) return
+		const slot = requestDeliveryInterrupt(loaded.value.slot, input.now)
+		if (slot !== loaded.value.slot) yield* writeDeliverySlot({ loaded: loaded.value, slot, now: input.now })
+	})
 
 /**
  * Accept an event once. The mailbox row is locked before the insert draws its sequence number,
  * so sequence order is commit order within a mailbox.
  *
  * An arrival wakes an idle mailbox now, even a deferred one. A running or retrying mailbox keeps its due time.
+ * An interrupting arrival also marks the mailbox's active delivery, in the same transaction, through
+ * the shared lifecycle; the event itself still waits its turn.
  */
 const deliver = Effect.fn('delivery.sql.deliver')(function* (admission: DeliveryAdmission) {
 	const now = yield* Clock.currentTimeMillis
 	const mailboxKey = deliveryMailboxKey(admission)
-	const admissionJson = yield* Schema.encodeEffect(admissionCodec)(admission)
+	const admissionJson = yield* Schema.encodeEffect(DeliveryAdmissionJson)(admission)
 	const sql = (yield* SqlClient.SqlClient).withoutTransforms()
 	return yield* sql.withTransaction(
 		Effect.gen(function* () {
@@ -134,6 +65,7 @@ const deliver = Effect.fn('delivery.sql.deliver')(function* (admission: Delivery
 				yield* sql`UPDATE delivery_next_mailboxes SET ready_at = ${now}
 				WHERE mailbox_key = ${mailboxKey} AND status = 'idle'`
 			}
+			if (inserted.length === 1 && admission.interrupt === true) yield* markInterrupt({ mailboxKey, now })
 			return DeliveryReceipt.make({ mailboxKey, accepted: inserted.length === 1 })
 		}),
 	)

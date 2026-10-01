@@ -1,9 +1,10 @@
 /**
  * This file defines the life of one delivery as pure transitions over a mailbox's delivery slot.
  *
- * A store that keeps a whole mailbox as one value, such as memory or a Durable Object, runs these
- * inside its own atomic update. Keeping them here means those stores cannot drift apart. Stores with
- * their own data layout, such as SQL, follow the same rules through the shared backend contract.
+ * Every store runs these inside its own atomic update: memory and the Durable Object over a mailbox
+ * kept as one value, Postgres over the rows it locked in one transaction, and Redis over one read of
+ * the mailbox, written only if nothing changed it since. Keeping them here means the stores cannot
+ * drift apart.
  *
  * ```text
  * Local ──handoff──▶ ExternalCleaning ──callback returns──▶ ExternalWaiting ──result──▶ Finishing ──output settled──▶ Retired
@@ -17,7 +18,7 @@
  * one at a time, in the order they were saved. A delivery retires once its callback has returned and
  * every operation is delivered or has failed.
  */
-import { Data, Effect, Match, Predicate, Result, Schema } from 'effect'
+import { Data, Effect, Match, Predicate, Result, Schema, Struct } from 'effect'
 
 import { DeliveryActivity, SetActivity, sameDeliveryActivity } from './DeliveryActivity'
 import { DeliveryOperationKind, PreparedDeliveryInvocation, type DeliveryStage } from './DeliveryContext'
@@ -134,6 +135,27 @@ export type DeliverySlot = typeof DeliverySlot.Type
 
 export const emptyDeliverySlot = DeliverySlot.make({ active: null, readyAt: null, retained: [] })
 
+/**
+ * The part of an `ActiveDelivery` that Postgres and Redis keep as one JSON value. They keep the batch
+ * ID, token, admissions, callback choice, and stage in columns or fields of their own.
+ */
+export const StoredActiveDelivery = ActiveDelivery.mapFields(
+	Struct.omit(['batchId', 'accessToken', 'admissions', 'prepared', 'stage']),
+)
+export interface StoredActiveDelivery extends Schema.Schema.Type<typeof StoredActiveDelivery> {}
+
+/**
+ * How a polling store's scheduler sees a mailbox: no active delivery, one waiting to retry, or one in
+ * any other stage. Postgres and Redis keep it beside the slot.
+ */
+export const MailboxSchedulerStatus = Schema.Literals(['idle', 'active', 'retry'])
+export type MailboxSchedulerStatus = typeof MailboxSchedulerStatus.Type
+
+export const mailboxSchedulerStatus = (slot: DeliverySlot): MailboxSchedulerStatus => {
+	if (Predicate.isNull(slot.active)) return 'idle'
+	return slot.active.stage === 'Retry' ? 'retry' : 'active'
+}
+
 /** What a transition needs to know about the rest of the mailbox. */
 export type MailboxFacts = {
 	readonly now: number
@@ -150,8 +172,11 @@ const claimNotOwned = new ClaimNotOwned()
 /** A different preparation is already saved. */
 export class PreparationMismatch extends Data.TaggedError('PreparationMismatch')<{ readonly batchId: BatchId }> {}
 
-/** What due work the active delivery has: its callback to run, or output to send. */
-export const activeDeliveryWork = (active: ActiveDelivery): 'Callback' | 'Output' =>
+/**
+ * What due work the active delivery has: its callback to run, or output to send. Takes only the
+ * stage, so a store that keeps the stage in its own column can ask without loading the delivery.
+ */
+export const activeDeliveryWork = (active: { readonly stage: ActiveDeliveryStage }): 'Callback' | 'Output' =>
 	active.stage === 'ExternalWaiting' || active.stage === 'Finishing' ? 'Output' : 'Callback'
 
 /** The operation that runs next. Operations run in order, so a later one waits for this one to settle. */

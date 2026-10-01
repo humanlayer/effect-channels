@@ -1,8 +1,8 @@
 /**
- * The contract for stores that support remote handoff: memory and the Durable Object.
+ * The contract for stores that support remote handoff: memory, the Durable Object, Postgres, and Redis.
  *
  * It drives a store through MailboxDelivery, MailboxProcessingBackend, and DeliveryControlBackend,
- * under the test clock. Stores that do not support handoff yet run `handoffUnsupportedContract`.
+ * under the test clock.
  */
 import { it } from '@effect/vitest'
 import { Clock, Effect, Option, type Layer } from 'effect'
@@ -883,22 +883,3 @@ export const deliveryHandoffContract = <E>(storeName: string, makeEmptyStore: ()
 		}),
 	)
 }
-
-/** The contract for stores that keep batch identity but cannot hand deliveries off yet. */
-export const handoffUnsupportedContract = <E>(
-	storeName: string,
-	makeEmptyStore: () => Layer.Layer<MailboxDelivery | MailboxProcessingBackend, E>,
-) =>
-	it.effect(`${storeName}: refuses handoff until it supports remote control`, () =>
-		Effect.gen(function* () {
-			yield* deliver('a')
-			const claim = yield* claimPrepared
-			const refused = yield* handOff(claim).pipe(Effect.flip)
-			expect(refused._tag).toEqual('DeliveryHandoffUnsupported')
-			yield* settle(claim, 'completed')
-			expect(yield* findReady).toEqual([])
-			const backend = yield* MailboxProcessingBackend
-			const idempotencyKey = '00000000-0000-4000-8000-000000000001'
-		expect(Option.isNone(yield* backend.claimDeliveryOutput({ mailboxKey, leaseMs, idempotencyKey }))).toEqual(true)
-		}).pipe(Effect.provide(makeEmptyStore())),
-	)

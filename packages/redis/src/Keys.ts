@@ -12,4 +12,6 @@ export const readyMailboxesKey = `${root}:ready`
 export const mailboxStateKey = (mailboxKey: string) => `${root}:state:${encode(mailboxKey)}`
 export const mailboxPendingKey = (mailboxKey: string) => `${root}:pending:${encode(mailboxKey)}`
 export const mailboxEventsKey = (mailboxKey: string) => `${root}:events:${encode(mailboxKey)}`
+/** A mailbox's finished deliveries, kept for status reads and repeated requests until the last one's retention ends. */
+export const mailboxRetainedKey = (mailboxKey: string) => `${root}:retained:${encode(mailboxKey)}`
 export const mailboxSubscriptionsKey = `${root}:subscriptions`

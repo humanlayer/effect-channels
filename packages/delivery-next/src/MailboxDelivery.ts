@@ -49,6 +49,9 @@ export const DeliveryAdmission = Schema.TaggedStruct('DeliveryAdmission', {
 })
 export type DeliveryAdmission = Schema.Schema.Type<typeof DeliveryAdmission>
 
+/** An admission as JSON text, for stores that keep it as a string. */
+export const DeliveryAdmissionJson = Schema.fromJsonString(DeliveryAdmission)
+
 /** A collision-free, stable key for the mailbox addressed by an admission. */
 export type DeliveryMailboxAddress = Pick<DeliveryAdmission, 'namespace' | 'provider' | 'installationId' | 'resourceId'>
 

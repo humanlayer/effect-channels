@@ -1,4 +1,11 @@
 {
 	"extends": "../tsconfig.json",
-	"include": [".", "../src", "../../delivery-next/test/backend-contract.ts", "../../delivery-next/test/delivery-handoff-contract.ts"]
+	"include": [
+		".",
+		"../src",
+		"../../delivery-next/test/backend-contract.ts",
+		"../../delivery-next/test/delivery-handoff-contract.ts",
+		"../../delivery-next/test/delivery-output-scenarios.ts",
+		"../../delivery-next/test/delivery-api-scenario.ts"
+	]
 }

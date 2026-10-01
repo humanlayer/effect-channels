@@ -5,7 +5,7 @@
  * and DeliveryControlBackend) and must pass the same backend contract, so the shared processing code
  * can run against realistic mailbox behaviour without a database.
  */
-import { Array as Arr, Clock, Context, Effect, Layer, Match, Option, Predicate, Ref, Result } from 'effect'
+import { Array as Arr, Clock, Context, Effect, Layer, Match, Option, Ref, Result } from 'effect'
 
 import { DeliveryPreparationConflict, type PreparedDeliveryInvocation } from './DeliveryContext'
 import { DeliveryControlBackend, DeliveryNotFound, type DeliveryStatus } from './DeliveryControl'
@@ -25,7 +25,6 @@ import {
 	requestDeliveryInterrupt,
 	settleDeliveryOutput,
 	startDeliveryBatch,
-	type ActiveDelivery,
 	type DeliverySlot,
 } from './DeliveryLifecycle'
 import { makeDeliveryId } from './DeliveryReference'
@@ -40,6 +39,7 @@ import {
 	RecoverableMailbox,
 	WaitingMailbox,
 	toClaimedDeliveryOutput,
+	toClaimedMailboxBatch,
 	type ClaimMailbox,
 	type ReadyMailbox,
 } from './MailboxProcessing'
@@ -69,20 +69,6 @@ const withMailbox = (store: MemoryStore, mailbox: MemoryMailbox): MemoryStore =>
 const toBatch = (events: ReadonlyArray<WaitingEvent>) => {
 	const [first, ...rest] = events.map(({ admission }) => admission)
 	return first === undefined ? null : DeliveryAdmissionBatch.make([first, ...rest])
-}
-
-const toClaimedBatch = (mailboxKey: string, active: ActiveDelivery, claimId: string) => {
-	const claimed = {
-		mailboxKey,
-		batchId: active.batchId,
-		claimId,
-		attempt: active.attempt,
-		accessToken: active.accessToken,
-		admissions: active.admissions,
-	}
-	return ClaimedMailboxBatch.make(
-		Predicate.isUndefined(active.prepared) ? claimed : { ...claimed, prepared: active.prepared },
-	)
 }
 
 export const MailboxBackendMemory = Layer.effectContext(
@@ -198,7 +184,7 @@ export const MailboxBackendMemory = Layer.effectContext(
 									deliveries: started.slot,
 								}
 								return [
-									Option.some(toClaimedBatch(current.mailboxKey, started.claimed, claimId)),
+									Option.some(toClaimedMailboxBatch({ mailboxKey: current.mailboxKey, active: started.claimed, claimId })),
 									{ ...withMailbox(store, next), ...claimsMade },
 								] as const
 							},
@@ -212,7 +198,7 @@ export const MailboxBackendMemory = Layer.effectContext(
 								const nextStore = { ...withMailbox(store, { ...current, deliveries: slot }), ...claimsMade }
 								return claimed === null
 									? ([Option.none(), nextStore] as const)
-									: ([Option.some(toClaimedBatch(current.mailboxKey, claimed, claimId)), nextStore] as const)
+									: ([Option.some(toClaimedMailboxBatch({ mailboxKey: current.mailboxKey, active: claimed, claimId })), nextStore] as const)
 							},
 						}),
 					)

@@ -1,4 +1,5 @@
 export * from './MailboxDelivery'
 export * from './MailboxProcessingBackend'
 export * from './MailboxSubscriptions'
+export * from './DeliveryControlBackend'
 export * as ChannelsRedis from './ChannelsRedis'

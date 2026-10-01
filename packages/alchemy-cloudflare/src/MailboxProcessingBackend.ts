@@ -21,7 +21,7 @@ import {
 	settleDeliveryOutput,
 	startDeliveryBatch,
 	toClaimedDeliveryOutput,
-	type ActiveDelivery,
+	toClaimedMailboxBatch,
 	type ClaimDeliveryOutput,
 	type ClaimedDeliveryOutput,
 	type ClaimMailbox,
@@ -99,20 +99,6 @@ const describeReadyMailbox = (current: DurableMailboxState, now: number): Readon
 	]
 }
 
-const toClaimedBatch = (mailboxKey: string, active: ActiveDelivery, claimId: string) => {
-	const claimed = {
-		mailboxKey,
-		batchId: active.batchId,
-		claimId,
-		attempt: active.attempt,
-		accessToken: active.accessToken,
-		admissions: active.admissions,
-	}
-	return ClaimedMailboxBatch.make(
-		Predicate.isUndefined(active.prepared) ? claimed : { ...claimed, prepared: active.prepared },
-	)
-}
-
 const claimTransition = (input: {
 	readonly current: DurableMailboxState
 	readonly claim: ClaimMailbox
@@ -136,7 +122,9 @@ const claimTransition = (input: {
 				})
 				if (Predicate.isNull(started)) return unchanged(Option.none())
 				return {
-					result: Option.some(toClaimedBatch(current.mailboxKey, started.claimed, claimId)),
+					result: Option.some(
+						toClaimedMailboxBatch({ mailboxKey: current.mailboxKey, active: started.claimed, claimId }),
+					),
 					next: Option.some(
 						DurableMailboxState.make({
 							...current,
@@ -156,7 +144,9 @@ const claimTransition = (input: {
 				return {
 					result: Predicate.isNull(claimed)
 						? Option.none()
-						: Option.some(toClaimedBatch(current.mailboxKey, claimed, claimId)),
+						: Option.some(
+								toClaimedMailboxBatch({ mailboxKey: current.mailboxKey, active: claimed, claimId }),
+							),
 					next: Option.some(DurableMailboxState.make({ ...current, deliveries: slot })),
 				}
 			},

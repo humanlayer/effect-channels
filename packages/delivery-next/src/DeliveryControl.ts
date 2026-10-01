@@ -5,8 +5,7 @@
  * `DeliveryControl` parses the ID, then asks the owning store, which checks the token and changes the
  * delivery in one step. It never calls Slack, GitHub, or Linear.
  *
- * `DeliveryControlBackend` is the store's half. Memory and the Durable Object implement it; SQL and
- * Redis do not yet, so a bot on those stores cannot mount the delivery API.
+ * `DeliveryControlBackend` is the store's half. Memory, the Durable Object, Postgres, and Redis implement it.
  *
  * A change saves the provider output it needs in the same write, such as the `PresentOutcome` of a
  * result. Mailbox processing applies that output later.
