@@ -241,7 +241,7 @@ export type ClaimDeliveryOutput = typeof ClaimDeliveryOutput.Type
  * @property clearActivity - the delivery's last activity was `Working`; its `PresentOutcome` must clear it
  * @property messageReference - for an update or deletion, or a reaction on a message, the provider's reference to the message; missing when its create failed
  * @property reactionAddedReference - for a reaction removal, the provider's receipt for the add it undoes, when this delivery made one
- * @property renderedPlan - for `RenderPlan` and `PresentOutcome`, the plan the provider last showed, when it has shown one
+ * @property renderedPlan - for `RenderPlan`, the plan the provider last showed, when it has shown one
  * @property hadAmbiguousAttempt - an earlier attempt's lease ran out, so the provider may already have applied it
  * @property idempotencyKey - the operation's key, the same on every attempt at it
  */
@@ -297,10 +297,7 @@ export const toClaimedDeliveryOutput = (input: {
 	const withReference = Predicate.isUndefined(addedReference)
 		? withMessage
 		: { ...withMessage, reactionAddedReference: addedReference }
-	const renderedPlan =
-		Predicate.isTagged(operation.operation, 'RenderPlan') || Predicate.isTagged(operation.operation, 'PresentOutcome')
-			? renderedDeliveryPlan(active)
-			: undefined
+	const renderedPlan = Predicate.isTagged(operation.operation, 'RenderPlan') ? renderedDeliveryPlan(active) : undefined
 	const withPlan = Predicate.isUndefined(renderedPlan) ? withReference : { ...withReference, renderedPlan }
 	return ClaimedDeliveryOutput.make(
 		Predicate.isUndefined(active.prepared) ? withPlan : { ...withPlan, prepared: active.prepared },
@@ -774,7 +771,7 @@ class OutputNotSendable extends Data.TaggedError('OutputNotSendable')<{ readonly
  * The operation as its provider receives it. An update or deletion, or a reaction on a message, takes
  * the provider's reference to its message; there is none when the message's create failed, so it cannot
  * be sent. A reaction removal also takes the receipt of the add it undoes, when there is one. A plan
- * takes the plan the provider last showed, and a result takes where it showed it.
+ * takes the plan the provider last showed.
  */
 const providerOperation = (
 	claim: ClaimedDeliveryOutput,
@@ -785,13 +782,8 @@ const providerOperation = (
 	return Match.value(claim.operation).pipe(
 		Match.withReturnType<Effect.Effect<ProviderOutputOperation, OutputNotSendable>>(),
 		Match.tagsExhaustive({
-			PresentOutcome: (operation) => {
-				const planPresentation = claim.renderedPlan?.presentation
-				const present = { ...operation, clearActivity: claim.clearActivity }
-				return Effect.succeed(
-					ProviderPresentOutcome.make(Predicate.isUndefined(planPresentation) ? present : { ...present, planPresentation }),
-				)
-			},
+			PresentOutcome: (operation) =>
+				Effect.succeed(ProviderPresentOutcome.make({ ...operation, clearActivity: claim.clearActivity })),
 			RenderPlan: ({ revision, plan }) =>
 				Effect.succeed(
 					ProviderRenderPlan.make(

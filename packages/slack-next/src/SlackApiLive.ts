@@ -28,6 +28,7 @@ import {
 	SlackMessage,
 	type SlackMessages,
 	SlackMessageRef,
+	type SlackPlan,
 	SlackParticipant,
 	SlackSentMessage,
 	SlackThreadInfo,
@@ -183,7 +184,6 @@ type SlackStartStreamBody = {
 	chunks: ReadonlyArray<Schema.Json>
 	recipient_user_id?: string
 	recipient_team_id?: string
-	task_display_mode?: 'plan'
 }
 
 const slackHistoryPageSize = 15
@@ -205,6 +205,50 @@ const streamChunkJson = Match.type<SlackStreamChunk>().pipe(
 		PlanUpdateChunk: (chunk) => ({ type: 'plan_update', title: chunk.title }),
 	}),
 )
+
+type SlackRichTextJson = {
+	readonly type: 'rich_text'
+	readonly elements: ReadonlyArray<Schema.Json>
+}
+
+/** One task of a plan block, as Block Kit takes it. */
+type SlackTaskCardJson = {
+	readonly type: 'task_card'
+	readonly task_id: string
+	readonly title: string
+	readonly status: SlackPlan['tasks'][number]['status']
+	details?: SlackRichTextJson
+	output?: SlackRichTextJson
+}
+
+/** Slack's rich text for a plan task's note. */
+const planNote = (text: string): SlackRichTextJson => ({
+	type: 'rich_text',
+	elements: [{ type: 'rich_text_section', elements: [{ type: 'text', text }] }],
+})
+
+/** A plan as one plan block, the way Slack's Block Kit takes it. */
+const planBlocks = (plan: SlackPlan): ReadonlyArray<Schema.Json> => [
+	{
+		type: 'plan',
+		title: plan.title,
+		tasks: plan.tasks.map((task) => {
+			const card: SlackTaskCardJson = {
+				type: 'task_card',
+				task_id: task.id,
+				title: task.title,
+				status: task.status,
+			}
+			if (Predicate.isNotUndefined(task.details)) card.details = planNote(task.details)
+			if (Predicate.isNotUndefined(task.output)) card.output = planNote(task.output)
+			return card
+		}),
+	},
+]
+
+/** The text Slack shows where it cannot show blocks, such as a notification. */
+const planFallbackText = (plan: SlackPlan) =>
+	[plan.title, ...plan.tasks.map((task) => `- (${task.status}) ${task.title}`)].join('\n')
 
 const nextCursor = (metadata: typeof SlackResponseMetadata.Type | undefined) => {
 	const cursor = metadata?.next_cursor
@@ -476,45 +520,6 @@ const SlackApiService = Layer.effect(
 			return yield* normalizeMessage(request.thread, snapshot)
 		})
 
-		/**
-		 * The body of `chat.startStream` for a thread, without its chunks. Outside a DM, Slack needs the
-		 * person the stream answers: the last person, not a bot, who wrote in the thread.
-		 */
-		const streamStartBody = Effect.fn('slack.api.stream_start_body')(function* (
-			thread: SlackThreadRef,
-			operation: 'stream' | 'start_plan_stream',
-		) {
-			const recipient = yield* thread.isDm
-				? Effect.succeed(Option.none<SlackParticipant>())
-				: listThreadMessages(thread).pipe(
-						Effect.flatMap((messages) => {
-							const participant = Array.from(messages)
-								.reverse()
-								.find((message) => !message.author.isMe && !message.author.isBot)?.author
-							return Predicate.isUndefined(participant)
-								? Effect.fail(
-										SlackApiError.make({
-											operation,
-											message: 'Could not determine the Slack stream recipient',
-										}),
-									)
-								: Effect.succeedSome(participant)
-						}),
-					)
-			return (streamChunks: ReadonlyArray<Schema.Json>): SlackStartStreamBody => {
-				const body: SlackStartStreamBody = {
-					channel: thread.channelId,
-					thread_ts: thread.threadTs,
-					chunks: streamChunks,
-				}
-				if (Option.isSome(recipient)) {
-					body.recipient_user_id = recipient.value.userId
-					body.recipient_team_id = recipient.value.teamId ?? thread.teamId
-				}
-				return body
-			}
-		})
-
 		const postMessage = Effect.fn('slack.api.post_message')(function* (input: {
 			readonly operation: 'post' | 'post_to_channel'
 			readonly thread?: SlackThreadRef
@@ -666,7 +671,35 @@ const SlackApiService = Layer.effect(
 				),
 			stream: (thread, chunks) =>
 				Effect.gen(function* () {
-					const startStreamBody = yield* streamStartBody(thread, 'stream')
+					const recipient = yield* thread.isDm
+						? Effect.succeed(Option.none<SlackParticipant>())
+						: listThreadMessages(thread).pipe(
+								Effect.flatMap((messages) => {
+									const participant = Array.from(messages)
+										.reverse()
+										.find((message) => !message.author.isMe && !message.author.isBot)?.author
+									return Predicate.isUndefined(participant)
+										? Effect.fail(
+												SlackApiError.make({
+													operation: 'stream',
+													message: 'Could not determine the Slack stream recipient',
+												}),
+											)
+										: Effect.succeedSome(participant)
+								}),
+							)
+					const startStreamBody = (streamChunks: ReadonlyArray<Schema.Json>): SlackStartStreamBody => {
+						const body: SlackStartStreamBody = {
+							channel: thread.channelId,
+							thread_ts: thread.threadTs,
+							chunks: streamChunks,
+						}
+						if (Option.isSome(recipient)) {
+							body.recipient_user_id = recipient.value.userId
+							body.recipient_team_id = recipient.value.teamId ?? thread.teamId
+						}
+						return body
+					}
 					const started = yield* chunks.pipe(
 						Stream.runFoldEffect(
 							() => Option.none<SlackMessageTs>(),
@@ -737,36 +770,34 @@ const SlackApiService = Layer.effect(
 					const message = yield* normalizeMessage(thread, snapshot)
 					return SlackSentMessage.make({ ref: message.ref, message })
 				}),
-			startPlanStream: ({ thread, chunks }) =>
-				Effect.gen(function* () {
-					const startStreamBody = yield* streamStartBody(thread, 'start_plan_stream')
-					const body: SlackStartStreamBody = {
-						...startStreamBody(chunks.map(streamChunkJson)),
-						task_display_mode: 'plan',
-					}
-					const response = yield* callSlack('start_plan_stream', 'chat.startStream', body, SlackPostMessageResponse)
-					if (Predicate.isUndefined(response.ts)) {
-						return yield* SlackApiError.make({
-							operation: 'start_plan_stream',
-							message: 'Slack did not start the stream',
-						})
-					}
-					return SlackMessageRef.make({ teamId: thread.teamId, channelId: thread.channelId, messageTs: response.ts })
-				}).pipe(Effect.withSpan('slack.api.start_plan_stream')),
-			appendStream: ({ message, chunks }) =>
+			postPlanToThread: ({ thread, plan }) =>
 				callSlack(
-					'append_stream',
-					'chat.appendStream',
-					{ channel: message.channelId, ts: message.messageTs, chunks: chunks.map(streamChunkJson) },
-					SlackResponse,
-				).pipe(Effect.asVoid, Effect.withSpan('slack.api.append_stream')),
-			stopStream: ({ message }) =>
+					'post_plan',
+					'chat.postMessage',
+					{
+						channel: thread.channelId,
+						thread_ts: thread.threadTs,
+						text: planFallbackText(plan),
+						blocks: planBlocks(plan),
+					},
+					SlackPostMessageResponse,
+				).pipe(
+					Effect.flatMap((response) =>
+						Predicate.isUndefined(response.ts)
+							? Effect.fail(SlackApiError.make({ operation: 'post_plan', message: 'Slack did not return a message ID' }))
+							: Effect.succeed(
+									SlackMessageRef.make({ teamId: thread.teamId, channelId: thread.channelId, messageTs: response.ts }),
+								),
+					),
+					Effect.withSpan('slack.api.post_plan'),
+				),
+			updatePlan: ({ message, plan }) =>
 				callSlack(
-					'stop_stream',
-					'chat.stopStream',
-					{ channel: message.channelId, ts: message.messageTs, chunks: [] },
+					'update_plan',
+					'chat.update',
+					{ channel: message.channelId, ts: message.messageTs, text: planFallbackText(plan), blocks: planBlocks(plan) },
 					SlackResponse,
-				).pipe(Effect.asVoid, Effect.withSpan('slack.api.stop_stream')),
+				).pipe(Effect.asVoid, Effect.withSpan('slack.api.update_plan')),
 			addReaction: ({ message, reaction }) =>
 				callSlack(
 					'add_reaction',

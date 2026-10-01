@@ -1150,7 +1150,7 @@ export const deliveryHandoffContract = <E>(storeName: string, makeEmptyStore: ()
 	)
 
 	contract(
-		'refuses a new plan once the delivery has a result; the result receives where the plan is shown',
+		'refuses a new plan once the delivery has a result, and still replays the plan already desired',
 		Effect.gen(function* () {
 			const claim = yield* waitingDeliveryWith(planPreparation)
 			yield* apply(claim, putPlan(planA))
@@ -1163,7 +1163,6 @@ export const deliveryHandoffContract = <E>(storeName: string, makeEmptyStore: ()
 			expect((yield* apply(claim, putPlan(planB)).pipe(Effect.flip))._tag).toEqual('DeliveryClosed')
 			const outcome = Option.getOrThrow(yield* claimOutput)
 			expect(outcome.operation._tag).toEqual('PresentOutcome')
-			expect(outcome.renderedPlan).toEqual({ revision: 1, plan: planA, presentation: { stream: 's-1' } })
 			yield* settleOutput(outcome)
 			expect((yield* status(claim)).plan).toEqual({ revision: 1, plan: planA, renderedRevision: 1 })
 		}),

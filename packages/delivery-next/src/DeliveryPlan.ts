@@ -8,8 +8,8 @@
  * is followed by a new operation.
  *
  * The store also keeps the plan a provider last showed, exactly as it was sent, with the provider's own
- * reference to where it shows it. A provider that can only change a plan step by step, such as Slack's
- * plan stream, compares the two. The stored plan, not any provider's rendering of it, is authoritative.
+ * reference to where it shows it, such as a Slack message or a GitHub comment. A provider compares the two
+ * to skip a plan it already shows. The stored plan, not any provider's rendering of it, is authoritative.
  *
  * ```text
  * PlanState

@@ -22,13 +22,10 @@ import { DeliveryId } from './DeliveryReference'
  * `PresentOutcome` as a provider receives it.
  *
  * @property clearActivity - the remote worker's last activity was `Working`, so the provider must clear it
- * @property planPresentation - where the provider last showed the delivery's plan, if it did. A provider
- * whose plan stays open, such as Slack's plan stream, closes it here.
  */
 export const ProviderPresentOutcome = Schema.TaggedStruct('PresentOutcome', {
 	...PresentOutcome.fields,
 	clearActivity: Schema.Boolean,
-	planPresentation: Schema.optionalKey(Schema.Json),
 })
 export type ProviderPresentOutcome = typeof ProviderPresentOutcome.Type
 

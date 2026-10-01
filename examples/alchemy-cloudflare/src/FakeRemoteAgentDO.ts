@@ -17,7 +17,7 @@
  *   such as a Linear session's messages.
  * - With `plan`, it keeps a three-step plan up to date: one step in progress when it starts, the next one
  *   halfway through, all done just before it finishes. It sends the whole plan each time, and the second
- *   request of each is a replay. Slack shows it as a plan stream, a Linear session as its Agent Plan, and
+ *   request of each is a replay. Slack shows it as one plan message, a Linear session as its Agent Plan, and
  *   GitHub and a Linear issue as one comment the agent's plan edits.
  * - It then completes the delivery with a final message, or with a question and choices for `ask`.
  * - It reads the delivery's status at least every few seconds. When someone asked it to stop, such as
@@ -267,7 +267,7 @@ const planStep = (id: string, title: string, state: DeliveryPlanItemState) =>
 
 /**
  * The plan at each stage. Halfway, `look` gains a result and `change` its details; at the end `change`
- * loses its details, which Slack cannot clear, so Slack replaces its plan stream there.
+ * loses its details, which shows that each provider replaces the whole plan.
  */
 const fakePlan = (stage: PlanStage) => {
 	const { Pending, InProgress, Completed } = DeliveryPlanItemState.cases
