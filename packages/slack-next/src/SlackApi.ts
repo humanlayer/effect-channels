@@ -22,7 +22,7 @@ import {
 	SlackThreadRef,
 	SlackUploadFileInput,
 } from './SlackModels'
-import type { SlackStreamChunk } from './SlackStreamChunk'
+import { SlackStreamChunk } from './SlackStreamChunk'
 
 export const SlackListChannelMessagesBeforeThreadRequest = Schema.Struct({
 	thread: SlackThreadRef,
@@ -47,6 +47,24 @@ export const SlackThreadStatusRequest = Schema.Struct({
 	status: Schema.NonEmptyString,
 })
 export type SlackThreadStatusRequest = typeof SlackThreadStatusRequest.Type
+
+/** Start a stream in a thread that shows its tasks as one plan, seeded with `chunks`. It stays open. */
+export const SlackStartPlanStreamRequest = Schema.Struct({
+	thread: SlackThreadRef,
+	chunks: Schema.Array(SlackStreamChunk),
+})
+export type SlackStartPlanStreamRequest = typeof SlackStartPlanStreamRequest.Type
+
+/** Add chunks to an open stream. */
+export const SlackAppendStreamRequest = Schema.Struct({
+	message: SlackMessageRef,
+	chunks: Schema.Array(SlackStreamChunk),
+})
+export type SlackAppendStreamRequest = typeof SlackAppendStreamRequest.Type
+
+/** Close an open stream; it stays in the thread as a message. */
+export const SlackStopStreamRequest = Schema.Struct({ message: SlackMessageRef })
+export type SlackStopStreamRequest = typeof SlackStopStreamRequest.Type
 
 export const SlackPostToChannelRequest = Schema.Struct({ channel: SlackChannelRef, content: SlackContent })
 export type SlackPostToChannelRequest = typeof SlackPostToChannelRequest.Type
@@ -111,6 +129,9 @@ export const SlackApiOperation = Schema.Literals([
 	'clear_thread_status',
 	'start_typing',
 	'stream',
+	'start_plan_stream',
+	'append_stream',
+	'stop_stream',
 	'add_reaction',
 	'remove_reaction',
 	'resolve_participant',
@@ -186,6 +207,16 @@ export class SlackApi extends Context.Service<
 			thread: SlackThreadRef,
 			chunks: Stream.Stream<SlackStreamChunk, E, R>,
 		) => Effect.Effect<SlackSentMessage, SlackApiError | E, R>
+		/**
+		 * `chat.startStream` with `task_display_mode: plan`: start a stream that shows its tasks as one plan
+		 * and leave it open. Slack closes a stream it has not heard from for about five minutes; an append
+		 * then fails with `message_not_in_streaming_state`.
+		 */
+		readonly startPlanStream: (request: SlackStartPlanStreamRequest) => Effect.Effect<SlackMessageRef, SlackApiError>
+		/** `chat.appendStream`: add chunks to an open stream. */
+		readonly appendStream: (request: SlackAppendStreamRequest) => Effect.Effect<void, SlackApiError>
+		/** `chat.stopStream`: close an open stream. */
+		readonly stopStream: (request: SlackStopStreamRequest) => Effect.Effect<void, SlackApiError>
 		readonly addReaction: (request: SlackReactionRequest) => Effect.Effect<void, SlackApiError>
 		readonly removeReaction: (request: SlackReactionRequest) => Effect.Effect<void, SlackApiError>
 		readonly resolveParticipant: (

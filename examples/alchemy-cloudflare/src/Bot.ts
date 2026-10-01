@@ -48,6 +48,7 @@ const startRemoteJob = Effect.fn('example.start_remote_job')(function* (
 		flakyOutput: options.flakySlackOutput,
 		askForInput: command.askForInput,
 		react: command.react,
+		plan: command.plan,
 	})
 })
 

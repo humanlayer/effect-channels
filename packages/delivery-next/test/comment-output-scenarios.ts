@@ -17,6 +17,13 @@ import {
 	AddExternalLink,
 	CreateMessage,
 	DeliveryOutcome,
+	DeliveryPlan,
+	DeliveryPlanItem,
+	DeliveryPlanItemId,
+	DeliveryPlanItemState,
+	ProviderRenderPlan,
+	RenderedDeliveryPlan,
+	deliveryPlanMarkdown,
 	ExternalLink,
 	MessageId,
 	ProviderDeleteMessage,
@@ -158,6 +165,58 @@ export const commentOutputScenarios = (harness: CommentOutputHarness) =>
 				const linked = yield* harness.run(AddExternalLink.make({ link }))
 				expect(Result.isSuccess(linked.result)).toBe(true)
 				expect(linked.shown).toEqual([])
+			}),
+		)
+	})
+
+const planStep = (id: string, state: DeliveryPlanItemState) =>
+	DeliveryPlanItem.make({ id: DeliveryPlanItemId.make(id), title: `Step ${id}`, state })
+const firstPlan = DeliveryPlan.make({
+	title: 'Ship the fix',
+	items: [planStep('a', DeliveryPlanItemState.cases.InProgress.make({})), planStep('b', DeliveryPlanItemState.cases.Pending.make({}))],
+})
+const secondPlan = DeliveryPlan.make({
+	title: 'Ship the fix',
+	items: [
+		planStep('a', DeliveryPlanItemState.cases.Completed.make({ result: 'done' })),
+		planStep('b', DeliveryPlanItemState.cases.Failed.make({ reason: 'timed out' })),
+	],
+})
+
+/**
+ * Plan scenarios for a destination that shows the plan as one comment it edits: a GitHub issue or pull
+ * request, and a Linear issue. Uses the same harness as `commentOutputScenarios`.
+ */
+export const planCommentScenarios = (harness: CommentOutputHarness) =>
+	describe(`${harness.provider} output: shared plan comment scenarios`, () => {
+		it.effect('comments the first plan, edits that comment for each later one, and makes no call for the same plan', ({
+			expect,
+		}) =>
+			Effect.gen(function* () {
+				const first = yield* harness.run(ProviderRenderPlan.make({ revision: 1, plan: firstPlan }))
+				expect(first.shown).toEqual([`post: ${deliveryPlanMarkdown(firstPlan)}`])
+				const presentation = receiptOf(first)
+				if (presentation === undefined) return expect.unreachable()
+				const rendered = RenderedDeliveryPlan.make({ revision: 1, plan: firstPlan, presentation })
+
+				const second = yield* harness.run(ProviderRenderPlan.make({ revision: 2, plan: secondPlan, rendered }))
+				expect(second.shown).toEqual([`edit: ${deliveryPlanMarkdown(secondPlan)}`])
+				expect(receiptOf(second)).toEqual(presentation)
+
+				const same = yield* harness.run(ProviderRenderPlan.make({ revision: 2, plan: firstPlan, rendered }))
+				expect(same.shown).toEqual([])
+				expect(receiptOf(same)).toEqual(presentation)
+			}),
+		)
+
+		it.effect('reports a plan comment failure as retryable or final', ({ expect }) =>
+			Effect.gen(function* () {
+				const render = ProviderRenderPlan.make({ revision: 1, plan: firstPlan })
+				const outage = yield* harness.run(render, { fault: 'retryable' })
+				const refused = yield* harness.run(render, { fault: 'final' })
+				if (!Result.isFailure(outage.result) || !Result.isFailure(refused.result)) return expect.unreachable()
+				expect(outage.result.failure.retryable).toBe(true)
+				expect(refused.result.failure.retryable).toBe(false)
 			}),
 		)
 	})

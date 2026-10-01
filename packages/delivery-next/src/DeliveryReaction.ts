@@ -34,7 +34,7 @@ export type PortableReaction = typeof PortableReaction.Type
  *
  * - `ActivationTarget`: the message, comment, or issue that started the delivery
  * - `MessageTarget`: a message this delivery created, by the remote worker's `MessageId`
- * - `PlanTarget`: where the delivery's plan is shown; no provider shows plans yet, so it is never available
+ * - `PlanTarget`: where the delivery's plan is shown; no provider reacts on its plan yet, so it is never available
  */
 export const DeliveryReactionTarget = Schema.TaggedUnion({
 	ActivationTarget: {},

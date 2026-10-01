@@ -17,6 +17,8 @@
  * - `SetMessageReaction` adds or removes the bot's reaction on what started the delivery, or on a comment
  *   the delivery posted. A reaction already there, or already gone, counts as done. The activity's `eyes`
  *   and a portable `eyes` on the activation target are the same reaction, so `Idle` removes both.
+ * - `RenderPlan` keeps one plan comment: the first plan comments it, and each later plan edits it. A plan
+ *   comment someone deleted is commented again.
  *
  * A comment is at-least-once: when GitHub accepts it but the attempt dies before the store saves the
  * result, the next attempt comments again, and the attempt carries `hadAmbiguousAttempt`. Reactions,
@@ -31,7 +33,10 @@ import {
 	type ProviderOutputProcessor,
 	type ProviderPresentOutcome,
 	ProviderReactionTarget,
+	type ProviderRenderPlan,
 	type ProviderSetMessageReaction,
+	deliveryPlanMarkdown,
+	sameDeliveryPlan,
 } from '@humanlayer/channels-delivery-next'
 import { Array as Arr, Effect, Match, Option, Predicate, Schema } from 'effect'
 
@@ -178,6 +183,31 @@ const postedComment = (reference: Schema.Json) =>
 		reportUnreadable('GitHub output message reference could not be read', 'message_reference_invalid'),
 	)
 
+/**
+ * Show the plan in one comment: comment it the first time, then edit that comment, whose receipt is the
+ * plan's presentation. An unchanged plan makes no call. A plan comment someone deleted is commented again.
+ */
+const renderPlan = Effect.fn('github.output.render_plan')(function* (
+	destination: GitHubDeliveryDestination,
+	{ plan, rendered }: ProviderRenderPlan,
+) {
+	const gitHubApi = yield* GitHubApi
+	const markdown = deliveryPlanMarkdown(plan)
+	const presentation = rendered?.presentation
+	if (Predicate.isUndefined(rendered) || Predicate.isUndefined(presentation)) return yield* postComment(destination, markdown)
+	if (sameDeliveryPlan(rendered.plan, plan)) return DeliveryOutputApplied.make({ receipt: presentation })
+	const comment = yield* postedComment(presentation)
+	const edited = yield* gitHubApi.updateComment({ comment, content: GitHubContent.make({ markdown }) }).pipe(
+		Effect.as(true),
+		Effect.catchIf(
+			(error) => error.reason === 'not_found',
+			(error) => Effect.logInfo('GitHub plan comment is gone; commenting the plan again', error).pipe(Effect.as(false)),
+		),
+		reportGitHubFailure('GitHub plan comment update failed', 'github_comment_update_failed'),
+	)
+	return edited ? DeliveryOutputApplied.make({ receipt: presentation }) : yield* postComment(destination, markdown)
+})
+
 /** Edit the comment a message's create posted. */
 const updateComment = Effect.fn('github.output.update_comment')(function* (reference: Schema.Json, markdown: string) {
 	const gitHubApi = yield* GitHubApi
@@ -323,6 +353,7 @@ export const makeGitHubOutputProcessor = Effect.fn('github.make_output_processor
 			Match.tagsExhaustive({
 				AddExternalLink: () => Effect.succeed(applied),
 				SetMessageReaction: (operation) => setPortableReaction(activationTarget, operation),
+				RenderPlan: (operation) => renderPlan(destination, operation),
 				PresentOutcome: (operation) => presentOutcome(destination, activationTarget, operation),
 				SetActivity: ({ activity }) =>
 					Match.value(activity).pipe(

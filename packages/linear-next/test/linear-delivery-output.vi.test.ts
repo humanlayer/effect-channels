@@ -11,13 +11,23 @@ import {
 	ProviderOutputAttempt,
 	ProviderPresentOutcome,
 	ProviderReactionTarget,
+	ProviderRenderPlan,
 	ProviderSetMessageReaction,
+	RenderedDeliveryPlan,
+	DeliveryPlan,
+	DeliveryPlanItem,
+	DeliveryPlanItemId,
+	DeliveryPlanItemState,
 	makeDeliveryId,
 	type ProviderOutputOperation,
 } from '@humanlayer/channels-delivery-next'
 import { Effect, Layer, Match, Ref, Result, Schema } from 'effect'
 
-import { commentOutputScenarios } from '../../delivery-next/test/comment-output-scenarios'
+import {
+	commentOutputScenarios,
+	planCommentScenarios,
+	type CommentOutputHarness,
+} from '../../delivery-next/test/comment-output-scenarios'
 
 import {
 	LinearActivationTarget,
@@ -143,6 +153,8 @@ const run = (
 		readonly commentError?: LinearApiError
 		/** How Linear answers every reaction create and delete. */
 		readonly reactionError?: LinearApiError
+		/** How Linear answers every session update. */
+		readonly sessionUpdateError?: LinearApiError
 	} = {},
 ) =>
 	Effect.gen(function* () {
@@ -191,7 +203,10 @@ const run = (
 							: Effect.fail(options.activityError),
 					),
 				),
-			updateAgentSession: (request) => record('sessionUpdates', request),
+			updateAgentSession: (request) =>
+				record('sessionUpdates', request).pipe(
+					Effect.andThen(options.sessionUpdateError === undefined ? Effect.void : Effect.fail(options.sessionUpdateError)),
+				),
 			createComment: (request) =>
 				record('comments', request).pipe(
 					Effect.andThen(commentAnswer),
@@ -255,7 +270,7 @@ const commentFault = {
 	gone: LinearApiError.make({ operation: 'update_comment', reason: 'not_found', retryable: false }),
 } as const
 
-commentOutputScenarios({
+const linearIssueHarness: CommentOutputHarness = {
 	provider: 'Linear issue',
 	optionBullet: '- ',
 	run: (operation, options = {}) => {
@@ -278,6 +293,101 @@ commentOutputScenarios({
 			})),
 		)
 	},
+}
+
+commentOutputScenarios(linearIssueHarness)
+planCommentScenarios(linearIssueHarness)
+
+const planItem = (id: string, title: string, state: DeliveryPlanItemState) =>
+	DeliveryPlanItem.make({ id: DeliveryPlanItemId.make(id), title, state })
+const sessionPlan = DeliveryPlan.make({
+	title: 'Ship the fix',
+	items: [
+		planItem('inspect', 'Inspect logs', DeliveryPlanItemState.cases.Completed.make({ result: 'Found expired credentials' })),
+		planItem('rotate', 'Rotate secret', DeliveryPlanItemState.cases.InProgress.make({ details: 'Updating production' })),
+		planItem('notify', 'Notify owner', DeliveryPlanItemState.cases.Failed.make({ reason: 'No owner listed' })),
+		planItem('verify', 'Verify deployment', DeliveryPlanItemState.cases.Pending.make({})),
+	],
+})
+const encodeLinearReceipt = Schema.encodeSync(Schema.toCodecJson(LinearOutputReceipt))
+const thoughtShown = (text?: string) =>
+	RenderedDeliveryPlan.make({
+		revision: 1,
+		plan: sessionPlan,
+		presentation: encodeLinearReceipt(text === undefined ? { _tag: 'LinearPlanThought' } : { _tag: 'LinearPlanThought', text }),
+	})
+
+describe('Linear output: session plan', () => {
+	it.effect('replaces the whole Agent Plan, with a failed item canceled and its reason in its text', ({ expect }) =>
+		Effect.gen(function* () {
+			const { result, calls } = yield* run(attempt(ProviderRenderPlan.make({ revision: 1, plan: sessionPlan })))
+			expect(calls.sessionUpdates).toEqual([
+				{
+					organizationId: linearOrganizationId,
+					sessionId,
+					plan: [
+						{ content: 'Inspect logs: Found expired credentials', status: 'completed' },
+						{ content: 'Rotate secret: Updating production', status: 'inProgress' },
+						{ content: 'Notify owner (failed: No owner listed)', status: 'canceled' },
+						{ content: 'Verify deployment', status: 'pending' },
+					],
+				},
+			])
+			expect(calls.activities).toEqual([])
+			expect(result).toEqual({ _tag: 'Success', success: DeliveryOutputApplied.make({ receipt: { _tag: 'LinearAgentPlan' } }) })
+		}),
+	)
+
+	it.effect('falls back to a thought for the item in progress when Linear refuses the Agent Plan, and keeps it', ({
+		expect,
+	}) =>
+		Effect.gen(function* () {
+			const refused = LinearApiError.make({ operation: 'update_agent_session', reason: 'validation', retryable: false })
+			const first = yield* run(attempt(ProviderRenderPlan.make({ revision: 1, plan: sessionPlan })), {
+				sessionUpdateError: refused,
+			})
+			expect(first.calls.activities).toEqual([
+				{
+					organizationId: linearOrganizationId,
+					sessionId,
+					content: { _tag: 'Thought', body: 'Rotate secret: Updating production' },
+					ephemeral: true,
+					activityId: idempotencyKey,
+				},
+			])
+			expect(first.result).toEqual({
+				_tag: 'Success',
+				success: DeliveryOutputApplied.make({
+					receipt: { _tag: 'LinearPlanThought', text: 'Rotate secret: Updating production' },
+				}),
+			})
+
+			const unchanged = yield* run(
+				attempt(ProviderRenderPlan.make({ revision: 2, plan: sessionPlan, rendered: thoughtShown('Rotate secret: Updating production') })),
+			)
+			expect(unchanged.calls.sessionUpdates).toEqual([])
+			expect(unchanged.calls.activities).toEqual([])
+
+			const moved = DeliveryPlan.make({
+				items: [planItem('verify', 'Verify deployment', DeliveryPlanItemState.cases.InProgress.make({}))],
+			})
+			const next = yield* run(
+				attempt(ProviderRenderPlan.make({ revision: 2, plan: moved, rendered: thoughtShown('Rotate secret: Updating production') })),
+			)
+			expect(next.calls.sessionUpdates).toEqual([])
+			expect(next.calls.activities.map(({ content }) => content)).toEqual([{ _tag: 'Thought', body: 'Verify deployment' }])
+		}),
+	)
+
+	it.effect('reports an Agent Plan failure Linear may get over as retryable, without a fallback', ({ expect }) =>
+		Effect.gen(function* () {
+			const { result, calls } = yield* run(attempt(ProviderRenderPlan.make({ revision: 1, plan: sessionPlan })), {
+				sessionUpdateError: LinearApiError.make({ operation: 'update_agent_session', reason: 'unavailable', retryable: true }),
+			})
+			expect(calls.activities).toEqual([])
+			expect(result).toMatchObject({ _tag: 'Failure', failure: { retryable: true, safeCode: 'linear_plan_failed' } })
+		}),
+	)
 })
 
 describe('Linear output: Agent Session', () => {

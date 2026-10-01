@@ -5,7 +5,7 @@
  */
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto'
 import { describe, it } from '@effect/vitest'
-import { Effect, Layer, Option, Queue, Redacted, Ref, Schedule } from 'effect'
+import { Effect, Layer, Option, Queue, Redacted, Ref, Schedule, type Schema } from 'effect'
 import { FetchHttpClient } from 'effect/unstable/http'
 
 import {
@@ -15,6 +15,10 @@ import {
 	DeliveryOutputApplied,
 	DeliveryActivity,
 	DeliveryOutputFailed,
+	DeliveryPlan,
+	DeliveryPlanItem,
+	DeliveryPlanItemId,
+	DeliveryPlanItemState,
 	DeliveryReactionTarget,
 	MessageId,
 	PreparedDeliveryInvocation,
@@ -500,6 +504,80 @@ describe('delivery API reactions', () => {
 			expect((yield* request('eyes', { target: { _tag: 'PlanTarget' }, active: true })).status).toBe(409)
 			expect((yield* request('party_parrot', { target: { _tag: 'ActivationTarget' }, active: true })).status).toBe(400)
 			expect((yield* client.status(delivery)).output).toEqual([])
+		}),
+	)
+})
+
+describe('delivery API plan', () => {
+	const step = (id: string, state: DeliveryPlanItemState) =>
+		DeliveryPlanItem.make({ id: DeliveryPlanItemId.make(id), title: `Step ${id}`, state })
+	const first = DeliveryPlan.make({
+		title: 'Ship the fix',
+		items: [step('a', DeliveryPlanItemState.cases.InProgress.make({})), step('b', DeliveryPlanItemState.cases.Pending.make({}))],
+	})
+	const second = DeliveryPlan.make({
+		title: 'Ship the fix',
+		items: [
+			step('a', DeliveryPlanItemState.cases.Completed.make({ result: 'done' })),
+			step('b', DeliveryPlanItemState.cases.InProgress.make({})),
+		],
+	})
+
+	it.live('puts the whole plan through the generated client; the provider gets the plan it last showed', ({ expect }) =>
+		Effect.gen(function* () {
+			const { contexts, output, webhook, client } = yield* startBotWith(['PresentOutcome', 'RenderPlan'])
+			yield* webhook('first')
+			const context = yield* Queue.take(contexts)
+			const delivery = { deliveryId: context.deliveryId, accessToken: context.accessToken }
+
+			expect((yield* client.plan.put({ ...delivery, plan: first })).status).toBe('accepted')
+			expect((yield* Queue.take(output)).operation).toEqual({ _tag: 'RenderPlan', revision: 1, plan: first })
+			expect((yield* client.plan.put({ ...delivery, plan: first })).status).toBe('already_recorded')
+			expect((yield* client.plan.put({ ...delivery, plan: second })).status).toBe('accepted')
+			expect((yield* Queue.take(output)).operation).toEqual({
+				_tag: 'RenderPlan',
+				revision: 2,
+				plan: second,
+				rendered: { revision: 1, plan: first, presentation: { sent: 'plan-1' } },
+			})
+
+			yield* client.complete(delivery)
+			const retired = yield* awaitRetired(client, delivery)
+			expect(retired.plan).toEqual({ revision: 2, plan: second, renderedRevision: 2 })
+			expect((yield* client.plan.put({ ...delivery, plan: second })).status).toBe('already_recorded')
+			expect((yield* client.plan.put({ ...delivery, plan: first }).pipe(Effect.flip))._tag).toBe('DeliveryClosed')
+		}),
+	)
+
+	it.live('keeps a plan the destination cannot show, and answers 400 for repeated item IDs or too many items', ({
+		expect,
+	}) =>
+		Effect.gen(function* () {
+			const { contexts, webhook, client, raw } = yield* startBotWith(['PresentOutcome'])
+			yield* webhook('first')
+			const context = yield* Queue.take(contexts)
+			const delivery = { deliveryId: context.deliveryId, accessToken: context.accessToken }
+			expect((yield* client.plan.put({ ...delivery, plan: first })).status).toBe('accepted')
+			const kept = yield* client.status(delivery)
+			expect(kept.plan).toEqual({ revision: 1, plan: first })
+			expect(kept.output).toEqual([])
+
+			const put = (plan: Schema.Json) =>
+				raw(`/deliveries/${encodeURIComponent(context.deliveryId)}/plan`, {
+					method: 'PUT',
+					headers: {
+						authorization: `Bearer ${Redacted.value(context.accessToken)}`,
+						'content-type': 'application/json',
+					},
+					body: JSON.stringify({ plan }),
+				})
+			const item = { id: 'a', title: 'Step a', state: { _tag: 'Pending' } }
+			expect((yield* put({ items: [item, item] })).status).toBe(400)
+			expect((yield* put({ items: Array.from({ length: 51 }, (_, index) => ({ ...item, id: `a${index}` })) })).status).toBe(
+				400,
+			)
+			expect((yield* put({ items: [{ ...item, state: { _tag: 'Skipped' } }] })).status).toBe(400)
+			expect((yield* client.status(delivery)).plan).toEqual({ revision: 1, plan: first })
 		}),
 	)
 })

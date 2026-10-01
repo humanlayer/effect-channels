@@ -17,6 +17,10 @@
  * - `AddExternalLink` adds the link to the session (`agentSessionUpdate` with `addedExternalUrls`).
  * - `SetMessageReaction` reacts on the comment that started the session, else the issue. Its messages
  *   are activities, which take no reactions, so it has no message target.
+ * - `RenderPlan` replaces the session's whole Agent Plan (`agentSessionUpdate` with `plan`); a failed
+ *   item is `canceled`, with the reason in its text. The Agent Plan API is a technology preview: when
+ *   Linear refuses the plan as invalid, the session shows the item in progress as an ephemeral thought
+ *   instead, and keeps doing so for that delivery. A thought is posted only when that item changes.
  *
  * Every activity carries the operation's idempotency key as its ID. Linear refuses a second activity
  * with the same ID, so an attempt that finds the activity already made counts as applied, and session
@@ -31,6 +35,8 @@
  * - `AddExternalLink` is applied without a call.
  * - `SetMessageReaction` reacts on the mentioning comment, else the issue, or on a comment the delivery
  *   posted.
+ * - `RenderPlan` keeps one plan comment: the first plan comments it, and each later plan edits it. A plan
+ *   comment someone deleted is commented again.
  *
  * Reactions, both kinds: an add sends the operation's idempotency key as the reaction's ID. Linear
  * answers a repeat with the reaction it already has (seen live), so a retry never reacts twice; an
@@ -50,7 +56,12 @@ import {
 	type ProviderOutputAttempt,
 	type ProviderOutputProcessor,
 	ProviderReactionTarget,
+	type ProviderRenderPlan,
 	type ProviderSetMessageReaction,
+	type DeliveryPlan,
+	type DeliveryPlanItem,
+	deliveryPlanMarkdown,
+	sameDeliveryPlan,
 } from '@humanlayer/channels-delivery-next'
 import { Array as Arr, Effect, Match, Option, Predicate, Schema } from 'effect'
 
@@ -66,6 +77,7 @@ import {
 import { LinearAgentActivityId, LinearReactionId } from './LinearIdentity'
 import {
 	LinearActivityContent,
+	LinearAgentPlanStep,
 	LinearAgentSessionExternalUrl,
 	LinearCommentRef,
 	LinearContent,
@@ -87,8 +99,27 @@ export const LinearReactionReceipt = Schema.TaggedStruct('LinearReaction', {
 })
 export type LinearReactionReceipt = typeof LinearReactionReceipt.Type
 
+/** The session shows the plan as its Agent Plan. */
+export const LinearAgentPlanReceipt = Schema.TaggedStruct('LinearAgentPlan', {})
+
+/**
+ * Linear refused the Agent Plan, so the session shows the plan's item in progress as a thought.
+ *
+ * @property text - the thought last posted, if any; a plan whose item in progress reads the same posts nothing
+ */
+export const LinearPlanThoughtReceipt = Schema.TaggedStruct('LinearPlanThought', {
+	text: Schema.optionalKey(Schema.NonEmptyString),
+})
+export type LinearPlanThoughtReceipt = typeof LinearPlanThoughtReceipt.Type
+
 /** What Linear made for an operation. Saved by the store, read only here. */
-export const LinearOutputReceipt = Schema.Union([LinearActivityReceipt, LinearCommentReceipt, LinearReactionReceipt])
+export const LinearOutputReceipt = Schema.Union([
+	LinearActivityReceipt,
+	LinearCommentReceipt,
+	LinearReactionReceipt,
+	LinearAgentPlanReceipt,
+	LinearPlanThoughtReceipt,
+])
 export type LinearOutputReceipt = typeof LinearOutputReceipt.Type
 const LinearOutputReceiptJson = Schema.toCodecJson(LinearOutputReceipt)
 const LinearDeliveryDestinationJson = Schema.toCodecJson(LinearDeliveryDestination)
@@ -119,6 +150,30 @@ const failed = (safeCode: string, retryable: boolean, retryAfterMs?: number) =>
 			? { provider: 'linear', retryable, safeCode }
 			: { provider: 'linear', retryable, safeCode, retryAfterMs },
 	)
+
+/** An item's text with its note, if it has one. */
+const withNote = (title: string, note: string | undefined) => (Predicate.isUndefined(note) ? title : `${title}: ${note}`)
+
+/** The plan as Agent Plan steps. Linear has no failed status, so a failed item is `canceled` and says why. */
+export const linearAgentPlanSteps = (plan: DeliveryPlan) =>
+	plan.items.map((item) =>
+		Match.value(item.state).pipe(
+			Match.tagsExhaustive({
+				Pending: () => LinearAgentPlanStep.make({ content: item.title, status: 'pending' }),
+				InProgress: ({ details }) => LinearAgentPlanStep.make({ content: withNote(item.title, details), status: 'inProgress' }),
+				Completed: ({ result }) => LinearAgentPlanStep.make({ content: withNote(item.title, result), status: 'completed' }),
+				Failed: ({ reason }) =>
+					LinearAgentPlanStep.make({ content: `${item.title} (failed${Predicate.isUndefined(reason) ? '' : `: ${reason}`})`, status: 'canceled' }),
+			}),
+		),
+	)
+
+/** The thought that stands in for the Agent Plan: the first item in progress, if any. */
+const planThoughtText = (plan: DeliveryPlan) => {
+	const current = plan.items.find((item: DeliveryPlanItem) => Predicate.isTagged(item.state, 'InProgress'))
+	if (Predicate.isUndefined(current) || !Predicate.isTagged(current.state, 'InProgress')) return undefined
+	return withNote(current.title, current.state.details)
+}
 
 /** The comment a result posts on an issue: its Markdown, then any options as a list. */
 const issueOutcomeMarkdown = (outcome: DeliveryOutcome, markdown: string) =>
@@ -208,6 +263,8 @@ export const makeLinearOutputProcessor = Effect.fn('linear.make_output_processor
 							LinearIssueComment: ({ comment: posted }) => Effect.succeed(posted),
 							LinearAgentActivity: () => Effect.fail(failed('message_reference_invalid', false)),
 							LinearReaction: () => Effect.fail(failed('message_reference_invalid', false)),
+							LinearAgentPlan: () => Effect.fail(failed('message_reference_invalid', false)),
+							LinearPlanThought: () => Effect.fail(failed('message_reference_invalid', false)),
 						}),
 					),
 				),
@@ -290,6 +347,8 @@ export const makeLinearOutputProcessor = Effect.fn('linear.make_output_processor
 							LinearReaction: (added) => Effect.succeed(added),
 							LinearIssueComment: notAReaction,
 							LinearAgentActivity: notAReaction,
+							LinearAgentPlan: notAReaction,
+							LinearPlanThought: notAReaction,
 						}),
 					),
 				),
@@ -332,7 +391,7 @@ export const makeLinearOutputProcessor = Effect.fn('linear.make_output_processor
 			 * Post one activity under the operation's idempotency key. Linear refuses a second activity with
 			 * the same ID, so finding it already made means an earlier attempt made it.
 			 */
-			const postActivity = (content: LinearActivityContent, ephemeral: boolean) =>
+			const sendActivity = (content: LinearActivityContent, ephemeral: boolean) =>
 				linearApi
 					.createAgentActivity(
 						LinearCreateAgentActivityRequest.make({
@@ -354,10 +413,74 @@ export const makeLinearOutputProcessor = Effect.fn('linear.make_output_processor
 								),
 						),
 						reportLinearFailure('Linear session activity failed', 'linear_activity_failed'),
-						Effect.flatMap((made) =>
-							encodeReceipt(LinearActivityReceipt.make({ activityId: LinearAgentActivityId.make(made) })),
-						),
 					)
+
+			const postActivity = (content: LinearActivityContent, ephemeral: boolean) =>
+				sendActivity(content, ephemeral).pipe(
+					Effect.flatMap((made) =>
+						encodeReceipt(LinearActivityReceipt.make({ activityId: LinearAgentActivityId.make(made) })),
+					),
+				)
+
+			/**
+			 * The Agent Plan's stand-in: post the item in progress as an ephemeral thought, unless the last
+			 * thought already said the same.
+			 */
+			const planThought = (plan: DeliveryPlan, previous: LinearPlanThoughtReceipt | undefined) => {
+				const text = planThoughtText(plan)
+				if (Predicate.isUndefined(text) || text === previous?.text) {
+					return encodeReceipt(previous ?? LinearPlanThoughtReceipt.make({}))
+				}
+				return sendActivity(LinearActivityContent.cases.Thought.make({ body: text }), true).pipe(
+					Effect.flatMap(() => encodeReceipt(LinearPlanThoughtReceipt.make({ text }))),
+				)
+			}
+
+			/** How the session showed the plan last time, read from its presentation. Unreadable counts as never shown. */
+			const shownPlan = (presentation: Schema.Json | undefined) =>
+				Predicate.isUndefined(presentation)
+					? Effect.succeed(undefined)
+					: Schema.decodeEffect(LinearOutputReceiptJson)(presentation).pipe(
+							Effect.catchTag('SchemaError', (error) =>
+								Effect.logWarning('Linear plan presentation could not be read; sending the Agent Plan', error).pipe(
+									Effect.annotateLogs(annotations),
+									Effect.as(undefined),
+								),
+							),
+						)
+
+			/**
+			 * Replace the session's whole Agent Plan. A session already showing the thought stand-in keeps it;
+			 * one whose Agent Plan Linear refuses as invalid switches to it.
+			 */
+			const renderPlan = ({ plan, rendered }: ProviderRenderPlan) =>
+				Effect.gen(function* () {
+					const shown = yield* shownPlan(rendered?.presentation)
+					if (Predicate.isNotUndefined(shown) && Predicate.isTagged(shown, 'LinearPlanThought')) {
+						return yield* planThought(plan, shown)
+					}
+					const replaced = yield* linearApi
+						.updateAgentSession(
+							LinearUpdateAgentSessionRequest.make({
+								organizationId: session.organizationId,
+								sessionId: session.sessionId,
+								plan: linearAgentPlanSteps(plan),
+							}),
+						)
+						.pipe(
+							Effect.as(true),
+							Effect.catchIf(
+								(error) => error.reason === 'validation' || error.reason === 'rejected',
+								(error) =>
+									Effect.logWarning('Linear refused the Agent Plan; showing the item in progress as a thought', error).pipe(
+										Effect.annotateLogs(annotations),
+										Effect.as(false),
+									),
+							),
+							reportLinearFailure('Linear Agent Plan update failed', 'linear_plan_failed'),
+						)
+					return replaced ? yield* encodeReceipt(LinearAgentPlanReceipt.make({})) : yield* planThought(plan, undefined)
+				}).pipe(Effect.withSpan('linear.output.render_session_plan', { attributes: { item_count: plan.items.length } }))
 
 			return Match.value(attempt.operation).pipe(
 				Match.tagsExhaustive({
@@ -379,6 +502,7 @@ export const makeLinearOutputProcessor = Effect.fn('linear.make_output_processor
 							ActivationTarget: () => setReaction(operation),
 							MessageTarget: () => unsupported,
 						}),
+					RenderPlan: renderPlan,
 					AddExternalLink: ({ link }) =>
 						linearApi
 							.updateAgentSession(
@@ -409,8 +533,37 @@ export const makeLinearOutputProcessor = Effect.fn('linear.make_output_processor
 					Effect.flatMap((created) => encodeReceipt(LinearCommentReceipt.make({ comment: created.ref }))),
 				)
 
+			/**
+			 * Show the plan in one comment: comment it the first time, then edit that comment, whose receipt
+			 * is the plan's presentation. An unchanged plan makes no call; a deleted one is commented again.
+			 */
+			const renderPlan = ({ plan, rendered }: ProviderRenderPlan) =>
+				Effect.gen(function* () {
+					const markdown = deliveryPlanMarkdown(plan)
+					const presentation = rendered?.presentation
+					if (Predicate.isUndefined(rendered) || Predicate.isUndefined(presentation)) return yield* comment(markdown)
+					if (sameDeliveryPlan(rendered.plan, plan)) return DeliveryOutputApplied.make({ receipt: presentation })
+					const posted = yield* postedComment(presentation)
+					const edited = yield* linearApi
+						.updateComment({ comment: posted, content: LinearContent.make({ markdown }) })
+						.pipe(
+							Effect.as(true),
+							Effect.catchIf(
+								(error) => error.reason === 'not_found',
+								(error) =>
+									Effect.logInfo('Linear plan comment is gone; commenting the plan again', error).pipe(
+										Effect.annotateLogs(annotations),
+										Effect.as(false),
+									),
+							),
+							reportLinearFailure('Linear plan comment update failed', 'linear_comment_update_failed'),
+						)
+					return edited ? DeliveryOutputApplied.make({ receipt: presentation }) : yield* comment(markdown)
+				}).pipe(Effect.withSpan('linear.output.render_issue_plan'))
+
 			return Match.value(attempt.operation).pipe(
 				Match.tagsExhaustive({
+					RenderPlan: renderPlan,
 					PresentOutcome: ({ outcome, markdown }) =>
 						Predicate.isUndefined(markdown)
 							? Effect.succeed(applied)

@@ -17,11 +17,16 @@
  * - `SetMessageReaction` adds or removes the bot's reaction (`reactions.add`, `reactions.remove`) on the
  *   message that started the delivery, or on a message the delivery posted. A reaction already there,
  *   or already gone, counts as done.
+ * - `RenderPlan` shows the plan as a stream in plan mode, which stays open. The first plan starts it with
+ *   every task; a later one appends only what changed (see `SlackDeliveryPlan.ts`). A change no chunk can
+ *   express, or a stream Slack has already closed, starts a new stream with the whole plan, then stops and
+ *   deletes the old one as best it can. `PresentOutcome` stops the stream before it posts.
  *
  * A post is at-least-once: when Slack accepts it but the attempt dies before the store saves the
  * result, the next attempt posts again, and the first post stays in the thread. The attempt then
  * carries `hadAmbiguousAttempt`, which delivery status shows. Edits, deletions, and reactions are safe to
- * repeat.
+ * repeat. So is appending a plan: each task chunk carries the task's whole state. Starting a plan stream
+ * is at-least-once, like a post.
  */
 import {
 	DeliveryOutputApplied,
@@ -30,8 +35,12 @@ import {
 	type PortableReaction,
 	type ProviderOutputAttempt,
 	type ProviderOutputProcessor,
+	type ProviderPresentOutcome,
 	ProviderReactionTarget,
+	type ProviderRenderPlan,
 	type ProviderSetMessageReaction,
+	type DeliveryPlan,
+	type RenderedDeliveryPlan,
 } from '@humanlayer/channels-delivery-next'
 import { Array as Arr, Effect, Match, Option, Predicate, Schema } from 'effect'
 
@@ -41,6 +50,13 @@ import {
 	SlackDeliveryDestinationJson,
 	slackPresentationVersion,
 } from './SlackDeliveryDestination'
+import {
+	SlackPlanChange,
+	SlackPlanPresentation,
+	SlackPlanPresentationJson,
+	slackPlanChange,
+	slackPlanStartChunks,
+} from './SlackDeliveryPlan'
 import { SlackMarkdownContent, SlackMessageRef, SlackReaction } from './SlackModels'
 
 /** What Slack made for an operation: the message it posted. Saved by the store, read only here. */
@@ -84,6 +100,9 @@ const permanentSlackErrors: ReadonlySet<string> = new Set([
 	'token_expired',
 	'token_revoked',
 ])
+
+/** Slack's answers to an append on a stream that is no longer open; the plan then needs a new stream. */
+const closedStreamErrors: ReadonlySet<string> = new Set(['message_not_in_streaming_state', 'stopped_by_user', 'message_not_found'])
 
 /** Whether another attempt at a failed Slack call might succeed. */
 export const isRetryableSlackApiError = (error: SlackApiError) => !permanentSlackErrors.has(error.message)
@@ -222,16 +241,121 @@ export const makeSlackOutputProcessor = Effect.fn('slack.make_output_processor')
 				Effect.withSpan('slack.output.set_reaction', { attributes: { reaction, active } }),
 			)
 
+		/** The plan's stream, when a saved presentation names one. One that cannot be read is logged and treated as none. */
+		const planStream = (presentation: Schema.Json | undefined) =>
+			Predicate.isUndefined(presentation)
+				? Effect.succeedNone
+				: Schema.decodeUnknownEffect(SlackPlanPresentationJson)(presentation).pipe(
+						Effect.map(({ message }) => Option.some(message)),
+						Effect.catchTag('SchemaError', (error) =>
+							Effect.logWarning('Slack plan presentation could not be read; starting a new stream', error).pipe(
+								Effect.annotateLogs({ delivery_id: attempt.deliveryId, operation_id: attempt.operationId }),
+								Effect.as(Option.none()),
+							),
+						),
+					)
+
+		/** The plan's presentation as the operation's receipt. */
+		const planReceipt = (message: SlackMessageRef) =>
+			Schema.encodeEffect(SlackPlanPresentationJson)(SlackPlanPresentation.make({ message })).pipe(
+				Effect.mapError(() => failed('receipt_unencodable', false)),
+				Effect.map((receipt) => DeliveryOutputApplied.make({ receipt })),
+			)
+
+		/** Stop a plan stream. One Slack already closed, or that is gone, counts as stopped. */
+		const stopPlanStream = (message: SlackMessageRef) =>
+			slackApi.stopStream({ message }).pipe(
+				Effect.catchIf(
+					(error) => closedStreamErrors.has(error.message),
+					(error) =>
+						Effect.logInfo('Slack plan stream was already closed').pipe(
+							Effect.annotateLogs({ slack_error: error.message }),
+						),
+				),
+			)
+
+		/** Stop and delete a plan stream a new one replaced. A failure is logged; the new stream stands. */
+		const removeReplacedStream = (message: SlackMessageRef) =>
+			stopPlanStream(message).pipe(
+				Effect.andThen(
+					slackApi
+						.deleteMessage({ message })
+						.pipe(Effect.catchIf((error) => error.message === 'message_not_found', () => Effect.void)),
+				),
+				Effect.catchTag('SlackApiError', (error) =>
+					Effect.logWarning('Slack could not remove a replaced plan stream; it stays in the thread', error).pipe(
+						Effect.annotateLogs({ delivery_id: attempt.deliveryId, operation_id: attempt.operationId }),
+					),
+				),
+				Effect.withSpan('slack.output.remove_replaced_plan_stream'),
+			)
+
+		/** Start a new stream with the whole plan, then remove the stream it replaces, if any. */
+		const startPlan = (plan: DeliveryPlan, replaced: Option.Option<SlackMessageRef>) =>
+			slackApi.startPlanStream({ thread: destination.thread, chunks: slackPlanStartChunks(plan) }).pipe(
+				reportSlackFailure('Slack plan stream start failed', 'slack_plan_failed'),
+				Effect.tap(() => Option.match(replaced, { onNone: () => Effect.void, onSome: removeReplacedStream })),
+				Effect.flatMap(planReceipt),
+			)
+
+		/** Bring the stream from the plan it shows to `plan`: append what changed, or replace the stream. */
+		const updatePlan = (plan: DeliveryPlan, shown: RenderedDeliveryPlan, message: SlackMessageRef) =>
+			SlackPlanChange.$match(slackPlanChange(shown.plan, plan), {
+				Replace: () => startPlan(plan, Option.some(message)),
+				Append: ({ chunks }) =>
+					Arr.isReadonlyArrayNonEmpty(chunks)
+						? slackApi.appendStream({ message, chunks }).pipe(
+								Effect.as(true),
+								Effect.catchIf(
+									(error) => closedStreamErrors.has(error.message),
+									(error) =>
+										Effect.logInfo('Slack plan stream is closed; starting a new one').pipe(
+											Effect.annotateLogs({ slack_error: error.message }),
+											Effect.as(false),
+										),
+								),
+								reportSlackFailure('Slack plan stream append failed', 'slack_plan_failed'),
+								Effect.flatMap((appended) => (appended ? planReceipt(message) : startPlan(plan, Option.some(message)))),
+							)
+						: planReceipt(message),
+			})
+
+		const renderPlan = ({ plan, rendered }: ProviderRenderPlan) =>
+			Effect.gen(function* () {
+				const stream = yield* planStream(rendered?.presentation)
+				if (Predicate.isUndefined(rendered) || Option.isNone(stream)) return yield* startPlan(plan, Option.none())
+				return yield* updatePlan(plan, rendered, stream.value)
+			}).pipe(Effect.withSpan('slack.output.render_plan', { attributes: { item_count: plan.items.length } }))
+
+		/**
+		 * Present the result: stop the plan stream first, then post the Markdown, or clear the status line.
+		 * A stop Slack refuses for good is logged and the result still posts.
+		 */
+		const presentOutcome = ({ outcome, markdown, clearActivity, planPresentation }: ProviderPresentOutcome) =>
+			Effect.gen(function* () {
+				const stream = yield* planStream(planPresentation)
+				if (Option.isSome(stream)) {
+					yield* stopPlanStream(stream.value).pipe(
+						Effect.catchIf(
+							(error) => !isRetryableSlackApiError(error),
+							(error) =>
+								Effect.logWarning('Slack plan stream could not be stopped; presenting the result anyway', error).pipe(
+									Effect.annotateLogs({ delivery_id: attempt.deliveryId, operation_id: attempt.operationId }),
+								),
+						),
+						reportSlackFailure('Slack plan stream stop failed', 'slack_plan_failed'),
+					)
+				}
+				if (Predicate.isNotUndefined(markdown)) return yield* post(outcomeMarkdown(outcome, markdown))
+				return clearActivity ? yield* clearStatus : applied
+			})
+
 		return yield* Match.value(attempt.operation).pipe(
 			Match.tagsExhaustive({
 				AddExternalLink: () => Effect.succeed(applied),
 				SetMessageReaction: setReaction,
-				PresentOutcome: ({ outcome, markdown, clearActivity }) =>
-					Predicate.isNotUndefined(markdown)
-						? post(outcomeMarkdown(outcome, markdown))
-						: clearActivity
-							? clearStatus
-							: Effect.succeed(applied),
+				RenderPlan: renderPlan,
+				PresentOutcome: presentOutcome,
 				SetActivity: ({ activity }) =>
 					Match.value(activity).pipe(
 						Match.tagsExhaustive({

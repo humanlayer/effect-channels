@@ -107,9 +107,14 @@ const makeFakeLinear = (options: FakeLinearOptions = {}) =>
 					})
 				}),
 			updateAgentSession: (request) =>
-				Queue.offer(shown, `link: ${request.addedExternalUrls.map(({ label, url }) => `${label} ${url}`).join(', ')}`).pipe(
-					Effect.asVoid,
-				),
+				Effect.gen(function* () {
+					if (request.addedExternalUrls !== undefined) {
+						yield* Queue.offer(shown, `link: ${request.addedExternalUrls.map(({ label, url }) => `${label} ${url}`).join(', ')}`)
+					}
+					if (request.plan !== undefined) {
+						yield* Queue.offer(shown, `plan: ${request.plan.map(({ content, status }) => `${content} [${status}]`).join(', ')}`)
+					}
+				}),
 			createComment: (request) =>
 				Effect.gen(function* () {
 					const count = yield* Ref.updateAndGet(commentCount, (n) => n + 1)

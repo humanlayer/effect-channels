@@ -14,6 +14,7 @@ import {
 	type CompleteDeliveryPayload,
 	type CreateMessagePayload,
 	type FailDeliveryPayload,
+	type PutPlanPayload,
 	type SetActivityPayload,
 	type SetReactionPayload,
 	type UpdateMessagePayload,
@@ -96,6 +97,26 @@ export const makeDeliveryClient = Effect.fn('delivery.client.make')(function* (o
 						}),
 					),
 					Effect.withSpan('delivery.client.set_activity'),
+				),
+		},
+		/**
+		 * The delivery's plan: the task list the remote worker keeps up to date, shown where the provider
+		 * shows plans, such as Slack's plan, a Linear Agent Plan, or one GitHub comment.
+		 */
+		plan: {
+			/**
+			 * Replace the whole plan. Send every item each time, with stable item IDs; the plan already
+			 * desired is a replay, and a quick change replaces one not yet shown.
+			 */
+			put: (target: DeliveryClientTarget & PutPlanPayload) =>
+				forDelivery(target).pipe(
+					Effect.flatMap((client) =>
+						client.deliveries.putPlan({
+							params: { deliveryId: target.deliveryId },
+							payload: { plan: target.plan },
+						}),
+					),
+					Effect.withSpan('delivery.client.put_plan'),
 				),
 		},
 		/**

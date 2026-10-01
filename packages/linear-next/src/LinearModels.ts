@@ -231,10 +231,23 @@ export const LinearAgentSessionExternalUrl = Schema.Struct({
 })
 export type LinearAgentSessionExternalUrl = typeof LinearAgentSessionExternalUrl.Type
 
-/** Add links to an Agent Session. Linear keeps the ones it has; adding one does not change the session's state. */
+/** One step of an Agent Plan. Linear has no failed status; a failed step is `canceled`. */
+export const LinearAgentPlanStep = Schema.Struct({
+	content: Schema.NonEmptyString,
+	status: Schema.Literals(['pending', 'inProgress', 'completed', 'canceled']),
+})
+export type LinearAgentPlanStep = typeof LinearAgentPlanStep.Type
+
+/**
+ * Change an Agent Session.
+ *
+ * @property addedExternalUrls - links to add; Linear keeps the ones it has, and adding one does not change the session's state
+ * @property plan - the whole Agent Plan, which replaces the one before. Linear's Agent Plan API is a technology preview.
+ */
 export const LinearUpdateAgentSessionRequest = Schema.Struct({
 	organizationId: LinearOrganizationId,
 	sessionId: LinearAgentSessionId,
-	addedExternalUrls: Schema.Array(LinearAgentSessionExternalUrl),
+	addedExternalUrls: Schema.optionalKey(Schema.Array(LinearAgentSessionExternalUrl)),
+	plan: Schema.optionalKey(Schema.Array(LinearAgentPlanStep)),
 })
 export type LinearUpdateAgentSessionRequest = typeof LinearUpdateAgentSessionRequest.Type

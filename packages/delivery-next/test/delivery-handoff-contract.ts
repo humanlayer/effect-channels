@@ -23,10 +23,15 @@ import {
 	DeliveryReactionTarget,
 	ExternalLink,
 	DeliveryActivity,
+	DeliveryPlan,
+	DeliveryPlanItem,
+	DeliveryPlanItemId,
+	DeliveryPlanItemState,
 	FailDelivery,
 	MailboxDelivery,
 	MessageId,
 	PreparedDeliveryInvocation,
+	PutDeliveryPlan,
 	SetDeliveryActivity,
 	SetDeliveryReaction,
 	UpdateDeliveryMessage,
@@ -209,6 +214,23 @@ const onActivation = DeliveryReactionTarget.cases.ActivationTarget.make({})
 const onProgress = DeliveryReactionTarget.cases.MessageTarget.make({ messageId: progress })
 const react = (target: DeliveryReactionTarget, reaction: PortableReaction, active: boolean) =>
 	SetDeliveryReaction.make({ target, reaction, active })
+
+/** A destination that shows plans. */
+const planPreparation = PreparedDeliveryInvocation.make({
+	...messagePreparation,
+	supportedOperations: [...messagePreparation.supportedOperations, 'RenderPlan'],
+})
+
+const step = (id: string, state: DeliveryPlanItemState = DeliveryPlanItemState.cases.Pending.make({})) =>
+	DeliveryPlanItem.make({ id: DeliveryPlanItemId.make(id), title: `Step ${id}`, state })
+const planOf = (...items: ReadonlyArray<DeliveryPlanItem>) => DeliveryPlan.make({ title: 'Ship the fix', items })
+const putPlan = (plan: DeliveryPlan) => PutDeliveryPlan.make({ plan })
+const planA = planOf(step('inspect', DeliveryPlanItemState.cases.InProgress.make({})), step('rotate'))
+const planB = planOf(step('inspect', DeliveryPlanItemState.cases.Completed.make({ result: 'Found it' })), step('rotate'))
+const planC = planOf(
+	step('inspect', DeliveryPlanItemState.cases.Completed.make({ result: 'Found it' })),
+	step('rotate', DeliveryPlanItemState.cases.InProgress.make({})),
+)
 
 export const deliveryHandoffContract = <E>(storeName: string, makeEmptyStore: () => Layer.Layer<HandoffStore, E>) => {
 	const contract = <TestError>(name: string, test: Effect.Effect<void, TestError, HandoffStore>) =>
@@ -1044,6 +1066,119 @@ export const deliveryHandoffContract = <E>(storeName: string, makeEmptyStore: ()
 			expect((yield* apply(claim, react(onActivation, 'rocket', true)).pipe(Effect.flip))._tag).toEqual(
 				'DeliveryClosed',
 			)
+		}),
+	)
+
+	contract(
+		'replaces the whole plan, coalesces a waiting render, and renders a change made during a render afterwards',
+		Effect.gen(function* () {
+			const claim = yield* waitingDeliveryWith(planPreparation)
+			expect((yield* apply(claim, putPlan(planA))).status).toEqual('accepted')
+			expect(yield* findReady).toEqual([OutputReadyMailbox.make({ mailboxKey })])
+			expect((yield* apply(claim, putPlan(planA))).status).toEqual('already_recorded')
+			expect((yield* apply(claim, putPlan(planB))).status).toEqual('accepted')
+			const coalesced = yield* status(claim)
+			expect(coalesced.plan).toEqual({ revision: 2, plan: planB })
+			expect(coalesced.output).toEqual([
+				{ operationId: 'plan-1', kind: 'RenderPlan', state: 'Pending', attempts: 0, hadAmbiguousAttempt: false },
+			])
+
+			const first = Option.getOrThrow(yield* claimOutput)
+			expect(first.operation).toEqual({ _tag: 'RenderPlan', revision: 2, plan: planB })
+			expect(first.renderedPlan).toBeUndefined()
+			expect((yield* apply(claim, putPlan(planC))).status).toEqual('accepted')
+			yield* settleOutput(first, DeliveryOutputSettlement.cases.Applied.make({ receipt: { stream: 's-1' } }))
+			expect((yield* status(claim)).plan).toEqual({ revision: 3, plan: planC, renderedRevision: 2 })
+
+			const second = Option.getOrThrow(yield* claimOutput)
+			expect(second.operationId).toEqual('plan-2')
+			expect(second.operation).toEqual({ _tag: 'RenderPlan', revision: 3, plan: planC })
+			/** The snapshot is what the first render sent, not the plan desired when it settled. */
+			expect(second.renderedPlan).toEqual({ revision: 2, plan: planB, presentation: { stream: 's-1' } })
+			yield* settleOutput(second, DeliveryOutputSettlement.cases.Applied.make({ receipt: { stream: 's-2' } }))
+			expect((yield* status(claim)).plan).toEqual({ revision: 3, plan: planC, renderedRevision: 3 })
+			expect(yield* findReady).toEqual([])
+		}),
+	)
+
+	contract(
+		'a failed render leaves the last shown plan, and a lost lease renders the latest plan again',
+		Effect.gen(function* () {
+			const claim = yield* waitingDeliveryWith(planPreparation)
+			yield* apply(claim, putPlan(planA))
+			yield* settleOutput(
+				Option.getOrThrow(yield* claimOutput),
+				DeliveryOutputSettlement.cases.Applied.make({ receipt: { stream: 's-1' } }),
+			)
+			yield* apply(claim, putPlan(planB))
+			yield* settleOutput(
+				Option.getOrThrow(yield* claimOutput),
+				DeliveryOutputSettlement.cases.Failed.make({ safeCode: 'slack_plan_failed' }),
+			)
+			expect((yield* status(claim)).plan).toEqual({ revision: 2, plan: planB, renderedRevision: 1 })
+
+			yield* apply(claim, putPlan(planC))
+			const lost = Option.getOrThrow(yield* claimOutput)
+			yield* TestClock.adjust(leaseMs + 1)
+			const again = Option.getOrThrow(yield* claimOutput)
+			expect(again.operationId).toEqual(lost.operationId)
+			expect(again.hadAmbiguousAttempt).toEqual(true)
+			expect(again.idempotencyKey).toEqual(lost.idempotencyKey)
+			expect(again.operation).toEqual({ _tag: 'RenderPlan', revision: 3, plan: planC })
+			expect(again.renderedPlan).toEqual({ revision: 1, plan: planA, presentation: { stream: 's-1' } })
+		}),
+	)
+
+	contract(
+		'keeps a plan for a destination that cannot show it, with no operation, and keeps it after retirement',
+		Effect.gen(function* () {
+			const claim = yield* waitingDeliveryWith(messagePreparation)
+			expect((yield* apply(claim, putPlan(planA))).status).toEqual('accepted')
+			const saved = yield* status(claim)
+			expect(saved.plan).toEqual({ revision: 1, plan: planA })
+			expect(saved.output).toEqual([])
+			expect(yield* findReady).toEqual([])
+
+			yield* finish(claim)
+			yield* sendOutput
+			const retired = yield* status(claim)
+			expect(retired.stage).toEqual('Retired')
+			expect(retired.plan).toEqual({ revision: 1, plan: planA })
+			expect((yield* apply(claim, putPlan(planA))).status).toEqual('already_recorded')
+			expect((yield* apply(claim, putPlan(planB)).pipe(Effect.flip))._tag).toEqual('DeliveryClosed')
+		}),
+	)
+
+	contract(
+		'refuses a new plan once the delivery has a result; the result receives where the plan is shown',
+		Effect.gen(function* () {
+			const claim = yield* waitingDeliveryWith(planPreparation)
+			yield* apply(claim, putPlan(planA))
+			yield* settleOutput(
+				Option.getOrThrow(yield* claimOutput),
+				DeliveryOutputSettlement.cases.Applied.make({ receipt: { stream: 's-1' } }),
+			)
+			yield* finish(claim)
+			expect((yield* apply(claim, putPlan(planA))).status).toEqual('already_recorded')
+			expect((yield* apply(claim, putPlan(planB)).pipe(Effect.flip))._tag).toEqual('DeliveryClosed')
+			const outcome = Option.getOrThrow(yield* claimOutput)
+			expect(outcome.operation._tag).toEqual('PresentOutcome')
+			expect(outcome.renderedPlan).toEqual({ revision: 1, plan: planA, presentation: { stream: 's-1' } })
+			yield* settleOutput(outcome)
+			expect((yield* status(claim)).plan).toEqual({ revision: 1, plan: planA, renderedRevision: 1 })
+		}),
+	)
+
+	contract(
+		'a plan sent while the callback still runs is shown once the callback returns',
+		Effect.gen(function* () {
+			yield* deliver('a')
+			const claim = yield* claimPreparedWith(planPreparation)
+			yield* handOff(claim)
+			expect((yield* apply(claim, putPlan(planA))).status).toEqual('accepted')
+			expect(Option.isNone(yield* claimOutput)).toEqual(true)
+			yield* settle(claim, 'completed')
+			expect((yield* sendOutput).operation).toEqual({ _tag: 'RenderPlan', revision: 1, plan: planA })
 		}),
 	)
 }

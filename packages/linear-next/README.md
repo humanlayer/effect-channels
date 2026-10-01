@@ -81,12 +81,15 @@ Every callback receives a `DeliveryContext` and may hand its delivery to a remot
 | `messages.update` / `delete` | not supported (409): activities cannot change | edit or delete the comment |
 | `links.add` | a labeled link on the session (`agentSessionUpdate`) | nothing |
 | `reactions.set` | on the comment that started the session, else the issue; not on the session's messages (409) | on the mentioning comment, else the issue, or on a comment the delivery posted |
+| `plan.put` | the whole Agent Plan (`agentSessionUpdate` with `plan`), replaced each time | one plan comment, edited for each later plan |
 
 `GET /deliveries/<id>` lists what the delivery supports in `supportedOperations`. The final activity replaces any ephemeral thought, so a session turn needs no separate step to clear its activity. Linear marks a session stale after 30 minutes without an activity, and any later activity revives it; on long turns, send `Working` every few minutes.
 
 Session output is exactly-once. Each activity carries a UUID that stays the same on every attempt, and Linear refuses a second activity with an ID it has seen (`LinearApiError` reason `already_exists`), which counts as done. The automatic `Working on this…` thought before `onAgentSessionCreated` uses an ID made from the delivery ID, so a callback retry does not post it twice. Issue comments stay at-least-once.
 
 A reaction add carries its operation's UUID as the reaction's ID; Linear answers a repeat with the reaction it already has, so a retry never reacts twice. Linear removes a reaction by its ID, so a removal deletes the reaction this delivery's last add made; with no such add, there is nothing it can find, and the removal makes no call. Portable reactions map to Linear's emoji names, which are Slack-style short codes: `thumbs_up` is `+1`, `thumbs_down` is `-1`, `laugh` is `laughing`, `hooray` is `tada`; the rest keep their names. Linear refuses a name it doesn't know. `GET /deliveries/<id>` lists where reactions can go in `reactionTargets`.
+
+A session's plan uses Linear's Agent Plan, which Linear replaces whole on every update. Items map to steps `pending`, `inProgress`, `completed`, and `canceled`; Linear has no failed step, so a failed item is `canceled` and its text says why. The Agent Plan API is a technology preview. If Linear refuses the plan as invalid, the session shows the item in progress as an ephemeral thought instead, for the rest of that delivery. An issue delivery keeps one plan comment, as GitHub does.
 
 Stop arrives as a `prompted` event with `signal: stop`. It marks the handed-off turn, and the remote worker sees `interruptRequested: true` in the status, stops, and calls `fail` or `complete`; that posts the final activity Linear expects. The stop prompt then runs `onAgentSessionPrompted` as the next turn, with `prompt.signal` set to `stop`. A question (`complete` with `awaitingInput`) ends the turn; the user's reply is a new delivery.
 

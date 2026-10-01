@@ -14,6 +14,7 @@ import { AddExternalLink } from './DeliveryLink'
 import { CreateMessage, ProviderDeleteMessage, ProviderUpdateMessage } from './DeliveryMessage'
 import { DeliveryOperationId } from './DeliveryOperation'
 import { PresentOutcome } from './DeliveryOutcome'
+import { ProviderRenderPlan } from './DeliveryPlan'
 import { ProviderSetMessageReaction } from './DeliveryReaction'
 import { DeliveryId } from './DeliveryReference'
 
@@ -21,17 +22,20 @@ import { DeliveryId } from './DeliveryReference'
  * `PresentOutcome` as a provider receives it.
  *
  * @property clearActivity - the remote worker's last activity was `Working`, so the provider must clear it
+ * @property planPresentation - where the provider last showed the delivery's plan, if it did. A provider
+ * whose plan stays open, such as Slack's plan stream, closes it here.
  */
 export const ProviderPresentOutcome = Schema.TaggedStruct('PresentOutcome', {
 	...PresentOutcome.fields,
 	clearActivity: Schema.Boolean,
+	planPresentation: Schema.optionalKey(Schema.Json),
 })
 export type ProviderPresentOutcome = typeof ProviderPresentOutcome.Type
 
 /**
  * A saved operation as a provider receives it. An update or deletion, or a reaction on a message,
  * carries the provider's own reference to the message, taken from the receipt of the message's
- * `CreateMessage`.
+ * `CreateMessage`. `RenderPlan` carries the plan the provider last showed.
  */
 export const ProviderOutputOperation = Schema.Union([
 	ProviderPresentOutcome,
@@ -41,6 +45,7 @@ export const ProviderOutputOperation = Schema.Union([
 	ProviderDeleteMessage,
 	SetActivity,
 	ProviderSetMessageReaction,
+	ProviderRenderPlan,
 ])
 export type ProviderOutputOperation = typeof ProviderOutputOperation.Type
 

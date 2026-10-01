@@ -41,6 +41,7 @@ import {
 	terminalFromMutation,
 	type DeliveryMessageMutation,
 	type DeliveryMutation,
+	type PutDeliveryPlan,
 	type SetDeliveryActivity,
 	type SetDeliveryReaction,
 } from './DeliveryControl'
@@ -64,6 +65,15 @@ import {
 	type DeliveryOutputSettlement,
 } from './DeliveryOperation'
 import { DeliveryTerminal, PresentOutcome } from './DeliveryOutcome'
+import {
+	DeliveryPlanRevision,
+	DeliveryPlanState,
+	DeliveryPlanStatus,
+	RenderPlan,
+	RenderedDeliveryPlan,
+	deliveryPlanStatus,
+	sameDeliveryPlan,
+} from './DeliveryPlan'
 import {
 	DeliveryReactionTarget,
 	SetMessageReaction,
@@ -101,6 +111,7 @@ export type ActiveDeliveryStage = typeof ActiveDeliveryStage.Type
  *
  * @property claimId - the attempt that owns the batch; kept through `ExternalCleaning` as ownership of callback cleanup
  * @property terminal - the remote worker's result, when it has sent one
+ * @property plan - the plan the remote worker last sent, and the plan a provider last showed
  * @property operations - provider output the delivery owes or has sent, in the order it was saved
  */
 export const ActiveDelivery = Schema.Struct({
@@ -115,6 +126,7 @@ export const ActiveDelivery = Schema.Struct({
 	interruptRequestedAt: Schema.optionalKey(Timestamp),
 	handedOffAt: Schema.optionalKey(Timestamp),
 	links: Schema.Array(ExternalLink),
+	plan: Schema.optionalKey(DeliveryPlanState),
 	/** Stores written before output existed read it as empty. */
 	operations: Schema.Array(DeliveryOperation).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
 })
@@ -131,6 +143,7 @@ export const RetainedDelivery = Schema.Struct({
 	/** Stores written before output existed read these as empty. */
 	links: Schema.Array(ExternalLink).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
 	output: Schema.Array(DeliveryOutputStatus).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
+	plan: Schema.optionalKey(DeliveryPlanStatus),
 })
 export type RetainedDelivery = typeof RetainedDelivery.Type
 
@@ -216,8 +229,9 @@ const retire = (slot: DeliverySlot, active: ActiveDelivery, facts: MailboxFacts)
 		links: active.links,
 		output: active.operations.map(deliveryOutputStatus),
 	}
+	const withTerminal = Predicate.isUndefined(active.terminal) ? entry : { ...entry, terminal: active.terminal }
 	const retiredEntry = RetainedDelivery.make(
-		Predicate.isUndefined(active.terminal) ? entry : { ...entry, terminal: active.terminal },
+		Predicate.isUndefined(active.plan) ? withTerminal : { ...withTerminal, plan: deliveryPlanStatus(active.plan) },
 	)
 	const retained = [...slot.retained.filter(({ retainUntil }) => retainUntil > facts.now), retiredEntry].slice(
 		-MAX_RETAINED_DELIVERIES,
@@ -258,6 +272,7 @@ const withOperations = (
 		const activities = () => saved.filter(({ operation }) => Predicate.isTagged(operation, 'SetActivity')).length
 		const reactions = () =>
 			saved.filter(({ operation }) => Predicate.isTagged(operation, 'SetMessageReaction')).length
+		const plans = () => saved.filter(({ operation }) => Predicate.isTagged(operation, 'RenderPlan')).length
 		const operationId = Match.value(operation).pipe(
 			Match.tagsExhaustive({
 				PresentOutcome: () => 'outcome',
@@ -267,6 +282,7 @@ const withOperations = (
 				DeleteMessage: () => `message-${messages() + 1}`,
 				SetActivity: () => `activity-${activities() + 1}`,
 				SetMessageReaction: () => `reaction-${reactions() + 1}`,
+				RenderPlan: () => `plan-${plans() + 1}`,
 			}),
 		)
 		return [
@@ -319,6 +335,28 @@ const desiredActivity = (active: ActiveDelivery): DeliveryActivity => {
 /** Whether the delivery's last activity request was `Working`, so ending it must clear the provider's activity. */
 export const activityToClear = (active: ActiveDelivery) =>
 	Predicate.isTagged(desiredActivity(active), 'Working')
+
+/** The last saved `RenderPlan`, which holds the latest plan sent to the provider or waiting to be. */
+const lastPlanOperation = (active: ActiveDelivery) =>
+	active.operations.findLast(({ operation }) => Predicate.isTagged(operation, 'RenderPlan'))
+
+/** The plan the provider last showed, with its presentation. None until a `RenderPlan` has been applied. */
+export const renderedDeliveryPlan = (active: ActiveDelivery): RenderedDeliveryPlan | undefined => active.plan?.rendered
+
+/**
+ * Record what an applied `RenderPlan` showed: exactly the plan it sent, never a newer desired plan that
+ * arrived while it ran, and the provider's presentation from its receipt.
+ */
+const withRenderedPlan = (active: ActiveDelivery, request: RenderPlan, presentation: Schema.Json | undefined) => {
+	const { plan } = active
+	if (plan === undefined || (plan.rendered !== undefined && plan.rendered.revision >= request.revision)) return active
+	const rendered = RenderedDeliveryPlan.make(
+		Predicate.isUndefined(presentation)
+			? { revision: request.revision, plan: request.plan }
+			: { revision: request.revision, plan: request.plan, presentation },
+	)
+	return ActiveDelivery.make({ ...active, plan: DeliveryPlanState.make({ ...plan, rendered }) })
+}
 
 /** The saved `SetMessageReaction` operations for one reaction on one target, oldest first. */
 const reactionsOn = (
@@ -616,7 +654,12 @@ export const settleDeliveryOutput = Effect.fn('delivery.lifecycle.settle_output'
 			Failed: ({ safeCode }) => DeliveryOperationState.cases.Failed.make({ safeCode }),
 		}),
 	)
-	const active = replaceOperation(owner.active, DeliveryOperation.make({ ...owner.operation, state }))
+	const settled = replaceOperation(owner.active, DeliveryOperation.make({ ...owner.operation, state }))
+	const request = owner.operation.operation
+	const active =
+		Predicate.isTagged(request, 'RenderPlan') && Predicate.isTagged(state, 'Delivered')
+			? withRenderedPlan(settled, request, state.receipt)
+			: settled
 	if (active.stage === 'Finishing' && nextOperation(active) === undefined) return retire(slot, active, input)
 	return withActive(slot, active, nextOutputAt(active))
 })
@@ -646,11 +689,15 @@ const locate = (
 	return retained !== undefined && matches(retained.accessToken) ? Located.Retained({ retained }) : null
 }
 
-const statusWithOutcome = (
-	status: Omit<DeliveryStatus, '_tag' | 'outcome'>,
+/** A status with the outcome and plan the delivery has, when it has them. */
+const statusWith = (
+	status: Omit<DeliveryStatus, '_tag' | 'outcome' | 'plan'>,
 	terminal: DeliveryTerminal | undefined,
-) =>
-	DeliveryStatus.make(Predicate.isUndefined(terminal) ? status : { ...status, outcome: terminal.outcome })
+	plan: DeliveryPlanStatus | undefined,
+) => {
+	const withOutcome = Predicate.isUndefined(terminal) ? status : { ...status, outcome: terminal.outcome }
+	return DeliveryStatus.make(Predicate.isUndefined(plan) ? withOutcome : { ...withOutcome, plan })
+}
 
 /** What a remote worker may read about its delivery. */
 export const readDeliverySlotStatus = Effect.fn('delivery.lifecycle.read_status')(function* (
@@ -661,7 +708,7 @@ export const readDeliverySlotStatus = Effect.fn('delivery.lifecycle.read_status'
 	if (located === null) return yield* new DeliveryNotFound()
 	return Located.$match(located, {
 		Active: ({ active }) =>
-			statusWithOutcome(
+			statusWith(
 				{
 					deliveryId: input.reference.deliveryId,
 					stage: publicStage(active),
@@ -674,9 +721,10 @@ export const readDeliverySlotStatus = Effect.fn('delivery.lifecycle.read_status'
 					output: active.operations.map(deliveryOutputStatus),
 				},
 				active.terminal,
+				Predicate.isUndefined(active.plan) ? undefined : deliveryPlanStatus(active.plan),
 			),
 		Retained: ({ retained }) =>
-			statusWithOutcome(
+			statusWith(
 				{
 					deliveryId: input.reference.deliveryId,
 					stage: 'Retired',
@@ -686,6 +734,7 @@ export const readDeliverySlotStatus = Effect.fn('delivery.lifecycle.read_status'
 					output: retained.output,
 				},
 				retained.terminal,
+				retained.plan,
 			),
 	})
 })
@@ -830,8 +879,11 @@ const decideMessageChange = (active: ActiveDelivery, mutation: DeliveryMessageMu
 	)
 }
 
-/** The output operation a change needs its destination to support. */
-const requiredOperation = (mutation: DeliveryMutation): DeliveryOperationKind =>
+/**
+ * The output operation a change needs its destination to support. A plan needs none: a destination
+ * that cannot show it still keeps it.
+ */
+const requiredOperation = (mutation: DeliveryMutation): DeliveryOperationKind | undefined =>
 	Match.value(mutation).pipe(
 		Match.tagsExhaustive({
 			CompleteDelivery: () => 'PresentOutcome' as const,
@@ -842,6 +894,7 @@ const requiredOperation = (mutation: DeliveryMutation): DeliveryOperationKind =>
 			DeleteDeliveryMessage: () => 'DeleteMessage' as const,
 			SetDeliveryActivity: () => 'SetActivity' as const,
 			SetDeliveryReaction: () => 'SetMessageReaction' as const,
+			PutDeliveryPlan: () => undefined,
 		}),
 	)
 
@@ -899,7 +952,7 @@ type ReactionTargetCheck = Effect.Effect<
 /**
  * Check that a reaction's target is one the destination can react on, and that it exists: the delivery
  * has an activation target, or the message was created and not removed. A message whose create has not
- * run yet is fine; the reaction runs after it. No provider presents a plan yet.
+ * run yet is fine; the reaction runs after it. No provider reacts on its plan yet.
  */
 const checkReactionTarget = (active: ActiveDelivery, target: DeliveryReactionTarget): ReactionTargetCheck => {
 	const kind = deliveryReactionTargetKind(target)
@@ -957,6 +1010,52 @@ const changeReaction = (
 			}),
 	})
 
+/**
+ * Save the remote worker's whole plan as the desired plan, advancing its revision. The plan already
+ * desired is a replay, even after the delivery ended. A new plan replaces a `RenderPlan` still waiting
+ * to be sent, so only the latest is sent; one already being sent is followed by a new operation. A
+ * destination that cannot show plans keeps the plan with no operation. A delivery with a result takes no
+ * new plan.
+ */
+const changePlan = (
+	slot: DeliverySlot,
+	located: Located,
+	input: {
+		readonly mutation: PutDeliveryPlan
+		readonly receipt: (status: DeliveryMutationReceipt['status']) => DeliveryMutationReceipt
+	} & MailboxFacts,
+): MutationChange => {
+	const { plan } = input.mutation
+	const replay = Effect.succeed({ slot, receipt: input.receipt('already_recorded') })
+	return Located.$match(located, {
+		Retained: ({ retained }) =>
+			retained.plan !== undefined && sameDeliveryPlan(retained.plan.plan, plan) ? replay : Effect.fail(new DeliveryClosed()),
+		Active: ({ active }) => {
+			if (active.plan !== undefined && sameDeliveryPlan(active.plan.desired.plan, plan)) return replay
+			if (active.terminal !== undefined || active.stage === 'Finishing') return Effect.fail(new DeliveryClosed())
+			const revision = DeliveryPlanRevision.make((active.plan?.desired.revision ?? 0) + 1)
+			const desired = { revision, plan }
+			const planned = ActiveDelivery.make({
+				...active,
+				plan: DeliveryPlanState.make(
+					active.plan?.rendered === undefined ? { desired } : { desired, rendered: active.plan.rendered },
+				),
+			})
+			const accepted = (next: ActiveDelivery, readyAt: number | null) =>
+				Effect.succeed({ slot: withActive(slot, next, readyAt), receipt: input.receipt('accepted') })
+			if (!(active.prepared?.supportedOperations ?? []).includes('RenderPlan')) return accepted(planned, slot.readyAt)
+			const request = RenderPlan.make({ revision, plan })
+			const last = lastPlanOperation(active)
+			const next =
+				last !== undefined && Predicate.isTagged(last.state, 'Pending')
+					? replaceOperation(planned, replacedRequest(last, request))
+					: withOperations(planned, [request], input.now)
+			/** A delivery waiting for its remote worker has no callback running, so the output can start now. */
+			return accepted(next, active.stage === 'ExternalWaiting' ? nextOutputAt(next) : slot.readyAt)
+		},
+	})
+}
+
 /** Save a message change and the operation that shows it, in one change. A retired delivery takes none. */
 const changeMessage = (
 	slot: DeliverySlot,
@@ -996,7 +1095,9 @@ export const applyDeliverySlotMutation = Effect.fn('delivery.lifecycle.apply_mut
 		Active: ({ active }) => active.prepared?.supportedOperations ?? [],
 		Retained: ({ retained }) => retained.supportedOperations,
 	})
-	if (!supported.includes(operation)) return yield* new DeliveryOperationUnsupported({ operation })
+	if (operation !== undefined && !supported.includes(operation)) {
+		return yield* new DeliveryOperationUnsupported({ operation })
+	}
 	const receipt = (status: DeliveryMutationReceipt['status']) =>
 		DeliveryMutationReceipt.make({ deliveryId: input.reference.deliveryId, status })
 	const facts = { now: input.now, hasWaiting: input.hasWaiting, receipt }
@@ -1010,6 +1111,7 @@ export const applyDeliverySlotMutation = Effect.fn('delivery.lifecycle.apply_mut
 			DeleteDeliveryMessage: (mutation) => changeMessage(slot, located, { ...facts, mutation }),
 			SetDeliveryActivity: (mutation) => changeActivity(slot, located, { ...facts, mutation }),
 			SetDeliveryReaction: (mutation) => changeReaction(slot, located, { ...facts, mutation }),
+			PutDeliveryPlan: (mutation) => changePlan(slot, located, { ...facts, mutation }),
 		}),
 	)
 })

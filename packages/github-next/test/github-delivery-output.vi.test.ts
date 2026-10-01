@@ -13,7 +13,13 @@ import {
 	ProviderOutputAttempt,
 	ProviderPresentOutcome,
 	ProviderReactionTarget,
+	ProviderRenderPlan,
 	ProviderSetMessageReaction,
+	RenderedDeliveryPlan,
+	DeliveryPlan,
+	DeliveryPlanItem,
+	DeliveryPlanItemId,
+	DeliveryPlanItemState,
 	SetActivity,
 	makeDeliveryId,
 	MessageId,
@@ -21,7 +27,12 @@ import {
 } from '@humanlayer/channels-delivery-next'
 import { Effect, Layer, Match, Option, Ref, Result, Schema } from 'effect'
 
-import { commentOutputScenarios, type CommentOutputFault } from '../../delivery-next/test/comment-output-scenarios'
+import {
+	commentOutputScenarios,
+	planCommentScenarios,
+	type CommentOutputFault,
+	type CommentOutputHarness,
+} from '../../delivery-next/test/comment-output-scenarios'
 import {
 	GitHubActivationTarget,
 	GitHubActivationTargetJson,
@@ -152,7 +163,7 @@ const run = (
 		return { result, calls: yield* Ref.get(calls) }
 	})
 
-commentOutputScenarios({
+const gitHubIssueHarness: CommentOutputHarness = {
 	provider: 'GitHub issue',
 	optionBullet: '- ',
 	run: (operation, options = {}) =>
@@ -171,13 +182,69 @@ commentOutputScenarios({
 				),
 			})),
 		),
-})
+}
+
+commentOutputScenarios(gitHubIssueHarness)
+planCommentScenarios(gitHubIssueHarness)
 
 const working = SetActivity.make({ activity: DeliveryActivity.cases.Working.make({ message: 'Running tests' }) })
 const idle = SetActivity.make({ activity: DeliveryActivity.cases.Idle.make({}) })
 const completed = DeliveryOutcome.cases.Completed.make({})
 
 describe('GitHub delivery output', () => {
+	it.effect('comments the plan again when its comment was deleted, and keeps the new comment', ({ expect }) =>
+		Effect.gen(function* () {
+			const calls = yield* Ref.make<ReadonlyArray<string>>([])
+			const api = Layer.mock(GitHubApi, {
+				updateComment: ({ comment }) =>
+					Ref.update(calls, (all) => [...all, `edit ${comment.id}`]).pipe(
+						Effect.andThen(
+							Effect.fail(GitHubApiError.make({ operation: 'update_comment', reason: 'not_found', retryable: false })),
+						),
+					),
+				postIssueComment: ({ issue: target, content }) =>
+					Ref.update(calls, (all) => [...all, 'post']).pipe(
+						Effect.as(
+							GitHubIssueComment.make({
+								ref: { discussion: { _tag: 'Issue', ref: target }, id: GitHubId.make(901) },
+								body: content.markdown,
+								url: 'https://github.com/alice/project/issues/42#issuecomment-901',
+								author: null,
+							}),
+						),
+					),
+			})
+			const plan = DeliveryPlan.make({
+				items: [
+					DeliveryPlanItem.make({
+						id: DeliveryPlanItemId.make('a'),
+						title: 'Step a',
+						state: DeliveryPlanItemState.cases.Pending.make({}),
+					}),
+				],
+			})
+			const deleted = Schema.encodeSync(GitHubOutputReceiptJson)(GitHubOutputReceipt.make({ comment: mentionComment }))
+			const processor = yield* makeGitHubOutputProcessor({ namespace: 'github-output-test' }).pipe(Effect.provide(api))
+			const applied = yield* processor.process(
+				attempt(
+					ProviderRenderPlan.make({
+						revision: 2,
+						plan,
+						rendered: RenderedDeliveryPlan.make({
+							revision: 1,
+							plan: DeliveryPlan.make({ items: [] }),
+							presentation: deleted,
+						}),
+					}),
+					prepared({}),
+				),
+			)
+			expect(yield* Ref.get(calls)).toEqual(['edit 500', 'post'])
+			const receipt = yield* Schema.decodeUnknownEffect(GitHubOutputReceiptJson)(applied.receipt)
+			expect(receipt.comment.id).toEqual(GitHubId.make(901))
+		}),
+	)
+
 	it.effect('comments on a pull request, and keeps the comment as an opaque receipt', ({ expect }) =>
 		Effect.gen(function* () {
 			const { result, calls } = yield* run(

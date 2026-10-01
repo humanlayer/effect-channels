@@ -29,6 +29,7 @@ import {
 } from './DeliveryControl'
 import { ExternalLink } from './DeliveryLink'
 import { MessageId } from './DeliveryMessage'
+import { DeliveryPlan } from './DeliveryPlan'
 import { DeliveryReactionTarget, PortableReaction } from './DeliveryReaction'
 
 /** The request had no `Authorization: Bearer` token. */
@@ -88,6 +89,15 @@ export const SetReactionPayload = Schema.Struct({
 })
 export type SetReactionPayload = typeof SetReactionPayload.Type
 
+/**
+ * The whole plan, which replaces the one before: `{ "plan": { "title": "…", "items": [{ "id": "…",
+ * "title": "…", "state": { "_tag": "InProgress" } }] } }`.
+ */
+export const PutPlanPayload = Schema.Struct({
+	plan: DeliveryPlan,
+})
+export type PutPlanPayload = typeof PutPlanPayload.Type
+
 const Accepted = DeliveryMutationReceipt.pipe(HttpApiSchema.status(202))
 
 const statusErrors = [
@@ -135,6 +145,12 @@ export const DeliveryHttpApi = HttpApi.make('ChannelsDeliveryApi').add(
 		HttpApiEndpoint.put('setActivity', '/deliveries/:deliveryId/activity', {
 			params: Params,
 			payload: SetActivityPayload,
+			success: Accepted,
+			error: mutationErrors,
+		}),
+		HttpApiEndpoint.put('putPlan', '/deliveries/:deliveryId/plan', {
+			params: Params,
+			payload: PutPlanPayload,
 			success: Accepted,
 			error: mutationErrors,
 		}),

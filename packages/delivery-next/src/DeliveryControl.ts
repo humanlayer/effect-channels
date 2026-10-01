@@ -18,6 +18,7 @@ import { ExternalLink } from './DeliveryLink'
 import { MessageId } from './DeliveryMessage'
 import { DeliveryOutputStatus } from './DeliveryOperation'
 import { DeliveryOutcome, DeliveryTerminal } from './DeliveryOutcome'
+import { DeliveryPlan, DeliveryPlanStatus } from './DeliveryPlan'
 import { DeliveryReactionTarget, DeliveryReactionTargetKind, PortableReaction } from './DeliveryReaction'
 import { DeliveryId, DeliveryReference, parseDeliveryId } from './DeliveryReference'
 
@@ -92,7 +93,16 @@ export const SetDeliveryReaction = Schema.TaggedStruct('SetDeliveryReaction', {
 })
 export type SetDeliveryReaction = typeof SetDeliveryReaction.Type
 
-/** A change a remote worker asks for. A later phase adds plan changes. */
+/**
+ * Replace the delivery's whole plan. The plan already desired is a replay; any other advances the
+ * revision. A destination that cannot show plans still keeps it, and status reports it.
+ */
+export const PutDeliveryPlan = Schema.TaggedStruct('PutDeliveryPlan', {
+	plan: DeliveryPlan,
+})
+export type PutDeliveryPlan = typeof PutDeliveryPlan.Type
+
+/** A change a remote worker asks for. */
 export const DeliveryMutation = Schema.Union([
 	CompleteDelivery,
 	FailDelivery,
@@ -102,6 +112,7 @@ export const DeliveryMutation = Schema.Union([
 	DeleteDeliveryMessage,
 	SetDeliveryActivity,
 	SetDeliveryReaction,
+	PutDeliveryPlan,
 ])
 export type DeliveryMutation = typeof DeliveryMutation.Type
 
@@ -122,6 +133,7 @@ export type DeliveryMutationReceipt = typeof DeliveryMutationReceipt.Type
  * @property outcome - how the remote worker ended the delivery
  * @property activity - the activity the remote worker last asked for; `Idle` once the delivery has a result
  * @property reactionTargets - what a reaction can go on; none once the delivery retires
+ * @property plan - the latest plan the remote worker sent, if it sent one, and the revision a provider last showed
  * @property output - the provider output the delivery owes or has sent. A failed output does not change `outcome`.
  */
 export const DeliveryStatus = Schema.TaggedStruct('DeliveryStatus', {
@@ -132,6 +144,7 @@ export const DeliveryStatus = Schema.TaggedStruct('DeliveryStatus', {
 	interruptRequested: Schema.Boolean,
 	supportedOperations: Schema.Array(DeliveryOperationKind),
 	reactionTargets: Schema.Array(DeliveryReactionTargetKind),
+	plan: Schema.optionalKey(DeliveryPlanStatus),
 	output: Schema.Array(DeliveryOutputStatus),
 })
 export type DeliveryStatus = typeof DeliveryStatus.Type
@@ -174,7 +187,7 @@ export class DeliveryMessageConflict extends Schema.TaggedError<DeliveryMessageC
 
 /**
  * The delivery's destination cannot react on this target: the delivery has no activation target, the
- * provider cannot react on its messages, or nothing presents a plan. Nothing was saved.
+ * provider cannot react on its messages, or the target is the plan, which no provider reacts on yet. Nothing was saved.
  */
 export class DeliveryReactionTargetUnavailable extends Schema.TaggedError<DeliveryReactionTargetUnavailable>()(
 	'DeliveryReactionTargetUnavailable',

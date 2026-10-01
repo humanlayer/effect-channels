@@ -15,6 +15,10 @@
  *   twice, to show the second request is a replay), removes it halfway through (also twice), and adds
  *   `heart` to its summary message. Each step is skipped where the delivery cannot react on that target,
  *   such as a Linear session's messages.
+ * - With `plan`, it keeps a three-step plan up to date: one step in progress when it starts, the next one
+ *   halfway through, all done just before it finishes. It sends the whole plan each time, and the second
+ *   request of each is a replay. Slack shows it as a plan stream, a Linear session as its Agent Plan, and
+ *   GitHub and a Linear issue as one comment the agent's plan edits.
  * - It then completes the delivery with a final message, or with a question and choices for `ask`.
  * - It reads the delivery's status at least every few seconds. When someone asked it to stop, such as
  *   Stop in a Linear session, it fails the delivery with `Stopped as requested.` and ends.
@@ -25,6 +29,10 @@
 import {
 	DeliveryActivity,
 	DeliveryId,
+	DeliveryPlan,
+	DeliveryPlanItem,
+	DeliveryPlanItemId,
+	DeliveryPlanItemState,
 	DeliveryReactionTarget,
 	MessageId,
 	deliveryReactionTargetKind,
@@ -72,6 +80,7 @@ class DeliveryApi extends Context.Service<DeliveryApi, DeliveryClient>()('alchem
  * @property flakyOutput - make Slack refuse the final message for a while
  * @property askForInput - end the turn with a question and choices instead of an answer
  * @property react - add and remove portable reactions while the job runs
+ * @property plan - keep a plan up to date while the job runs
  */
 export const StartRemoteAgentJob = Schema.Struct({
 	deliveryId: DeliveryId,
@@ -80,6 +89,7 @@ export const StartRemoteAgentJob = Schema.Struct({
 	flakyOutput: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
 	askForInput: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
 	react: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
+	plan: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
 })
 export type StartRemoteAgentJob = typeof StartRemoteAgentJob.Type
 
@@ -102,6 +112,7 @@ const RemoteAgentJob = Schema.Struct({
 	flakyOutput: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
 	askForInput: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
 	react: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
+	plan: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
 })
 type RemoteAgentJob = typeof RemoteAgentJob.Type
 
@@ -248,6 +259,47 @@ const setReactionTwice = Effect.fn('fake_remote_agent.set_reaction')(function* (
 	)
 })
 
+/** Where a `plan` job is: starting, halfway, or done. */
+type PlanStage = 'Started' | 'Halfway' | 'Done'
+
+const planStep = (id: string, title: string, state: DeliveryPlanItemState) =>
+	DeliveryPlanItem.make({ id: DeliveryPlanItemId.make(id), title, state })
+
+/**
+ * The plan at each stage. Halfway, `look` gains a result and `change` its details; at the end `change`
+ * loses its details, which Slack cannot clear, so Slack replaces its plan stream there.
+ */
+const fakePlan = (stage: PlanStage) => {
+	const { Pending, InProgress, Completed } = DeliveryPlanItemState.cases
+	type Steps = readonly [DeliveryPlanItemState, DeliveryPlanItemState, DeliveryPlanItemState]
+	const stages = {
+		Started: [InProgress.make({}), Pending.make({}), Pending.make({})],
+		Halfway: [Completed.make({ result: 'Nothing unusual' }), InProgress.make({ details: 'Waiting it out' }), Pending.make({})],
+		Done: [Completed.make({ result: 'Nothing unusual' }), Completed.make({}), Completed.make({ result: 'All quiet' })],
+	} satisfies Record<PlanStage, Steps>
+	const [look, change, check] = stages[stage]
+	return DeliveryPlan.make({
+		title: 'Fake remote agent plan',
+		items: [
+			planStep('look', 'Look into it', look),
+			planStep('change', 'Make no change', change),
+			planStep('check', 'Check the result', check),
+		],
+	})
+}
+
+/** For a `plan` job, send the whole plan for `stage`, twice: the second request answers `already_recorded`. */
+const putPlanTwice = Effect.fn('fake_remote_agent.put_plan')(function* (job: RemoteAgentJob, stage: PlanStage) {
+	if (!job.plan) return
+	const deliveryApi = yield* DeliveryApi
+	const put = deliveryApi.plan.put({ deliveryId: job.deliveryId, accessToken: job.accessToken, plan: fakePlan(stage) })
+	const first = yield* put
+	const second = yield* put
+	yield* Effect.logInfo('Fake remote agent set its plan').pipe(
+		Effect.annotateLogs({ delivery_id: job.deliveryId, stage, receipt_status: `${first.status},${second.status}` }),
+	)
+})
+
 /** Someone asked the job to stop, such as Stop in a Linear session: fail the delivery, which ends the turn. */
 const stopDelivery = Effect.fn('fake_remote_agent.stop_delivery')(function* (job: RemoteAgentJob) {
 	const deliveryApi = yield* DeliveryApi
@@ -273,6 +325,7 @@ const completeDelivery = Effect.fn('fake_remote_agent.complete_delivery')(functi
 ) {
 	const deliveryApi = yield* DeliveryApi
 	const target = { deliveryId: job.deliveryId, accessToken: job.accessToken }
+	yield* putPlanTwice(job, 'Done')
 	if (before.supportedOperations.includes('CreateMessage')) {
 		const summary = yield* deliveryApi.messages.create({
 			...target,
@@ -376,6 +429,7 @@ export const FakeRemoteAgentLive = FakeRemoteAgent.make<HttpClient.HttpClient>(
 					flakyOutput: request.flakyOutput,
 					askForInput: request.askForInput,
 					react: request.react,
+					plan: request.plan,
 				})
 				yield* storage.put(JOB_KEY, yield* encodeJob(job))
 				yield* storage.setAlarm(Math.min(now + FIRST_ACTIVITY_DELAY_MS, job.finishAt))
@@ -386,6 +440,7 @@ export const FakeRemoteAgentLive = FakeRemoteAgent.make<HttpClient.HttpClient>(
 						flaky_output: job.flakyOutput,
 						ask_for_input: job.askForInput,
 						react: job.react,
+						plan: job.plan,
 					}),
 				)
 				return toStarted(job, baseUrl)
@@ -428,6 +483,7 @@ export const FakeRemoteAgentLive = FakeRemoteAgent.make<HttpClient.HttpClient>(
 							reaction: ACTIVATION_REACTION,
 							active: true,
 						})
+						yield* putPlanTwice(job, 'Started')
 						return yield* waitUntil(job, 'Working', halfwayAt(job), now)
 					}
 					if (job.step === 'Working') {
@@ -438,6 +494,7 @@ export const FakeRemoteAgentLive = FakeRemoteAgent.make<HttpClient.HttpClient>(
 							reaction: ACTIVATION_REACTION,
 							active: false,
 						})
+						yield* putPlanTwice(job, 'Halfway')
 						return yield* waitUntil(job, 'Halfway', job.finishAt, now)
 					}
 					if (now < job.finishAt) return yield* waitUntil(job, 'Halfway', job.finishAt, now)

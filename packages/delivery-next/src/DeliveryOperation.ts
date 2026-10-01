@@ -19,6 +19,7 @@ import { SetActivity } from './DeliveryActivity'
 import { AddExternalLink } from './DeliveryLink'
 import { CreateMessage, DeleteMessage, MessageId, UpdateMessage } from './DeliveryMessage'
 import { PresentOutcome } from './DeliveryOutcome'
+import { RenderPlan } from './DeliveryPlan'
 import { DeliveryReactionTarget, SetMessageReaction } from './DeliveryReaction'
 import { Timestamp } from './MailboxPolicy'
 
@@ -38,6 +39,7 @@ export const DeliveryOutputOperation = Schema.Union([
 	DeleteMessage,
 	SetActivity,
 	SetMessageReaction,
+	RenderPlan,
 ])
 export type DeliveryOutputOperation = typeof DeliveryOutputOperation.Type
 
@@ -93,6 +95,7 @@ export const DeliveryOutputStatus = Schema.Struct({
 		'DeleteMessage',
 		'SetActivity',
 		'SetMessageReaction',
+		'RenderPlan',
 	]),
 	messageId: Schema.optionalKey(MessageId),
 	state: Schema.Literals(['Pending', 'Delivering', 'Delivered', 'Failed']),
@@ -109,6 +112,7 @@ export const operationMessageId = (operation: DeliveryOutputOperation): MessageI
 			PresentOutcome: () => undefined,
 			AddExternalLink: () => undefined,
 			SetActivity: () => undefined,
+			RenderPlan: () => undefined,
 			CreateMessage: ({ messageId }) => messageId,
 			UpdateMessage: ({ messageId }) => messageId,
 			DeleteMessage: ({ messageId }) => messageId,

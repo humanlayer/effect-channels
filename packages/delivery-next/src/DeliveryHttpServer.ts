@@ -12,6 +12,7 @@ import {
 	DeleteDeliveryMessage,
 	DeliveryControl,
 	FailDelivery,
+	PutDeliveryPlan,
 	SetDeliveryActivity,
 	SetDeliveryReaction,
 	UpdateDeliveryMessage,
@@ -70,6 +71,9 @@ const handlers = (api: ReturnType<typeof prefixedDeliveryHttpApi>) =>
 				)
 				.handle('setActivity', ({ params, payload, request }) =>
 					apply(request, params.deliveryId, SetDeliveryActivity.make(payload), 'delivery.api.set_activity'),
+				)
+				.handle('putPlan', ({ params, payload, request }) =>
+					apply(request, params.deliveryId, PutDeliveryPlan.make(payload), 'delivery.api.put_plan'),
 				)
 				.handle('setReaction', ({ params, payload, request }) =>
 					apply(
