@@ -17,19 +17,23 @@ import {
 	type ApplyDeliveryMutation,
 	type ReadDeliveryStatus,
 } from '@humanlayer/channels-delivery-next'
-import { Clock, Effect, Layer, Option, Result, Schema } from 'effect'
+import { Clock, Effect, Layer, Option, type Schema } from 'effect'
 import * as SqlClient from 'effect/unstable/sql/SqlClient'
 import * as SqlError from 'effect/unstable/sql/SqlError'
 
-import { changeDeliverySlot, lockDeliverySlot } from './DeliverySlot'
+import { changeDeliverySlot, lockDeliverySlot, type NarrowSqlFailure } from './DeliverySlot'
 
-/** Log the raw failure, then narrow it to `DeliveryControlUnavailable`. */
-const unavailable = <A, R>(effect: Effect.Effect<A, Schema.SchemaError | SqlError.SqlError, R>) =>
+/** Log a database or codec failure where it happens, then narrow it to `DeliveryControlUnavailable`. */
+const narrowSqlFailure: NarrowSqlFailure<DeliveryControlUnavailable> = (reason) => (error) =>
+	Effect.logError('SQL delivery control failed', error).pipe(
+		Effect.andThen(Effect.fail(new DeliveryControlUnavailable({ reason }))),
+	)
+
+const unavailable = <A, R>(effect: Effect.Effect<A, SqlError.SqlError | Schema.SchemaError, R>) =>
 	effect.pipe(
-		Effect.tapError((error) => Effect.logError('SQL delivery control failed', error)),
 		Effect.catchTags({
-			SchemaError: () => Effect.fail(new DeliveryControlUnavailable({ reason: 'sql_codec_unavailable' })),
-			SqlError: () => Effect.fail(new DeliveryControlUnavailable({ reason: 'sql_unavailable' })),
+			SqlError: narrowSqlFailure('sql_unavailable'),
+			SchemaError: narrowSqlFailure('sql_codec_unavailable'),
 		}),
 	)
 
@@ -43,7 +47,7 @@ const readDeliveryStatus = Effect.fn('delivery.sql.read_delivery_status')(functi
 		)
 		.pipe(unavailable)
 	if (Option.isNone(loaded)) return yield* new DeliveryNotFound()
-	return yield* Effect.fromResult(readDeliverySlotStatus(loaded.value.slot, { ...input, now }))
+	return yield* readDeliverySlotStatus(loaded.value.slot, { ...input, now })
 })
 
 /** Check the token and apply the change, with the output it needs, in one transaction. */
@@ -51,23 +55,19 @@ const applyDeliveryMutation = Effect.fn('delivery.sql.apply_delivery_mutation')(
 	input: ApplyDeliveryMutation,
 ) {
 	const now = yield* Clock.currentTimeMillis
-	const recorded = yield* changeDeliverySlot({
+	return yield* changeDeliverySlot({
 		mailboxKey: input.reference.mailboxKey,
 		withRetained: true,
 		onMissing: new DeliveryNotFound(),
 		change: (loaded) =>
-			Result.map(
-				applyDeliverySlotMutation(loaded.slot, { ...input, now, hasWaiting: loaded.hasWaiting }),
-				({ slot, receipt }) => ({ slot, value: receipt }),
+			applyDeliverySlotMutation(loaded.slot, { ...input, now, hasWaiting: loaded.hasWaiting }).pipe(
+				Effect.map(({ slot, receipt }) => ({ slot, value: receipt })),
 			),
-	}).pipe(unavailable)
-	return yield* Effect.fromResult(recorded)
+		narrowSqlFailure,
+	})
 })
 
-/**
- * Delivery control over the application's `SqlClient`. It creates no tables: the mailbox store's
- * other layers run the migrations.
- */
+/** Delivery control over the application's `SqlClient`. It creates no tables: see `MigrationsSql`. */
 export const DeliveryControlBackendSql = Layer.effect(
 	DeliveryControlBackend,
 	Effect.gen(function* () {

@@ -53,21 +53,6 @@ const unavailable = <A, R>(
 		}),
 	)
 
-export const migrateMailboxSubscriptions = Effect.gen(function* () {
-	const sql = (yield* SqlClient.SqlClient).withoutTransforms()
-
-	yield* sql`
-		CREATE TABLE IF NOT EXISTS delivery_next_mailbox_subscriptions (
-			mailbox_key text COLLATE "C" PRIMARY KEY,
-			created_at timestamp with time zone NOT NULL DEFAULT now()
-		)
-	`
-}).pipe(
-	(effect) => unavailable('migrate', effect),
-	Effect.asVoid,
-	Effect.withSpan('delivery.sql.subscriptions.migrate'),
-)
-
 const subscribe = Effect.fn('delivery.sql.subscriptions.subscribe')(
 	function* ({ mailboxKey }: { readonly mailboxKey: string }) {
 		const sql = (yield* SqlClient.SqlClient).withoutTransforms()
@@ -122,26 +107,18 @@ const unsubscribe = Effect.fn('delivery.sql.subscriptions.unsubscribe')(
 	(effect) => unavailable('unsubscribe', effect),
 )
 
-export type MailboxSubscriptionsSqlOptions = {
-	readonly runMigrations: boolean
-}
+/** Mailbox subscriptions over the application's `SqlClient`. It creates no tables: see `MigrationsSql`. */
+export const MailboxSubscriptionsSql = Layer.effect(
+	MailboxSubscriptions,
+	Effect.gen(function* () {
+		const sql = yield* SqlClient.SqlClient
 
-export const MailboxSubscriptionsSql = (options: MailboxSubscriptionsSqlOptions) =>
-	Layer.effect(
-		MailboxSubscriptions,
-		Effect.gen(function* () {
-			const sql = yield* SqlClient.SqlClient
+		return MailboxSubscriptions.of({
+			subscribe: (input) => subscribe(input).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
 
-			if (options.runMigrations) {
-				yield* migrateMailboxSubscriptions
-			}
+			isSubscribed: (input) => isSubscribed(input).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
 
-			return MailboxSubscriptions.of({
-				subscribe: (input) => subscribe(input).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
-
-				isSubscribed: (input) => isSubscribed(input).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
-
-				unsubscribe: (input) => unsubscribe(input).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
-			})
-		}),
-	)
+			unsubscribe: (input) => unsubscribe(input).pipe(Effect.provideService(SqlClient.SqlClient, sql)),
+		})
+	}),
+)

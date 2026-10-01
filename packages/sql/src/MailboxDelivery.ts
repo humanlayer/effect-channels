@@ -12,7 +12,6 @@ import * as SqlClient from 'effect/unstable/sql/SqlClient'
 import * as SqlError from 'effect/unstable/sql/SqlError'
 
 import { loadDeliverySlot, writeDeliverySlot } from './DeliverySlot'
-import { migrate } from './Migrations'
 
 const insertedRows = Schema.Array(Schema.Struct({ event_id: Schema.NonEmptyString })).check(Schema.isMaxLength(1))
 
@@ -71,18 +70,15 @@ const deliver = Effect.fn('delivery.sql.deliver')(function* (admission: Delivery
 	)
 }, unavailable)
 
-export type MailboxDeliverySqlOptions = { readonly runMigrations: boolean }
-
-export const MailboxDeliverySql = (options: MailboxDeliverySqlOptions) =>
-	Layer.effect(
-		MailboxDelivery,
-		Effect.gen(function* () {
-			const sqlClient = yield* SqlClient.SqlClient
-			if (options.runMigrations) yield* migrate
-			return MailboxDelivery.of({
-				deliver: (admission) => deliver(admission).pipe(Effect.provideService(SqlClient.SqlClient, sqlClient)),
-			})
-		}),
-	)
+/** Admission over the application's `SqlClient`. It creates no tables: see `MigrationsSql`. */
+export const MailboxDeliverySql = Layer.effect(
+	MailboxDelivery,
+	Effect.gen(function* () {
+		const sqlClient = yield* SqlClient.SqlClient
+		return MailboxDelivery.of({
+			deliver: (admission) => deliver(admission).pipe(Effect.provideService(SqlClient.SqlClient, sqlClient)),
+		})
+	}),
+)
 
 export const layer = MailboxDeliverySql

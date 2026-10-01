@@ -2,11 +2,11 @@
  * This file applies one change to the stored mailbox inside a Durable Object storage transaction.
  *
  * Every write that changes the mailbox's deliveries goes through here, so the alarm always matches
- * `deliveries.readyAt`. A transaction closure may run outside the calling fiber, so changes are pure:
- * the caller reads the clock first and passes the time in.
+ * `deliveries.readyAt`. A transaction closure may run outside the calling fiber, so changes need no
+ * services: the caller reads the clock first and passes the time in.
  */
 import type { DeliverySlot } from '@humanlayer/channels-delivery-next'
-import { Effect, Exit, Option, Predicate, Result, Schema } from 'effect'
+import { Effect, Option, Predicate, Schema } from 'effect'
 
 import { DurableMailboxState, mailboxStateKey } from './MailboxState'
 import type { MailboxStorage, MailboxStorageTransaction } from './MailboxStorage'
@@ -34,52 +34,65 @@ export const writeMailboxState = (transaction: MailboxStorageTransaction, state:
 		else yield* transaction.setAlarm(readyAt)
 	})
 
-/** Apply one transition to the stored mailbox in one storage transaction. Fails only when storage or decoding does. */
-export const transactMailbox = <A>(
+/**
+ * Apply one transition to the stored mailbox in one storage transaction. A transition that fails,
+ * such as a refused lifecycle change, writes nothing, and the returned effect fails with its error.
+ * A stored mailbox that cannot be decoded is narrowed where it is read, by `onUndecodable`, to the
+ * calling service's own error. Storage failures are defects (see `MailboxStorage`).
+ *
+ * The storage transaction takes a closure that cannot fail: Alchemy runs it with `runPromise`, so a
+ * failure would reach the caller as an untyped rejection. The closure therefore returns its outcome
+ * as an `Exit`, which goes back into the error channel as soon as the transaction ends. Nothing
+ * outside this function sees it as a value.
+ */
+export const transactMailbox = <A, E, U>(
 	storage: (typeof MailboxStorage)['Service'],
 	input: {
-		readonly whenNothingStored: A
-		readonly transition: (current: DurableMailboxState) => MailboxTransition<A>
+		readonly whenNothingStored: Effect.Effect<A, E>
+		readonly transition: (current: DurableMailboxState) => Effect.Effect<MailboxTransition<A>, E>
+		readonly onUndecodable: (error: Schema.SchemaError) => Effect.Effect<never, U>
 	},
-) =>
+): Effect.Effect<A, E | U> =>
 	storage
 		.transaction((transaction) =>
 			Effect.gen(function* () {
 				const stored = yield* transaction.get(mailboxStateKey)
-				if (Predicate.isUndefined(stored)) return Exit.succeed(input.whenNothingStored)
-				const decoded = yield* decodeMailboxState(stored).pipe(Effect.exit)
-				if (Exit.isFailure(decoded)) return Exit.failCause(decoded.cause)
-				const { result, next } = input.transition(decoded.value)
+				if (Predicate.isUndefined(stored)) return yield* input.whenNothingStored
+				const current = yield* decodeMailboxState(stored).pipe(
+					Effect.catchTag('SchemaError', input.onUndecodable),
+				)
+				const { result, next } = yield* input.transition(current)
 				if (Option.isSome(next)) yield* writeMailboxState(transaction, next.value)
-				return Exit.succeed(result)
-			}),
+				return result
+			}).pipe(Effect.exit),
 		)
 		.pipe(Effect.flatten)
 
 /** A lifecycle change to the mailbox's deliveries: the new slot and a value, or the reason it was refused. */
 export type DeliveriesChange<A, E> = (
 	current: DurableMailboxState,
-) => Result.Result<{ readonly slot: DeliverySlot; readonly value: A }, E>
+) => Effect.Effect<{ readonly slot: DeliverySlot; readonly value: A }, E>
 
 /**
- * Apply one lifecycle change to the mailbox's deliveries. A missing mailbox or a refused change writes
- * nothing and comes back as a failed `Result`; the effect itself fails only when storage does.
+ * Apply one lifecycle change to the mailbox's deliveries. A missing mailbox fails with `onMissing`,
+ * and a refused change with its refusal; neither writes anything.
  */
-export const changeDeliveries = <A, E>(
+export const changeDeliveries = <A, E, U>(
 	storage: (typeof MailboxStorage)['Service'],
 	input: {
 		readonly onMissing: E
 		readonly change: DeliveriesChange<A, E>
+		readonly onUndecodable: (error: Schema.SchemaError) => Effect.Effect<never, U>
 	},
 ) =>
-	transactMailbox<Result.Result<A, E>>(storage, {
-		whenNothingStored: Result.fail(input.onMissing),
-		transition: (current) => {
-			const changed = input.change(current)
-			if (Result.isFailure(changed)) return unchanged(Result.fail(changed.failure))
-			return {
-				result: Result.succeed(changed.success.value),
-				next: Option.some(DurableMailboxState.make({ ...current, deliveries: changed.success.slot })),
-			}
-		},
+	transactMailbox<A, E, U>(storage, {
+		onUndecodable: input.onUndecodable,
+		whenNothingStored: Effect.fail(input.onMissing),
+		transition: (current) =>
+			input.change(current).pipe(
+				Effect.map(({ slot, value }) => ({
+					result: value,
+					next: Option.some(DurableMailboxState.make({ ...current, deliveries: slot })),
+				})),
+			),
 	})

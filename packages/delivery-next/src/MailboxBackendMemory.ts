@@ -5,9 +5,9 @@
  * and DeliveryControlBackend) and must pass the same backend contract, so the shared processing code
  * can run against realistic mailbox behaviour without a database.
  */
-import { Array as Arr, Clock, Context, Effect, Layer, Match, Option, Ref, Result } from 'effect'
+import { Array as Arr, Clock, Context, Effect, Layer, Match, Option, SynchronizedRef } from 'effect'
 
-import { DeliveryPreparationConflict, type PreparedDeliveryInvocation } from './DeliveryContext'
+import { DeliveryPreparationConflict } from './DeliveryContext'
 import { DeliveryControlBackend, DeliveryNotFound, type DeliveryStatus } from './DeliveryControl'
 import {
 	DEFAULT_RETRY_AFTER_MS,
@@ -73,27 +73,26 @@ const toBatch = (events: ReadonlyArray<WaitingEvent>) => {
 
 export const MailboxBackendMemory = Layer.effectContext(
 	Effect.gen(function* () {
-		const state = yield* Ref.make<MemoryStore>({ eventIds: new Set(), mailboxes: new Map(), claimsMade: 0 })
+		const state = yield* SynchronizedRef.make<MemoryStore>({ eventIds: new Set(), mailboxes: new Map(), claimsMade: 0 })
 
-		/** Apply one change to one mailbox's deliveries, atomically. A missing mailbox fails with `onMissing`. */
-		const updateDeliveries = <A, E>(
+		/**
+		 * Apply one change to one mailbox's deliveries, atomically. A missing mailbox fails with
+		 * `onMissing`; a refused change fails with its refusal and stores nothing.
+		 */
+		const updateDeliveries = <A, E1, E2>(
 			mailboxKey: string,
-			onMissing: E,
-			change: (mailbox: MemoryMailbox, now: number) => Result.Result<{ readonly slot: DeliverySlot; readonly value: A }, E>,
+			onMissing: E1,
+			change: (mailbox: MemoryMailbox, now: number) => Effect.Effect<{ readonly slot: DeliverySlot; readonly value: A }, E2>,
 		) =>
 			Effect.gen(function* () {
 				const now = yield* Clock.currentTimeMillis
-				const result = yield* Ref.modify(state, (store): readonly [Result.Result<A, E>, MemoryStore] => {
+				return yield* SynchronizedRef.modifyEffect(state, (store): Effect.Effect<readonly [A, MemoryStore], E1 | E2> => {
 					const current = store.mailboxes.get(mailboxKey)
-					if (current === undefined) return [Result.fail(onMissing), store]
-					const changed = change(current, now)
-					if (Result.isFailure(changed)) return [Result.fail(changed.failure), store]
-					return [
-						Result.succeed(changed.success.value),
-						withMailbox(store, { ...current, deliveries: changed.success.slot }),
-					]
+					if (current === undefined) return Effect.fail(onMissing)
+					return change(current, now).pipe(
+						Effect.map(({ slot, value }) => [value, withMailbox(store, { ...current, deliveries: slot })] as const),
+					)
 				})
-				return yield* Effect.fromResult(result)
 			})
 
 		const deliver = (admission: DeliveryAdmission) =>
@@ -101,7 +100,7 @@ export const MailboxBackendMemory = Layer.effectContext(
 				const now = yield* Clock.currentTimeMillis
 				const mailboxKey = deliveryMailboxKey(admission)
 				const eventKey = `${admission.namespace}|${admission.provider}|${admission.eventId}`
-				const accepted = yield* Ref.modify(state, (store) => {
+				const accepted = yield* SynchronizedRef.modify(state, (store) => {
 					if (store.eventIds.has(eventKey)) return [false, store]
 					const current: MemoryMailbox = store.mailboxes.get(mailboxKey) ?? {
 						mailboxKey,
@@ -126,7 +125,7 @@ export const MailboxBackendMemory = Layer.effectContext(
 
 		const findReadyMailboxes = Effect.gen(function* () {
 			const now = yield* Clock.currentTimeMillis
-			const store = yield* Ref.get(state)
+			const store = yield* SynchronizedRef.get(state)
 			return [...store.mailboxes.values()]
 				.filter(({ deliveries }) => deliveries.readyAt !== null && deliveries.readyAt <= now)
 				.flatMap((mailbox): ReadonlyArray<ReadyMailbox> => {
@@ -157,7 +156,7 @@ export const MailboxBackendMemory = Layer.effectContext(
 		const claimMailbox = (input: ClaimMailbox) =>
 			Effect.gen(function* () {
 				const now = yield* Clock.currentTimeMillis
-				return yield* Ref.modify(state, (store): readonly [Option.Option<ClaimedMailboxBatch>, MemoryStore] => {
+				return yield* SynchronizedRef.modify(state, (store): readonly [Option.Option<ClaimedMailboxBatch>, MemoryStore] => {
 					const current = store.mailboxes.get(input.mailboxKey)
 					if (current === undefined) return [Option.none(), store]
 					const { deliveries } = current
@@ -207,8 +206,9 @@ export const MailboxBackendMemory = Layer.effectContext(
 
 		const claimLost = (mailboxKey: string, claimId: string) => new MailboxProcessingClaimLost({ mailboxKey, claimId })
 
+
 		const findDeliveries = (mailboxKey: string) =>
-			Ref.get(state).pipe(Effect.map((store) => store.mailboxes.get(mailboxKey)))
+			SynchronizedRef.get(state).pipe(Effect.map((store) => store.mailboxes.get(mailboxKey)))
 
 		const controlBackend = DeliveryControlBackend.of({
 			readDeliveryStatus: (input) =>
@@ -216,20 +216,18 @@ export const MailboxBackendMemory = Layer.effectContext(
 					const now = yield* Clock.currentTimeMillis
 					const mailbox = yield* findDeliveries(input.reference.mailboxKey)
 					if (mailbox === undefined) return yield* new DeliveryNotFound()
-					return yield* Effect.fromResult(
-						readDeliverySlotStatus(mailbox.deliveries, { ...input, now }),
-					) satisfies Effect.Effect<DeliveryStatus, DeliveryNotFound>
+					return yield* (readDeliverySlotStatus(mailbox.deliveries, { ...input, now }) satisfies Effect.Effect<
+						DeliveryStatus,
+						DeliveryNotFound
+					>)
 				}),
 			applyDeliveryMutation: (input) =>
 				updateDeliveries(input.reference.mailboxKey, new DeliveryNotFound(), (mailbox, now) =>
-					Result.map(
-						applyDeliverySlotMutation(mailbox.deliveries, {
-							...input,
-							now,
-							hasWaiting: Arr.isReadonlyArrayNonEmpty(mailbox.waiting),
-						}),
-						({ slot, receipt }) => ({ slot, value: receipt }),
-					),
+					applyDeliverySlotMutation(mailbox.deliveries, {
+						...input,
+						now,
+						hasWaiting: Arr.isReadonlyArrayNonEmpty(mailbox.waiting),
+					}).pipe(Effect.map(({ slot, receipt }) => ({ slot, value: receipt }))),
 				),
 		})
 
@@ -241,7 +239,7 @@ export const MailboxBackendMemory = Layer.effectContext(
 					findReadyMailboxes,
 					claimMailbox,
 					deferMailbox: (input) =>
-						Ref.update(state, (store) => {
+						SynchronizedRef.update(state, (store) => {
 							const current = store.mailboxes.get(input.mailboxKey)
 							if (current === undefined || current.deliveries.active !== null) return store
 							if (current.waiting.at(-1)?.sequence !== input.lastSequenceSeen) return store
@@ -253,8 +251,8 @@ export const MailboxBackendMemory = Layer.effectContext(
 					renewClaim: (input) =>
 						updateDeliveries(input.mailboxKey, claimLost(input.mailboxKey, input.claimId), (mailbox, now) =>
 							renewDeliveryClaim(mailbox.deliveries, { ...input, now }).pipe(
-								Result.map((slot) => ({ slot, value: undefined })),
-								Result.mapError(() => claimLost(input.mailboxKey, input.claimId)),
+								Effect.map((slot) => ({ slot, value: undefined })),
+								Effect.catchTag('ClaimNotOwned', () => Effect.fail(claimLost(input.mailboxKey, input.claimId))),
 							),
 						),
 					recordProcessingAttemptResult: (input) =>
@@ -271,41 +269,36 @@ export const MailboxBackendMemory = Layer.effectContext(
 									now: input.finishedAt,
 									hasWaiting: Arr.isReadonlyArrayNonEmpty(mailbox.waiting),
 								}).pipe(
-									Result.map((slot) => ({ slot, value: undefined })),
-									Result.mapError(() => claimLost(input.claim.mailboxKey, input.claim.claimId)),
+									Effect.map((slot) => ({ slot, value: undefined })),
+									Effect.catchTag('ClaimNotOwned', () => Effect.fail(claimLost(input.claim.mailboxKey, input.claim.claimId))),
 								),
 						),
 					prepareDelivery: (input) =>
-						updateDeliveries<PreparedDeliveryInvocation, MailboxProcessingClaimLost | DeliveryPreparationConflict>(
-							input.mailboxKey,
-							claimLost(input.mailboxKey, input.claimId),
-							(mailbox) =>
-								prepareDeliverySlot(mailbox.deliveries, input).pipe(
-									Result.map(({ slot, prepared }) => ({ slot, value: prepared })),
-									Result.mapError((error) =>
-										Match.value(error).pipe(
-											Match.tagsExhaustive({
-												ClaimNotOwned: () => claimLost(input.mailboxKey, input.claimId),
-												PreparationMismatch: ({ batchId }) =>
-													new DeliveryPreparationConflict({
-														deliveryId: makeDeliveryId({ mailboxKey: input.mailboxKey, batchId }),
-													}),
+						updateDeliveries(input.mailboxKey, claimLost(input.mailboxKey, input.claimId), (mailbox) =>
+							prepareDeliverySlot(mailbox.deliveries, input).pipe(
+								Effect.map(({ slot, prepared }) => ({ slot, value: prepared })),
+								Effect.catchTags({
+									ClaimNotOwned: () => Effect.fail(claimLost(input.mailboxKey, input.claimId)),
+									PreparationMismatch: ({ batchId }) =>
+										Effect.fail(
+											new DeliveryPreparationConflict({
+												deliveryId: makeDeliveryId({ mailboxKey: input.mailboxKey, batchId }),
 											}),
 										),
-									),
-								),
+								}),
+							),
 						),
 					handOffDelivery: (input) =>
 						updateDeliveries(input.mailboxKey, claimLost(input.mailboxKey, input.claimId), (mailbox) =>
 							handOffDeliverySlot(mailbox.deliveries, input).pipe(
-								Result.map((slot) => ({ slot, value: undefined })),
-								Result.mapError(() => claimLost(input.mailboxKey, input.claimId)),
+								Effect.map((slot) => ({ slot, value: undefined })),
+								Effect.catchTag('ClaimNotOwned', () => Effect.fail(claimLost(input.mailboxKey, input.claimId))),
 							),
 						),
 					claimDeliveryOutput: (input) =>
 						Effect.gen(function* () {
 							const now = yield* Clock.currentTimeMillis
-							return yield* Ref.modify(state, (store): readonly [Option.Option<ClaimedDeliveryOutput>, MemoryStore] => {
+							return yield* SynchronizedRef.modify(state, (store): readonly [Option.Option<ClaimedDeliveryOutput>, MemoryStore] => {
 								const current = store.mailboxes.get(input.mailboxKey)
 								if (current === undefined) return [Option.none(), store]
 								const claimId = `output-claim-${store.claimsMade + 1}`
@@ -325,8 +318,8 @@ export const MailboxBackendMemory = Layer.effectContext(
 					renewDeliveryOutput: (input) =>
 						updateDeliveries(input.mailboxKey, claimLost(input.mailboxKey, input.claimId), (mailbox, now) =>
 							renewDeliveryOutput(mailbox.deliveries, { ...input, now }).pipe(
-								Result.map((slot) => ({ slot, value: undefined })),
-								Result.mapError(() => claimLost(input.mailboxKey, input.claimId)),
+								Effect.map((slot) => ({ slot, value: undefined })),
+								Effect.catchTag('ClaimNotOwned', () => Effect.fail(claimLost(input.mailboxKey, input.claimId))),
 							),
 						),
 					settleDeliveryOutput: (input) =>
@@ -336,8 +329,8 @@ export const MailboxBackendMemory = Layer.effectContext(
 								now: input.settledAt,
 								hasWaiting: Arr.isReadonlyArrayNonEmpty(mailbox.waiting),
 							}).pipe(
-								Result.map((slot) => ({ slot, value: undefined })),
-								Result.mapError(() => claimLost(input.mailboxKey, input.claimId)),
+								Effect.map((slot) => ({ slot, value: undefined })),
+								Effect.catchTag('ClaimNotOwned', () => Effect.fail(claimLost(input.mailboxKey, input.claimId))),
 							),
 						),
 				}),

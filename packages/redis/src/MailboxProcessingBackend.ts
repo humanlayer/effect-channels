@@ -48,7 +48,7 @@ import {
 	type RenewMailboxClaim,
 	type SettleDeliveryOutput,
 } from '@humanlayer/channels-delivery-next'
-import { Array as Arr, Clock, Effect, Layer, Match, Option, Predicate, Random, Result, Schema } from 'effect'
+import { Array as Arr, Clock, Effect, Layer, Match, Option, Predicate, Random, Schema } from 'effect'
 import * as Redis from 'effect/unstable/persistence/Redis'
 
 import {
@@ -56,8 +56,8 @@ import {
 	legacyStage,
 	nextClaimId,
 	type LoadedDeliverySlot,
+	type NarrowRedisFailure,
 	type SlotChange,
-	type SlotChanged,
 } from './DeliverySlot'
 import { readyMailboxesKey } from './Keys'
 import * as Scripts from './scripts'
@@ -86,15 +86,18 @@ const BusyLook = Schema.Tuple([
 ])
 const Look = Schema.NullOr(Schema.Union([IdleLook, BusyLook]))
 
-const unavailable = <A, R>(
-	effect: Effect.Effect<A, MailboxProcessingUnavailable | Redis.RedisError | Schema.SchemaError | SlotChanged, R>,
-) =>
+/** Log a Redis, codec, or contention failure where it happens, then narrow it to `MailboxProcessingUnavailable`. */
+const narrowRedisFailure: NarrowRedisFailure<MailboxProcessingUnavailable> = (reason) => (error) =>
+	Effect.logError('Redis mailbox processing failed', error).pipe(
+		Effect.andThen(Effect.fail(new MailboxProcessingUnavailable({ reason }))),
+	)
+
+/** Narrow the failures of an operation that only reads and writes keys. */
+const unavailable = <A, R>(effect: Effect.Effect<A, Redis.RedisError | Schema.SchemaError, R>) =>
 	effect.pipe(
-		Effect.tapError((error) => Effect.logError('Redis mailbox processing failed', error)),
 		Effect.catchTags({
-			RedisError: () => Effect.fail(new MailboxProcessingUnavailable({ reason: 'redis_unavailable' })),
-			SchemaError: () => Effect.fail(new MailboxProcessingUnavailable({ reason: 'redis_codec_unavailable' })),
-			SlotChanged: () => Effect.fail(new MailboxProcessingUnavailable({ reason: 'redis_contention' })),
+			RedisError: narrowRedisFailure('redis_unavailable'),
+			SchemaError: narrowRedisFailure('redis_codec_unavailable'),
 		}),
 	)
 
@@ -148,8 +151,7 @@ const findReadyMailboxes = Effect.fn('delivery.redis.find_ready_mailboxes')(func
 }, unavailable)
 
 /** A decided change that writes nothing. */
-const unchanged = <A>(loaded: LoadedDeliverySlot, value: A): Result.Result<SlotChange<A>> =>
-	Result.succeed({ slot: loaded.slot, value })
+const unchanged = <A>(loaded: LoadedDeliverySlot, value: A): SlotChange<A> => ({ slot: loaded.slot, value })
 
 /**
  * Freeze the waiting admissions at or below `upToSequence` as a new batch, or take the frozen batch
@@ -160,7 +162,7 @@ const claimMailbox = (input: ClaimMailbox) =>
 	Effect.gen(function* () {
 		const nonce = yield* makeClaimNonce
 		const now = yield* Clock.currentTimeMillis
-		const changed = yield* changeDeliverySlot({
+		return yield* changeDeliverySlot({
 			mailboxKey: input.mailboxKey,
 			waitingUpTo: Match.value(input).pipe(
 				Match.tagsExhaustive({
@@ -168,66 +170,66 @@ const claimMailbox = (input: ClaimMailbox) =>
 					ClaimFrozenBatch: () => undefined,
 				}),
 			),
-			onMissing: Option.none<ClaimedMailboxBatch>(),
-			change: (loaded): Result.Result<SlotChange<Option.Option<ClaimedMailboxBatch>>> => {
-				const { readyAt } = loaded.slot
-				if (Predicate.isNull(readyAt) || readyAt > now) return unchanged(loaded, Option.none())
-				const claimId = nextClaimId(loaded, nonce)
-				return Match.value(input).pipe(
-					Match.tagsExhaustive({
-						ClaimWaitingEvents: ({ batchId, accessToken, leaseMs }) => {
-							const [first, ...rest] = loaded.waiting
-							if (Predicate.isUndefined(first)) return unchanged(loaded, Option.none())
-							const started = startDeliveryBatch(loaded.slot, {
-								batchId,
-								accessToken,
-								admissions: [first, ...rest],
-								claimId,
-								leaseMs,
-								now,
-							})
-							if (Predicate.isNull(started)) return unchanged(loaded, Option.none())
-							return Result.succeed({
-								slot: started.slot,
-								value: Option.some(
-									toClaimedMailboxBatch({
-										mailboxKey: input.mailboxKey,
-										active: started.claimed,
-										claimId,
-									}),
-								),
-								tookWaiting: loaded.waiting.length,
-								madeClaim: true,
-							})
-						},
-						ClaimFrozenBatch: ({ leaseMs }) => {
-							const { slot, claimed } = claimFrozenBatchSlot(loaded.slot, {
-								claimId,
-								leaseMs,
-								now,
-								hasWaiting: loaded.hasWaiting,
-							})
-							return Result.succeed({
-								slot,
-								value: Predicate.isNull(claimed)
-									? Option.none()
-									: Option.some(
-											toClaimedMailboxBatch({
-												mailboxKey: input.mailboxKey,
-												active: claimed,
-												claimId,
-											}),
-										),
-								madeClaim: Predicate.isNotNull(claimed),
-							})
-						},
-					}),
-				)
-			},
+			onMissing: Effect.succeedNone,
+			change: (loaded) =>
+				Effect.sync((): SlotChange<Option.Option<ClaimedMailboxBatch>> => {
+					const { readyAt } = loaded.slot
+					if (Predicate.isNull(readyAt) || readyAt > now) return unchanged(loaded, Option.none())
+					const claimId = nextClaimId(loaded, nonce)
+					return Match.value(input).pipe(
+						Match.tagsExhaustive({
+							ClaimWaitingEvents: ({ batchId, accessToken, leaseMs }) => {
+								const [first, ...rest] = loaded.waiting
+								if (Predicate.isUndefined(first)) return unchanged(loaded, Option.none())
+								const started = startDeliveryBatch(loaded.slot, {
+									batchId,
+									accessToken,
+									admissions: [first, ...rest],
+									claimId,
+									leaseMs,
+									now,
+								})
+								if (Predicate.isNull(started)) return unchanged(loaded, Option.none())
+								return {
+									slot: started.slot,
+									value: Option.some(
+										toClaimedMailboxBatch({
+											mailboxKey: input.mailboxKey,
+											active: started.claimed,
+											claimId,
+										}),
+									),
+									tookWaiting: loaded.waiting.length,
+									madeClaim: true,
+								}
+							},
+							ClaimFrozenBatch: ({ leaseMs }) => {
+								const { slot, claimed } = claimFrozenBatchSlot(loaded.slot, {
+									claimId,
+									leaseMs,
+									now,
+									hasWaiting: loaded.hasWaiting,
+								})
+								return {
+									slot,
+									value: Predicate.isNull(claimed)
+										? Option.none()
+										: Option.some(
+												toClaimedMailboxBatch({
+													mailboxKey: input.mailboxKey,
+													active: claimed,
+													claimId,
+												}),
+											),
+									madeClaim: Predicate.isNotNull(claimed),
+								}
+							},
+						}),
+					)
+				}),
+			narrowRedisFailure,
 		})
-		return Result.merge(changed)
 	}).pipe(
-		unavailable,
 		Effect.withSpan('delivery.redis.claim_mailbox', {
 			attributes: { mailbox_key: input.mailboxKey, claim_kind: input._tag },
 		}),
@@ -247,15 +249,13 @@ const changeClaimedSlot = <A, E = never>(
 	claim: { readonly mailboxKey: string; readonly claimId: string },
 	change: (
 		loaded: LoadedDeliverySlot,
-	) => Result.Result<{ readonly slot: DeliverySlot; readonly value: A }, E | MailboxProcessingClaimLost>,
+	) => Effect.Effect<{ readonly slot: DeliverySlot; readonly value: A }, E | MailboxProcessingClaimLost>,
 ) =>
-	Effect.gen(function* () {
-		const changed = yield* changeDeliverySlot({
-			mailboxKey: claim.mailboxKey,
-			onMissing: claimLost(claim),
-			change,
-		}).pipe(unavailable)
-		return yield* Effect.fromResult(changed)
+	changeDeliverySlot({
+		mailboxKey: claim.mailboxKey,
+		onMissing: Effect.fail(claimLost(claim)),
+		change,
+		narrowRedisFailure,
 	})
 
 const renewClaim = (input: RenewMailboxClaim) =>
@@ -263,8 +263,8 @@ const renewClaim = (input: RenewMailboxClaim) =>
 		const now = yield* Clock.currentTimeMillis
 		yield* changeClaimedSlot(input, ({ slot }) =>
 			renewDeliveryClaim(slot, { ...input, now }).pipe(
-				Result.map((renewed) => ({ slot: renewed, value: undefined })),
-				Result.mapError(() => claimLost(input)),
+				Effect.map((renewed) => ({ slot: renewed, value: undefined })),
+				Effect.catchTag('ClaimNotOwned', () => Effect.fail(claimLost(input))),
 			),
 		)
 	}).pipe(
@@ -288,8 +288,8 @@ const recordProcessingAttemptResult = (input: RecordProcessingAttemptResult) =>
 				now: input.finishedAt,
 				hasWaiting: loaded.hasWaiting,
 			}).pipe(
-				Result.map((slot) => ({ slot, value: undefined })),
-				Result.mapError(() => claimLost(claim)),
+				Effect.map((slot) => ({ slot, value: undefined })),
+				Effect.catchTag('ClaimNotOwned', () => Effect.fail(claimLost(claim))),
 			),
 		)
 	}).pipe(
@@ -309,18 +309,16 @@ const recordProcessingAttemptResult = (input: RecordProcessingAttemptResult) =>
 const prepareDelivery = (input: PrepareMailboxDelivery) =>
 	changeClaimedSlot<PrepareMailboxDelivery['prepared'], DeliveryPreparationConflict>(input, ({ slot }) =>
 		prepareDeliverySlot(slot, input).pipe(
-			Result.map(({ slot: prepared, prepared: saved }) => ({ slot: prepared, value: saved })),
-			Result.mapError((error) =>
-				Match.value(error).pipe(
-					Match.tagsExhaustive({
-						ClaimNotOwned: () => claimLost(input),
-						PreparationMismatch: ({ batchId }) =>
-							new DeliveryPreparationConflict({
-								deliveryId: makeDeliveryId({ mailboxKey: input.mailboxKey, batchId }),
-							}),
-					}),
-				),
-			),
+			Effect.map(({ slot: prepared, prepared: saved }) => ({ slot: prepared, value: saved })),
+			Effect.catchTags({
+				ClaimNotOwned: () => Effect.fail(claimLost(input)),
+				PreparationMismatch: ({ batchId }) =>
+					Effect.fail(
+						new DeliveryPreparationConflict({
+							deliveryId: makeDeliveryId({ mailboxKey: input.mailboxKey, batchId }),
+						}),
+					),
+			}),
 		),
 	).pipe(
 		Effect.withSpan('delivery.redis.prepare_delivery', {
@@ -332,8 +330,8 @@ const prepareDelivery = (input: PrepareMailboxDelivery) =>
 const handOffDelivery = (input: HandOffMailboxDelivery) =>
 	changeClaimedSlot(input, ({ slot }) =>
 		handOffDeliverySlot(slot, input).pipe(
-			Result.map((handedOff) => ({ slot: handedOff, value: undefined })),
-			Result.mapError(() => claimLost(input)),
+			Effect.map((handedOff) => ({ slot: handedOff, value: undefined })),
+			Effect.catchTag('ClaimNotOwned', () => Effect.fail(claimLost(input))),
 		),
 	).pipe(
 		Effect.withSpan('delivery.redis.hand_off_delivery', {
@@ -346,38 +344,38 @@ const claimDeliveryOutput = (input: ClaimDeliveryOutput) =>
 	Effect.gen(function* () {
 		const nonce = yield* makeClaimNonce
 		const now = yield* Clock.currentTimeMillis
-		const changed = yield* changeDeliverySlot({
+		return yield* changeDeliverySlot({
 			mailboxKey: input.mailboxKey,
-			onMissing: Option.none<ClaimedDeliveryOutput>(),
-			change: (loaded): Result.Result<SlotChange<Option.Option<ClaimedDeliveryOutput>>> => {
-				const claimId = nextClaimId(loaded, nonce)
-				const { slot, claimed } = claimDeliveryOutputSlot(loaded.slot, {
-					claimId,
-					leaseMs: input.leaseMs,
-					now,
-					idempotencyKey: input.idempotencyKey,
-				})
-				if (Predicate.isNull(claimed)) return unchanged(loaded, Option.none())
-				return Result.succeed({
-					slot,
-					value: Option.some(toClaimedDeliveryOutput({ mailboxKey: input.mailboxKey, claimId, ...claimed })),
-					madeClaim: true,
-				})
-			},
+			onMissing: Effect.succeedNone,
+			change: (loaded) =>
+				Effect.sync((): SlotChange<Option.Option<ClaimedDeliveryOutput>> => {
+					const claimId = nextClaimId(loaded, nonce)
+					const { slot, claimed } = claimDeliveryOutputSlot(loaded.slot, {
+						claimId,
+						leaseMs: input.leaseMs,
+						now,
+						idempotencyKey: input.idempotencyKey,
+					})
+					if (Predicate.isNull(claimed)) return unchanged(loaded, Option.none())
+					return {
+						slot,
+						value: Option.some(
+							toClaimedDeliveryOutput({ mailboxKey: input.mailboxKey, claimId, ...claimed }),
+						),
+						madeClaim: true,
+					}
+				}),
+			narrowRedisFailure,
 		})
-		return Result.merge(changed)
-	}).pipe(
-		unavailable,
-		Effect.withSpan('delivery.redis.claim_delivery_output', { attributes: { mailbox_key: input.mailboxKey } }),
-	)
+	}).pipe(Effect.withSpan('delivery.redis.claim_delivery_output', { attributes: { mailbox_key: input.mailboxKey } }))
 
 const renewDeliveryOutput = (input: RenewDeliveryOutput) =>
 	Effect.gen(function* () {
 		const now = yield* Clock.currentTimeMillis
 		yield* changeClaimedSlot(input, ({ slot }) =>
 			renewDeliveryOutputSlot(slot, { ...input, now }).pipe(
-				Result.map((renewed) => ({ slot: renewed, value: undefined })),
-				Result.mapError(() => claimLost(input)),
+				Effect.map((renewed) => ({ slot: renewed, value: undefined })),
+				Effect.catchTag('ClaimNotOwned', () => Effect.fail(claimLost(input))),
 			),
 		)
 	}).pipe(
@@ -394,8 +392,8 @@ const settleDeliveryOutput = (input: SettleDeliveryOutput) =>
 			now: input.settledAt,
 			hasWaiting: loaded.hasWaiting,
 		}).pipe(
-			Result.map((settled) => ({ slot: settled, value: undefined })),
-			Result.mapError(() => claimLost(input)),
+			Effect.map((settled) => ({ slot: settled, value: undefined })),
+			Effect.catchTag('ClaimNotOwned', () => Effect.fail(claimLost(input))),
 		),
 	).pipe(
 		Effect.withSpan('delivery.redis.settle_delivery_output', {

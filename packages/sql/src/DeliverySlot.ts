@@ -7,8 +7,12 @@
  * 1. lock the mailbox row with `lockMailboxRow`, in a statement of its own;
  * 2. read the slot with `loadDeliverySlot`. Under READ COMMITTED these later statements see every
  *    change committed before the lock was granted; a subquery in the locking statement would not;
- * 3. run the pure transition;
+ * 3. run the transition. A refused one fails the transaction, which rolls back having written nothing;
  * 4. write back what changed with `writeDeliverySlot`.
+ *
+ * A database or codec failure is logged and narrowed to the calling service's own error where it
+ * happens, before the transition runs, so a refusal and a failed database never share a union that
+ * needs sorting.
  *
  * No provider is called inside: output is claimed in one transaction and settled in a later one.
  *
@@ -37,8 +41,9 @@ import {
 	Timestamp,
 	mailboxSchedulerStatus,
 } from '@humanlayer/channels-delivery-next'
-import { Array as Arr, Clock, Effect, Match, Option, Predicate, Result, Schema, Struct } from 'effect'
+import { Array as Arr, Clock, Effect, Match, Option, Predicate, Schema, Struct } from 'effect'
 import * as SqlClient from 'effect/unstable/sql/SqlClient'
+import * as SqlError from 'effect/unstable/sql/SqlError'
 
 /** What `delivery_json` holds for the active batch: the fields no column holds. */
 const storedActiveCodec = Schema.fromJsonString(StoredActiveDelivery)
@@ -315,43 +320,68 @@ const writeRetainedDeliveries = (input: { readonly before: DeliverySlot; readonl
 		)
 	})
 
+/** Why the store is unavailable: the database failed, or a row could not be encoded or decoded. */
+export type SqlFailureReason = 'sql_unavailable' | 'sql_codec_unavailable'
+
+/**
+ * How a service logs a database or codec failure and narrows it to its own error, `U`, with the
+ * reason codes it reports.
+ */
+export type NarrowSqlFailure<U> = (
+	reason: SqlFailureReason,
+) => (error: SqlError.SqlError | Schema.SchemaError) => Effect.Effect<never, U>
+
 /**
  * Apply one lifecycle change to a mailbox's deliveries in one transaction, waiting for the lock.
- * A missing mailbox or a refused change writes nothing and comes back as a failed `Result`; the
- * effect itself fails only when the database or a row's decoding does.
+ * A missing mailbox fails with `onMissing`, and a refused change with its refusal. A database or
+ * codec failure, including the transaction's own begin and commit, fails with the service's error
+ * through `narrowSqlFailure`. Any failure rolls the transaction back.
  *
  * @param beforeWrite - rows to write before the slot, such as the result of the claim that just ended
  */
-export const changeDeliverySlot = <A, E, E2 = never, R = never>(input: {
+export const changeDeliverySlot = <A, E1, E2, U>(input: {
 	readonly mailboxKey: string
 	readonly withRetained: boolean
-	readonly onMissing: E
+	readonly onMissing: E1
 	readonly change: (
 		loaded: LoadedDeliverySlot,
-	) => Result.Result<{ readonly slot: DeliverySlot; readonly value: A }, E>
-	readonly beforeWrite?: (slot: DeliverySlot) => Effect.Effect<void, E2, R>
+	) => Effect.Effect<{ readonly slot: DeliverySlot; readonly value: A }, E2>
+	readonly beforeWrite?: (
+		slot: DeliverySlot,
+	) => Effect.Effect<void, SqlError.SqlError | Schema.SchemaError, SqlClient.SqlClient>
+	readonly narrowSqlFailure: NarrowSqlFailure<U>
 }) =>
 	Effect.gen(function* () {
 		const sql = yield* SqlClient.SqlClient
 		const now = yield* Clock.currentTimeMillis
-		return yield* sql.withTransaction(
+		const narrowed = <B, R>(effect: Effect.Effect<B, SqlError.SqlError | Schema.SchemaError, R>) =>
+			effect.pipe(
+				Effect.catchTags({
+					SqlError: input.narrowSqlFailure('sql_unavailable'),
+					SchemaError: input.narrowSqlFailure('sql_codec_unavailable'),
+				}),
+			)
+		const changed = sql.withTransaction(
 			Effect.gen(function* () {
-				const loaded = yield* lockDeliverySlot({
-					mailboxKey: input.mailboxKey,
-					now,
-					lock: 'Wait',
-					withRetained: input.withRetained,
-				})
-				if (Option.isNone(loaded)) return Result.fail(input.onMissing)
-				const changed = input.change(loaded.value)
-				if (Result.isFailure(changed)) return Result.fail(changed.failure)
-				if (changed.success.slot !== loaded.value.slot) {
-					if (Predicate.isNotUndefined(input.beforeWrite)) yield* input.beforeWrite(changed.success.slot)
-					yield* writeDeliverySlot({ loaded: loaded.value, slot: changed.success.slot, now })
+				const loaded = yield* narrowed(
+					lockDeliverySlot({
+						mailboxKey: input.mailboxKey,
+						now,
+						lock: 'Wait',
+						withRetained: input.withRetained,
+					}),
+				)
+				if (Option.isNone(loaded)) return yield* Effect.fail(input.onMissing)
+				const { slot, value } = yield* input.change(loaded.value)
+				if (slot !== loaded.value.slot) {
+					if (Predicate.isNotUndefined(input.beforeWrite)) yield* narrowed(input.beforeWrite(slot))
+					yield* narrowed(writeDeliverySlot({ loaded: loaded.value, slot, now }))
 				}
-				return Result.succeed(changed.success.value)
+				return value
 			}),
 		)
+		/** Every statement inside is narrowed already, so a `SqlError` left here is the transaction's own. */
+		return yield* Effect.catchIf(changed, SqlError.isSqlError, input.narrowSqlFailure('sql_unavailable'))
 	})
 
 /**

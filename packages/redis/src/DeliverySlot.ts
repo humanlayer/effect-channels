@@ -5,7 +5,7 @@
  * Every change follows one pattern, with optimistic concurrency instead of a lock:
  *
  * 1. read the mailbox in one step with the `load` script, which returns its `version`;
- * 2. run the pure transition in TypeScript;
+ * 2. run the transition in TypeScript. A refused one fails with its refusal and writes nothing;
  * 3. write what changed with the `commit` script, which writes only if the version is unchanged,
  *    and moves it on;
  * 4. if another poller, request, or admission changed the mailbox in between, start again from 1.
@@ -40,7 +40,7 @@ import {
 	emptyDeliverySlot,
 	mailboxSchedulerStatus,
 } from '@humanlayer/channels-delivery-next'
-import { Array as Arr, Clock, Data, Effect, Option, Predicate, Random, Result, Schedule, Schema, Struct } from 'effect'
+import { Array as Arr, Clock, Effect, Option, Predicate, Random, Schedule, Schema, Struct } from 'effect'
 import * as Redis from 'effect/unstable/persistence/Redis'
 
 import * as Scripts from './scripts'
@@ -101,7 +101,9 @@ const Loaded = Schema.NullOr(
 const CommitResult = Schema.Literals(['ok', 'conflict', 'duplicate'])
 
 /** Another change reached the mailbox between the read and the write; the change is decided again. */
-export class SlotChanged extends Data.TaggedError('SlotChanged')<{}> {}
+export class SlotChanged extends Schema.TaggedError<SlotChanged>()('SlotChanged', {}) {}
+
+const isSlotChanged: Predicate.Refinement<unknown, SlotChanged> = Schema.is(SlotChanged)
 
 /** How many times a change is decided again before the store reports itself too busy. */
 const MAX_CHANGE_ATTEMPTS = 50
@@ -299,32 +301,47 @@ export const commitDeliverySlot = (input: {
 export const retryWhenChanged = <A, E, R>(effect: Effect.Effect<A, E | SlotChanged, R>) =>
 	effect.pipe(Effect.retry({ schedule: decideAgain, while: (error) => Predicate.isTagged(error, 'SlotChanged') }))
 
+/** Why the store is unavailable: Redis failed, a stored value could not be read or written, or other changes kept winning. */
+export type RedisFailureReason = 'redis_unavailable' | 'redis_codec_unavailable' | 'redis_contention'
+
+/** How a service logs a Redis, codec, or contention failure and narrows it to its own error, `U`. */
+export type NarrowRedisFailure<U> = (
+	reason: RedisFailureReason,
+) => (error: Redis.RedisError | Schema.SchemaError | SlotChanged) => Effect.Effect<never, U>
+
 /**
  * Apply one lifecycle change to a mailbox's deliveries, deciding it again whenever another change
- * reached the mailbox first. A missing mailbox or a refused change writes nothing and comes back as a
- * failed `Result`; the effect itself fails only when Redis, a stored value's decoding, or contention does.
+ * reached the mailbox first. A missing mailbox answers with `onMissing`; a refused change fails with
+ * its refusal and writes nothing. A Redis or codec failure fails with the service's error through
+ * `narrowRedisFailure` where it happens, and so does contention once the attempts run out.
  */
-export const changeDeliverySlot = <A, E>(input: {
+export const changeDeliverySlot = <A, E1, E2, U>(input: {
 	readonly mailboxKey: string
 	readonly waitingUpTo?: number
-	readonly onMissing: E
-	readonly change: (loaded: LoadedDeliverySlot) => Result.Result<SlotChange<A>, E>
-}) =>
-	Effect.gen(function* () {
-		const loaded = yield* loadDeliverySlot(input)
-		if (Option.isNone(loaded)) return Result.fail(input.onMissing)
-		const changed = input.change(loaded.value)
-		if (Result.isFailure(changed)) return Result.fail(changed.failure)
-		const { slot, value } = changed.success
-		if (slot !== loaded.value.slot) {
+	readonly onMissing: Effect.Effect<A, E1>
+	readonly change: (loaded: LoadedDeliverySlot) => Effect.Effect<SlotChange<A>, E2>
+	readonly narrowRedisFailure: NarrowRedisFailure<U>
+}) => {
+	const storageFailures = {
+		RedisError: input.narrowRedisFailure('redis_unavailable'),
+		SchemaError: input.narrowRedisFailure('redis_codec_unavailable'),
+	}
+	const decided = Effect.gen(function* () {
+		const loaded = yield* loadDeliverySlot(input).pipe(Effect.catchTags(storageFailures))
+		if (Option.isNone(loaded)) return yield* input.onMissing
+		const changed = yield* input.change(loaded.value)
+		if (changed.slot !== loaded.value.slot) {
 			yield* commitDeliverySlot({
-				...changed.success,
+				...changed,
 				loaded: loaded.value,
 				provider: loaded.value.provider ?? '',
-			})
+			}).pipe(Effect.catchTags(storageFailures))
 		}
-		return Result.succeed(value)
+		return changed.value
 	}).pipe(retryWhenChanged)
+	/** `SlotChanged` never leaves here: it is retried, and only reported once the attempts run out. */
+	return Effect.catchIf(decided, isSlotChanged, input.narrowRedisFailure('redis_contention'))
+}
 
 /** A claim ID no other claim on the mailbox has had: the caller's nonce and the mailbox's claim count. */
 export const nextClaimId = (loaded: LoadedDeliverySlot, nonce: string) => `${nonce}-${loaded.claimsMade + 1}`

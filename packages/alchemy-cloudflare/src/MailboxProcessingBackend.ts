@@ -34,7 +34,7 @@ import {
 	type RenewMailboxClaim,
 	type SettleDeliveryOutput,
 } from '@humanlayer/channels-delivery-next'
-import { Array as Arr, Clock, Effect, Layer, Match, Option, Predicate, Random, Result } from 'effect'
+import { Array as Arr, Clock, Effect, Layer, Match, Option, Predicate, Random, type Schema } from 'effect'
 
 import { DurableMailboxState, mailboxStateKey, type WaitingAdmission } from './MailboxState'
 import { MailboxStorage } from './MailboxStorage'
@@ -52,13 +52,20 @@ const makeClaimId = Effect.gen(function* () {
 	return `${now}-${Math.abs(yield* Random.nextInt)}`
 })
 
-/** Log the raw failure, then narrow it to the one error callers can act on. */
-const narrowToUnavailable =
+/** Log a stored mailbox that cannot be decoded, where it is read, then narrow it to the one error callers can act on. */
+const undecodable = (message: string) => (error: Schema.SchemaError) =>
+	Effect.logError(message, error).pipe(
+		Effect.andThen(Effect.fail(new MailboxProcessingUnavailable({ reason: 'cloudflare_unavailable' }))),
+	)
+
+/**
+ * Storage failures arrive as defects (see `MailboxStorage`): log one, then narrow it to the one error
+ * callers can act on. Typed errors, such as a lost claim, are not touched.
+ */
+const narrowStorageDefect =
 	(message: string) =>
 	<A, E, R>(effect: Effect.Effect<A, E, R>) =>
 		effect.pipe(
-			Effect.tapError((error) => Effect.logError(message, error)),
-			Effect.mapError(() => new MailboxProcessingUnavailable({ reason: 'cloudflare_unavailable' })),
 			Effect.catchDefect((defect) =>
 				Effect.logError(message, defect).pipe(
 					Effect.andThen(Effect.fail(new MailboxProcessingUnavailable({ reason: 'cloudflare_unavailable' }))),
@@ -202,25 +209,33 @@ export const makeMailboxProcessingBackendFromDurableObjectStorage = Effect.gen(f
 	const claimLost = (claim: { readonly mailboxKey: string; readonly claimId: string }) =>
 		new MailboxProcessingClaimLost({ mailboxKey: claim.mailboxKey, claimId: claim.claimId })
 
-	/** A change to a claimed batch. A mailbox that is not the claim's own is a lost claim. */
+	/**
+	 * A change to a claimed batch. A mailbox that is not the claim's own is a lost claim. `message` is
+	 * what a storage or decode failure is logged with.
+	 */
 	const changeClaimedDeliveries = <A, E>(
+		message: string,
 		claim: { readonly mailboxKey: string; readonly claimId: string },
 		change: DeliveriesChange<A, E | MailboxProcessingClaimLost>,
 	) =>
-		changeDeliveries<A, E | MailboxProcessingClaimLost>(storage, {
+		changeDeliveries(storage, {
 			onMissing: claimLost(claim),
 			change: (current) =>
-				current.mailboxKey === claim.mailboxKey ? change(current) : Result.fail(claimLost(claim)),
-		})
+				current.mailboxKey === claim.mailboxKey ? change(current) : Effect.fail(claimLost(claim)),
+			onUndecodable: undecodable(message),
+		}).pipe(narrowStorageDefect(message))
 
 	return MailboxProcessingBackend.of({
 		findReadyMailboxes: Effect.gen(function* () {
 			const now = yield* Clock.currentTimeMillis
 			const stored = yield* storage.get(mailboxStateKey)
 			if (Predicate.isUndefined(stored)) return []
-			return describeReadyMailbox(yield* decodeMailboxState(stored), now)
+			const current = yield* decodeMailboxState(stored).pipe(
+				Effect.catchTag('SchemaError', undecodable('Cloudflare mailbox look failed')),
+			)
+			return describeReadyMailbox(current, now)
 		}).pipe(
-			narrowToUnavailable('Cloudflare mailbox look failed'),
+			narrowStorageDefect('Cloudflare mailbox look failed'),
 			Effect.withSpan('delivery.cloudflare.find_ready_mailboxes'),
 		),
 
@@ -228,29 +243,30 @@ export const makeMailboxProcessingBackendFromDurableObjectStorage = Effect.gen(f
 			const now = yield* Clock.currentTimeMillis
 			const claimId = yield* makeClaimId
 			return yield* transactMailbox(storage, {
-				whenNothingStored: Option.none(),
-				transition: (current) => claimTransition({ current, claim, claimId, now }),
+				whenNothingStored: Effect.succeedNone,
+				transition: (current) => Effect.succeed(claimTransition({ current, claim, claimId, now })),
+				onUndecodable: undecodable('Cloudflare mailbox claim failed'),
 			})
-		}, narrowToUnavailable('Cloudflare mailbox claim failed')),
+		}, narrowStorageDefect('Cloudflare mailbox claim failed')),
 
 		deferMailbox: (input) =>
 			transactMailbox(storage, {
-				whenNothingStored: undefined,
-				transition: (current) => deferTransition(current, input),
+				whenNothingStored: Effect.void,
+				transition: (current) => Effect.succeed(deferTransition(current, input)),
+				onUndecodable: undecodable('Cloudflare mailbox deferral failed'),
 			}).pipe(
-				narrowToUnavailable('Cloudflare mailbox deferral failed'),
+				narrowStorageDefect('Cloudflare mailbox deferral failed'),
 				Effect.withSpan('delivery.cloudflare.defer_mailbox'),
 			),
 
 		renewClaim: Effect.fn('delivery.cloudflare.renew_claim')(function* (renewal: RenewMailboxClaim) {
 			const now = yield* Clock.currentTimeMillis
-			const renewed = yield* changeClaimedDeliveries<void, never>(renewal, (current) =>
+			yield* changeClaimedDeliveries('Cloudflare mailbox claim renewal failed', renewal, (current) =>
 				renewDeliveryClaim(current.deliveries, { ...renewal, now }).pipe(
-					Result.map((slot) => ({ slot, value: undefined })),
-					Result.mapError(() => claimLost(renewal)),
+					Effect.map((slot) => ({ slot, value: undefined })),
+					Effect.catchTag('ClaimNotOwned', () => Effect.fail(claimLost(renewal))),
 				),
-			).pipe(narrowToUnavailable('Cloudflare mailbox claim renewal failed'))
-			return yield* Effect.fromResult(renewed)
+			)
 		}),
 
 		recordProcessingAttemptResult: Effect.fn('delivery.cloudflare.record_processing_attempt_result')(function* (
@@ -260,48 +276,43 @@ export const makeMailboxProcessingBackendFromDurableObjectStorage = Effect.gen(f
 				Match.tag('RetryableFailure', ({ retryAfterMs }) => retryAfterMs ?? DEFAULT_RETRY_AFTER_MS),
 				Match.orElse(() => null),
 			)
-			const recorded = yield* changeClaimedDeliveries<void, never>(input.claim, (current) =>
+			yield* changeClaimedDeliveries('Cloudflare mailbox result recording failed', input.claim, (current) =>
 				recordDeliveryAttempt(current.deliveries, {
 					claimId: input.claim.claimId,
 					retryAfterMs,
 					now: input.finishedAt,
 					hasWaiting: Arr.isReadonlyArrayNonEmpty(current.waiting),
 				}).pipe(
-					Result.map((slot) => ({ slot, value: undefined })),
-					Result.mapError(() => claimLost(input.claim)),
+					Effect.map((slot) => ({ slot, value: undefined })),
+					Effect.catchTag('ClaimNotOwned', () => Effect.fail(claimLost(input.claim))),
 				),
-			).pipe(narrowToUnavailable('Cloudflare mailbox result recording failed'))
-			return yield* Effect.fromResult(recorded)
+			)
 		}),
 
 		prepareDelivery: Effect.fn('delivery.cloudflare.prepare_delivery')(function* (input: PrepareMailboxDelivery) {
-			const prepared = yield* changeClaimedDeliveries(input, (current) =>
+			return yield* changeClaimedDeliveries('Cloudflare mailbox delivery preparation failed', input, (current) =>
 				prepareDeliverySlot(current.deliveries, input).pipe(
-					Result.map(({ slot, prepared }) => ({ slot, value: prepared })),
-					Result.mapError((error) =>
-						Match.value(error).pipe(
-							Match.tagsExhaustive({
-								ClaimNotOwned: () => claimLost(input),
-								PreparationMismatch: ({ batchId }) =>
-									new DeliveryPreparationConflict({
-										deliveryId: makeDeliveryId({ mailboxKey: input.mailboxKey, batchId }),
-									}),
-							}),
-						),
-					),
+					Effect.map(({ slot, prepared }) => ({ slot, value: prepared })),
+					Effect.catchTags({
+						ClaimNotOwned: () => Effect.fail(claimLost(input)),
+						PreparationMismatch: ({ batchId }) =>
+							Effect.fail(
+								new DeliveryPreparationConflict({
+									deliveryId: makeDeliveryId({ mailboxKey: input.mailboxKey, batchId }),
+								}),
+							),
+					}),
 				),
-			).pipe(narrowToUnavailable('Cloudflare mailbox delivery preparation failed'))
-			return yield* Effect.fromResult(prepared)
+			)
 		}),
 
 		handOffDelivery: Effect.fn('delivery.cloudflare.hand_off_delivery')(function* (input: HandOffMailboxDelivery) {
-			const handedOff = yield* changeClaimedDeliveries<void, never>(input, (current) =>
+			yield* changeClaimedDeliveries('Cloudflare mailbox handoff failed', input, (current) =>
 				handOffDeliverySlot(current.deliveries, input).pipe(
-					Result.map((slot) => ({ slot, value: undefined })),
-					Result.mapError(() => claimLost(input)),
+					Effect.map((slot) => ({ slot, value: undefined })),
+					Effect.catchTag('ClaimNotOwned', () => Effect.fail(claimLost(input))),
 				),
-			).pipe(narrowToUnavailable('Cloudflare mailbox handoff failed'))
-			return yield* Effect.fromResult(handedOff)
+			)
 		}),
 
 		claimDeliveryOutput: Effect.fn('delivery.cloudflare.claim_delivery_output')(function* (
@@ -310,38 +321,37 @@ export const makeMailboxProcessingBackendFromDurableObjectStorage = Effect.gen(f
 			const now = yield* Clock.currentTimeMillis
 			const claimId = yield* makeClaimId
 			return yield* transactMailbox(storage, {
-				whenNothingStored: Option.none(),
-				transition: (current) => claimOutputTransition({ current, claim, claimId, now }),
+				whenNothingStored: Effect.succeedNone,
+				transition: (current) => Effect.succeed(claimOutputTransition({ current, claim, claimId, now })),
+				onUndecodable: undecodable('Cloudflare delivery output claim failed'),
 			})
-		}, narrowToUnavailable('Cloudflare delivery output claim failed')),
+		}, narrowStorageDefect('Cloudflare delivery output claim failed')),
 
 		renewDeliveryOutput: Effect.fn('delivery.cloudflare.renew_delivery_output')(function* (
 			renewal: RenewDeliveryOutput,
 		) {
 			const now = yield* Clock.currentTimeMillis
-			const renewed = yield* changeClaimedDeliveries<void, never>(renewal, (current) =>
+			yield* changeClaimedDeliveries('Cloudflare delivery output renewal failed', renewal, (current) =>
 				renewDeliveryOutput(current.deliveries, { ...renewal, now }).pipe(
-					Result.map((slot) => ({ slot, value: undefined })),
-					Result.mapError(() => claimLost(renewal)),
+					Effect.map((slot) => ({ slot, value: undefined })),
+					Effect.catchTag('ClaimNotOwned', () => Effect.fail(claimLost(renewal))),
 				),
-			).pipe(narrowToUnavailable('Cloudflare delivery output renewal failed'))
-			return yield* Effect.fromResult(renewed)
+			)
 		}),
 
 		settleDeliveryOutput: Effect.fn('delivery.cloudflare.settle_delivery_output')(function* (
 			input: SettleDeliveryOutput,
 		) {
-			const settled = yield* changeClaimedDeliveries<void, never>(input, (current) =>
+			yield* changeClaimedDeliveries('Cloudflare delivery output settlement failed', input, (current) =>
 				settleDeliveryOutput(current.deliveries, {
 					...input,
 					now: input.settledAt,
 					hasWaiting: Arr.isReadonlyArrayNonEmpty(current.waiting),
 				}).pipe(
-					Result.map((slot) => ({ slot, value: undefined })),
-					Result.mapError(() => claimLost(input)),
+					Effect.map((slot) => ({ slot, value: undefined })),
+					Effect.catchTag('ClaimNotOwned', () => Effect.fail(claimLost(input))),
 				),
-			).pipe(narrowToUnavailable('Cloudflare delivery output settlement failed'))
-			return yield* Effect.fromResult(settled)
+			)
 		}),
 	})
 })

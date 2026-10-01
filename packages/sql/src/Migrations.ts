@@ -9,7 +9,7 @@
  * All times are milliseconds from Effect's Clock, passed in as parameters, never the database's clock.
  */
 import { MailboxDeliveryUnavailable } from '@humanlayer/channels-delivery-next'
-import { Effect, Schema } from 'effect'
+import { Effect, Layer, Schema } from 'effect'
 import * as SqlClient from 'effect/unstable/sql/SqlClient'
 import * as SqlError from 'effect/unstable/sql/SqlError'
 
@@ -152,6 +152,15 @@ export const migrateDeliveryControl = Effect.gen(function* () {
 			AND mailbox.status IN ('active', 'retry') AND mailbox.active_batch_id IS NULL`
 })
 
+/** Mailbox subscriptions: a row for each mailbox whose conversation the bot follows. */
+export const migrateMailboxSubscriptions = Effect.gen(function* () {
+	const sql = (yield* SqlClient.SqlClient).withoutTransforms()
+	yield* sql`CREATE TABLE IF NOT EXISTS delivery_next_mailbox_subscriptions (
+		mailbox_key text COLLATE "C" PRIMARY KEY,
+		created_at timestamp with time zone NOT NULL DEFAULT now()
+	)`
+})
+
 /**
  * Create or bring up to date every mailbox table, in order. Stores that start together, such as
  * several pollers, take turns: a transaction-scoped advisory lock lets one migrate at a time.
@@ -164,6 +173,13 @@ export const migrate = Effect.gen(function* () {
 			yield* migrateMailboxTables
 			yield* migrateBatches
 			yield* migrateDeliveryControl
+			yield* migrateMailboxSubscriptions
 		}),
 	)
 }).pipe(unavailable, Effect.asVoid, Effect.withSpan('delivery.sql.migrate'))
+
+/**
+ * Runs `migrate` once when built. `ChannelsSql.make` provides it ahead of the store's services when
+ * `runMigrations` is on, so one application start migrates once.
+ */
+export const MigrationsSql = Layer.effectDiscard(migrate)

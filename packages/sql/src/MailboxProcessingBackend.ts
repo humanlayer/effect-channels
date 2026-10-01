@@ -48,12 +48,17 @@ import {
 	type RenewMailboxClaim,
 	type SettleDeliveryOutput,
 } from '@humanlayer/channels-delivery-next'
-import { Array as Arr, Clock, Effect, Layer, Match, Option, Predicate, Random, Result, Schema } from 'effect'
+import { Array as Arr, Clock, Effect, Layer, Match, Option, Predicate, Random, Schema } from 'effect'
 import * as SqlClient from 'effect/unstable/sql/SqlClient'
 import * as SqlError from 'effect/unstable/sql/SqlError'
 
-import { changeDeliverySlot, lockDeliverySlot, writeDeliverySlot, type LoadedDeliverySlot } from './DeliverySlot'
-import { migrate } from './Migrations'
+import {
+	changeDeliverySlot,
+	lockDeliverySlot,
+	writeDeliverySlot,
+	type LoadedDeliverySlot,
+	type NarrowSqlFailure,
+} from './DeliverySlot'
 
 const resultCodec = Schema.fromJsonString(MailboxProcessingAttemptResult)
 
@@ -81,14 +86,18 @@ const mailboxKeyRows = Schema.Array(Schema.Struct({ mailbox_key: Schema.NonEmpty
 
 const waitingAdmissionRows = Schema.Array(Schema.Struct({ admission_json: DeliveryAdmissionJson }))
 
-const unavailable = <A, R>(
-	effect: Effect.Effect<A, MailboxProcessingUnavailable | Schema.SchemaError | SqlError.SqlError, R>,
-) =>
+/** Log a database or codec failure where it happens, then narrow it to `MailboxProcessingUnavailable`. */
+const narrowSqlFailure: NarrowSqlFailure<MailboxProcessingUnavailable> = (reason) => (error) =>
+	Effect.logError('SQL mailbox processing failed', error).pipe(
+		Effect.andThen(Effect.fail(new MailboxProcessingUnavailable({ reason }))),
+	)
+
+/** Narrow the failures of an operation that only reads and writes rows. */
+const unavailable = <A, R>(effect: Effect.Effect<A, SqlError.SqlError | Schema.SchemaError, R>) =>
 	effect.pipe(
-		Effect.tapError((error) => Effect.logError('SQL mailbox processing failed', error)),
 		Effect.catchTags({
-			SchemaError: () => Effect.fail(new MailboxProcessingUnavailable({ reason: 'sql_codec_unavailable' })),
-			SqlError: () => Effect.fail(new MailboxProcessingUnavailable({ reason: 'sql_unavailable' })),
+			SqlError: narrowSqlFailure('sql_unavailable'),
+			SchemaError: narrowSqlFailure('sql_codec_unavailable'),
 		}),
 	)
 
@@ -279,21 +288,19 @@ const changeClaimedSlot = <A, E = never>(
 		readonly withRetained: boolean
 		readonly change: (
 			loaded: LoadedDeliverySlot,
-		) => Result.Result<{ readonly slot: DeliverySlot; readonly value: A }, E | MailboxProcessingClaimLost>
+		) => Effect.Effect<{ readonly slot: DeliverySlot; readonly value: A }, E | MailboxProcessingClaimLost>
 		readonly beforeWrite?: (
 			slot: DeliverySlot,
 		) => Effect.Effect<void, SqlError.SqlError | Schema.SchemaError, SqlClient.SqlClient>
 	},
 ) =>
-	Effect.gen(function* () {
-		const changed = yield* changeDeliverySlot({
-			mailboxKey: claim.mailboxKey,
-			withRetained: input.withRetained,
-			onMissing: claimLost(claim),
-			change: input.change,
-			beforeWrite: input.beforeWrite,
-		}).pipe(unavailable)
-		return yield* Effect.fromResult(changed)
+	changeDeliverySlot({
+		mailboxKey: claim.mailboxKey,
+		withRetained: input.withRetained,
+		onMissing: claimLost(claim),
+		change: input.change,
+		beforeWrite: input.beforeWrite,
+		narrowSqlFailure,
 	})
 
 const renewClaim = (input: RenewMailboxClaim) =>
@@ -303,8 +310,8 @@ const renewClaim = (input: RenewMailboxClaim) =>
 			withRetained: false,
 			change: ({ slot }) =>
 				renewDeliveryClaim(slot, { ...input, now }).pipe(
-					Result.map((renewed) => ({ slot: renewed, value: undefined })),
-					Result.mapError(() => claimLost(input)),
+					Effect.map((renewed) => ({ slot: renewed, value: undefined })),
+					Effect.catchTag('ClaimNotOwned', () => Effect.fail(claimLost(input))),
 				),
 		})
 	}).pipe(
@@ -348,8 +355,8 @@ const recordProcessingAttemptResult = (input: RecordProcessingAttemptResult) =>
 					now: input.finishedAt,
 					hasWaiting: loaded.hasWaiting,
 				}).pipe(
-					Result.map((slot) => ({ slot, value: undefined })),
-					Result.mapError(() => claimLost(claim)),
+					Effect.map((slot) => ({ slot, value: undefined })),
+					Effect.catchTag('ClaimNotOwned', () => Effect.fail(claimLost(claim))),
 				),
 			beforeWrite: closeClaim,
 		})
@@ -372,18 +379,16 @@ const prepareDelivery = (input: PrepareMailboxDelivery) =>
 		withRetained: false,
 		change: ({ slot }) =>
 			prepareDeliverySlot(slot, input).pipe(
-				Result.map(({ slot: prepared, prepared: saved }) => ({ slot: prepared, value: saved })),
-				Result.mapError((error) =>
-					Match.value(error).pipe(
-						Match.tagsExhaustive({
-							ClaimNotOwned: () => claimLost(input),
-							PreparationMismatch: ({ batchId }) =>
-								new DeliveryPreparationConflict({
-									deliveryId: makeDeliveryId({ mailboxKey: input.mailboxKey, batchId }),
-								}),
-						}),
-					),
-				),
+				Effect.map(({ slot: prepared, prepared: saved }) => ({ slot: prepared, value: saved })),
+				Effect.catchTags({
+					ClaimNotOwned: () => Effect.fail(claimLost(input)),
+					PreparationMismatch: ({ batchId }) =>
+						Effect.fail(
+							new DeliveryPreparationConflict({
+								deliveryId: makeDeliveryId({ mailboxKey: input.mailboxKey, batchId }),
+							}),
+						),
+				}),
 			),
 	}).pipe(
 		Effect.withSpan('delivery.sql.prepare_delivery', {
@@ -397,8 +402,8 @@ const handOffDelivery = (input: HandOffMailboxDelivery) =>
 		withRetained: false,
 		change: ({ slot }) =>
 			handOffDeliverySlot(slot, input).pipe(
-				Result.map((handedOff) => ({ slot: handedOff, value: undefined })),
-				Result.mapError(() => claimLost(input)),
+				Effect.map((handedOff) => ({ slot: handedOff, value: undefined })),
+				Effect.catchTag('ClaimNotOwned', () => Effect.fail(claimLost(input))),
 			),
 	}).pipe(
 		Effect.withSpan('delivery.sql.hand_off_delivery', {
@@ -444,8 +449,8 @@ const renewDeliveryOutput = (input: RenewDeliveryOutput) =>
 			withRetained: false,
 			change: ({ slot }) =>
 				renewDeliveryOutputSlot(slot, { ...input, now }).pipe(
-					Result.map((renewed) => ({ slot: renewed, value: undefined })),
-					Result.mapError(() => claimLost(input)),
+					Effect.map((renewed) => ({ slot: renewed, value: undefined })),
+					Effect.catchTag('ClaimNotOwned', () => Effect.fail(claimLost(input))),
 				),
 		})
 	}).pipe(
@@ -464,8 +469,8 @@ const settleDeliveryOutput = (input: SettleDeliveryOutput) =>
 				now: input.settledAt,
 				hasWaiting: loaded.hasWaiting,
 			}).pipe(
-				Result.map((settled) => ({ slot: settled, value: undefined })),
-				Result.mapError(() => claimLost(input)),
+				Effect.map((settled) => ({ slot: settled, value: undefined })),
+				Effect.catchTag('ClaimNotOwned', () => Effect.fail(claimLost(input))),
 			),
 	}).pipe(
 		Effect.withSpan('delivery.sql.settle_delivery_output', {
@@ -481,15 +486,14 @@ const settleDeliveryOutput = (input: SettleDeliveryOutput) =>
 export type MailboxProcessingBackendSqlOptions = {
 	/** The most mailboxes one `findReadyMailboxes` reports. */
 	readonly claimLimit: number
-	readonly runMigrations: boolean
 }
 
+/** Mailbox processing over the application's `SqlClient`. It creates no tables: see `MigrationsSql`. */
 export const MailboxProcessingBackendSql = (options: MailboxProcessingBackendSqlOptions) =>
 	Layer.effect(
 		MailboxProcessingBackend,
 		Effect.gen(function* () {
 			const sql = yield* SqlClient.SqlClient
-			if (options.runMigrations) yield* migrate
 			return MailboxProcessingBackend.of({
 				findReadyMailboxes: findReadyMailboxes(options.claimLimit).pipe(
 					Effect.provideService(SqlClient.SqlClient, sql),

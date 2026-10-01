@@ -33,11 +33,7 @@ export const emptyTables = Effect.gen(function* () {
 
 /** The store's three services over `SqlClient`, the way `ChannelsSql.make` builds them. */
 export const storeOverClient = (claimLimit = 10) =>
-	Layer.mergeAll(
-		MailboxDeliverySql({ runMigrations: false }),
-		MailboxProcessingBackendSql({ claimLimit, runMigrations: false }),
-		DeliveryControlBackendSql,
-	)
+	Layer.mergeAll(MailboxDeliverySql, MailboxProcessingBackendSql({ claimLimit }), DeliveryControlBackendSql)
 
 /** An empty store with a pool of its own. Each build empties the tables again. */
 export const emptyStore = storeOverClient().pipe(Layer.provide(Layer.effectDiscard(emptyTables)), Layer.provide(client))

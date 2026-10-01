@@ -14,19 +14,26 @@ import {
 	type ApplyDeliveryMutation,
 	type ReadDeliveryStatus,
 } from '@humanlayer/channels-delivery-next'
-import { Array as Arr, Clock, Effect, Layer, Option, Predicate, Result } from 'effect'
+import { Array as Arr, Clock, Effect, Layer, Option, Predicate, type Schema } from 'effect'
 
 import { mailboxStateKey } from './MailboxState'
 import { MailboxStorage } from './MailboxStorage'
 import { changeDeliveries, decodeMailboxState } from './MailboxTransaction'
 
-/** Log the raw storage failure, then narrow it to `DeliveryControlUnavailable`. */
-const narrowToUnavailable =
+/** Log a stored mailbox that cannot be decoded, where it is read, then narrow it to `DeliveryControlUnavailable`. */
+const undecodable = (message: string) => (error: Schema.SchemaError) =>
+	Effect.logError(message, error).pipe(
+		Effect.andThen(Effect.fail(new DeliveryControlUnavailable({ reason: 'cloudflare_unavailable' }))),
+	)
+
+/**
+ * Storage failures arrive as defects (see `MailboxStorage`): log one, then narrow it to
+ * `DeliveryControlUnavailable`. Typed errors, such as a closed delivery, are not touched.
+ */
+const narrowStorageDefect =
 	(message: string) =>
 	<A, E, R>(effect: Effect.Effect<A, E, R>) =>
 		effect.pipe(
-			Effect.tapError((error) => Effect.logError(message, error)),
-			Effect.mapError(() => new DeliveryControlUnavailable({ reason: 'cloudflare_unavailable' })),
 			Effect.catchDefect((defect) =>
 				Effect.logError(message, defect).pipe(
 					Effect.andThen(Effect.fail(new DeliveryControlUnavailable({ reason: 'cloudflare_unavailable' }))),
@@ -45,34 +52,37 @@ export const makeDeliveryControlBackendFromDurableObjectStorage = Effect.gen(fun
 				.get(mailboxStateKey)
 				.pipe(
 					Effect.flatMap((value) =>
-						Predicate.isUndefined(value) ? Effect.succeedNone : Effect.asSome(decodeMailboxState(value)),
+						Predicate.isUndefined(value)
+							? Effect.succeedNone
+							: Effect.asSome(
+									decodeMailboxState(value).pipe(
+										Effect.catchTag('SchemaError', undecodable('Cloudflare delivery status read failed')),
+									),
+								),
 					),
-					narrowToUnavailable('Cloudflare delivery status read failed'),
+					narrowStorageDefect('Cloudflare delivery status read failed'),
 				)
 			const mailbox = Option.filter(stored, ({ mailboxKey }) => mailboxKey === input.reference.mailboxKey)
 			if (Option.isNone(mailbox)) return yield* new DeliveryNotFound()
-			return yield* Effect.fromResult(readDeliverySlotStatus(mailbox.value.deliveries, { ...input, now }))
+			return yield* readDeliverySlotStatus(mailbox.value.deliveries, { ...input, now })
 		}),
 
 		applyDeliveryMutation: Effect.fn('delivery.cloudflare.apply_delivery_mutation')(function* (
 			input: ApplyDeliveryMutation,
 		) {
 			const now = yield* Clock.currentTimeMillis
-			const recorded = yield* changeDeliveries(storage, {
+			return yield* changeDeliveries(storage, {
 				onMissing: new DeliveryNotFound(),
 				change: (current) =>
 					current.mailboxKey === input.reference.mailboxKey
-						? Result.map(
-								applyDeliverySlotMutation(current.deliveries, {
-									...input,
-									now,
-									hasWaiting: Arr.isReadonlyArrayNonEmpty(current.waiting),
-								}),
-								({ slot, receipt }) => ({ slot, value: receipt }),
-							)
-						: Result.fail(new DeliveryNotFound()),
-			}).pipe(narrowToUnavailable('Cloudflare delivery mutation failed'))
-			return yield* Effect.fromResult(recorded)
+						? applyDeliverySlotMutation(current.deliveries, {
+								...input,
+								now,
+								hasWaiting: Arr.isReadonlyArrayNonEmpty(current.waiting),
+							}).pipe(Effect.map(({ slot, receipt }) => ({ slot, value: receipt })))
+						: Effect.fail(new DeliveryNotFound()),
+				onUndecodable: undecodable('Cloudflare delivery mutation failed'),
+			}).pipe(narrowStorageDefect('Cloudflare delivery mutation failed'))
 		}),
 	})
 })

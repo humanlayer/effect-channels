@@ -18,28 +18,28 @@ import {
 	type ApplyDeliveryMutation,
 	type ReadDeliveryStatus,
 } from '@humanlayer/channels-delivery-next'
-import { Clock, Effect, Layer, Option, Result, Schema } from 'effect'
+import { Clock, Effect, Layer, Option } from 'effect'
 import * as Redis from 'effect/unstable/persistence/Redis'
 
-import { changeDeliverySlot, loadDeliverySlot, type SlotChanged } from './DeliverySlot'
+import { changeDeliverySlot, loadDeliverySlot, type NarrowRedisFailure } from './DeliverySlot'
 
-/** Log the raw failure, then narrow it to `DeliveryControlUnavailable`. */
-const unavailable = <A, R>(effect: Effect.Effect<A, Redis.RedisError | Schema.SchemaError | SlotChanged, R>) =>
-	effect.pipe(
-		Effect.tapError((error) => Effect.logError('Redis delivery control failed', error)),
-		Effect.catchTags({
-			RedisError: () => Effect.fail(new DeliveryControlUnavailable({ reason: 'redis_unavailable' })),
-			SchemaError: () => Effect.fail(new DeliveryControlUnavailable({ reason: 'redis_codec_unavailable' })),
-			SlotChanged: () => Effect.fail(new DeliveryControlUnavailable({ reason: 'redis_contention' })),
-		}),
+/** Log a Redis, codec, or contention failure where it happens, then narrow it to `DeliveryControlUnavailable`. */
+const narrowRedisFailure: NarrowRedisFailure<DeliveryControlUnavailable> = (reason) => (error) =>
+	Effect.logError('Redis delivery control failed', error).pipe(
+		Effect.andThen(Effect.fail(new DeliveryControlUnavailable({ reason }))),
 	)
 
 /** Read what a remote worker may see. The read is one script, so it sees one moment of the mailbox. */
 const readDeliveryStatus = Effect.fn('delivery.redis.read_delivery_status')(function* (input: ReadDeliveryStatus) {
 	const now = yield* Clock.currentTimeMillis
-	const loaded = yield* loadDeliverySlot({ mailboxKey: input.reference.mailboxKey }).pipe(unavailable)
+	const loaded = yield* loadDeliverySlot({ mailboxKey: input.reference.mailboxKey }).pipe(
+		Effect.catchTags({
+			RedisError: narrowRedisFailure('redis_unavailable'),
+			SchemaError: narrowRedisFailure('redis_codec_unavailable'),
+		}),
+	)
 	if (Option.isNone(loaded)) return yield* new DeliveryNotFound()
-	return yield* Effect.fromResult(readDeliverySlotStatus(loaded.value.slot, { ...input, now }))
+	return yield* readDeliverySlotStatus(loaded.value.slot, { ...input, now })
 })
 
 /** Check the token and apply the change, with the output it needs, in one write. */
@@ -47,16 +47,15 @@ const applyDeliveryMutation = Effect.fn('delivery.redis.apply_delivery_mutation'
 	input: ApplyDeliveryMutation,
 ) {
 	const now = yield* Clock.currentTimeMillis
-	const recorded = yield* changeDeliverySlot({
+	return yield* changeDeliverySlot({
 		mailboxKey: input.reference.mailboxKey,
-		onMissing: new DeliveryNotFound(),
+		onMissing: Effect.fail(new DeliveryNotFound()),
 		change: (loaded) =>
-			Result.map(
-				applyDeliverySlotMutation(loaded.slot, { ...input, now, hasWaiting: loaded.hasWaiting }),
-				({ slot, receipt }) => ({ slot, value: receipt }),
+			applyDeliverySlotMutation(loaded.slot, { ...input, now, hasWaiting: loaded.hasWaiting }).pipe(
+				Effect.map(({ slot, receipt }) => ({ slot, value: receipt })),
 			),
-	}).pipe(unavailable)
-	return yield* Effect.fromResult(recorded)
+		narrowRedisFailure,
+	})
 })
 
 /** Delivery control over the application's `Redis` client. */
