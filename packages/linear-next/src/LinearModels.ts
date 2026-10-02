@@ -165,6 +165,8 @@ export const LinearAgentPrompt = Schema.Struct({
 	body: Schema.String,
 	createdAt: Schema.String,
 	user: LinearParticipant,
+	/** Linear's signal on the prompt, such as `stop` when the user asks the agent to stop. */
+	signal: Schema.NullOr(Schema.String),
 })
 export type LinearAgentPrompt = typeof LinearAgentPrompt.Type
 
@@ -182,9 +184,20 @@ export const LinearAgentGuidance = Schema.Struct({
 })
 export type LinearAgentGuidance = typeof LinearAgentGuidance.Type
 
+/**
+ * What an Agent Activity says.
+ *
+ * - `Thought`: a note on the agent's progress; only a thought may be ephemeral
+ * - `Response`: the work is done; the session becomes `complete`
+ * - `Error`: the work failed; the session becomes `error`
+ * - `Elicitation`: a question for the user; the session becomes `awaitingInput`. With `options`, Linear
+ *   shows them as choices (the `select` signal); the user may still reply in free text.
+ */
 export const LinearActivityContent = Schema.TaggedUnion({
 	Thought: { body: Schema.String },
 	Response: { body: Schema.String },
+	Error: { body: Schema.String },
+	Elicitation: { body: Schema.String, options: Schema.optionalKey(Schema.Array(Schema.NonEmptyString)) },
 })
 export type LinearActivityContent = typeof LinearActivityContent.Type
 
@@ -194,11 +207,47 @@ export const LinearAgentActivityReceipt = Schema.Struct({
 })
 export type LinearAgentActivityReceipt = typeof LinearAgentActivityReceipt.Type
 
+/**
+ * Create one Agent Activity.
+ *
+ * @property activityId - a UUID v4 the caller chooses. Linear refuses a second activity with the same
+ * ID with `already_exists`, so a retry with the same ID cannot post twice. Without it, Linear picks one.
+ * @property deliveryId - the webhook delivery that led to the activity, when there is one; used for tracing
+ */
 export const LinearCreateAgentActivityRequest = Schema.Struct({
 	organizationId: LinearOrganizationId,
 	sessionId: LinearAgentSessionId,
 	content: LinearActivityContent,
 	ephemeral: Schema.Boolean,
-	deliveryId: LinearWebhookDeliveryId,
+	activityId: Schema.optionalKey(LinearAgentActivityId),
+	deliveryId: Schema.optionalKey(LinearWebhookDeliveryId),
 })
 export type LinearCreateAgentActivityRequest = typeof LinearCreateAgentActivityRequest.Type
+
+/** A labeled link Linear shows on an Agent Session. */
+export const LinearAgentSessionExternalUrl = Schema.Struct({
+	label: Schema.NonEmptyString,
+	url: Schema.NonEmptyString,
+})
+export type LinearAgentSessionExternalUrl = typeof LinearAgentSessionExternalUrl.Type
+
+/** One step of an Agent Plan. Linear has no failed status; a failed step is `canceled`. */
+export const LinearAgentPlanStep = Schema.Struct({
+	content: Schema.NonEmptyString,
+	status: Schema.Literals(['pending', 'inProgress', 'completed', 'canceled']),
+})
+export type LinearAgentPlanStep = typeof LinearAgentPlanStep.Type
+
+/**
+ * Change an Agent Session.
+ *
+ * @property addedExternalUrls - links to add; Linear keeps the ones it has, and adding one does not change the session's state
+ * @property plan - the whole Agent Plan, which replaces the one before. Linear's Agent Plan API is a technology preview.
+ */
+export const LinearUpdateAgentSessionRequest = Schema.Struct({
+	organizationId: LinearOrganizationId,
+	sessionId: LinearAgentSessionId,
+	addedExternalUrls: Schema.optionalKey(Schema.Array(LinearAgentSessionExternalUrl)),
+	plan: Schema.optionalKey(Schema.Array(LinearAgentPlanStep)),
+})
+export type LinearUpdateAgentSessionRequest = typeof LinearUpdateAgentSessionRequest.Type

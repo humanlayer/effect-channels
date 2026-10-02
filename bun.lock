@@ -29,6 +29,7 @@
     "examples/alchemy-cloudflare": {
       "name": "alchemy-cloudflare",
       "dependencies": {
+        "@effect/platform-bun": "catalog:",
         "@effect/platform-node": "catalog:",
         "@humanlayer/channels-alchemy-cloudflare": "workspace:*",
         "@humanlayer/channels-delivery-next": "workspace:*",
@@ -54,35 +55,11 @@
       "devDependencies": {
         "@effect/platform-node": "catalog:",
         "@effect/vitest": "catalog:",
+        "@humanlayer/channels-github-next": "workspace:*",
+        "@humanlayer/channels-linear-next": "workspace:*",
+        "@humanlayer/channels-slack-next": "workspace:*",
         "typescript": "catalog:",
       },
-    },
-    "packages/delivery": {
-      "name": "@humanlayer/channels-delivery",
-      "version": "0.0.0",
-      "devDependencies": {
-        "@effect/platform-node": "catalog:",
-        "@effect/sql-pg": "catalog:",
-        "@effect/vitest": "catalog:",
-        "@types/pg": "^8.15.6",
-        "effect": "catalog:",
-        "redis": "^5.11.0",
-        "typescript": "catalog:",
-        "vitest": "catalog:",
-      },
-      "peerDependencies": {
-        "@effect/platform-node": "4.0.0-rc.112",
-        "@effect/sql-pg": "4.0.0-rc.112",
-        "@types/pg": "^8.15.6",
-        "effect": "4.0.0-rc.112",
-        "redis": ">=5.0.0 <7.0.0",
-      },
-      "optionalPeers": [
-        "@effect/platform-node",
-        "@effect/sql-pg",
-        "@types/pg",
-        "redis",
-      ],
     },
     "packages/delivery-next": {
       "name": "@humanlayer/channels-delivery-next",
@@ -95,25 +72,6 @@
         "@effect/platform-node": "catalog:",
         "@effect/vitest": "catalog:",
         "typescript": "catalog:",
-      },
-    },
-    "packages/github": {
-      "name": "@humanlayer/channels-github",
-      "version": "0.0.0",
-      "dependencies": {
-        "@humanlayer/channels-delivery": "workspace:*",
-      },
-      "devDependencies": {
-        "@effect/platform-node": "catalog:",
-        "@effect/vitest": "catalog:",
-        "@types/bun": "catalog:",
-        "effect": "catalog:",
-        "emulate": "0.11.0",
-        "typescript": "catalog:",
-        "vitest": "catalog:",
-      },
-      "peerDependencies": {
-        "effect": "4.0.0-rc.112",
       },
     },
     "packages/github-next": {
@@ -162,37 +120,6 @@
         "typescript": "catalog:",
         "vitest": "catalog:",
       },
-    },
-    "packages/slack": {
-      "name": "@humanlayer/channels-slack",
-      "version": "0.0.0",
-      "dependencies": {
-        "@humanlayer/channels-delivery": "workspace:*",
-      },
-      "devDependencies": {
-        "@effect/platform-node": "catalog:",
-        "@effect/sql-pg": "catalog:",
-        "@effect/vitest": "catalog:",
-        "@types/pg": "^8.15.6",
-        "effect": "catalog:",
-        "emulate": "catalog:",
-        "redis": "^5.11.0",
-        "typescript": "catalog:",
-        "vitest": "catalog:",
-      },
-      "peerDependencies": {
-        "@effect/platform-node": "4.0.0-rc.112",
-        "@effect/sql-pg": "4.0.0-rc.112",
-        "@types/pg": "^8.15.6",
-        "effect": "4.0.0-rc.112",
-        "redis": ">=5.0.0 <7.0.0",
-      },
-      "optionalPeers": [
-        "@effect/platform-node",
-        "@effect/sql-pg",
-        "@types/pg",
-        "redis",
-      ],
     },
     "packages/slack-next": {
       "name": "@humanlayer/channels-slack-next",
@@ -353,6 +280,8 @@
 
     "@effect/language-service": ["@effect/language-service@0.87.2", "", { "bin": { "effect-language-service": "cli.js" } }, "sha512-CfiSoaVQO8pZgaMZGw5VvMvRGybsJ2LaSDoLYaqiVGvo/YYPYVR2GzUKY0h1NtIweq/+SQ5XLrvtzPIttWQ0GQ=="],
 
+    "@effect/platform-bun": ["@effect/platform-bun@4.0.0-rc.112", "", { "dependencies": { "@effect/platform-node-shared": "^4.0.0-rc.112" }, "peerDependencies": { "effect": "^4.0.0-rc.112" } }, "sha512-Y5n2HhV/vsbrJls9ukX42RL7zqXQxISHegWFsP9njsCyDmGTnq7QYSO82rglwrLPwtTrv5dkSRTuGw4+oXxgMg=="],
+
     "@effect/platform-node": ["@effect/platform-node@4.0.0-rc.112", "", { "dependencies": { "@effect/platform-node-shared": "^4.0.0-rc.112", "mime": "^4.1.0", "undici": "^8.10.0" }, "peerDependencies": { "effect": "^4.0.0-rc.112", "redis": ">=5.0.0 <7.0.0" } }, "sha512-/BMAcdNGQQskLmI0Zoa95KfTZkr9HV9N4NSxaSrusG6GeW6Ulp9KvZ+Rlaiw8lnOt43CXjFLdfll5/k5rxL4hQ=="],
 
     "@effect/platform-node-shared": ["@effect/platform-node-shared@4.0.0-rc.112", "", { "dependencies": { "@types/ws": "^8.18.1", "ws": "^8.21.3" }, "peerDependencies": { "effect": "^4.0.0-rc.112" } }, "sha512-ttjz0xKamFN7vL8pNDYVwddJLjZvqKePc05djlz2VcdaKbLsnYbtMnL1rbOfHgEnIUSHGh7FkjaN4DM1Ov81sQ=="],
@@ -453,19 +382,13 @@
 
     "@humanlayer/channels-alchemy-cloudflare": ["@humanlayer/channels-alchemy-cloudflare@workspace:packages/alchemy-cloudflare"],
 
-    "@humanlayer/channels-delivery": ["@humanlayer/channels-delivery@workspace:packages/delivery"],
-
     "@humanlayer/channels-delivery-next": ["@humanlayer/channels-delivery-next@workspace:packages/delivery-next"],
-
-    "@humanlayer/channels-github": ["@humanlayer/channels-github@workspace:packages/github"],
 
     "@humanlayer/channels-github-next": ["@humanlayer/channels-github-next@workspace:packages/github-next"],
 
     "@humanlayer/channels-linear-next": ["@humanlayer/channels-linear-next@workspace:packages/linear-next"],
 
     "@humanlayer/channels-redis": ["@humanlayer/channels-redis@workspace:packages/redis"],
-
-    "@humanlayer/channels-slack": ["@humanlayer/channels-slack@workspace:packages/slack"],
 
     "@humanlayer/channels-slack-next": ["@humanlayer/channels-slack-next@workspace:packages/slack-next"],
 
@@ -806,8 +729,6 @@
     "@types/ms": ["@types/ms@2.1.0", "", {}, "sha512-GsCCIZDE/p3i96vtEqx+7dBUGXrc7zeSK3wwPHIaRThS+9OhWIXRqzs4d6k1SVU8g91DrNRWxWUGhp5KXQb2VA=="],
 
     "@types/node": ["@types/node@26.2.0", "", { "dependencies": { "undici-types": "~8.3.0" } }, "sha512-5IviulTZeRNp2vAJ514cc/HUlY5nZ9fCbq9DMyC52BrhFZACo3nI0R7qBxhQmo/d27NFe96ur/b7Wwxklda+kg=="],
-
-    "@types/pg": ["@types/pg@8.23.1", "", { "dependencies": { "@types/node": "*", "pg-protocol": "*", "pg-types": "^2.2.0" } }, "sha512-fKVHpikPdg4GKks3JuLEhvwSyvwzF23hnabPy6DD8ljVbC7+6J5dQzdv4arV6jqq57djnMgs1HKBxX4P8aBI3A=="],
 
     "@types/unist": ["@types/unist@3.0.3", "", {}, "sha512-ko/gIFJRv177XgZsZcBwnqJN5x/Gien8qNOn0D5bQU/zAzVf9Zt3BlcUiLqhV9y4ARk0GbT3tnUiPNgnTXzc/Q=="],
 
@@ -1525,8 +1446,6 @@
 
     "zwitch": ["zwitch@2.0.4", "", {}, "sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A=="],
 
-    "@humanlayer/channels-github/emulate": ["emulate@0.11.0", "", { "dependencies": { "commander": "^14", "picocolors": "^1.1.1", "yaml": "^2" }, "bin": { "emulate": "dist/index.js" } }, "sha512-R2kKebrA5MZRKv0U3vNJuOHPbtK34KZlNCTvVMAC6y/LuAD4jjNFgkMX79fth3ETrCXWA5IB/PwiID0Y04s0cw=="],
-
     "@octokit/plugin-paginate-rest/@octokit/types": ["@octokit/types@16.0.0", "", { "dependencies": { "@octokit/openapi-types": "^27.0.0" } }, "sha512-sKq+9r1Mm4efXW1FCk7hFSeJo4QKreL/tTbR0rz/qx/r1Oa2VV83LTA/H/MuCOX7uCIJmQVRKBcbmWoySjAnSg=="],
 
     "@octokit/plugin-rest-endpoint-methods/@octokit/types": ["@octokit/types@16.0.0", "", { "dependencies": { "@octokit/openapi-types": "^27.0.0" } }, "sha512-sKq+9r1Mm4efXW1FCk7hFSeJo4QKreL/tTbR0rz/qx/r1Oa2VV83LTA/H/MuCOX7uCIJmQVRKBcbmWoySjAnSg=="],
@@ -1534,8 +1453,6 @@
     "@prisma/dev/std-env": ["std-env@3.10.0", "", {}, "sha512-5GS12FdOZNliM5mAOxFRg7Ir0pWz8MdpYm6AY6VPkGpbA7ZzmbzNcBJQ0GPvvyWgcY7QAhCgf9Uy89I03faLkg=="],
 
     "@prisma/dev/valibot": ["valibot@1.2.0", "", { "peerDependencies": { "typescript": ">=5" }, "optionalPeers": ["typescript"] }, "sha512-mm1rxUsmOxzrwnX5arGS+U4T25RdvpPjPN4yR0u9pUBov9+zGVtO84tif1eY4r6zWxVxu3KzIyknJy3rxfRZZg=="],
-
-    "@types/pg/pg-types": ["pg-types@2.2.0", "", { "dependencies": { "pg-int8": "1.0.1", "postgres-array": "~2.0.0", "postgres-bytea": "~1.0.0", "postgres-date": "~1.0.4", "postgres-interval": "^1.1.0" } }, "sha512-qTAAlrEsl8s4OiEQY69wDvcMIdQN6wdz5ojQiOy6YRMuynxenON0O5oCpJI6lshc6scgAY8qvJ2On/p+CXY0GA=="],
 
     "alchemy/undici": ["undici@7.30.0", "", {}, "sha512-dkrQXeHSaoamnItlYbmzG0wFYrM0ZwDxCIg0A7aKjTyyhh9svRzCNFEzV+Vm05/yehjCzjDZ31KXfGEjYSztDQ=="],
 
@@ -1568,14 +1485,6 @@
     "@octokit/plugin-paginate-rest/@octokit/types/@octokit/openapi-types": ["@octokit/openapi-types@27.0.0", "", {}, "sha512-whrdktVs1h6gtR+09+QsNk2+FO+49j6ga1c55YZudfEG+oKJVvJLQi3zkOm5JjiUXAagWK2tI2kTGKJ2Ys7MGA=="],
 
     "@octokit/plugin-rest-endpoint-methods/@octokit/types/@octokit/openapi-types": ["@octokit/openapi-types@27.0.0", "", {}, "sha512-whrdktVs1h6gtR+09+QsNk2+FO+49j6ga1c55YZudfEG+oKJVvJLQi3zkOm5JjiUXAagWK2tI2kTGKJ2Ys7MGA=="],
-
-    "@types/pg/pg-types/postgres-array": ["postgres-array@2.0.0", "", {}, "sha512-VpZrUqU5A69eQyW2c5CA1jtLecCsN2U/bD6VilrFDWq5+5UIEVO7nazS3TEcHf1zuPYO/sqGvUvW62g86RXZuA=="],
-
-    "@types/pg/pg-types/postgres-bytea": ["postgres-bytea@1.0.1", "", {}, "sha512-5+5HqXnsZPE65IJZSMkZtURARZelel2oXUEO8rH83VS/hxH5vv1uHquPg5wZs8yMAfdv971IU+kcPUczi7NVBQ=="],
-
-    "@types/pg/pg-types/postgres-date": ["postgres-date@1.0.7", "", {}, "sha512-suDmjLVQg78nMK2UZ454hAG+OAW+HQPZ6n++TNDUX+L0+uUlLywnoxJKDou51Zm+zTCjrCl0Nq6J9C5hP9vK/Q=="],
-
-    "@types/pg/pg-types/postgres-interval": ["postgres-interval@1.2.0", "", { "dependencies": { "xtend": "^4.0.0" } }, "sha512-9ZhXKM/rw350N1ovuWHbGxnGh/SNJ4cnxHiM0rxE4VN41wsg8P8zWn9hv/buK00RP4WvlOyr/RBDiptyxVbkZQ=="],
 
     "pg/pg-types/postgres-array": ["postgres-array@2.0.0", "", {}, "sha512-VpZrUqU5A69eQyW2c5CA1jtLecCsN2U/bD6VilrFDWq5+5UIEVO7nazS3TEcHf1zuPYO/sqGvUvW62g86RXZuA=="],
 

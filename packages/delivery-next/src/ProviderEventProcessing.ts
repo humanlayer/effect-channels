@@ -4,6 +4,7 @@
  */
 import { Schema, Effect, Predicate } from 'effect'
 
+import type { ProviderDeliveryExecution } from './DeliveryContext'
 import { DeliveryAdmission } from './MailboxDelivery'
 
 /** Providers can elect to handle an event that's read */
@@ -70,8 +71,14 @@ export type DeliveryAdmissionBatch = typeof DeliveryAdmissionBatch.Type
 export type ProviderEventProcessor<R = never> = {
 	readonly namespace: string
 	readonly providerName: string
+	/**
+	 * Run one attempt at one batch. When `execution.prepared` is present the processor must run the
+	 * callback it names; otherwise it selects one and saves the choice with `execution.prepare` before
+	 * running any application code.
+	 */
 	readonly process: (
 		admissions: DeliveryAdmissionBatch,
+		execution: ProviderDeliveryExecution,
 	) => Effect.Effect<ProviderEventResult, ProviderEventProcessorError, R>
 }
 
@@ -82,7 +89,10 @@ export type ProviderEventProcessor<R = never> = {
  * @returns
  */
 export const processProviderEvent = <R = never>(processors: ReadonlyArray<ProviderEventProcessor<R>>) =>
-	Effect.fn('delivery.process_provider_event')(function* (admissions: DeliveryAdmissionBatch) {
+	Effect.fn('delivery.process_provider_event')(function* (
+		admissions: DeliveryAdmissionBatch,
+		execution: ProviderDeliveryExecution,
+	) {
 		const admission = admissions[0]
 		const processor = processors.find(
 			(candidate) => candidate.namespace === admission.namespace && candidate.providerName === admission.provider,
@@ -105,5 +115,5 @@ export const processProviderEvent = <R = never>(processors: ReadonlyArray<Provid
 			})
 		}
 
-		return yield* processor.process(admissions)
+		return yield* processor.process(admissions, execution)
 	})

@@ -1,9 +1,10 @@
 /**
  * This file defines `ChannelsRedis.make`: Redis mailbox storage as `Channels.make` takes it.
  */
-import type { ChannelsStorage } from '@humanlayer/channels-delivery-next'
+import type { ChannelsStorage, DeliveryControlBackend } from '@humanlayer/channels-delivery-next'
 import { Layer } from 'effect'
 
+import { DeliveryControlBackendRedis } from './DeliveryControlBackend'
 import { MailboxDeliveryRedis } from './MailboxDelivery'
 import { MailboxProcessingBackendRedis } from './MailboxProcessingBackend'
 import { MailboxSubscriptionsRedis } from './MailboxSubscriptions'
@@ -17,7 +18,10 @@ export type MakeOptions = {
 	readonly polling: { readonly intervalMs: number }
 }
 
-/** The application provides the `Redis` client. */
+/**
+ * The application provides the `Redis` client. The storage supports handoff, so a bot on it can serve
+ * `bot.deliveryApi` for remote workers.
+ */
 export const make = (options: MakeOptions) =>
 	({
 		polling: options.polling,
@@ -25,5 +29,6 @@ export const make = (options: MakeOptions) =>
 			MailboxDeliveryRedis,
 			MailboxProcessingBackendRedis({ claimLimit: options.claimLimit }),
 			MailboxSubscriptionsRedis,
+			DeliveryControlBackendRedis,
 		),
-	}) satisfies ChannelsStorage<unknown, unknown>
+	}) satisfies ChannelsStorage<unknown, unknown, DeliveryControlBackend>

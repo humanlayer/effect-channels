@@ -12,8 +12,11 @@ import { TestClock } from 'effect/testing'
 import { expect } from 'vite-plus/test'
 
 import {
+	BatchId,
 	ClaimFrozenBatch,
 	ClaimWaitingEvents,
+	DeliveryAccessToken,
+	PreparedDeliveryInvocation,
 	DeliveryAdmission,
 	MailboxDelivery,
 	MailboxProcessingAttemptCompleted,
@@ -26,9 +29,9 @@ import {
 	type WaitingMailbox,
 } from '../src'
 
-const leaseMs = 1_000
+export const leaseMs = 1_000
 
-const event = (eventId: string, resourceId = 'thread-1') =>
+export const event = (eventId: string, resourceId = 'thread-1') =>
 	DeliveryAdmission.make({
 		namespace: 'contract',
 		provider: 'example',
@@ -38,19 +41,19 @@ const event = (eventId: string, resourceId = 'thread-1') =>
 		payload: { eventId },
 	})
 
-const mailboxKey = deliveryMailboxKey(event('any'))
+export const mailboxKey = deliveryMailboxKey(event('any'))
 
-const deliver = (eventId: string, resourceId?: string) =>
+export const deliver = (eventId: string, resourceId?: string) =>
 	Effect.gen(function* () {
 		return yield* (yield* MailboxDelivery).deliver(event(eventId, resourceId))
 	})
 
-const findReady = Effect.gen(function* () {
+export const findReady = Effect.gen(function* () {
 	return yield* (yield* MailboxProcessingBackend).findReadyMailboxes
 })
 
 /** The one waiting mailbox the test expects to be ready. Dies loudly when the store reports anything else. */
-const findWaiting = Effect.gen(function* () {
+export const findWaiting = Effect.gen(function* () {
 	const ready = yield* findReady
 	const [only] = ready.flatMap((mailbox) =>
 		Match.value(mailbox).pipe(
@@ -64,21 +67,32 @@ const findWaiting = Effect.gen(function* () {
 	return only
 })
 
-const claimUpTo = (upToSequence: number) =>
+let batchesMade = 0
+
+/** A new batch's identity, as mailbox processing would make it. */
+export const nextBatchIdentity = () => {
+	batchesMade += 1
+	return {
+		batchId: BatchId.make(`batch-${batchesMade}`),
+		accessToken: DeliveryAccessToken.make(`token-${batchesMade}`),
+	}
+}
+
+export const claimUpTo = (upToSequence: number, identity = nextBatchIdentity()) =>
 	Effect.gen(function* () {
 		const backend = yield* MailboxProcessingBackend
-		return yield* backend.claimMailbox(ClaimWaitingEvents.make({ mailboxKey, upToSequence, leaseMs }))
+		return yield* backend.claimMailbox(ClaimWaitingEvents.make({ mailboxKey, upToSequence, leaseMs, ...identity }))
 	})
 
-const claimFrozen = Effect.gen(function* () {
+export const claimFrozen = Effect.gen(function* () {
 	const backend = yield* MailboxProcessingBackend
 	return yield* backend.claimMailbox(ClaimFrozenBatch.make({ mailboxKey, leaseMs }))
 })
 
-const claimAll = (waiting: WaitingMailbox) =>
+export const claimAll = (waiting: WaitingMailbox) =>
 	claimUpTo(waiting.waiting.lastSequence).pipe(Effect.map(Option.getOrThrow))
 
-const settle = (claim: ClaimedMailboxBatch, result: 'completed' | { readonly retryAfterMs: number }) =>
+export const settle = (claim: ClaimedMailboxBatch, result: 'completed' | { readonly retryAfterMs: number }) =>
 	Effect.gen(function* () {
 		const backend = yield* MailboxProcessingBackend
 		const finishedAt = Timestamp.make(yield* Clock.currentTimeMillis)
@@ -95,7 +109,15 @@ const settle = (claim: ClaimedMailboxBatch, result: 'completed' | { readonly ret
 		})
 	})
 
-const eventIds = (claim: ClaimedMailboxBatch) => claim.admissions.map(({ eventId }) => eventId)
+export const eventIds = (claim: ClaimedMailboxBatch) => claim.admissions.map(({ eventId }) => eventId)
+
+export const preparation = (callback: string) =>
+	PreparedDeliveryInvocation.make({
+		callback,
+		presentationVersion: 1,
+		destination: { thread: 'thread-1' },
+		supportedOperations: ['PresentOutcome', 'AddExternalLink', 'CreateMessage'],
+	})
 
 export const mailboxBackendContract = <E>(
 	storeName: string,
@@ -315,6 +337,76 @@ export const mailboxBackendContract = <E>(
 			}),
 		)
 	}
+
+	contract(
+		'keeps the batch ID and token across recovery, with a new claim ID',
+		Effect.gen(function* () {
+			yield* deliver('a')
+			const identity = nextBatchIdentity()
+			const first = Option.getOrThrow(yield* claimUpTo((yield* findWaiting).waiting.lastSequence, identity))
+			expect(first.batchId).toEqual(identity.batchId)
+			expect(first.accessToken).toEqual(identity.accessToken)
+			yield* TestClock.adjust(leaseMs)
+			const recovered = Option.getOrThrow(yield* claimFrozen)
+			expect(recovered.batchId).toEqual(identity.batchId)
+			expect(recovered.accessToken).toEqual(identity.accessToken)
+			expect(recovered.claimId === first.claimId).toEqual(false)
+		}),
+	)
+
+	contract(
+		'gives the next batch its own batch ID',
+		Effect.gen(function* () {
+			yield* deliver('a')
+			const first = yield* claimAll(yield* findWaiting)
+			yield* deliver('b')
+			yield* settle(first, 'completed')
+			const identity = nextBatchIdentity()
+			const second = Option.getOrThrow(yield* claimUpTo((yield* findWaiting).waiting.lastSequence, identity))
+			expect(second.batchId).toEqual(identity.batchId)
+			expect(second.batchId === first.batchId).toEqual(false)
+		}),
+	)
+
+	contract(
+		'saves one preparation per batch and hands it to the next attempt',
+		Effect.gen(function* () {
+			const backend = yield* MailboxProcessingBackend
+			yield* deliver('a')
+			const first = yield* claimAll(yield* findWaiting)
+			expect(first.prepared).toBeUndefined()
+			const owner = { mailboxKey, claimId: first.claimId }
+			expect(yield* backend.prepareDelivery({ ...owner, prepared: preparation('onNewMention') })).toEqual(
+				preparation('onNewMention'),
+			)
+			expect(yield* backend.prepareDelivery({ ...owner, prepared: preparation('onNewMention') })).toEqual(
+				preparation('onNewMention'),
+			)
+			const conflict = yield* backend
+				.prepareDelivery({ ...owner, prepared: preparation('onSubscribedThreadEvents') })
+				.pipe(Effect.flip)
+			expect(conflict._tag).toEqual('DeliveryPreparationConflict')
+			yield* settle(first, { retryAfterMs: 100 })
+			yield* TestClock.adjust(100)
+			const retry = Option.getOrThrow(yield* claimFrozen)
+			expect(retry.prepared).toEqual(preparation('onNewMention'))
+		}),
+	)
+
+	contract(
+		'refuses a preparation from a claim that no longer owns the batch',
+		Effect.gen(function* () {
+			const backend = yield* MailboxProcessingBackend
+			yield* deliver('a')
+			const abandoned = yield* claimAll(yield* findWaiting)
+			yield* TestClock.adjust(leaseMs)
+			Option.getOrThrow(yield* claimFrozen)
+			const lost = yield* backend
+				.prepareDelivery({ mailboxKey, claimId: abandoned.claimId, prepared: preparation('onNewMention') })
+				.pipe(Effect.flip)
+			expect(lost._tag).toEqual('MailboxProcessingClaimLost')
+		}),
+	)
 
 	contract(
 		'goes quiet once everything is settled',

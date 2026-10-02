@@ -1,4 +1,4 @@
-import { Schema } from 'effect'
+import { Order, Schema } from 'effect'
 
 import { GitHubId } from './GitHubIdentity'
 
@@ -60,6 +60,13 @@ export interface GitHubReviewCommentRef extends Schema.Schema.Type<typeof GitHub
 
 export const GitHubCommentRef = Schema.Union([GitHubIssueCommentRef, GitHubReviewCommentRef])
 export type GitHubCommentRef = typeof GitHubCommentRef.Type
+
+/** What a reaction goes on: a comment, or an issue or pull request itself. */
+export const GitHubReactionTarget = Schema.TaggedUnion({
+	Comment: { comment: GitHubCommentRef },
+	Discussion: { discussion: GitHubDiscussionRef },
+})
+export type GitHubReactionTarget = typeof GitHubReactionTarget.Type
 
 export const GitHubParticipant = Schema.Struct({
 	id: GitHubId,
@@ -296,3 +303,18 @@ export interface GitHubTeam extends Schema.Schema.Type<typeof GitHubTeam> {}
 
 export const GitHubReaction = Schema.Literals(['+1', '-1', 'laugh', 'confused', 'heart', 'hooray', 'rocket', 'eyes'])
 export type GitHubReaction = typeof GitHubReaction.Type
+
+/** A user's access to a repository, lowest first: GitHub's built-in repository roles, and `none`. */
+export const GitHubAccessLevel = Schema.Literals(['none', 'read', 'triage', 'write', 'maintain', 'admin'])
+export type GitHubAccessLevel = typeof GitHubAccessLevel.Type
+
+/** Orders access levels from `none` to `admin`. */
+export const GitHubAccessLevelOrder: Order.Order<GitHubAccessLevel> = Order.mapInput(Order.Number, (level) =>
+	GitHubAccessLevel.literals.indexOf(level),
+)
+
+/** Whether `access` is `minimum` or higher. */
+export const hasGitHubAccess = (input: {
+	readonly access: GitHubAccessLevel
+	readonly minimum: GitHubAccessLevel
+}): boolean => Order.isGreaterThanOrEqualTo(GitHubAccessLevelOrder)(input.access, input.minimum)

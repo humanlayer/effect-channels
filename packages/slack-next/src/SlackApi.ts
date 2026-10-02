@@ -18,6 +18,7 @@ import {
 	SlackFileRef,
 	SlackMessageCount,
 	SlackMessageRef,
+	SlackPlan,
 	SlackReaction,
 	SlackThreadRef,
 	SlackUploadFileInput,
@@ -32,6 +33,29 @@ export type SlackListChannelMessagesBeforeThreadRequest = typeof SlackListChanne
 
 export const SlackPostToThreadRequest = Schema.Struct({ thread: SlackThreadRef, content: SlackContent })
 export type SlackPostToThreadRequest = typeof SlackPostToThreadRequest.Type
+
+/** Replace the text of a message the bot posted. */
+export const SlackUpdateMessageRequest = Schema.Struct({ message: SlackMessageRef, content: SlackContent })
+export type SlackUpdateMessageRequest = typeof SlackUpdateMessageRequest.Type
+
+/** Remove a message the bot posted. */
+export const SlackDeleteMessageRequest = Schema.Struct({ message: SlackMessageRef })
+export type SlackDeleteMessageRequest = typeof SlackDeleteMessageRequest.Type
+
+/** Show a status line under the thread, such as `Running tests…`, while the agent works. */
+export const SlackThreadStatusRequest = Schema.Struct({
+	thread: SlackThreadRef,
+	status: Schema.NonEmptyString,
+})
+export type SlackThreadStatusRequest = typeof SlackThreadStatusRequest.Type
+
+/** Post a plan to a thread as a message holding one plan block. */
+export const SlackPostPlanRequest = Schema.Struct({ thread: SlackThreadRef, plan: SlackPlan })
+export type SlackPostPlanRequest = typeof SlackPostPlanRequest.Type
+
+/** Replace the plan a plan message shows. */
+export const SlackUpdatePlanRequest = Schema.Struct({ message: SlackMessageRef, plan: SlackPlan })
+export type SlackUpdatePlanRequest = typeof SlackUpdatePlanRequest.Type
 
 export const SlackPostToChannelRequest = Schema.Struct({ channel: SlackChannelRef, content: SlackContent })
 export type SlackPostToChannelRequest = typeof SlackPostToChannelRequest.Type
@@ -90,8 +114,14 @@ export const SlackApiOperation = Schema.Literals([
 	'list_channel_messages_before_thread',
 	'post',
 	'post_to_channel',
+	'update_message',
+	'delete_message',
+	'set_thread_status',
+	'clear_thread_status',
 	'start_typing',
 	'stream',
+	'post_plan',
+	'update_plan',
 	'add_reaction',
 	'remove_reaction',
 	'resolve_participant',
@@ -110,6 +140,18 @@ export class SlackApiError extends Schema.TaggedError<SlackApiError>()('SlackApi
 	operation: SlackApiOperation,
 	message: Schema.String,
 }) {}
+
+/** Slack's answers when it refuses the bot token itself, not one request. */
+const rejectedTokenErrors: ReadonlySet<string> = new Set([
+	'account_inactive',
+	'invalid_auth',
+	'not_authed',
+	'token_expired',
+	'token_revoked',
+])
+
+/** Whether Slack refused the bot token itself. Another attempt with the same token cannot succeed. */
+export const isSlackTokenRejected = (error: SlackApiError) => rejectedTokenErrors.has(error.message)
 
 export const SlackFileScope = Schema.Literals(['files:read', 'files:write'])
 export type SlackFileScope = typeof SlackFileScope.Type
@@ -154,11 +196,23 @@ export class SlackApi extends Context.Service<
 		) => Effect.Effect<SlackMessages, SlackApiError>
 		readonly postToThread: (request: SlackPostToThreadRequest) => Effect.Effect<SlackSentMessage, SlackApiError>
 		readonly postToChannel: (request: SlackPostToChannelRequest) => Effect.Effect<SlackSentMessage, SlackApiError>
+		/** `chat.update`: replace the text of a message the bot posted. */
+		readonly updateMessage: (request: SlackUpdateMessageRequest) => Effect.Effect<void, SlackApiError>
+		/** `chat.delete`: remove a message the bot posted. */
+		readonly deleteMessage: (request: SlackDeleteMessageRequest) => Effect.Effect<void, SlackApiError>
 		readonly startTyping: (request: SlackThreadRequest) => Effect.Effect<void, SlackApiError>
+		/** `assistant.threads.setStatus`: show a status line under the thread while the agent works. */
+		readonly setThreadStatus: (request: SlackThreadStatusRequest) => Effect.Effect<void, SlackApiError>
+		/** `agents.sessions.setStatus` `active`: clear the thread's status line and typing indicator. */
+		readonly clearThreadStatus: (request: SlackThreadRequest) => Effect.Effect<void, SlackApiError>
 		readonly stream: <E, R>(
 			thread: SlackThreadRef,
 			chunks: Stream.Stream<SlackStreamChunk, E, R>,
 		) => Effect.Effect<SlackSentMessage, SlackApiError | E, R>
+		/** `chat.postMessage` with one plan block: post a task list to a thread. */
+		readonly postPlanToThread: (request: SlackPostPlanRequest) => Effect.Effect<SlackMessageRef, SlackApiError>
+		/** `chat.update` with one plan block: replace the whole task list a plan message shows. */
+		readonly updatePlan: (request: SlackUpdatePlanRequest) => Effect.Effect<void, SlackApiError>
 		readonly addReaction: (request: SlackReactionRequest) => Effect.Effect<void, SlackApiError>
 		readonly removeReaction: (request: SlackReactionRequest) => Effect.Effect<void, SlackApiError>
 		readonly resolveParticipant: (

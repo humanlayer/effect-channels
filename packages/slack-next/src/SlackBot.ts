@@ -2,10 +2,10 @@
  * This file defines `SlackBot.make`: the Slack provider as `Channels.make` takes it.
  */
 import {
-	ChannelsProviderUnavailable,
 	type ChannelsProvider,
 	type DeliveryMode,
 	type DeliveryAdmissionBatch,
+	type ProviderDeliveryExecution,
 	type RawWebhookInput,
 } from '@humanlayer/channels-delivery-next'
 import { Effect, Layer, Predicate } from 'effect'
@@ -14,6 +14,7 @@ import type { Config, Redacted } from 'effect'
 import { SlackApi } from './SlackApi'
 import { SlackApiLive } from './SlackApiLive'
 import { SlackCallbacks, type SlackCallbackHandlers } from './SlackCallbacks'
+import { makeSlackOutputProcessor } from './SlackDeliveryOutput'
 import { makeSlackEventProcessor } from './SlackEventProcessor'
 import { makeSlackWebhookProvider } from './SlackWebhookProvider'
 
@@ -32,27 +33,23 @@ export type MakeOptions<E, R, ApiError, ApiRequirements> = {
 	readonly slackApi?: Layer.Layer<SlackApi, ApiError, ApiRequirements>
 }
 
-const unavailable = <A, E, R>(step: string, effect: Effect.Effect<A, E, R>) =>
-	effect.pipe(
-		Effect.tapError((error) =>
-			Effect.logError('Slack bot could not be built', error).pipe(Effect.annotateLogs({ step })),
-		),
-		Effect.mapError(() => ChannelsProviderUnavailable.make({ provider: 'slack' })),
-	)
-
 export const make = <E, R, ApiError = never, ApiRequirements = never>(
 	options: MakeOptions<E, R, ApiError, ApiRequirements>,
-): ChannelsProvider<{ readonly build: ApiRequirements; readonly process: Exclude<R, SlackApi> }> => {
+): ChannelsProvider<{
+	readonly build: ApiRequirements
+	readonly process: Exclude<R, SlackApi>
+	readonly error: Config.ConfigError | ApiError
+}> => {
 	const callbacks = SlackCallbacks.layer(options.handlers)
 	const buildSlackApi = Predicate.isUndefined(options.slackApi)
-		? unavailable('build_slack_api', Layer.build(SlackApiLive))
-		: unavailable('build_slack_api', Layer.build(options.slackApi))
+		? Layer.build(SlackApiLive)
+		: Layer.build(options.slackApi)
 
 	return {
 		providerName: 'slack',
 		deliveryMode: options.deliveryMode,
 		webhookProvider: Effect.fn('slack.bot.build_webhook_provider')(function* ({ namespace }) {
-			const signingSecret = yield* unavailable('read_signing_secret', options.signingSecret)
+			const signingSecret = yield* options.signingSecret
 			const slackApi = yield* buildSlackApi
 			const webhookProvider = makeSlackWebhookProvider({ namespace, signingSecret })
 			return {
@@ -67,9 +64,15 @@ export const make = <E, R, ApiError = never, ApiRequirements = never>(
 				namespace: eventProcessor.namespace,
 				providerName: eventProcessor.providerName,
 				/** The callbacks are wrapped per batch because they read the services of the running batch. */
-				process: (admissions: DeliveryAdmissionBatch) =>
-					eventProcessor.process(admissions).pipe(Effect.provide(callbacks), Effect.provide(slackApi)),
+				process: (admissions: DeliveryAdmissionBatch, execution: ProviderDeliveryExecution) =>
+					eventProcessor
+						.process(admissions, execution)
+						.pipe(Effect.provide(callbacks), Effect.provide(slackApi)),
 			}
+		}),
+		outputProcessor: Effect.fn('slack.bot.build_output_processor')(function* ({ namespace }) {
+			const slackApi = yield* buildSlackApi
+			return yield* makeSlackOutputProcessor({ namespace }).pipe(Effect.provide(slackApi))
 		}),
 	}
 }

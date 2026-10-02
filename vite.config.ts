@@ -25,6 +25,7 @@ export default defineConfig({
 		options: {
 			typeAware: true,
 			typeCheck: true,
+
 		},
 		jsPlugins: [
 			{ name: 'import-extensions', specifier: './tools/oxlint/import-extensions.mjs' },
@@ -90,6 +91,7 @@ export default defineConfig({
 			'anti-slop-effect/no-manual-effect-error-tag': 'error',
 			'anti-slop-effect/no-manual-tag-comparison': 'error',
 			'anti-slop-effect/no-manual-tagged-construction': 'error',
+			'anti-slop-effect/no-manual-tagged-type': 'error',
 			'anti-slop-effect/prefer-effect-match': 'error',
 			'automation/no-ambient-nondeterminism': 'error',
 			'automation/no-api-backend-imports': 'error',
@@ -219,6 +221,7 @@ export default defineConfig({
 			'tools/diff-check/**',
 			'tools/typed/**',
 		],
+		sortPackageJson: true
 	},
 	run: {
 		cache: true,

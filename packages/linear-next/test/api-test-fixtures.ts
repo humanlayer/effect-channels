@@ -56,6 +56,7 @@ export const decodeGraphqlRequest =
 /** A complete LinearApi whose every method dies; tests override the methods they exercise. */
 export const unusedLinearApi: LinearApi['Service'] = {
 	createAgentActivity: () => Effect.die('unused LinearApi method'),
+	updateAgentSession: () => Effect.die('unused LinearApi method'),
 	getIssue: () => Effect.die('unused LinearApi method'),
 	updateIssue: () => Effect.die('unused LinearApi method'),
 	listAssignableUsers: () => Effect.die('unused LinearApi method'),

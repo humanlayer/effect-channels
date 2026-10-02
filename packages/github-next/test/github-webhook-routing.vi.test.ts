@@ -1,5 +1,6 @@
 import { describe, it } from '@effect/vitest'
 import {
+	DeliveryContext,
 	DeliveryReceipt,
 	type DeliveryAdmission,
 	MailboxSubscriptions,
@@ -52,6 +53,7 @@ describe('GitHub webhook routing', () => {
 					trigger: expect.objectContaining({ _tag: 'GitHubIssueOpened', title: 'Process this issue' }),
 					issue: expect.objectContaining({ ref: expect.objectContaining({ number: issueNumber }) }),
 				}),
+				expect.any(DeliveryContext),
 			)
 		}),
 	)

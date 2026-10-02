@@ -1,5 +1,5 @@
 import { describe, it } from '@effect/vitest'
-import { ChannelsProviderUnavailable, SerialDeliveryMode } from '@humanlayer/channels-delivery-next'
+import { SerialDeliveryMode } from '@humanlayer/channels-delivery-next'
 import { Config, ConfigProvider, Effect, Layer, Redacted, Schema } from 'effect'
 
 import { LinearAuth, LinearBot, LinearOrganizationId, LinearUserId } from '../src'
@@ -67,7 +67,7 @@ describe('LinearBot.make', () => {
 			const error = yield* provider
 				.webhookProvider({ namespace: 'linear-bot-test' })
 				.pipe(Effect.scoped, Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({}))), Effect.flip)
-			expect(error).toEqual(ChannelsProviderUnavailable.make({ provider: 'linear' }))
+			expect(error).toBeInstanceOf(Config.ConfigError)
 		}),
 	)
 
@@ -88,7 +88,7 @@ describe('LinearBot.make', () => {
 			const error = yield* provider
 				.webhookProvider({ namespace: 'linear-bot-test' })
 				.pipe(Effect.scoped, Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({}))), Effect.flip)
-			expect(error).toEqual(ChannelsProviderUnavailable.make({ provider: 'linear' }))
+			expect(error).toBeInstanceOf(Config.ConfigError)
 
 			const configured = yield* LinearBot.make({
 				...providerOptions(),
@@ -117,7 +117,7 @@ describe('LinearBot.make', () => {
 			const error = yield* provider
 				.webhookProvider({ namespace: 'linear-bot-test' })
 				.pipe(Effect.scoped, Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({}))), Effect.flip)
-			expect(error).toEqual(ChannelsProviderUnavailable.make({ provider: 'linear' }))
+			expect(error).toBeInstanceOf(Config.ConfigError)
 		}),
 	)
 })

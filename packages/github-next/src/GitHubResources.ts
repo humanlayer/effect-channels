@@ -15,6 +15,7 @@ import type {
 import { GitHubApi } from './GitHubApi'
 import { GitHubId } from './GitHubIdentity'
 import {
+	type GitHubAccessLevel,
 	GitHubActionsJobRef,
 	type GitHubActionsJobInfo,
 	GitHubCheckAnnotation,
@@ -32,6 +33,7 @@ import {
 	type GitHubPullRequestInfo,
 	GitHubPullRequestRef,
 	type GitHubReaction,
+	GitHubReactionTarget,
 	GitHubReview,
 	GitHubReviewCommentRef,
 	GitHubParticipant,
@@ -140,6 +142,13 @@ export class GitHubIssue extends Schema.TaggedClass<GitHubIssue>()('GitHubIssue'
 	removeAllLabels(): Effect.Effect<void, GitHubApiError, GitHubApi> {
 		return Effect.flatMap(GitHubApi, (api) => api.removeAllIssueLabels({ issue: this.ref })).pipe(
 			Effect.withSpan('github.issue.remove_all_labels', { attributes: issueSpanAttributes(this.ref) }),
+		)
+	}
+
+	/** A user's access to this issue's repository, such as the author of an event. */
+	fetchUserAccess(login: string): Effect.Effect<GitHubAccessLevel, GitHubApiError, GitHubApi> {
+		return Effect.flatMap(GitHubApi, (api) => api.fetchUserAccess({ repository: this.ref, login })).pipe(
+			Effect.withSpan('github.issue.fetch_user_access', { attributes: issueSpanAttributes(this.ref) }),
 		)
 	}
 }
@@ -306,6 +315,15 @@ export class GitHubPullRequest extends Schema.TaggedClass<GitHubPullRequest>()('
 			Effect.withSpan('github.pull_request.merge', { attributes: pullRequestSpanAttributes(this.ref) }),
 		)
 	}
+
+	/** A user's access to this pull request's repository, such as the author of an event. */
+	fetchUserAccess(login: string): Effect.Effect<GitHubAccessLevel, GitHubApiError, GitHubApi> {
+		return Effect.flatMap(GitHubApi, (api) => api.fetchUserAccess({ repository: this.ref, login })).pipe(
+			Effect.withSpan('github.pull_request.fetch_user_access', {
+				attributes: pullRequestSpanAttributes(this.ref),
+			}),
+		)
+	}
 }
 
 export class GitHubCheckRun extends Schema.TaggedClass<GitHubCheckRun>()('GitHubCheckRun', {
@@ -365,13 +383,13 @@ export class GitHubIssueComment extends Schema.TaggedClass<GitHubIssueComment>()
 	}
 
 	addReaction(reaction: GitHubReaction): Effect.Effect<void, GitHubApiError, GitHubApi> {
-		return Effect.flatMap(GitHubApi, (api) => api.addReaction({ comment: this.ref, reaction })).pipe(
+		return Effect.flatMap(GitHubApi, (api) => api.addReaction({ target: GitHubReactionTarget.cases.Comment.make({ comment: this.ref }), reaction })).pipe(
 			Effect.withSpan('github.comment.add_reaction'),
 		)
 	}
 
 	removeReaction(reaction: GitHubReaction): Effect.Effect<void, GitHubApiError, GitHubApi> {
-		return Effect.flatMap(GitHubApi, (api) => api.removeReaction({ comment: this.ref, reaction })).pipe(
+		return Effect.flatMap(GitHubApi, (api) => api.removeReaction({ target: GitHubReactionTarget.cases.Comment.make({ comment: this.ref }), reaction })).pipe(
 			Effect.withSpan('github.comment.remove_reaction'),
 		)
 	}
@@ -412,13 +430,13 @@ export class GitHubReviewComment extends Schema.TaggedClass<GitHubReviewComment>
 	}
 
 	addReaction(reaction: GitHubReaction): Effect.Effect<void, GitHubApiError, GitHubApi> {
-		return Effect.flatMap(GitHubApi, (api) => api.addReaction({ comment: this.ref, reaction })).pipe(
+		return Effect.flatMap(GitHubApi, (api) => api.addReaction({ target: GitHubReactionTarget.cases.Comment.make({ comment: this.ref }), reaction })).pipe(
 			Effect.withSpan('github.review_comment.add_reaction'),
 		)
 	}
 
 	removeReaction(reaction: GitHubReaction): Effect.Effect<void, GitHubApiError, GitHubApi> {
-		return Effect.flatMap(GitHubApi, (api) => api.removeReaction({ comment: this.ref, reaction })).pipe(
+		return Effect.flatMap(GitHubApi, (api) => api.removeReaction({ target: GitHubReactionTarget.cases.Comment.make({ comment: this.ref }), reaction })).pipe(
 			Effect.withSpan('github.review_comment.remove_reaction'),
 		)
 	}

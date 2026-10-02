@@ -1,16 +1,18 @@
 import {
-	ChannelsProviderUnavailable,
 	type ChannelsProvider,
 	type DeliveryAdmissionBatch,
+	type ProviderDeliveryExecution,
 	SerialDeliveryMode,
 } from '@humanlayer/channels-delivery-next'
 import { Config, Effect, Layer, Match, Option, Predicate, Redacted, Schema } from 'effect'
+import type { Context, Scope } from 'effect'
 
 import { LinearApi } from './LinearApi'
 import { LinearApiLiveOptions, makeLinearApiLive } from './LinearApiLive'
 import type { AuthenticationInput } from './LinearAuth'
 import * as LinearAuth from './LinearAuth'
 import { LinearCallbacks, type LinearCallbackHandlers } from './LinearCallbacks'
+import { makeLinearOutputProcessor } from './LinearDeliveryOutput'
 import { makeLinearEventProcessor } from './LinearEventProcessor'
 import { LinearOrganizationId, LinearUserId } from './LinearIdentity'
 import { makeLinearWebhookProvider } from './LinearWebhookProvider'
@@ -31,21 +33,17 @@ export type MakeOptions<E, R, ApiError, ApiRequirements> = {
 	readonly maxTimestampAgeMs?: number
 }
 
-const unavailable = <A, E, R>(step: string, effect: Effect.Effect<A, E, R>) =>
-	effect.pipe(
-		Effect.tapError((error) =>
-			Effect.logError('Linear bot could not be built', error).pipe(Effect.annotateLogs({ step })),
-		),
-		Effect.mapError(() => ChannelsProviderUnavailable.make({ provider: 'linear' })),
-	)
-
 export const make = <E, R, ApiError = never, ApiRequirements = never>(
 	options: MakeOptions<E, R, ApiError, ApiRequirements>,
-): ChannelsProvider<{ readonly build: ApiRequirements; readonly process: Exclude<R, LinearApi> }> => {
+): ChannelsProvider<{
+	readonly build: ApiRequirements
+	readonly process: Exclude<R, LinearApi>
+	readonly error: Config.ConfigError | ApiError
+}> => {
 	const callbacks = LinearCallbacks.layer(options.handlers)
 	const readBotConfiguration = Schema.is(LinearBotConfiguration)(options.bot)
 		? Effect.succeed(options.bot)
-		: unavailable('read_bot_configuration', options.bot)
+		: options.bot
 	const botConfig = Schema.is(LinearBotConfiguration)(options.bot) ? Config.succeed(options.bot) : options.bot
 	const readOauthClientId = LinearAuth.resolve(options.auth).pipe(
 		Effect.flatMap((auth) =>
@@ -64,9 +62,13 @@ export const make = <E, R, ApiError = never, ApiRequirements = never>(
 			appUserId: botConfig.pipe(Config.map((bot) => bot.appUserId)),
 		}),
 	)
-	const buildLinearApi = Predicate.isUndefined(options.linearApi)
-		? unavailable('build_linear_api', Layer.build(defaultApi))
-		: unavailable('build_linear_api', Layer.build(options.linearApi))
+	const buildLinearApi: Effect.Effect<
+		Context.Context<LinearApi>,
+		Config.ConfigError | ApiError,
+		ApiRequirements | Scope.Scope
+	> = Predicate.isUndefined(options.linearApi)
+		? Layer.build(defaultApi)
+		: Layer.build(options.linearApi)
 	/** Builds the API layer so the host discovers its configuration; the live layer makes no requests until an operation runs. */
 	const discoverLinearApiConfiguration = Effect.asVoid(buildLinearApi)
 
@@ -75,9 +77,9 @@ export const make = <E, R, ApiError = never, ApiRequirements = never>(
 		/** Agent Session events must begin processing immediately and one at a time so the automatic acknowledgement can satisfy Linear's ten-second deadline. */
 		deliveryMode: SerialDeliveryMode.make({}),
 		webhookProvider: Effect.fn('linear.bot.build_webhook_provider')(function* ({ namespace }) {
-			const webhookSecret = yield* unavailable('read_webhook_secret', options.webhookSecret)
+			const webhookSecret = yield* options.webhookSecret
 			const bot = yield* readBotConfiguration
-			const oauthClientId = yield* unavailable('read_client_id', readOauthClientId)
+			const oauthClientId = yield* readOauthClientId
 			yield* discoverLinearApiConfiguration
 			return makeLinearWebhookProvider({
 				namespace,
@@ -91,7 +93,7 @@ export const make = <E, R, ApiError = never, ApiRequirements = never>(
 		}),
 		eventProcessor: Effect.fn('linear.bot.build_event_processor')(function* ({ namespace }) {
 			const bot = yield* readBotConfiguration
-			const oauthClientId = yield* unavailable('read_client_id', readOauthClientId)
+			const oauthClientId = yield* readOauthClientId
 			const linearApi = yield* buildLinearApi
 			const processor = makeLinearEventProcessor({
 				namespace,
@@ -101,9 +103,15 @@ export const make = <E, R, ApiError = never, ApiRequirements = never>(
 			return {
 				namespace: processor.namespace,
 				providerName: processor.providerName,
-				process: (admissions: DeliveryAdmissionBatch) =>
-					processor.process(admissions).pipe(Effect.provide(callbacks), Effect.provide(linearApi)),
+				process: (admissions: DeliveryAdmissionBatch, execution: ProviderDeliveryExecution) =>
+					processor.process(admissions, execution).pipe(Effect.provide(callbacks), Effect.provide(linearApi)),
 			}
+		}),
+		/** Sends a handed-off delivery's output: Agent Activities for a session, comments for an issue. */
+		outputProcessor: Effect.fn('linear.bot.build_output_processor')(function* ({ namespace }) {
+			const bot = yield* readBotConfiguration
+			const linearApi = yield* buildLinearApi
+			return yield* makeLinearOutputProcessor({ namespace, bot }).pipe(Effect.provide(linearApi))
 		}),
 	}
 }

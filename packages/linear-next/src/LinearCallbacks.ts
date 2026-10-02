@@ -1,3 +1,4 @@
+import type { DeliveryCallbackResult, DeliveryContext } from '@humanlayer/channels-delivery-next'
 import { Cause, Context, Effect, Layer, Option, Predicate, Schema } from 'effect'
 
 import type { LinearCallbackEventMap } from './LinearCallbackEvents'
@@ -23,10 +24,16 @@ export class LinearCallbackError extends Schema.TaggedError<LinearCallbackError>
 	reason: Schema.Literals(['failed', 'unexpected']),
 }) {}
 
-/** The application handler for one Linear callback. */
+/**
+ * The application handler for one Linear callback.
+ *
+ * `delivery` names this delivery and can hand it to a remote worker; return what `delivery.handoff()`
+ * returned, or nothing.
+ */
 export type LinearCallbackHandler<Name extends keyof LinearCallbackEventMap, E = never, R = never> = (
 	event: LinearCallbackEventMap[Name],
-) => Effect.Effect<void, E, R>
+	delivery: DeliveryContext,
+) => Effect.Effect<DeliveryCallbackResult, E, R>
 
 export type LinearCallbackHandlers<E, R> = {
 	readonly [Name in keyof LinearCallbackEventMap]?: LinearCallbackHandler<Name, E, R>
@@ -75,8 +82,8 @@ const wrapCallback = <Name extends keyof LinearCallbackEventMap, E, R>(
 ) =>
 	Predicate.isUndefined(handler)
 		? undefined
-		: Effect.fn(`linear.callbacks.${callback}`)((event: LinearCallbackEventMap[Name]) =>
-				Effect.suspend(() => handler(event)).pipe(
+		: Effect.fn(`linear.callbacks.${callback}`)((event: LinearCallbackEventMap[Name], delivery: DeliveryContext) =>
+				Effect.suspend(() => handler(event, delivery)).pipe(
 					Effect.provide(context),
 					Effect.catchCause((cause) => narrowCause(callback, cause)),
 				),

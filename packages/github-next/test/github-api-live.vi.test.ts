@@ -1,12 +1,20 @@
 import { describe, it } from '@effect/vitest'
-import { Clock, ConfigProvider, Effect, Layer, Match, Queue, Ref } from 'effect'
+import { Array as Arr, Clock, ConfigProvider, Effect, Layer, Logger, Match, Queue, Ref } from 'effect'
 import { TestClock } from 'effect/testing'
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http'
 
 import { GitHubApi } from '../src/GitHubApi'
 import { GitHubApiLiveBase, GitHubAppSigner } from '../src/GitHubApiLive'
 import { GitHubId } from '../src/GitHubIdentity'
-import { GitHubContent, GitHubIssueCommentRef, GitHubIssueRef, GitHubPullRequestRef } from '../src/GitHubModels'
+import {
+	GitHubAccessLevel,
+	GitHubAccessLevelOrder,
+	GitHubContent,
+	GitHubIssueCommentRef,
+	GitHubIssueRef,
+	GitHubPullRequestRef,
+	hasGitHubAccess,
+} from '../src/GitHubModels'
 
 const issue = GitHubIssueRef.make({
 	installationId: GitHubId.make(100),
@@ -129,6 +137,26 @@ describe('GitHubApiLive', () => {
 		}),
 	)
 
+	it.effect('logs app credentials GitHub refuses even with a new installation token, without the key', ({ expect }) =>
+		Effect.gen(function* () {
+			const logs: Array<string> = []
+			const logger = Logger.layer([Logger.make((entry) => logs.push(JSON.stringify(Logger.formatStructured.log(entry))))])
+			const httpClient = HttpClient.make((request) =>
+				Effect.succeed(HttpClientResponse.fromWeb(request, Response.json({ message: 'Bad credentials' }, { status: 401 }))),
+			)
+			const error = yield* Effect.flatMap(GitHubApi, (api) => api.fetchIssue({ issue })).pipe(
+				Effect.provide(makeLayer(httpClient)),
+				Effect.provide(logger),
+				Effect.flip,
+			)
+			expect(error).toMatchObject({ reason: 'authentication', retryable: false })
+			const output = logs.join('\n')
+			expect(output).toContain('GitHub rejected the app credentials; check GITHUB_APP_ID and GITHUB_PRIVATE_KEY')
+			expect(output).toContain('"level":"ERROR"')
+			expect(output).not.toContain('private-key-never-log')
+		}),
+	)
+
 	it.effect('invalidates a rejected installation token and retries once', ({ expect }) =>
 		Effect.gen(function* () {
 			const tokenRequests = yield* Ref.make(0)
@@ -229,8 +257,8 @@ describe('GitHubApiLive', () => {
 					comment: { pullRequest, id: GitHubId.make(500) },
 					content,
 				})
-				yield* api.addReaction({ comment: issueComment, reaction: 'eyes' })
-				yield* api.removeReaction({ comment: issueComment, reaction: 'eyes' })
+				yield* api.addReaction({ target: { _tag: 'Comment', comment: issueComment }, reaction: 'eyes' })
+				yield* api.removeReaction({ target: { _tag: 'Comment', comment: issueComment }, reaction: 'eyes' })
 			}).pipe(Effect.provide(layer))
 
 			expect(yield* Queue.take(calls)).toEqual({
@@ -252,6 +280,63 @@ describe('GitHubApiLive', () => {
 				path: '/repos/humanlayer/channels/issues/comments/400/reactions/700',
 				body: '',
 			})
+		}),
+	)
+
+	it.effect('reacts to an issue or pull request itself, and removes only the bot’s own reaction', ({ expect }) =>
+		Effect.gen(function* () {
+			const calls = yield* Queue.unbounded<{ readonly method: string; readonly path: string; readonly body: string }>()
+			const httpClient = HttpClient.make((request) =>
+				Effect.gen(function* () {
+					const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie)
+					const url = new URL(web.url)
+					if (url.pathname.startsWith('/app/installations/')) {
+						return HttpClientResponse.fromWeb(request, tokenResponse())
+					}
+					const body = web.method === 'POST' ? yield* Effect.promise(() => web.text()) : ''
+					yield* Queue.offer(calls, { method: web.method, path: url.pathname, body })
+					if (web.method === 'GET') {
+						return HttpClientResponse.fromWeb(
+							request,
+							Response.json([
+								{ id: 701, content: 'eyes', user: { id: 1, login: 'someone', type: 'User' } },
+								{ id: 702, content: 'eyes', user: participant },
+							]),
+						)
+					}
+					if (web.method === 'DELETE') {
+						return HttpClientResponse.fromWeb(request, new Response(null, { status: 204 }))
+					}
+					/** GitHub answers 200, not 201, when the bot already has this reaction. */
+					return HttpClientResponse.fromWeb(request, Response.json({ id: 702, content: 'eyes', user: participant }))
+				}),
+			)
+
+			yield* Effect.gen(function* () {
+				const api = yield* GitHubApi
+				yield* api.addReaction({ target: { _tag: 'Discussion', discussion: { _tag: 'Issue', ref: issue } }, reaction: 'eyes' })
+				yield* api.addReaction({
+					target: { _tag: 'Discussion', discussion: { _tag: 'PullRequest', ref: pullRequest } },
+					reaction: 'eyes',
+				})
+				yield* api.removeReaction({
+					target: { _tag: 'Discussion', discussion: { _tag: 'PullRequest', ref: pullRequest } },
+					reaction: 'eyes',
+				})
+				yield* api.removeReaction({
+					target: { _tag: 'Discussion', discussion: { _tag: 'Issue', ref: issue } },
+					reaction: 'rocket',
+				})
+			}).pipe(Effect.provide(makeLayer(httpClient)))
+
+			expect(Array.from(yield* Queue.takeAll(calls))).toEqual([
+				{ method: 'POST', path: '/repos/humanlayer/channels/issues/42/reactions', body: '{"content":"eyes"}' },
+				{ method: 'POST', path: '/repos/humanlayer/channels/issues/42/reactions', body: '{"content":"eyes"}' },
+				{ method: 'GET', path: '/repos/humanlayer/channels/issues/42/reactions', body: '' },
+				{ method: 'DELETE', path: '/repos/humanlayer/channels/issues/42/reactions/702', body: '' },
+				/** No `rocket` from the bot: nothing to delete. */
+				{ method: 'GET', path: '/repos/humanlayer/channels/issues/42/reactions', body: '' },
+			])
 		}),
 	)
 
@@ -290,8 +375,8 @@ describe('GitHubApiLive', () => {
 
 			yield* Effect.gen(function* () {
 				const api = yield* GitHubApi
-				yield* api.removeReaction({ comment, reaction: 'eyes' })
-				yield* api.removeReaction({ comment, reaction: 'eyes' })
+				yield* api.removeReaction({ target: { _tag: 'Comment', comment }, reaction: 'eyes' })
+				yield* api.removeReaction({ target: { _tag: 'Comment', comment }, reaction: 'eyes' })
 			}).pipe(Effect.provide(makeLayer(httpClient, null)))
 
 			const observed = yield* Queue.takeAll(calls)
@@ -402,6 +487,100 @@ describe('GitHubApiLive', () => {
 			yield* Ref.set(reset, '0')
 			const elapsed = yield* fetchError
 			expect(elapsed).toMatchObject({ reason: 'rate_limited', retryAfterMs: 0 })
+		}),
+	)
+})
+
+describe('GitHub user access', () => {
+	/** Answers the permission API from `answers` by login, and records every permission request it gets. */
+	const permissionClient = (
+		requests: Queue.Queue<{ readonly method: string; readonly path: string }>,
+		answers: ReadonlyMap<string, Response>,
+	) =>
+		HttpClient.make((request) =>
+			Effect.gen(function* () {
+				const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie)
+				const url = new URL(web.url)
+				if (url.pathname.startsWith('/app/installations/')) {
+					return HttpClientResponse.fromWeb(request, tokenResponse())
+				}
+				yield* Queue.offer(requests, { method: web.method, path: url.pathname })
+				const login = decodeURIComponent(url.pathname.split('/').at(-2) ?? '')
+				const answer = answers.get(login)
+				if (answer === undefined)
+					return yield* Effect.die(new Error(`Unexpected GitHub request ${url.pathname}`))
+				return HttpClientResponse.fromWeb(request, answer)
+			}),
+		)
+
+	const permission = (legacy: string, roleName: string) =>
+		Response.json({ permission: legacy, role_name: roleName, user: { login: 'someone', id: 1, type: 'User' } })
+
+	it.effect('uses a built-in role, and falls back to the legacy permission for a custom role', ({ expect }) =>
+		Effect.gen(function* () {
+			const requests = yield* Queue.unbounded<{ readonly method: string; readonly path: string }>()
+			const answers = new Map([
+				['K-Mistele', permission('admin', 'admin')],
+				['octocat', permission('read', 'read')],
+				['maintainer', permission('write', 'maintain')],
+				['triager', permission('read', 'triage')],
+				['custom[bot]', permission('write', 'security-reviewer')],
+			])
+			const access = yield* Effect.forEach(Array.from(answers.keys()), (login) =>
+				Effect.flatMap(GitHubApi, (api) => api.fetchUserAccess({ repository: issue, login })),
+			).pipe(Effect.provide(makeLayer(permissionClient(requests, answers))))
+
+			expect(access).toEqual(['admin', 'read', 'maintain', 'triage', 'write'])
+			expect(Array.from(yield* Queue.takeAll(requests))).toEqual([
+				{ method: 'GET', path: '/repos/humanlayer/channels/collaborators/K-Mistele/permission' },
+				{ method: 'GET', path: '/repos/humanlayer/channels/collaborators/octocat/permission' },
+				{ method: 'GET', path: '/repos/humanlayer/channels/collaborators/maintainer/permission' },
+				{ method: 'GET', path: '/repos/humanlayer/channels/collaborators/triager/permission' },
+				{ method: 'GET', path: '/repos/humanlayer/channels/collaborators/custom%5Bbot%5D/permission' },
+			])
+		}),
+	)
+
+	it.effect('fails with GitHubApiError for an unknown user, a refusal, or a response it cannot read', ({ expect }) =>
+		Effect.gen(function* () {
+			const requests = yield* Queue.unbounded<{ readonly method: string; readonly path: string }>()
+			const answers = new Map([
+				['ghost', Response.json({ message: 'ghost is not a user' }, { status: 404 })],
+				['blocked', Response.json({ message: 'Resource not accessible by integration' }, { status: 403 })],
+				['outage', Response.json({}, { status: 502 })],
+				['odd-permission', permission('owner', 'admin')],
+				['no-role', Response.json({ permission: 'write' })],
+			])
+			const errors = yield* Effect.forEach(Array.from(answers.keys()), (login) =>
+				Effect.flatMap(GitHubApi, (api) => api.fetchUserAccess({ repository: issue, login })).pipe(Effect.flip),
+			).pipe(Effect.provide(makeLayer(permissionClient(requests, answers))))
+
+			expect(errors).toMatchObject([
+				{
+					_tag: 'GitHubApiError',
+					operation: 'fetch_user_access',
+					reason: 'not_found',
+					retryable: false,
+					status: 404,
+					message: 'ghost is not a user',
+				},
+				{ operation: 'fetch_user_access', reason: 'forbidden', retryable: false, status: 403 },
+				{ operation: 'fetch_user_access', reason: 'unavailable', retryable: true, status: 502 },
+				{ operation: 'fetch_user_access', reason: 'invalid_response', retryable: false },
+				{ operation: 'fetch_user_access', reason: 'invalid_response', retryable: false },
+			])
+			expect(yield* Queue.size(requests)).toBe(5)
+		}),
+	)
+
+	it.effect('orders access levels from none to admin', ({ expect }) =>
+		Effect.sync(() => {
+			expect(Arr.sort(['admin', 'none', 'write', 'read', 'maintain', 'triage'], GitHubAccessLevelOrder)).toEqual(
+				GitHubAccessLevel.literals,
+			)
+			expect(
+				GitHubAccessLevel.literals.filter((access) => hasGitHubAccess({ access, minimum: 'write' })),
+			).toEqual(['write', 'maintain', 'admin'])
 		}),
 	)
 })

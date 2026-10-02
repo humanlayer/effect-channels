@@ -9,7 +9,8 @@ import * as Effect from 'effect/Effect'
 import { HttpRouter, HttpServerResponse } from 'effect/unstable/http'
 import type { HttpIncomingMessage } from 'effect/unstable/http/HttpIncomingMessage'
 
-import { DeliveryAdmission, MailboxDelivery } from './MailboxDelivery'
+import { isRoutableMailboxKey } from './DeliveryReference'
+import { DeliveryAdmission, MailboxDelivery, deliveryMailboxKey } from './MailboxDelivery'
 
 /**
  * The provider failed to authenticate the webhook
@@ -159,8 +160,14 @@ export const webhookRoutes = <const Requirements extends ReadonlyArray<unknown>>
 				headers: request.headers,
 				body: yield* readBoundedBody(request, provider.maxBodyBytes),
 			})
+			/** A mailbox key too long for a delivery ID would become work nothing can route to. */
 			const deliverAdmission = (event: DeliveryAdmission) =>
-				mailbox.deliver(event).pipe(
+				Effect.gen(function* () {
+					if (!isRoutableMailboxKey(deliveryMailboxKey(event))) {
+						return yield* new WebhookPayloadInvalidError({ reason: 'mailbox_key_too_long' })
+					}
+					return yield* mailbox.deliver(event)
+				}).pipe(
 					Effect.tap((receipt) =>
 						Effect.logInfo('Mailbox admission recorded').pipe(
 							Effect.annotateLogs({

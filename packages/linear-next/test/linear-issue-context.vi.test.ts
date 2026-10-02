@@ -10,7 +10,7 @@ import { vi } from 'vite-plus/test'
 import { LinearApi } from '../src/LinearApi'
 import { type LinearCallbackHandler, LinearCallbacks } from '../src/LinearCallbacks'
 import { makeLinearEventProcessor } from '../src/LinearEventProcessor'
-import { appUserNotificationPayloads, linearNotificationAdmission } from './fixtures'
+import { firstAttempt, appUserNotificationPayloads, linearNotificationAdmission } from './fixtures'
 
 describe('Linear issue context', () => {
 	it.effect('builds a comment resource and delegates issue subscription methods', ({ expect }) =>
@@ -48,7 +48,7 @@ describe('Linear issue context', () => {
 				subscriptions,
 			)
 			yield* makeLinearEventProcessor({ namespace: 'linear-processing-test' })
-				.process([linearNotificationAdmission(appUserNotificationPayloads[1])])
+				.process([linearNotificationAdmission(appUserNotificationPayloads[1])], yield* firstAttempt())
 				.pipe(Effect.provide(services))
 			expect(subscribe).toHaveBeenCalledOnce()
 			expect(unsubscribe).toHaveBeenCalledOnce()

@@ -65,6 +65,23 @@ export type SlackMarkdownContent = typeof SlackMarkdownContent.Type
 export const SlackContent = Schema.Union([SlackPlainTextContent, SlackMarkdownContent])
 export type SlackContent = typeof SlackContent.Type
 
+/** One task of a Slack plan block: its state, with an optional note while it runs (`details`) or after (`output`). */
+export const SlackPlanTask = Schema.Struct({
+	id: Schema.NonEmptyString,
+	title: Schema.NonEmptyString,
+	status: Schema.Literals(['pending', 'in_progress', 'complete', 'error']),
+	details: Schema.optionalKey(Schema.NonEmptyString),
+	output: Schema.optionalKey(Schema.NonEmptyString),
+})
+export type SlackPlanTask = typeof SlackPlanTask.Type
+
+/** A task list shown as one Slack plan block, at most 50 tasks. */
+export const SlackPlan = Schema.Struct({
+	title: Schema.NonEmptyString,
+	tasks: Schema.Array(SlackPlanTask).check(Schema.isMaxLength(50)),
+})
+export type SlackPlan = typeof SlackPlan.Type
+
 export const SlackFileId = Schema.NonEmptyString.pipe(Schema.brand('SlackFileId'))
 export type SlackFileId = typeof SlackFileId.Type
 
@@ -166,6 +183,11 @@ export class SlackMessage extends Schema.TaggedClass<SlackMessage>()('SlackMessa
 	ref: SlackMessageRef,
 	thread: SlackThreadRef,
 	author: SlackParticipant,
+	/**
+	 * The author's workspace, from the message's `user_team`. Slack sends it in Slack Connect channels, where an
+	 * author from another workspace can post; when absent, treat the author as from the installation's workspace.
+	 */
+	authorTeamId: Schema.optionalKey(SlackTeamId),
 	content: SlackContent,
 	files: Schema.Array(SlackFile),
 	metadata: SlackMetadata,

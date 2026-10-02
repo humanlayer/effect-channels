@@ -1,4 +1,4 @@
-import { Config, Effect, Layer, Match, Option, Predicate, Schema, Stream, type Types } from 'effect'
+import { Config, Effect, Layer, Match, Option, Predicate, Schema, Stream, Struct, type Types } from 'effect'
 import * as FetchHttpClient from 'effect/unstable/http/FetchHttpClient'
 import * as HttpClient from 'effect/unstable/http/HttpClient'
 import type * as UrlParams from 'effect/unstable/http/UrlParams'
@@ -11,6 +11,7 @@ import { uploadSlackFileBytes } from './api/UploadSlackFileBytes'
 import {
 	SlackApi,
 	SlackApiError,
+	isSlackTokenRejected,
 	type SlackApiOperation,
 	type SlackDownloadFileRequest,
 	SlackFileAuthorizationError,
@@ -28,6 +29,7 @@ import {
 	SlackMessage,
 	type SlackMessages,
 	SlackMessageRef,
+	type SlackPlan,
 	SlackParticipant,
 	SlackSentMessage,
 	SlackThreadInfo,
@@ -50,6 +52,7 @@ const SlackMessageSnapshot = Schema.Struct({
 	text: Schema.optionalKey(Schema.String),
 	ts: SlackMessageTs,
 	thread_ts: Schema.optionalKey(SlackMessageTs),
+	user_team: Schema.optionalKey(SlackTeamId),
 	files: Schema.optionalKey(Schema.Array(SlackFileMetadata)),
 })
 type SlackMessageSnapshot = typeof SlackMessageSnapshot.Type
@@ -133,7 +136,7 @@ type SlackTaskUpdateJson = {
 	readonly type: 'task_update'
 	readonly id: string
 	readonly title: string
-	readonly status: 'in_progress' | 'complete' | 'error'
+	readonly status: 'pending' | 'in_progress' | 'complete' | 'error'
 	details?: string
 	output?: string
 }
@@ -204,6 +207,67 @@ const streamChunkJson = Match.type<SlackStreamChunk>().pipe(
 	}),
 )
 
+type SlackRichTextJson = {
+	readonly type: 'rich_text'
+	readonly elements: ReadonlyArray<Schema.Json>
+}
+
+/** One task of a plan block, as Block Kit takes it. */
+type SlackTaskCardJson = {
+	readonly type: 'task_card'
+	readonly task_id: string
+	readonly title: string
+	readonly status: SlackPlan['tasks'][number]['status']
+	details?: SlackRichTextJson
+	output?: SlackRichTextJson
+}
+
+/** Slack's rich text for a plan task's note. */
+const planNote = (text: string): SlackRichTextJson => ({
+	type: 'rich_text',
+	elements: [{ type: 'rich_text_section', elements: [{ type: 'text', text }] }],
+})
+
+/** A plan as one plan block, the way Slack's Block Kit takes it. */
+const planBlocks = (plan: SlackPlan): ReadonlyArray<Schema.Json> => [
+	{
+		type: 'plan',
+		title: plan.title,
+		tasks: plan.tasks.map((task) => {
+			const card: SlackTaskCardJson = {
+				type: 'task_card',
+				task_id: task.id,
+				title: task.title,
+				status: task.status,
+			}
+			if (Predicate.isNotUndefined(task.details)) card.details = planNote(task.details)
+			if (Predicate.isNotUndefined(task.output)) card.output = planNote(task.output)
+			return card
+		}),
+	},
+]
+
+/** The text Slack shows where it cannot show blocks, such as a notification. */
+const planFallbackText = (plan: SlackPlan) =>
+	[plan.title, ...plan.tasks.map((task) => `- (${task.status}) ${task.title}`)].join('\n')
+
+/** Log a refused bot token as a configuration error that names the setting to check. */
+const reportRejectedToken = <A>(effect: Effect.Effect<A, SlackApiError>) =>
+	effect.pipe(
+		Effect.tapError((error) =>
+			isSlackTokenRejected(error)
+				? Effect.logError('Slack rejected the bot token; check SLACK_BOT_TOKEN').pipe(
+						Effect.annotateLogs({
+							provider: 'slack',
+							credential: 'bot_token',
+							slack_error: error.message,
+							operation: error.operation,
+						}),
+					)
+				: Effect.void,
+		),
+	)
+
 const nextCursor = (metadata: typeof SlackResponseMetadata.Type | undefined) => {
 	const cursor = metadata?.next_cursor
 	return Predicate.isUndefined(cursor) || cursor.length === 0 ? Option.none<string>() : Option.some(cursor)
@@ -224,6 +288,7 @@ const SlackApiService = Layer.effect(
 				Effect.catchTag('SlackMissingScopeError', (error) =>
 					Effect.fail(SlackApiError.make({ operation: error.operation, message: 'missing_scope' })),
 				),
+				reportRejectedToken,
 			)
 
 		const callSlack = <A>(
@@ -261,7 +326,7 @@ const SlackApiService = Layer.effect(
 			}),
 		)
 		const setSessionStatus = (
-			operation: 'post' | 'start_typing',
+			operation: 'post' | 'start_typing' | 'clear_thread_status',
 			thread: SlackThreadRef,
 			status: 'active' | 'processing',
 		): Effect.Effect<void, SlackApiError> =>
@@ -370,6 +435,7 @@ const SlackApiService = Layer.effect(
 				content: SlackMarkdownContent.make({ markdown: snapshot.text ?? '' }),
 				files: (snapshot.files ?? []).map((file) => slackFileFromMetadata(thread.teamId, file)),
 				metadata: {},
+				...Struct.renameKeys(Struct.pick(snapshot, ['user_team']), { user_team: 'authorTeamId' }),
 			})
 		})
 
@@ -591,7 +657,37 @@ const SlackApiService = Layer.effect(
 					content,
 				}),
 			postToChannel: ({ channel, content }) => postMessage({ operation: 'post_to_channel', channel, content }),
+			updateMessage: ({ message, content }) =>
+				callSlack(
+					'update_message',
+					'chat.update',
+					{ channel: message.channelId, ts: message.messageTs, text: contentText(content) },
+					SlackResponse,
+				).pipe(Effect.asVoid, Effect.withSpan('slack.api.update_message')),
+			deleteMessage: ({ message }) =>
+				callSlack(
+					'delete_message',
+					'chat.delete',
+					{ channel: message.channelId, ts: message.messageTs },
+					SlackResponse,
+				).pipe(Effect.asVoid, Effect.withSpan('slack.api.delete_message')),
 			startTyping: ({ thread }) => setSessionStatus('start_typing', thread, 'processing'),
+			/**
+			 * Status text goes through the Assistants API, whose bridge shows it in the agent-session
+			 * loading line; `agents.sessions.setStatus` only knows lifecycle states.
+			 */
+			setThreadStatus: ({ thread, status }) =>
+				callSlack(
+					'set_thread_status',
+					'assistant.threads.setStatus',
+					{ channel_id: thread.channelId, thread_ts: thread.threadTs, status, loading_messages: [status] },
+					SlackResponse,
+				).pipe(Effect.asVoid, Effect.withSpan('slack.api.set_thread_status')),
+			/** The agent-session lifecycle has no "clear"; `active` ends the loading state. */
+			clearThreadStatus: ({ thread }) =>
+				setSessionStatus('clear_thread_status', thread, 'active').pipe(
+					Effect.withSpan('slack.api.clear_thread_status'),
+				),
 			stream: (thread, chunks) =>
 				Effect.gen(function* () {
 					const recipient = yield* thread.isDm
@@ -693,6 +789,34 @@ const SlackApiService = Layer.effect(
 					const message = yield* normalizeMessage(thread, snapshot)
 					return SlackSentMessage.make({ ref: message.ref, message })
 				}),
+			postPlanToThread: ({ thread, plan }) =>
+				callSlack(
+					'post_plan',
+					'chat.postMessage',
+					{
+						channel: thread.channelId,
+						thread_ts: thread.threadTs,
+						text: planFallbackText(plan),
+						blocks: planBlocks(plan),
+					},
+					SlackPostMessageResponse,
+				).pipe(
+					Effect.flatMap((response) =>
+						Predicate.isUndefined(response.ts)
+							? Effect.fail(SlackApiError.make({ operation: 'post_plan', message: 'Slack did not return a message ID' }))
+							: Effect.succeed(
+									SlackMessageRef.make({ teamId: thread.teamId, channelId: thread.channelId, messageTs: response.ts }),
+								),
+					),
+					Effect.withSpan('slack.api.post_plan'),
+				),
+			updatePlan: ({ message, plan }) =>
+				callSlack(
+					'update_plan',
+					'chat.update',
+					{ channel: message.channelId, ts: message.messageTs, text: planFallbackText(plan), blocks: planBlocks(plan) },
+					SlackResponse,
+				).pipe(Effect.asVoid, Effect.withSpan('slack.api.update_plan')),
 			addReaction: ({ message, reaction }) =>
 				callSlack(
 					'add_reaction',

@@ -3,7 +3,6 @@ import { describe, it } from '@effect/vitest'
 import {
 	Channels,
 	ChannelsMemory,
-	ChannelsProviderUnavailable,
 	QueueDeliveryMode,
 } from '@humanlayer/channels-delivery-next'
 import { Config, ConfigProvider, Deferred, Effect, Layer, Redacted } from 'effect'
@@ -31,7 +30,7 @@ describe('GitHubBot.make', () => {
 				.webhookProvider({ namespace: 'github-bot-test' })
 				.pipe(Effect.scoped, Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({}))), Effect.flip)
 
-			expect(error).toEqual(ChannelsProviderUnavailable.make({ provider: 'github' }))
+			expect(error).toBeInstanceOf(Config.ConfigError)
 		}),
 	)
 
@@ -48,7 +47,7 @@ describe('GitHubBot.make', () => {
 				.webhookProvider({ namespace: 'github-bot-test' })
 				.pipe(Effect.scoped, Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({}))), Effect.flip)
 
-			expect(error).toEqual(ChannelsProviderUnavailable.make({ provider: 'github' }))
+			expect(error).toBeInstanceOf(Config.ConfigError)
 		}),
 	)
 

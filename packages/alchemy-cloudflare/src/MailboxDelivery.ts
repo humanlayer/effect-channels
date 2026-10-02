@@ -5,12 +5,15 @@ import {
 	MailboxDelivery,
 	MailboxDeliveryUnavailable,
 	Timestamp,
+	requestDeliveryInterrupt,
 } from '@humanlayer/channels-delivery-next'
 import { RuntimeContext } from 'alchemy/RuntimeContext'
-import { Clock, Effect, Layer, Predicate, Schema } from 'effect'
+import { Clock, Context, Effect, Layer, Predicate, Schema } from 'effect'
 
+import type { DeliveryRequest, DeliveryResponse } from './DeliveryControl'
 import { DurableMailboxState, emptyMailboxState, mailboxStateKey } from './MailboxState'
 import { MailboxStorage } from './MailboxStorage'
+import { writeMailboxState } from './MailboxTransaction'
 
 const unavailable = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
 	effect.pipe(
@@ -50,16 +53,23 @@ export const makeDeliverFromDurableObjectStorage = Effect.gen(function* () {
 								),
 							),
 						)
-				const wakesMailbox = current.status === 'idle'
+				/** An interrupting event marks the active delivery in this same write. */
+				const deliveries = Predicate.isNotUndefined(admission.interrupt)
+					? requestDeliveryInterrupt(current.deliveries, now)
+					: current.deliveries
+				/**
+				 * A mailbox with an active delivery is woken by that delivery ending, not by new events. Its
+				 * alarm is still put back to `readyAt`, so an event reaches a mailbox that lost its alarm.
+				 */
+				const wakesMailbox = Predicate.isNull(deliveries.active)
 				const next = DurableMailboxState.make({
 					...current,
 					nextSequence: current.nextSequence + 1,
 					waiting: [...current.waiting, { sequence: current.nextSequence, arrivedAt: now, admission }],
-					readyAt: wakesMailbox ? now : current.readyAt,
+					deliveries: wakesMailbox ? { ...deliveries, readyAt: now } : deliveries,
 				})
 				yield* transaction.put(eventKey, current.nextSequence)
-				yield* transaction.put(mailboxStateKey, next)
-				if (wakesMailbox) yield* transaction.setAlarm(now)
+				yield* writeMailboxState(transaction, next)
 				return { accepted: true }
 			}),
 		)
@@ -71,14 +81,24 @@ export type DeliveryMailboxNamespace = {
 		readonly deliver: (
 			admission: DeliveryAdmission,
 		) => Effect.Effect<{ readonly accepted: boolean }, never, RuntimeContext>
+		/** Read or change a delivery this mailbox owns. See `DeliveryControlAlchemyCloudflare`. */
+		readonly deliveryRequest: (
+			request: typeof DeliveryRequest.Encoded,
+		) => Effect.Effect<typeof DeliveryResponse.Encoded, never, RuntimeContext>
 	}
 }
 
+/** The application's mailbox Durable Object namespace, as the Worker's routes reach it. */
+export class DeliveryMailboxes extends Context.Service<DeliveryMailboxes, DeliveryMailboxNamespace>()(
+	'@humanlayer/channels-alchemy-cloudflare/DeliveryMailboxes',
+) {}
+
 /** Route host-level MailboxDelivery calls to the application-owned DO namespace. */
-export const MailboxDeliveryAlchemyCloudflare = (mailboxes: DeliveryMailboxNamespace) =>
-	Layer.succeed(
-		MailboxDelivery,
-		MailboxDelivery.of({
+export const MailboxDeliveryAlchemyCloudflare = Layer.effect(
+	MailboxDelivery,
+	Effect.gen(function* () {
+		const mailboxes = yield* DeliveryMailboxes
+		return MailboxDelivery.of({
 			deliver: (admission: DeliveryAdmission) => {
 				const mailboxKey = deliveryMailboxKey(admission)
 				return mailboxes
@@ -90,7 +110,8 @@ export const MailboxDeliveryAlchemyCloudflare = (mailboxes: DeliveryMailboxNames
 						unavailable,
 					)
 			},
-		}),
-	)
+		})
+	}),
+)
 
 export const layer = MailboxDeliveryAlchemyCloudflare

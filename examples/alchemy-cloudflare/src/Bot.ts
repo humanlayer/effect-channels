@@ -3,18 +3,97 @@
  * The Worker and the Durable Object both build their half from this one value.
  */
 import { ChannelsCloudflare } from '@humanlayer/channels-alchemy-cloudflare'
-import { DebounceDeliveryMode } from '@humanlayer/channels-delivery-next'
-import { GitHubBot, GitHubContent, GitHubId, GitHubReaction } from '@humanlayer/channels-github-next'
-import { LinearAuth, LinearBot, LinearOrganizationId, LinearUserId } from '@humanlayer/channels-linear-next'
-import { SlackBot, SlackContent, SlackReaction } from '@humanlayer/channels-slack-next'
-import { Config, Effect, Predicate, Duration } from 'effect'
+import { DebounceDeliveryMode, ExternalLink, type DeliveryContext } from '@humanlayer/channels-delivery-next'
+import {
+	GitHubBot,
+	GitHubContent,
+	GitHubId,
+	GitHubReaction,
+	type GitHubMentioned,
+} from '@humanlayer/channels-github-next'
+import {
+	LinearAuth,
+	LinearBot,
+	LinearOrganizationId,
+	LinearUserId,
+	type LinearAgentSessionCreated,
+	type LinearAgentSessionPrompted,
+	type LinearIssueCreated,
+} from '@humanlayer/channels-linear-next'
+import { SlackBot, SlackContent, SlackReaction, type SlackNewMention } from '@humanlayer/channels-slack-next'
+import { Config, Effect, Match, Option, Predicate, Duration, Redacted } from 'effect'
 
-/** Slack with placeholder callbacks. `SlackApiLive`, the default, reads `SLACK_BOT_TOKEN`. */
+import { eventsFromGitHubWriters, isFromGitHubWriter, isFromSlackWorkspace } from './AuthorAccess'
+import { FakeRemoteAgent } from './FakeRemoteAgentDO'
+import { FlakySlackApiLive } from './FlakySlackApi'
+import { parseHandoffCommand, parseHandoffText, parseIssueHandoffText, type HandoffCommand } from './HandoffCommand'
+
+/**
+ * Start a job for this delivery on the fake remote agent. The delivery ID is the job's idempotency key,
+ * so a callback retry gets the job already started. Answers the job, with its run-log URL.
+ *
+ * `flaky` is a Slack-only test switch: only `FlakySlackApiLive` understands the marker it adds to the final
+ * message, so only the Slack callback passes `flakySlackOutput: true`. GitHub and Linear ignore the word.
+ */
+const startRemoteJob = Effect.fn('example.start_remote_job')(function* (
+	delivery: DeliveryContext,
+	command: HandoffCommand,
+	options: { readonly flakySlackOutput: boolean },
+) {
+	const agents = yield* FakeRemoteAgent
+	return yield* agents.getByName(delivery.deliveryId).start({
+		deliveryId: delivery.deliveryId,
+		accessToken: Redacted.value(delivery.accessToken),
+		delaySeconds: command.delaySeconds,
+		flakyOutput: options.flakySlackOutput,
+		askForInput: command.askForInput,
+		react: command.react,
+		plan: command.plan,
+	})
+})
+
+/** Lines of text, without the missing ones, as one string to look for a handoff command in. */
+const joinText = (lines: ReadonlyArray<string | null>) => lines.filter(Predicate.isNotNull).join('\n')
+
+/** The reply to any other mention. */
+const replyToMention = Effect.fn('example.slack.reply_to_mention')(function* (event: SlackNewMention) {
+	yield* event.thread.startTyping()
+	yield* Effect.sleep(2_000)
+	yield* event.thread.post(SlackContent.make({ markdown: 'Subscribed! subsequent messages will be logged' }))
+})
+
+/**
+ * `@bot handoff [seconds] [flaky]`: start a job on the remote agent, say so in the thread, and hand the
+ * delivery off. The callback then returns; the remote agent completes the delivery through the delivery
+ * API with a final message, which the bot posts to the thread. `flaky` makes that post fail for a while.
+ */
+const handOffMention = Effect.fn('example.slack.hand_off_mention')(function* (
+	event: SlackNewMention,
+	delivery: DeliveryContext,
+	command: HandoffCommand,
+) {
+	const { delaySeconds, flakyOutput } = command
+	yield* startRemoteJob(delivery, command, { flakySlackOutput: flakyOutput })
+	const flakyNote = flakyOutput ? ' Slack will refuse the final message for 20s, then it retries.' : ''
+	yield* event.thread.post(
+		SlackContent.make({
+			markdown: `Handed off \`${delivery.deliveryId}\`. Finishing in ${delaySeconds}s.${flakyNote}`,
+		}),
+	)
+	return yield* delivery.handoff()
+})
+
+/**
+ * Slack with placeholder callbacks. `FlakySlackApiLive` is `SlackApiLive`, which reads `SLACK_BOT_TOKEN`,
+ * except that it refuses a `flaky` handoff's final message for a while. Messages from another workspace,
+ * which a Slack Connect channel lets in, are ignored.
+ */
 const slack = SlackBot.make({
 	signingSecret: Config.redacted('SLACK_SIGNING_SECRET'),
+	slackApi: FlakySlackApiLive,
 	deliveryMode: DebounceDeliveryMode.make({ quietPeriodMs: 2_000, maxWaitMs: 10_000 }),
 	handlers: {
-		onNewMention: (event) =>
+		onNewMention: (event, delivery) =>
 			Effect.gen(function* () {
 				yield* Effect.logInfo('Slack new mention received').pipe(
 					Effect.annotateLogs({
@@ -24,12 +103,12 @@ const slack = SlackBot.make({
 						event_count: event.events.length + 1,
 					}),
 				)
+				if (!(yield* isFromSlackWorkspace(event.trigger))) return yield* Effect.void
 				if (!(yield* event.thread.isSubscribed())) yield* event.thread.subscribe()
-				yield* event.thread.startTyping()
-				yield* Effect.sleep(2_000)
-				yield* event.thread.post(
-					SlackContent.make({ markdown: 'Subscribed! subsequent messages will be logged' }),
-				)
+				return yield* Option.match(parseHandoffCommand(event.trigger.content), {
+					onNone: () => replyToMention(event),
+					onSome: (command) => handOffMention(event, delivery, command),
+				})
 			}),
 		onSubscribedThreadEvents: (event) =>
 			Effect.gen(function* () {
@@ -42,7 +121,10 @@ const slack = SlackBot.make({
 					}),
 				)
 				for (const threadEvent of event.events) {
-					if (Predicate.isTagged(threadEvent, 'SlackMessageReceived')) {
+					if (
+						Predicate.isTagged(threadEvent, 'SlackMessageReceived') &&
+						(yield* isFromSlackWorkspace(threadEvent.message))
+					) {
 						yield* threadEvent.message.addReaction(SlackReaction.make('eyes'))
 					}
 				}
@@ -50,7 +132,52 @@ const slack = SlackBot.make({
 	},
 })
 
-/** GitHub App callbacks. `GitHubApiLive`, the default, reads the App ID and private key. */
+/** The text of what mentioned the bot: the comment, or the issue or pull request that was opened. */
+const gitHubMentionText = (event: GitHubMentioned) =>
+	Match.value(event.trigger).pipe(
+		Match.tagsExhaustive({
+			GitHubIssueOpened: ({ title, body }) => joinText([title, body]),
+			GitHubPrOpened: ({ title, body }) => joinText([title, body]),
+			GitHubIssueCommentCreated: ({ comment }) => comment.body,
+			GitHubPrCommentCreated: ({ comment }) => comment.body,
+			GitHubPrReviewCommentCreated: ({ comment }) => comment.body,
+		}),
+	)
+
+/**
+ * `@app handoff [seconds] [ask]` in a GitHub issue or pull request: start a job on the fake remote agent,
+ * say so in a comment, and hand the delivery off. While the job runs, its `Working` activity shows as the
+ * bot's `eyes` reaction on the mentioning comment (or on the issue or pull request, when the mention was
+ * in its body). Just before it finishes, the job posts one summary comment, then completes with a final
+ * comment, which also removes `eyes`.
+ */
+const handOffGitHubMention = Effect.fn('example.github.hand_off_mention')(function* (
+	event: GitHubMentioned,
+	delivery: DeliveryContext,
+	command: HandoffCommand,
+) {
+	yield* startRemoteJob(delivery, command, { flakySlackOutput: false })
+	const discussion = Predicate.isTagged(event, 'GitHubIssueMentioned') ? event.issue : event.pullRequest
+	yield* discussion.postComment(
+		GitHubContent.make({
+			markdown: `Handed off \`${delivery.deliveryId}\`. Finishing in ${command.delaySeconds}s.`,
+		}),
+	)
+	yield* Effect.logInfo('GitHub mention handed off').pipe(
+		Effect.annotateLogs({
+			repository_id: discussion.ref.repositoryId,
+			discussion_number: discussion.ref.number,
+			delivery_id: delivery.deliveryId,
+			delay_seconds: command.delaySeconds,
+		}),
+	)
+	return yield* delivery.handoff()
+})
+
+/**
+ * GitHub App callbacks. `GitHubApiLive`, the default, reads the App ID and private key. Each callback first
+ * checks that the author of what it acts on has write access or higher, and ignores anyone below that.
+ */
 const github = GitHubBot.make({
 	webhookSecret: Config.redacted('GITHUB_WEBHOOK_SECRET'),
 	deliveryMode: DebounceDeliveryMode.make({ quietPeriodMs: 2_000, maxWaitMs: 10_000 }),
@@ -61,6 +188,7 @@ const github = GitHubBot.make({
 	handlers: {
 		onIssueCreated: (event) =>
 			Effect.gen(function* () {
+				if (!(yield* isFromGitHubWriter({ discussion: event.issue, event: event.trigger }))) return
 				const [issue, comments] = yield* Effect.all([event.issue.fetchInfo(), event.issue.listComments()])
 				yield* Effect.logInfo('GitHub issue created').pipe(
 					Effect.annotateLogs({
@@ -80,6 +208,7 @@ const github = GitHubBot.make({
 			}),
 		onPrCreated: (event) =>
 			Effect.gen(function* () {
+				if (!(yield* isFromGitHubWriter({ discussion: event.pullRequest, event: event.trigger }))) return
 				const [pullRequest, comments, reviews, reviewComments] = yield* Effect.all([
 					event.pullRequest.fetchInfo(),
 					event.pullRequest.listComments(),
@@ -104,7 +233,7 @@ const github = GitHubBot.make({
 				)
 				yield* comment.addReaction(GitHubReaction.make('eyes'))
 			}),
-		onMentioned: (event) =>
+		onMentioned: (event, delivery) =>
 			Effect.gen(function* () {
 				const isIssue = Predicate.isTagged(event, 'GitHubIssueMentioned')
 				const discussion = isIssue ? event.issue : event.pullRequest
@@ -115,13 +244,21 @@ const github = GitHubBot.make({
 						discussion_number: discussion.ref.number,
 						trigger: event.trigger._tag,
 						event_count: event.events.length + 1,
+						delivery_id: delivery.deliveryId,
 					}),
 				)
+				if (!(yield* isFromGitHubWriter({ discussion, event: event.trigger }))) return yield* Effect.void
 				if (!(yield* discussion.isSubscribed())) yield* discussion.subscribe()
-				const comment = yield* discussion.postComment(
-					GitHubContent.make({ markdown: 'Mention received; this thread is subscribed.' }),
-				)
-				yield* comment.addReaction(GitHubReaction.make('eyes'))
+				return yield* Option.match(parseHandoffText(gitHubMentionText(event)), {
+					onSome: (command) => handOffGitHubMention(event, delivery, command),
+					onNone: () =>
+						Effect.gen(function* () {
+							const comment = yield* discussion.postComment(
+								GitHubContent.make({ markdown: 'Mention received; this thread is subscribed.' }),
+							)
+							yield* comment.addReaction(GitHubReaction.make('eyes'))
+						}),
+				})
 			}),
 		onSubscribedIssueEvents: (event) =>
 			Effect.gen(function* () {
@@ -132,10 +269,12 @@ const github = GitHubBot.make({
 						event_count: event.events.length,
 					}),
 				)
-				for (const issueEvent of event.events) {
-					if (Predicate.isTagged(issueEvent, 'GitHubIssueCommentCreated')) {
-						yield* issueEvent.comment.addReaction(GitHubReaction.make('eyes'))
-					}
+				const newComments = yield* eventsFromGitHubWriters({
+					discussion: event.issue,
+					events: event.events.filter((issueEvent) => Predicate.isTagged(issueEvent, 'GitHubIssueCommentCreated')),
+				})
+				for (const issueEvent of newComments) {
+					yield* issueEvent.comment.addReaction(GitHubReaction.make('eyes'))
 				}
 			}),
 		onSubscribedPrEvents: (event) =>
@@ -153,16 +292,58 @@ const github = GitHubBot.make({
 						review_comment_count: reviewComments.length,
 					}),
 				)
-				for (const pullRequestEvent of event.events) {
-					if (
-						Predicate.isTagged(pullRequestEvent, 'GitHubPrCommentCreated') ||
-						Predicate.isTagged(pullRequestEvent, 'GitHubPrReviewCommentCreated')
-					) {
-						yield* pullRequestEvent.comment.addReaction(GitHubReaction.make('eyes'))
-					}
+				const newComments = yield* eventsFromGitHubWriters({
+					discussion: event.pullRequest,
+					events: event.events.filter(
+						(pullRequestEvent) =>
+							Predicate.isTagged(pullRequestEvent, 'GitHubPrCommentCreated') ||
+							Predicate.isTagged(pullRequestEvent, 'GitHubPrReviewCommentCreated'),
+					),
+				})
+				for (const pullRequestEvent of newComments) {
+					yield* pullRequestEvent.comment.addReaction(GitHubReaction.make('eyes'))
 				}
 			}),
 	},
+})
+
+/**
+ * A Linear session turn that asks for `handoff [seconds] [ask]`: start a job on the fake remote agent and
+ * hand the turn off with a link to the job's run log, which Linear shows on the session. The automatic
+ * thought has already answered Linear within its 10 seconds. The remote agent then shows its activity
+ * as ephemeral thoughts, posts one lasting thought, and ends the turn with a response, or with a
+ * question for `ask`. Stop in the session makes it end the turn with an error.
+ */
+const handOffSessionTurn = Effect.fn('example.linear.hand_off_session_turn')(function* (
+	event: LinearAgentSessionCreated | LinearAgentSessionPrompted,
+	delivery: DeliveryContext,
+	command: HandoffCommand,
+) {
+	const started = yield* startRemoteJob(delivery, command, { flakySlackOutput: false })
+	yield* Effect.logInfo('Linear session turn handed off').pipe(
+		Effect.annotateLogs({
+			agent_session_id: event.session.ref.sessionId,
+			delivery_id: delivery.deliveryId,
+			delay_seconds: command.delaySeconds,
+			ask_for_input: command.askForInput,
+		}),
+	)
+	return yield* delivery.handoff({
+		links: [ExternalLink.make({ label: 'Fake remote agent run log', url: started.runLogUrl })],
+	})
+})
+
+/** A Linear issue that asked for `issue-handoff [seconds]`: start a job and hand the delivery off. Its output is comments. */
+const handOffIssue = Effect.fn('example.linear.hand_off_issue')(function* (
+	event: LinearIssueCreated,
+	delivery: DeliveryContext,
+	command: HandoffCommand,
+) {
+	yield* startRemoteJob(delivery, command, { flakySlackOutput: false })
+	yield* Effect.logInfo('Linear issue delivery handed off').pipe(
+		Effect.annotateLogs({ issue_id: event.issue.ref.issueId, delivery_id: delivery.deliveryId }),
+	)
+	return yield* delivery.handoff()
 })
 
 /** Linear Application callbacks for one explicitly configured workspace. */
@@ -174,7 +355,7 @@ const linear = LinearBot.make({
 	}),
 	auth: LinearAuth.fromEnvironment,
 	handlers: {
-		onAgentSessionCreated: (event) =>
+		onAgentSessionCreated: (event, delivery) =>
 			Effect.gen(function* () {
 				yield* Effect.logInfo('Linear agent session created').pipe(
 					Effect.annotateLogs({
@@ -186,12 +367,24 @@ const linear = LinearBot.make({
 					}),
 				)
 				if (!(yield* event.issue.isSubscribed())) yield* event.issue.subscribe()
-				yield* Effect.sleep(Duration.seconds(2))
-				yield* event.session.thought('thinking about session created...')
-				yield* Effect.sleep(Duration.seconds(2))
-				yield* event.session.respond('The example agent received this session and completed its callback.')
+				/** The command may be in the mentioning comment (part of the prompt context) or the issue itself. */
+				const command = parseHandoffText(
+					joinText([event.promptContext, event.issue.title, event.issue.description]),
+				)
+				return yield* Option.match(command, {
+					onSome: (handoff) => handOffSessionTurn(event, delivery, handoff),
+					onNone: () =>
+						Effect.gen(function* () {
+							yield* Effect.sleep(Duration.seconds(2))
+							yield* event.session.thought('thinking about session created...')
+							yield* Effect.sleep(Duration.seconds(2))
+							yield* event.session.respond(
+								'The example agent received this session and completed its callback.',
+							)
+						}),
+				})
 			}),
-		onAgentSessionPrompted: (event) =>
+		onAgentSessionPrompted: (event, delivery) =>
 			Effect.gen(function* () {
 				yield* Effect.logInfo('Linear agent session prompted').pipe(
 					Effect.annotateLogs({
@@ -200,17 +393,31 @@ const linear = LinearBot.make({
 						issue_id: event.issue.ref.issueId,
 						issue_identifier: event.issue.identifier,
 						prompt_activity_id: event.prompt.id,
+						prompt_signal: event.prompt.signal ?? 'none',
 						delivery_id: event.deliveryId,
 					}),
 				)
-				yield* Effect.sleep(Duration.seconds(2))
-				yield* event.session.thought('Thinking about session continuation...')
-				yield* Effect.sleep(Duration.seconds(2))
-				yield* event.session.respond(
-					'The example agent received the follow-up prompt and completed its callback.',
-				)
+				/**
+				 * Stop was handled before this ran: it marked the handed-off turn, and the remote agent
+				 * ended that turn with an error. There is nothing left to stop.
+				 */
+				if (event.prompt.signal === 'stop') {
+					return yield* Effect.logInfo('Linear stop prompt reached its callback; nothing is left to stop')
+				}
+				return yield* Option.match(parseHandoffText(event.prompt.body), {
+					onSome: (handoff) => handOffSessionTurn(event, delivery, handoff),
+					onNone: () =>
+						Effect.gen(function* () {
+							yield* Effect.sleep(Duration.seconds(2))
+							yield* event.session.thought('Thinking about session continuation...')
+							yield* Effect.sleep(Duration.seconds(2))
+							yield* event.session.respond(
+								'The example agent received the follow-up prompt and completed its callback.',
+							)
+						}),
+				})
 			}),
-		onIssueCreated: (event) =>
+		onIssueCreated: (event, delivery) =>
 			Effect.gen(function* () {
 				yield* Effect.logInfo('Linear issue created').pipe(
 					Effect.annotateLogs({
@@ -221,6 +428,10 @@ const linear = LinearBot.make({
 					}),
 				)
 				yield* event.issue.subscribe()
+				return yield* Option.match(parseIssueHandoffText(joinText([event.issue.title, event.issue.description])), {
+					onSome: (handoff) => handOffIssue(event, delivery, handoff),
+					onNone: () => Effect.void,
+				})
 			}),
 		onSubscribedEvent: (event) =>
 			Effect.logInfo('Linear subscribed issue events received').pipe(

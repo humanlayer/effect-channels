@@ -64,16 +64,8 @@ const program = Effect.gen(function* () {
 	}
 	const suites =
 		backend === 'postgres'
-			? [
-					{ config: 'packages/delivery/test-backends/vite.postgres.config.ts', port: 55432 },
-					{ config: 'packages/slack/test-backends/vite.postgres.config.ts', port: 55432 },
-					{ config: 'packages/sql/test-backends/vite.postgres.config.ts', port: 55432 },
-				]
-			: [
-					{ config: 'packages/delivery/test-backends/vite.redis.config.ts', port: 56379 },
-					{ config: 'packages/slack/test-backends/vite.redis.config.ts', port: 56379 },
-					{ config: 'packages/redis/test-backends/vite.redis.config.ts', port: 56379 },
-				]
+			? [{ config: 'packages/sql/test-backends/vite.postgres.config.ts', port: 55432 }]
+			: [{ config: 'packages/redis/test-backends/vite.redis.config.ts', port: 56379 }]
 	for (const suite of suites) {
 		yield* Effect.scoped(
 			Effect.gen(function* () {

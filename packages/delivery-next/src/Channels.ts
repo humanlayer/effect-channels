@@ -10,14 +10,26 @@ import { HttpEffect, HttpRouter } from 'effect/unstable/http'
 
 import type { ChannelsProvider, ChannelsProviderRequirements } from './ChannelsProvider'
 import type { ChannelsStorage } from './ChannelsStorage'
+import { DeliveryControlLive, type DeliveryControlBackend } from './DeliveryControl'
+import { deliveryApiRoutes } from './DeliveryHttpServer'
+import { DELIVERY_ID_MAX_LENGTH } from './DeliveryReference'
 import { MailboxDelivery } from './MailboxDelivery'
 import { QueueDeliveryMode } from './MailboxPolicy'
 import type { DeliveryMode } from './MailboxPolicy'
 import { MailboxProcessingLive, ProviderEventDispatcherLive } from './MailboxProcessing'
+import { ProviderOutputDispatcherLive } from './ProviderOutput'
 import type { MailboxProcessingOptions } from './MailboxProcessing'
 import type { MailboxSubscriptions } from './MailboxSubscriptions'
 import { webhookRoutes } from './ProviderWebhooks'
 import type { WebhookRoutesOptions } from './ProviderWebhooks'
+
+/**
+ * Router settings a bot's routes need. A delivery ID is longer than the router's default
+ * 100-character limit on a path parameter, so an application that mounts `routes` on its own
+ * router with the delivery API enabled must pass this, for example
+ * `HttpRouter.serve(routes, { routerConfig: Channels.routerConfig })`. `start` sets it itself.
+ */
+export const routerConfig = { maxParamLength: DELIVERY_ID_MAX_LENGTH }
 
 export type EventProcessingOptions = Pick<MailboxProcessingOptions, 'concurrency' | 'maxAttempts' | 'leaseMs'>
 
@@ -25,7 +37,7 @@ export type EventProcessingOptions = Pick<MailboxProcessingOptions, 'concurrency
  * What every host needs to know about a bot, whatever stores its mailboxes.
  *
  * @property namespace - tells this application's events apart from another's in shared storage
- * @property basePath - where the webhook routes are mounted inside a larger API
+ * @property basePath - where the webhook routes and the delivery API are mounted inside a larger API
  */
 export type Options<Requirements extends ReadonlyArray<ChannelsProviderRequirements>> = WebhookRoutesOptions & {
 	readonly namespace: string
@@ -62,7 +74,7 @@ const deliveryModeForProviders =
 		return Predicate.isUndefined(provider) ? QueueDeliveryMode.make({}) : provider.deliveryMode
 	}
 
-/** Mailbox processing for a bot: claims batches and runs each provider's callbacks. */
+/** Mailbox processing for a bot: claims batches, runs each provider's callbacks, and sends saved output. */
 export const processingLayer = <const Requirements extends ReadonlyArray<ChannelsProviderRequirements>>(
 	options: Options<Requirements>,
 	polling: MailboxProcessingOptions['polling'],
@@ -79,7 +91,15 @@ export const processingLayer = <const Requirements extends ReadonlyArray<Channel
 					const eventProcessors = yield* Effect.forEach(providers, (provider) =>
 						provider.eventProcessor({ namespace: options.namespace }),
 					)
-					return ProviderEventDispatcherLive(eventProcessors)
+					const outputProcessors = yield* Effect.forEach(providers, (provider) =>
+						Predicate.isUndefined(provider.outputProcessor)
+							? Effect.succeed([])
+							: Effect.map(provider.outputProcessor({ namespace: options.namespace }), (processor) => [processor]),
+					)
+					return Layer.merge(
+						ProviderEventDispatcherLive(eventProcessors),
+						ProviderOutputDispatcherLive(outputProcessors.flat()),
+					)
 				}),
 			),
 		),
@@ -90,8 +110,9 @@ export type MakeOptions<
 	Requirements extends ReadonlyArray<ChannelsProviderRequirements>,
 	StorageError,
 	StorageRequirements,
+	Control extends DeliveryControlBackend = never,
 > = Options<Requirements> & {
-	readonly storage: ChannelsStorage<StorageError, StorageRequirements>
+	readonly storage: ChannelsStorage<StorageError, StorageRequirements, Control>
 }
 
 /** A bot started outside an Effect program. */
@@ -116,8 +137,9 @@ export const make = <
 	const Requirements extends ReadonlyArray<ChannelsProviderRequirements>,
 	StorageError,
 	StorageRequirements,
+	Control extends DeliveryControlBackend = never,
 >(
-	options: MakeOptions<Requirements, StorageError, StorageRequirements>,
+	options: MakeOptions<Requirements, StorageError, StorageRequirements, Control>,
 ) => {
 	const layer = Layer.merge(processingLayer(options, options.storage.polling), options.storage.layer).pipe(
 		Layer.provide(options.storage.layer),
@@ -125,14 +147,25 @@ export const make = <
 
 	const routes = routesLayer(options).pipe(Layer.provide(layer))
 
-	const start = <ServicesError>(
+	/**
+	 * The delivery API. Mount it beside `routes` to let remote workers finish handed-off deliveries.
+	 * It needs a store that provides `DeliveryControlBackend`; with any other store it does not compile.
+	 */
+	const deliveryApi = deliveryApiRoutes(options).pipe(Layer.provide(DeliveryControlLive), Layer.provide(layer))
+
+	/**
+	 * Serve `routes`, and any `extraRoutes` such as `bot.deliveryApi`, outside an Effect program.
+	 */
+	const start = <ServicesError, ExtraError = never, ExtraRequirements = never>(
 		services: Layer.Layer<
 			| Requirements[number]['build']
 			| Exclude<Requirements[number]['process'], MailboxSubscriptions>
 			| StorageRequirements
-			| Crypto.Crypto,
+			| Crypto.Crypto
+			| Exclude<ExtraRequirements, HttpRouter.HttpRouter>,
 			ServicesError
 		>,
+		extraRoutes: Layer.Layer<never, ExtraError, ExtraRequirements> = Layer.empty,
 	): Promise<Started> =>
 		Effect.runPromise(
 			Effect.gen(function* () {
@@ -142,7 +175,10 @@ export const make = <
 				const router = yield* Effect.gen(function* () {
 					const servicesContext = yield* Layer.buildWithMemoMap(services, memoMap, scope)
 					const routerContext = yield* Layer.buildWithMemoMap(
-						Layer.provideMerge(routes, HttpRouter.layer),
+						Layer.provideMerge(
+							Layer.merge(routes, extraRoutes),
+							HttpRouter.layer.pipe(Layer.provide(Layer.succeed(HttpRouter.RouterConfig, routerConfig))),
+						),
 						memoMap,
 						scope,
 					).pipe(
@@ -161,5 +197,5 @@ export const make = <
 			}),
 		)
 
-	return { layer, routes, start }
+	return { layer, routes, deliveryApi, start }
 }

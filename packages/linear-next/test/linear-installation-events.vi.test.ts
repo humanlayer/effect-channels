@@ -12,6 +12,7 @@ import { LinearApi } from '../src/LinearApi'
 import { LinearCallbacks } from '../src/LinearCallbacks'
 import { makeLinearEventProcessor } from '../src/LinearEventProcessor'
 import {
+	firstAttempt,
 	linearAppUserId,
 	linearOauthClientId,
 	linearOrganizationId,
@@ -105,7 +106,7 @@ describe('Linear installation events', () => {
 				bot: { organizationId: linearOrganizationId, appUserId: linearAppUserId },
 				oauthClientId: linearOauthClientId,
 			})
-				.process([admission])
+				.process([admission], yield* firstAttempt())
 				.pipe(
 					Effect.provide(
 						Layer.mergeAll(

@@ -75,6 +75,10 @@ const makeApi = (
 		Queue.offer(calls, { operation: 'listChannelMessagesBeforeThread', request }).pipe(Effect.as([message])),
 	postToThread: (request) => Queue.offer(calls, { operation: 'postToThread', request }).pipe(Effect.as(sent)),
 	postToChannel: (request) => Queue.offer(calls, { operation: 'postToChannel', request }).pipe(Effect.as(sent)),
+	updateMessage: () => unexpected('updateMessage'),
+	setThreadStatus: () => unexpected('setThreadStatus'),
+	clearThreadStatus: () => unexpected('clearThreadStatus'),
+	deleteMessage: () => unexpected('deleteMessage'),
 	startTyping: (request) => Queue.offer(calls, { operation: 'startTyping', request }).pipe(Effect.asVoid),
 	stream: (requestedThread, chunks) =>
 		Stream.runCollect(chunks).pipe(
@@ -83,6 +87,8 @@ const makeApi = (
 			),
 			Effect.as(sent),
 		),
+	postPlanToThread: () => unexpected('postPlanToThread'),
+	updatePlan: () => unexpected('updatePlan'),
 	addReaction: (request) => Queue.offer(calls, { operation: 'addReaction', request }).pipe(Effect.asVoid),
 	removeReaction: (request) => Queue.offer(calls, { operation: 'removeReaction', request }).pipe(Effect.asVoid),
 	resolveParticipant: () => unexpected('resolveParticipant'),

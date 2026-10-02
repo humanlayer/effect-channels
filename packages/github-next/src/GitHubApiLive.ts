@@ -18,6 +18,7 @@ import {
 	fetchIssue,
 	fetchPullRequest,
 	fetchPullRequestDiff,
+	fetchUserAccess,
 	listCheckRunAnnotations,
 	listCheckRunsForRef,
 	listIssueComments,
@@ -107,6 +108,7 @@ const GitHubApiOperationsLive = Layer.effect(
 			fetchActionsJob: (input) => fetchActionsJob(input).pipe(Effect.provideService(GitHubApiClient, client)),
 			downloadActionsJobLog: (input) =>
 				downloadActionsJobLog(input).pipe(Effect.provideService(GitHubApiClient, client)),
+			fetchUserAccess: (input) => fetchUserAccess(input).pipe(Effect.provideService(GitHubApiClient, client)),
 		})
 	}),
 )

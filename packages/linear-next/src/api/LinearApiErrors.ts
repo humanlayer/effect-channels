@@ -51,6 +51,12 @@ export class LinearResponseDecodeError extends Schema.TaggedError<LinearResponse
 	{ ...LinearProviderErrorFields },
 ) {}
 
+/** Linear refused to create an entity because one with the caller's chosen ID exists. */
+export class LinearAlreadyExistsError extends Schema.TaggedError<LinearAlreadyExistsError>()(
+	'LinearAlreadyExistsError',
+	{ ...LinearProviderErrorFields },
+) {}
+
 export class LinearMutationRejectedError extends Schema.TaggedError<LinearMutationRejectedError>()(
 	'LinearMutationRejectedError',
 	{ ...LinearProviderErrorFields },
@@ -81,6 +87,7 @@ export type LinearProviderError =
 	| LinearGraphqlRequestError
 	| LinearResponseDecodeError
 	| LinearMutationRejectedError
+	| LinearAlreadyExistsError
 	| LinearFileOriginRejectedError
 	| LinearFileRedirectError
 	| LinearFileTransferRejectedError
@@ -137,6 +144,7 @@ export const narrowLinearProviderErrors = <A, R>(
 			LinearGraphqlRequestError: (error) => Effect.fail(toLinearApiError(error, 'rejected')),
 			LinearResponseDecodeError: (error) => Effect.fail(toLinearApiError(error, 'invalid_response')),
 			LinearMutationRejectedError: (error) => Effect.fail(toLinearApiError(error, 'rejected')),
+			LinearAlreadyExistsError: (error) => Effect.fail(toLinearApiError(error, 'already_exists')),
 			LinearFileOriginRejectedError: (error) => Effect.fail(toLinearApiError(error, 'validation')),
 			LinearFileRedirectError: (error) => Effect.fail(toLinearApiError(error, 'invalid_response')),
 			LinearFileTransferRejectedError: (error) => Effect.fail(toLinearApiError(error, 'rejected')),

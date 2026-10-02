@@ -13,7 +13,7 @@ import { vi } from 'vite-plus/test'
 import { LinearApi } from '../src/LinearApi'
 import { type LinearCallbackHandler, LinearCallbacks } from '../src/LinearCallbacks'
 import { makeLinearEventProcessor } from '../src/LinearEventProcessor'
-import { linearIssueCreateAdmission } from './fixtures'
+import { firstAttempt, linearIssueCreateAdmission } from './fixtures'
 
 const namespace = 'linear-processing-test'
 const services = <E, R>(handler?: LinearCallbackHandler<'onIssueCreated', E, R>) =>
@@ -33,7 +33,7 @@ describe('Linear event processing', () => {
 			const admission = linearIssueCreateAdmission(namespace)
 			const callback = vi.fn<LinearCallbackHandler<'onIssueCreated'>>(() => Effect.void)
 			const result = yield* makeLinearEventProcessor({ namespace })
-				.process([admission])
+				.process([admission], yield* firstAttempt())
 				.pipe(Effect.provide(services(callback)))
 			expect(result).toEqual(ProviderEventHandled.make({}))
 			expect(callback).toHaveBeenCalledOnce()
@@ -47,7 +47,7 @@ describe('Linear event processing', () => {
 		Effect.gen(function* () {
 			const admission = linearIssueCreateAdmission(namespace)
 			const result = yield* makeLinearEventProcessor({ namespace })
-				.process([admission])
+				.process([admission], yield* firstAttempt())
 				.pipe(Effect.provide(services<never, never>()))
 			expect(result).toEqual(ProviderEventIgnored.make({ reason: 'callback_not_configured' }))
 		}),
@@ -58,7 +58,7 @@ describe('Linear event processing', () => {
 			const admission = linearIssueCreateAdmission(namespace)
 			const mismatched = DeliveryAdmission.make({ ...admission, installationId: 'another-workspace' })
 			const error = yield* makeLinearEventProcessor({ namespace })
-				.process([mismatched])
+				.process([mismatched], yield* firstAttempt())
 				.pipe(Effect.provide(services<never, never>()), Effect.flip)
 			expect(error).toEqual(ProviderEventInvalid.make({ provider: 'linear', reason: 'identity_mismatch' }))
 		}),

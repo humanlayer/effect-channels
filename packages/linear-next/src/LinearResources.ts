@@ -3,7 +3,7 @@ import {
 	type MailboxSubscriptionResult,
 	MailboxSubscriptions,
 } from '@humanlayer/channels-delivery-next'
-import { Effect, Schema } from 'effect'
+import { Effect, Predicate, Schema } from 'effect'
 
 import {
 	LinearApi,
@@ -34,7 +34,7 @@ import {
 	type LinearUploadAttachmentInput,
 	type LinearUploadFileInput,
 } from './LinearFiles'
-import type { LinearIssueLabelId, LinearUserId, LinearWorkflowStateId } from './LinearIdentity'
+import type { LinearAgentActivityId, LinearIssueLabelId, LinearUserId, LinearWorkflowStateId } from './LinearIdentity'
 import { LinearReactionId } from './LinearIdentity'
 import { LinearWebhookDeliveryId } from './LinearIdentity'
 import {
@@ -227,29 +227,38 @@ export class LinearIssueAttachment extends Schema.TaggedClass<LinearIssueAttachm
 	}
 }
 
+/** Options for a session's own thought. */
+export type LinearAgentThoughtOptions = {
+	/**
+	 * A UUID v4 to send as the activity's ID. Linear refuses a second activity with the same ID, so a
+	 * retry with the same ID cannot post the thought twice; that refusal fails with reason `already_exists`.
+	 */
+	readonly activityId?: LinearAgentActivityId
+}
+
 export class LinearAgentSession extends Schema.TaggedClass<LinearAgentSession>()('LinearAgentSession', {
 	...LinearAgentSessionSnapshot.fields,
 	mailboxKey: Schema.NonEmptyString,
 	deliveryId: LinearWebhookDeliveryId,
 }) {
 	private createActivity(
-		purpose: 'thought' | 'response',
-		body: string,
+		purpose: 'thought' | 'response' | 'error',
+		content: LinearActivityContent,
 		ephemeral: boolean,
+		activityId: LinearAgentActivityId | undefined,
 	): Effect.Effect<LinearAgentActivityReceipt, LinearApiError, LinearApi> {
-		const content =
-			purpose === 'thought'
-				? LinearActivityContent.cases.Thought.make({ body })
-				: LinearActivityContent.cases.Response.make({ body })
+		const request = {
+			organizationId: this.ref.organizationId,
+			sessionId: this.ref.sessionId,
+			content,
+			ephemeral,
+			deliveryId: this.deliveryId,
+		}
 		return Effect.flatMap(LinearApi, (api) =>
 			api.createAgentActivity(
-				LinearCreateAgentActivityRequest.make({
-					organizationId: this.ref.organizationId,
-					sessionId: this.ref.sessionId,
-					content,
-					ephemeral,
-					deliveryId: this.deliveryId,
-				}),
+				LinearCreateAgentActivityRequest.make(
+					Predicate.isUndefined(activityId) ? request : { ...request, activityId },
+				),
 			),
 		).pipe(
 			Effect.withSpan(`linear.agent_session.${purpose}`, {
@@ -261,11 +270,21 @@ export class LinearAgentSession extends Schema.TaggedClass<LinearAgentSession>()
 		)
 	}
 
-	thought(body: string): Effect.Effect<LinearAgentActivityReceipt, LinearApiError, LinearApi> {
-		return this.createActivity('thought', body, true)
+	/** An ephemeral thought: Linear replaces it with the agent's next activity. */
+	thought(
+		body: string,
+		options: LinearAgentThoughtOptions = {},
+	): Effect.Effect<LinearAgentActivityReceipt, LinearApiError, LinearApi> {
+		return this.createActivity('thought', LinearActivityContent.cases.Thought.make({ body }), true, options.activityId)
 	}
 
+	/** The final answer: the session becomes `complete`. */
 	respond(body: string): Effect.Effect<LinearAgentActivityReceipt, LinearApiError, LinearApi> {
-		return this.createActivity('response', body, false)
+		return this.createActivity('response', LinearActivityContent.cases.Response.make({ body }), false, undefined)
+	}
+
+	/** Report that the work failed: the session becomes `error`. */
+	error(body: string): Effect.Effect<LinearAgentActivityReceipt, LinearApiError, LinearApi> {
+		return this.createActivity('error', LinearActivityContent.cases.Error.make({ body }), false, undefined)
 	}
 }

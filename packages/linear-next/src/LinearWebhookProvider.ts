@@ -87,6 +87,13 @@ const supportedActions = {
 	AgentSessionEvent: ['created', 'prompted'],
 } satisfies Record<LinearWebhookEventType, ReadonlyArray<string>>
 
+/**
+ * Linear's prompt signal asking the agent to stop. A stop prompt asks the session's current delivery to end;
+ * the prompt itself still queues behind it.
+ */
+const LinearStopSignal = Schema.Literal('stop')
+const isStopSignal = Schema.is(LinearStopSignal)
+
 const isSupportedAction = (envelope: typeof LinearWebhookEnvelope.Type) =>
 	isLinearWebhookEventType(envelope.type) && supportedActions[envelope.type].includes(envelope.action)
 
@@ -213,20 +220,29 @@ const admitLinearWebhook = Effect.fn('linear.webhook.admit')(function* (
 			Effect.mapError(() => WebhookPayloadInvalidError.make({ reason: 'session_identity_mismatch' })),
 		)
 		const session = normalized.webhook.agentSession
-		const eventId =
-			normalized.action === 'created'
-				? `agent-session-created:${session.id}`
-				: `agent-session-prompted:${normalized.agentActivity.id}`
-		return ProviderWebhookEvent.make({
-			event: DeliveryAdmission.make({
-				namespace: options.namespace,
-				provider: 'linear',
-				installationId: webhook.organizationId,
-				resourceId: linearAgentSessionResourceId(session.id),
-				eventId,
-				payload: LinearStoredAgentSessionWebhook.make({ deliveryId, webhook: normalized.webhook }),
+		const admission = {
+			namespace: options.namespace,
+			provider: 'linear',
+			installationId: webhook.organizationId,
+			resourceId: linearAgentSessionResourceId(session.id),
+			payload: LinearStoredAgentSessionWebhook.make({ deliveryId, webhook: normalized.webhook }),
+		}
+		return Match.value(normalized).pipe(
+			Match.discriminatorsExhaustive('action')({
+				created: () =>
+					ProviderWebhookEvent.make({
+						event: DeliveryAdmission.make({ ...admission, eventId: `agent-session-created:${session.id}` }),
+					}),
+				prompted: ({ agentActivity }) => {
+					const eventId = `agent-session-prompted:${agentActivity.id}`
+					return ProviderWebhookEvent.make({
+						event: isStopSignal(agentActivity.signal)
+							? DeliveryAdmission.make({ ...admission, eventId, interrupt: true })
+							: DeliveryAdmission.make({ ...admission, eventId }),
+					})
+				},
 			}),
-		})
+		)
 	}
 	if (webhook.type === 'AppUserNotification') {
 		const notification = yield* normalizeLinearAppUserNotificationWebhook(webhook).pipe(

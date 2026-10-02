@@ -1,35 +1,71 @@
 import {
 	ClaimedMailboxBatch,
+	DEFAULT_RETRY_AFTER_MS,
 	DeliveryAdmissionBatch,
+	DeliveryPreparationConflict,
 	MailboxProcessingBackend,
 	MailboxProcessingClaimLost,
 	MailboxProcessingUnavailable,
+	OutputReadyMailbox,
 	RecoverableMailbox,
-	Timestamp,
 	WaitingMailbox,
+	activeDeliveryWork,
+	claimDeliveryOutput,
+	claimFrozenBatch,
+	handOffDeliverySlot,
+	makeDeliveryId,
+	prepareDeliverySlot,
+	recordDeliveryAttempt,
+	renewDeliveryClaim,
+	renewDeliveryOutput,
+	settleDeliveryOutput,
+	startDeliveryBatch,
+	toClaimedDeliveryOutput,
+	toClaimedMailboxBatch,
+	type ClaimDeliveryOutput,
+	type ClaimedDeliveryOutput,
 	type ClaimMailbox,
 	type DeferMailbox,
+	type HandOffMailboxDelivery,
+	type PrepareMailboxDelivery,
 	type ReadyMailbox,
 	type RecordProcessingAttemptResult,
+	type RenewDeliveryOutput,
 	type RenewMailboxClaim,
+	type SettleDeliveryOutput,
 } from '@humanlayer/channels-delivery-next'
-import { Array as Arr, Clock, Effect, Exit, Layer, Match, Option, Predicate, Random, Schema } from 'effect'
+import { Array as Arr, Clock, Effect, Layer, Match, Option, Predicate, Random, type Schema } from 'effect'
 
 import { DurableMailboxState, mailboxStateKey, type WaitingAdmission } from './MailboxState'
 import { MailboxStorage } from './MailboxStorage'
+import {
+	changeDeliveries,
+	decodeMailboxState,
+	transactMailbox,
+	unchanged,
+	type DeliveriesChange,
+	type MailboxTransition,
+} from './MailboxTransaction'
 
 const makeClaimId = Effect.gen(function* () {
 	const now = yield* Clock.currentTimeMillis
 	return `${now}-${Math.abs(yield* Random.nextInt)}`
 })
 
-/** Log the raw failure, then narrow it to the one error callers can act on. */
-const narrowToUnavailable =
+/** Log a stored mailbox that cannot be decoded, where it is read, then narrow it to the one error callers can act on. */
+const undecodable = (message: string) => (error: Schema.SchemaError) =>
+	Effect.logError(message, error).pipe(
+		Effect.andThen(Effect.fail(new MailboxProcessingUnavailable({ reason: 'cloudflare_unavailable' }))),
+	)
+
+/**
+ * Storage failures arrive as defects (see `MailboxStorage`): log one, then narrow it to the one error
+ * callers can act on. Typed errors, such as a lost claim, are not touched.
+ */
+const narrowStorageDefect =
 	(message: string) =>
 	<A, E, R>(effect: Effect.Effect<A, E, R>) =>
 		effect.pipe(
-			Effect.tapError((error) => Effect.logError(message, error)),
-			Effect.mapError(() => new MailboxProcessingUnavailable({ reason: 'cloudflare_unavailable' })),
 			Effect.catchDefect((defect) =>
 				Effect.logError(message, defect).pipe(
 					Effect.andThen(Effect.fail(new MailboxProcessingUnavailable({ reason: 'cloudflare_unavailable' }))),
@@ -37,29 +73,21 @@ const narrowToUnavailable =
 			),
 		)
 
-/**
- * What one operation does to the stored mailbox.
- *
- * @property next - the state to store, or none to leave storage and the alarm untouched
- */
-type MailboxTransition<A> = {
-	readonly result: A
-	readonly next: Option.Option<DurableMailboxState>
-}
-
-const unchanged = <A>(result: A): MailboxTransition<A> => ({ result, next: Option.none() })
-
 const toBatch = (entries: ReadonlyArray<WaitingAdmission>) => {
 	const [first, ...rest] = entries.map(({ admission }) => admission)
 	return Predicate.isUndefined(first) ? null : DeliveryAdmissionBatch.make([first, ...rest])
 }
 
 const isDue = (current: DurableMailboxState, now: number) =>
-	Predicate.isNotNull(current.readyAt) && current.readyAt <= now
+	Predicate.isNotNull(current.deliveries.readyAt) && current.deliveries.readyAt <= now
 
 const describeReadyMailbox = (current: DurableMailboxState, now: number): ReadonlyArray<ReadyMailbox> => {
 	if (!isDue(current, now)) return []
-	if (current.status !== 'idle') return [RecoverableMailbox.make({ mailboxKey: current.mailboxKey })]
+	if (Predicate.isNotNull(current.deliveries.active)) {
+		return activeDeliveryWork(current.deliveries.active) === 'Output'
+			? [OutputReadyMailbox.make({ mailboxKey: current.mailboxKey })]
+			: [RecoverableMailbox.make({ mailboxKey: current.mailboxKey })]
+	}
 	const first = current.waiting[0]
 	const last = current.waiting.at(-1)
 	if (Predicate.isUndefined(first) || Predicate.isUndefined(last)) return []
@@ -78,28 +106,6 @@ const describeReadyMailbox = (current: DurableMailboxState, now: number): Readon
 	]
 }
 
-/** Pick the batch a claim takes, or null when the mailbox is not in the state the claim needs. */
-const selectBatch = (current: DurableMailboxState, claim: ClaimMailbox) =>
-	Match.value(claim).pipe(
-		Match.tagsExhaustive({
-			ClaimWaitingEvents: ({ upToSequence }) => {
-				if (current.status !== 'idle') return null
-				const admissions = toBatch(current.waiting.filter(({ sequence }) => sequence <= upToSequence))
-				return Predicate.isNull(admissions)
-					? null
-					: {
-							admissions,
-							attempt: 1,
-							waiting: current.waiting.filter(({ sequence }) => sequence > upToSequence),
-						}
-			},
-			ClaimFrozenBatch: () =>
-				current.status === 'idle' || Predicate.isNull(current.activeBatch)
-					? null
-					: { admissions: current.activeBatch, attempt: current.attempt + 1, waiting: current.waiting },
-		}),
-	)
-
 const claimTransition = (input: {
 	readonly current: DurableMailboxState
 	readonly claim: ClaimMailbox
@@ -108,174 +114,244 @@ const claimTransition = (input: {
 }): MailboxTransition<Option.Option<ClaimedMailboxBatch>> => {
 	const { current, claim, claimId, now } = input
 	if (current.mailboxKey !== claim.mailboxKey || !isDue(current, now)) return unchanged(Option.none())
-	const selection = selectBatch(current, claim)
-	if (Predicate.isNull(selection)) return unchanged(Option.none())
+	return Match.value(claim).pipe(
+		Match.tagsExhaustive({
+			ClaimWaitingEvents: ({ upToSequence, batchId, accessToken, leaseMs }) => {
+				const admissions = toBatch(current.waiting.filter(({ sequence }) => sequence <= upToSequence))
+				if (Predicate.isNull(admissions)) return unchanged(Option.none())
+				const started = startDeliveryBatch(current.deliveries, {
+					batchId,
+					accessToken,
+					admissions,
+					claimId,
+					leaseMs,
+					now,
+				})
+				if (Predicate.isNull(started)) return unchanged(Option.none())
+				return {
+					result: Option.some(
+						toClaimedMailboxBatch({ mailboxKey: current.mailboxKey, active: started.claimed, claimId }),
+					),
+					next: Option.some(
+						DurableMailboxState.make({
+							...current,
+							waiting: current.waiting.filter(({ sequence }) => sequence > upToSequence),
+							deliveries: started.slot,
+						}),
+					),
+				}
+			},
+			ClaimFrozenBatch: ({ leaseMs }) => {
+				const { slot, claimed } = claimFrozenBatch(current.deliveries, {
+					claimId,
+					leaseMs,
+					now,
+					hasWaiting: Arr.isReadonlyArrayNonEmpty(current.waiting),
+				})
+				return {
+					result: Predicate.isNull(claimed)
+						? Option.none()
+						: Option.some(
+								toClaimedMailboxBatch({ mailboxKey: current.mailboxKey, active: claimed, claimId }),
+							),
+					next: Option.some(DurableMailboxState.make({ ...current, deliveries: slot })),
+				}
+			},
+		}),
+	)
+}
+
+const claimOutputTransition = (input: {
+	readonly current: DurableMailboxState
+	readonly claim: ClaimDeliveryOutput
+	readonly claimId: string
+	readonly now: number
+}): MailboxTransition<Option.Option<ClaimedDeliveryOutput>> => {
+	const { current, claim, claimId, now } = input
+	if (current.mailboxKey !== claim.mailboxKey) return unchanged(Option.none())
+	const { slot, claimed } = claimDeliveryOutput(current.deliveries, {
+		claimId,
+		leaseMs: claim.leaseMs,
+		now,
+		idempotencyKey: claim.idempotencyKey,
+	})
+	if (Predicate.isNull(claimed)) return unchanged(Option.none())
 	return {
-		result: Option.some(
-			ClaimedMailboxBatch.make({
-				mailboxKey: current.mailboxKey,
-				claimId,
-				attempt: selection.attempt,
-				admissions: selection.admissions,
-			}),
-		),
-		next: Option.some(
-			DurableMailboxState.make({
-				...current,
-				status: 'active',
-				waiting: selection.waiting,
-				activeBatch: selection.admissions,
-				claimId,
-				attempt: selection.attempt,
-				readyAt: Timestamp.make(now + claim.leaseMs),
-			}),
-		),
+		result: Option.some(toClaimedDeliveryOutput({ mailboxKey: current.mailboxKey, claimId, ...claimed })),
+		next: Option.some(DurableMailboxState.make({ ...current, deliveries: slot })),
 	}
 }
 
 const deferTransition = (current: DurableMailboxState, input: DeferMailbox): MailboxTransition<void> => {
 	const seenLatest = current.waiting.at(-1)?.sequence === input.lastSequenceSeen
-	if (current.mailboxKey !== input.mailboxKey || current.status !== 'idle' || !seenLatest) return unchanged(undefined)
-	return { result: undefined, next: Option.some(DurableMailboxState.make({ ...current, readyAt: input.until })) }
-}
-
-const ownsClaim = (current: DurableMailboxState, claim: { readonly mailboxKey: string; readonly claimId: string }) =>
-	current.mailboxKey === claim.mailboxKey && current.status === 'active' && current.claimId === claim.claimId
-
-/** The result is whether the claim was still ours. */
-const renewTransition = (input: {
-	readonly current: DurableMailboxState
-	readonly renewal: RenewMailboxClaim
-	readonly now: number
-}): MailboxTransition<boolean> =>
-	ownsClaim(input.current, input.renewal)
-		? {
-				result: true,
-				next: Option.some(
-					DurableMailboxState.make({
-						...input.current,
-						readyAt: Timestamp.make(input.now + input.renewal.leaseMs),
-					}),
-				),
-			}
-		: unchanged(false)
-
-/** The result is whether the claim was still ours. */
-const recordTransition = (
-	current: DurableMailboxState,
-	input: RecordProcessingAttemptResult,
-): MailboxTransition<boolean> => {
-	if (!ownsClaim(current, input.claim)) return unchanged(false)
-	const settled = { ...current, lastResult: input.result, claimId: null }
-	const next = Match.value(input.result).pipe(
-		Match.tag('RetryableFailure', ({ retryAfterMs }) =>
-			DurableMailboxState.make({
-				...settled,
-				status: 'retry',
-				readyAt: Timestamp.make(input.finishedAt + (retryAfterMs ?? 1_000)),
-			}),
+	if (current.mailboxKey !== input.mailboxKey || Predicate.isNotNull(current.deliveries.active) || !seenLatest) {
+		return unchanged(undefined)
+	}
+	return {
+		result: undefined,
+		next: Option.some(
+			DurableMailboxState.make({ ...current, deliveries: { ...current.deliveries, readyAt: input.until } }),
 		),
-		Match.orElse(() =>
-			DurableMailboxState.make({
-				...settled,
-				status: 'idle',
-				activeBatch: null,
-				attempt: 0,
-				readyAt: Arr.isReadonlyArrayNonEmpty(current.waiting) ? input.finishedAt : null,
-			}),
-		),
-	)
-	return { result: true, next: Option.some(next) }
+	}
 }
 
 /**
  * Builds a mailbox-processing backend over the current Durable Object's persistent storage.
  *
- * One Durable Object holds one mailbox. Its alarm always matches the stored `readyAt`,
- * so the host's alarm handler wakes processing exactly when the mailbox is next due.
+ * One Durable Object holds one mailbox. Its alarm always matches the stored `deliveries.readyAt`,
+ * so the host's alarm handler wakes processing exactly when the mailbox is next due, whether for a
+ * callback or for output.
+ * The lifecycle rules themselves are the shared `DeliveryLifecycle` transitions.
  */
 export const makeMailboxProcessingBackendFromDurableObjectStorage = Effect.gen(function* () {
 	const storage = yield* MailboxStorage
 
-	const decodeStored = Schema.decodeUnknownEffect(DurableMailboxState)
+	const claimLost = (claim: { readonly mailboxKey: string; readonly claimId: string }) =>
+		new MailboxProcessingClaimLost({ mailboxKey: claim.mailboxKey, claimId: claim.claimId })
 
 	/**
-	 * Apply one transition to the stored mailbox inside a storage transaction, and move the alarm with `readyAt`.
-	 * The transition is pure: the transaction runs outside this fiber, so it must not read the clock.
+	 * A change to a claimed batch. A mailbox that is not the claim's own is a lost claim. `message` is
+	 * what a storage or decode failure is logged with.
 	 */
-	const transact = <A>(input: {
-		readonly whenNothingStored: A
-		readonly transition: (current: DurableMailboxState) => MailboxTransition<A>
-	}) =>
-		storage
-			.transaction((transaction) =>
-				Effect.gen(function* () {
-					const stored = yield* transaction.get(mailboxStateKey)
-					if (Predicate.isUndefined(stored)) return Exit.succeed(input.whenNothingStored)
-					const decoded = yield* decodeStored(stored).pipe(Effect.exit)
-					if (Exit.isFailure(decoded)) return Exit.failCause(decoded.cause)
-					const { result, next } = input.transition(decoded.value)
-					if (Option.isSome(next)) {
-						yield* transaction.put(mailboxStateKey, next.value)
-						if (Predicate.isNull(next.value.readyAt)) yield* transaction.deleteAlarm
-						else yield* transaction.setAlarm(next.value.readyAt)
-					}
-					return Exit.succeed(result)
-				}),
-			)
-			.pipe(Effect.flatten)
-
-	const claimLostUnless = (owned: boolean, claim: { readonly mailboxKey: string; readonly claimId: string }) =>
-		owned
-			? Effect.void
-			: Effect.fail(new MailboxProcessingClaimLost({ mailboxKey: claim.mailboxKey, claimId: claim.claimId }))
+	const changeClaimedDeliveries = <A, E>(
+		message: string,
+		claim: { readonly mailboxKey: string; readonly claimId: string },
+		change: DeliveriesChange<A, E | MailboxProcessingClaimLost>,
+	) =>
+		changeDeliveries(storage, {
+			onMissing: claimLost(claim),
+			change: (current) =>
+				current.mailboxKey === claim.mailboxKey ? change(current) : Effect.fail(claimLost(claim)),
+			onUndecodable: undecodable(message),
+		}).pipe(narrowStorageDefect(message))
 
 	return MailboxProcessingBackend.of({
 		findReadyMailboxes: Effect.gen(function* () {
 			const now = yield* Clock.currentTimeMillis
 			const stored = yield* storage.get(mailboxStateKey)
 			if (Predicate.isUndefined(stored)) return []
-			return describeReadyMailbox(yield* decodeStored(stored), now)
+			const current = yield* decodeMailboxState(stored).pipe(
+				Effect.catchTag('SchemaError', undecodable('Cloudflare mailbox look failed')),
+			)
+			return describeReadyMailbox(current, now)
 		}).pipe(
-			narrowToUnavailable('Cloudflare mailbox look failed'),
+			narrowStorageDefect('Cloudflare mailbox look failed'),
 			Effect.withSpan('delivery.cloudflare.find_ready_mailboxes'),
 		),
 
 		claimMailbox: Effect.fn('delivery.cloudflare.claim_mailbox')(function* (claim: ClaimMailbox) {
 			const now = yield* Clock.currentTimeMillis
 			const claimId = yield* makeClaimId
-			return yield* transact({
-				whenNothingStored: Option.none(),
-				transition: (current) => claimTransition({ current, claim, claimId, now }),
+			return yield* transactMailbox(storage, {
+				whenNothingStored: Effect.succeedNone,
+				transition: (current) => Effect.succeed(claimTransition({ current, claim, claimId, now })),
+				onUndecodable: undecodable('Cloudflare mailbox claim failed'),
 			})
-		}, narrowToUnavailable('Cloudflare mailbox claim failed')),
+		}, narrowStorageDefect('Cloudflare mailbox claim failed')),
 
 		deferMailbox: (input) =>
-			transact({
-				whenNothingStored: undefined,
-				transition: (current) => deferTransition(current, input),
+			transactMailbox(storage, {
+				whenNothingStored: Effect.void,
+				transition: (current) => Effect.succeed(deferTransition(current, input)),
+				onUndecodable: undecodable('Cloudflare mailbox deferral failed'),
 			}).pipe(
-				narrowToUnavailable('Cloudflare mailbox deferral failed'),
+				narrowStorageDefect('Cloudflare mailbox deferral failed'),
 				Effect.withSpan('delivery.cloudflare.defer_mailbox'),
 			),
 
 		renewClaim: Effect.fn('delivery.cloudflare.renew_claim')(function* (renewal: RenewMailboxClaim) {
 			const now = yield* Clock.currentTimeMillis
-			const owned = yield* transact({
-				whenNothingStored: false,
-				transition: (current) => renewTransition({ current, renewal, now }),
-			}).pipe(narrowToUnavailable('Cloudflare mailbox claim renewal failed'))
-			yield* claimLostUnless(owned, renewal)
+			yield* changeClaimedDeliveries('Cloudflare mailbox claim renewal failed', renewal, (current) =>
+				renewDeliveryClaim(current.deliveries, { ...renewal, now }).pipe(
+					Effect.map((slot) => ({ slot, value: undefined })),
+					Effect.catchTag('ClaimNotOwned', () => Effect.fail(claimLost(renewal))),
+				),
+			)
 		}),
 
 		recordProcessingAttemptResult: Effect.fn('delivery.cloudflare.record_processing_attempt_result')(function* (
 			input: RecordProcessingAttemptResult,
 		) {
-			const owned = yield* transact({
-				whenNothingStored: false,
-				transition: (current) => recordTransition(current, input),
-			}).pipe(narrowToUnavailable('Cloudflare mailbox result recording failed'))
-			yield* claimLostUnless(owned, input.claim)
+			const retryAfterMs = Match.value(input.result).pipe(
+				Match.tag('RetryableFailure', ({ retryAfterMs }) => retryAfterMs ?? DEFAULT_RETRY_AFTER_MS),
+				Match.orElse(() => null),
+			)
+			yield* changeClaimedDeliveries('Cloudflare mailbox result recording failed', input.claim, (current) =>
+				recordDeliveryAttempt(current.deliveries, {
+					claimId: input.claim.claimId,
+					retryAfterMs,
+					now: input.finishedAt,
+					hasWaiting: Arr.isReadonlyArrayNonEmpty(current.waiting),
+				}).pipe(
+					Effect.map((slot) => ({ slot, value: undefined })),
+					Effect.catchTag('ClaimNotOwned', () => Effect.fail(claimLost(input.claim))),
+				),
+			)
+		}),
+
+		prepareDelivery: Effect.fn('delivery.cloudflare.prepare_delivery')(function* (input: PrepareMailboxDelivery) {
+			return yield* changeClaimedDeliveries('Cloudflare mailbox delivery preparation failed', input, (current) =>
+				prepareDeliverySlot(current.deliveries, input).pipe(
+					Effect.map(({ slot, prepared }) => ({ slot, value: prepared })),
+					Effect.catchTags({
+						ClaimNotOwned: () => Effect.fail(claimLost(input)),
+						PreparationMismatch: ({ batchId }) =>
+							Effect.fail(
+								new DeliveryPreparationConflict({
+									deliveryId: makeDeliveryId({ mailboxKey: input.mailboxKey, batchId }),
+								}),
+							),
+					}),
+				),
+			)
+		}),
+
+		handOffDelivery: Effect.fn('delivery.cloudflare.hand_off_delivery')(function* (input: HandOffMailboxDelivery) {
+			yield* changeClaimedDeliveries('Cloudflare mailbox handoff failed', input, (current) =>
+				handOffDeliverySlot(current.deliveries, input).pipe(
+					Effect.map((slot) => ({ slot, value: undefined })),
+					Effect.catchTag('ClaimNotOwned', () => Effect.fail(claimLost(input))),
+				),
+			)
+		}),
+
+		claimDeliveryOutput: Effect.fn('delivery.cloudflare.claim_delivery_output')(function* (
+			claim: ClaimDeliveryOutput,
+		) {
+			const now = yield* Clock.currentTimeMillis
+			const claimId = yield* makeClaimId
+			return yield* transactMailbox(storage, {
+				whenNothingStored: Effect.succeedNone,
+				transition: (current) => Effect.succeed(claimOutputTransition({ current, claim, claimId, now })),
+				onUndecodable: undecodable('Cloudflare delivery output claim failed'),
+			})
+		}, narrowStorageDefect('Cloudflare delivery output claim failed')),
+
+		renewDeliveryOutput: Effect.fn('delivery.cloudflare.renew_delivery_output')(function* (
+			renewal: RenewDeliveryOutput,
+		) {
+			const now = yield* Clock.currentTimeMillis
+			yield* changeClaimedDeliveries('Cloudflare delivery output renewal failed', renewal, (current) =>
+				renewDeliveryOutput(current.deliveries, { ...renewal, now }).pipe(
+					Effect.map((slot) => ({ slot, value: undefined })),
+					Effect.catchTag('ClaimNotOwned', () => Effect.fail(claimLost(renewal))),
+				),
+			)
+		}),
+
+		settleDeliveryOutput: Effect.fn('delivery.cloudflare.settle_delivery_output')(function* (
+			input: SettleDeliveryOutput,
+		) {
+			yield* changeClaimedDeliveries('Cloudflare delivery output settlement failed', input, (current) =>
+				settleDeliveryOutput(current.deliveries, {
+					...input,
+					now: input.settledAt,
+					hasWaiting: Arr.isReadonlyArrayNonEmpty(current.waiting),
+				}).pipe(
+					Effect.map((slot) => ({ slot, value: undefined })),
+					Effect.catchTag('ClaimNotOwned', () => Effect.fail(claimLost(input))),
+				),
+			)
 		}),
 	})
 })
