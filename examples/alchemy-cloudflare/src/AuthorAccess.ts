@@ -7,7 +7,10 @@ import {
 	type GitHubAccessLevel,
 	type GitHubApiError,
 	type GitHubIssue,
-	type GitHubParticipant,
+	type GitHubIssueEvent,
+	type GitHubIssueOpened,
+	type GitHubPrEvent,
+	type GitHubPrOpened,
 	type GitHubPullRequest,
 	hasGitHubAccess,
 } from '@humanlayer/channels-github-next'
@@ -18,10 +21,7 @@ import { Array as Arr, Effect, Predicate } from 'effect'
 export const minimumGitHubAccess: GitHubAccessLevel = 'write'
 
 /** An issue or pull request event, with the person who caused it. */
-export interface GitHubAuthoredEvent {
-	readonly _tag: string
-	readonly actor: GitHubParticipant
-}
+export type GitHubAuthoredEvent = GitHubIssueOpened | GitHubIssueEvent | GitHubPrOpened | GitHubPrEvent
 
 /**
  * A login GitHub does not know as a user (a bot account, or a placeholder) has no access. Other lookup

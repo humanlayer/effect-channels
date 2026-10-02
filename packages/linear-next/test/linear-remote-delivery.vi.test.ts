@@ -16,7 +16,7 @@ import {
 	type DeliveryClient,
 	type DeliveryContext,
 } from '@humanlayer/channels-delivery-next'
-import { Clock, Config, Effect, Layer, Predicate, Queue, Redacted, Ref, Schedule, type Schema } from 'effect'
+import { Clock, Config, Data, Effect, Layer, Predicate, Queue, Redacted, Ref, Schedule, type Schema } from 'effect'
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http'
 
 import { LinearAuth, LinearBot } from '../src'
@@ -130,10 +130,12 @@ const makeFakeLinear = (options: FakeLinearOptions = {}) =>
 		return { api, shown, requests }
 	})
 
-type Event =
-	| { readonly _tag: 'SessionCreated'; readonly delivery: DeliveryContext }
-	| { readonly _tag: 'SessionPrompted'; readonly delivery: DeliveryContext; readonly signal: string | null }
-	| { readonly _tag: 'IssueCreated'; readonly delivery: DeliveryContext }
+type Event = Data.TaggedEnum<{
+	SessionCreated: { readonly delivery: DeliveryContext }
+	SessionPrompted: { readonly delivery: DeliveryContext; readonly signal: string | null }
+	IssueCreated: { readonly delivery: DeliveryContext }
+}>
+const Event = Data.taggedEnum<Event>()
 
 const promptPayload = (activityId: string, signal: string | null) => ({
 	...agentSessionPayloads[1],
@@ -161,7 +163,7 @@ const startBot = (api: Layer.Layer<LinearApi>) =>
 					linearApi: api,
 					handlers: {
 						onAgentSessionCreated: (_event, delivery) =>
-							Queue.offer(events, { _tag: 'SessionCreated', delivery }).pipe(
+							Queue.offer(events, Event.SessionCreated({ delivery })).pipe(
 								Effect.andThen(
 									delivery.handoff({
 										links: [ExternalLink.make({ label: 'Run log', url: 'https://agent.example.com/runs/1' })],
@@ -169,11 +171,11 @@ const startBot = (api: Layer.Layer<LinearApi>) =>
 								),
 							),
 						onAgentSessionPrompted: (event, delivery) =>
-							Queue.offer(events, { _tag: 'SessionPrompted', delivery, signal: event.prompt.signal }).pipe(
+							Queue.offer(events, Event.SessionPrompted({ delivery, signal: event.prompt.signal })).pipe(
 								Effect.asVoid,
 							),
 						onIssueCreated: (_event, delivery) =>
-							Queue.offer(events, { _tag: 'IssueCreated', delivery }).pipe(Effect.andThen(delivery.handoff())),
+							Queue.offer(events, Event.IssueCreated({ delivery })).pipe(Effect.andThen(delivery.handoff())),
 					},
 				}),
 			],

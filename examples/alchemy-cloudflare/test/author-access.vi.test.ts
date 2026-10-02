@@ -3,8 +3,12 @@ import {
 	type GitHubAccessLevel,
 	GitHubApi,
 	GitHubApiError,
+	GitHubDiscussionRef,
+	GitHubEventId,
 	GitHubId,
 	GitHubIssue,
+	GitHubIssueComment,
+	GitHubIssueCommentCreated,
 	GitHubIssueRef,
 	GitHubParticipant,
 } from '@humanlayer/channels-github-next'
@@ -36,7 +40,18 @@ const issue = GitHubIssue.make({
 
 const person = (id: number, login: string) => GitHubParticipant.make({ id: GitHubId.make(id), login, type: 'User' })
 const grants = (level: GitHubAccessLevel): Effect.Effect<GitHubAccessLevel, GitHubApiError> => Effect.succeed(level)
-const comment = (author: GitHubParticipant) => ({ _tag: 'GitHubIssueCommentCreated', actor: author }) as const
+const comment = (author: GitHubParticipant) =>
+	GitHubIssueCommentCreated.make({
+		eventId: GitHubEventId.make(`comment-by-${author.login}`),
+		issue,
+		actor: author,
+		comment: GitHubIssueComment.make({
+			ref: { discussion: GitHubDiscussionRef.cases.Issue.make({ ref: issue.ref }), id: author.id },
+			body: 'hello',
+			url: 'https://github.com/humanlayer/effect-channels/issues/42',
+			author,
+		}),
+	})
 
 /** A GitHub API that answers only `fetchUserAccess`, from `access` by login, and records each lookup. */
 const gitHubApi = (

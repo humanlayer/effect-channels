@@ -17,7 +17,7 @@ import {
 	type DeliveryClient,
 	type DeliveryContext,
 } from '@humanlayer/channels-delivery-next'
-import { Config, Effect, Layer, Match, Predicate, Queue, Redacted, Ref, Schedule, Schema } from 'effect'
+import { Config, Data, Effect, Layer, Match, Predicate, Queue, Redacted, Ref, Schedule, Schema } from 'effect'
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/unstable/http'
 
 import {
@@ -114,10 +114,11 @@ const makeFakeGitHub = (options: FakeGitHubOptions = {}) =>
 		return { api, shown, reactions }
 	})
 
-type Event = {
-	readonly _tag: 'Mentioned' | 'SubscribedIssueEvents'
-	readonly delivery: DeliveryContext
-}
+type Event = Data.TaggedEnum<{
+	Mentioned: { readonly delivery: DeliveryContext }
+	SubscribedIssueEvents: { readonly delivery: DeliveryContext }
+}>
+const Event = Data.taggedEnum<Event>()
 
 /** A comment mentioning the bot, on issue 42 or on pull request 42. */
 const mentionPayload = (input: { readonly id: number; readonly body: string; readonly pullRequest?: boolean }) => {
@@ -145,7 +146,7 @@ const startBot = (api: Layer.Layer<GitHubApi>) =>
 					handlers: {
 						onMentioned: (event, delivery) =>
 							Effect.gen(function* () {
-								yield* Queue.offer(events, { _tag: 'Mentioned', delivery })
+								yield* Queue.offer(events, Event.Mentioned({ delivery }))
 								const discussion = Predicate.isTagged(event, 'GitHubIssueMentioned') ? event.issue : event.pullRequest
 								const text = Match.value(event.trigger).pipe(
 									Match.tag(
@@ -160,7 +161,7 @@ const startBot = (api: Layer.Layer<GitHubApi>) =>
 								return yield* delivery.handoff()
 							}),
 						onSubscribedIssueEvents: (_event, delivery) =>
-							Queue.offer(events, { _tag: 'SubscribedIssueEvents', delivery }).pipe(
+							Queue.offer(events, Event.SubscribedIssueEvents({ delivery })).pipe(
 								Effect.andThen(delivery.handoff()),
 							),
 					},
