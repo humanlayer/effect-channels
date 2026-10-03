@@ -45,6 +45,7 @@
 		"vitest": "catalog:"
 	},
 	"overrides": {
+		"workerd": "1.20261002.1",
 		"@effect/opentelemetry": "4.0.0",
 		"@effect/platform-browser": "4.0.0",
 		"@effect/platform-bun": "4.0.0",

@@ -41,9 +41,15 @@ const RoutesLive = Layer.mergeAll(bot.routes, bot.deliveryApi, FakeAgentRunLogLi
 	Layer.provide(DeliveryMailboxesLive),
 )
 
+/**
+ * The Worker and the Durable Objects it hosts run at one pinned compatibility date, so an Alchemy
+ * upgrade cannot change their behavior. 2026-10-01 turns on `durable_object_io_tasks_prevent_eviction`:
+ * pending I/O, such as an RPC to another Durable Object or a timer, keeps an object alive for up to 15
+ * minutes. Listing that flag as well is an error, because the date already includes it.
+ */
 export default Cloudflare.Worker(
 	'IngressWorker',
-	{ main: import.meta.url },
+	{ main: import.meta.url, compatibility: { date: '2026-10-01' } },
 	Effect.gen(function* () {
 		const fetch = yield* ChannelsCloudflare.serve(RoutesLive)
 		return { fetch }
