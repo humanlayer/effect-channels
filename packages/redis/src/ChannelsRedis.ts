@@ -1,7 +1,7 @@
 /**
  * This file defines `ChannelsRedis.make`: Redis mailbox storage as `Channels.make` takes it.
  */
-import type { ChannelsStorage, DeliveryControlBackend } from '@humanlayer/channels-delivery-next'
+import type { ChannelsStorage, DeliveryControlBackend } from '@humanlayer/channels-delivery'
 import { Layer } from 'effect'
 
 import { DeliveryControlBackendRedis } from './DeliveryControlBackend'

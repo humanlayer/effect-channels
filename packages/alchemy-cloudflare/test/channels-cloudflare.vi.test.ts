@@ -24,9 +24,9 @@ import {
 	type DeliveryAdmissionBatch,
 	type ProviderOutputOperation,
 	type UpdateMessagePayload,
-} from '@humanlayer/channels-delivery-next'
+} from '@humanlayer/channels-delivery'
 import { Clock, Context, Effect, Layer, Option, Predicate, Redacted, Ref, Schema } from 'effect'
-import { HttpServerRequest, HttpServerResponse } from 'effect/unstable/http'
+import { HttpServerRequest, HttpServerResponse } from 'effect/http'
 
 import { ChannelsCloudflare, DeliveryMailboxes } from '../src'
 import { DurableObjectFake, DurableObjectFakeAlarm } from './DurableObjectFake'

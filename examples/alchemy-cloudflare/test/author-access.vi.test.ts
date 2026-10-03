@@ -11,7 +11,7 @@ import {
 	GitHubIssueCommentCreated,
 	GitHubIssueRef,
 	GitHubParticipant,
-} from '@humanlayer/channels-github-next'
+} from '@humanlayer/channels-github'
 import {
 	SlackChannelId,
 	SlackMarkdownContent,
@@ -22,7 +22,7 @@ import {
 	SlackTeamId,
 	SlackThreadRef,
 	SlackUserId,
-} from '@humanlayer/channels-slack-next'
+} from '@humanlayer/channels-slack'
 import { Effect, Layer, Queue } from 'effect'
 
 import { eventsFromGitHubWriters, isFromInstallationWorkspace, isFromSlackWorkspace } from '../src/AuthorAccess'

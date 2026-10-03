@@ -35,11 +35,10 @@ export const MailboxStorageFromDurableObjectState = Layer.effect(
 		const { storage } = yield* Cloudflare.DurableObjectState
 		const runtimeContext = yield* RuntimeContext
 		/**
-		 * Alchemy types every storage call as one that cannot fail, but a rejected storage promise still
-		 * fails the effect at run time, with an error no type names. Make it a defect, so it can never
-		 * pass for a typed error such as a lifecycle refusal; callers capture defects as storage failures.
+		 * A storage call can fail with `DurableObjectStorageError`. Make it a defect, so it can never pass
+		 * for a typed error such as a lifecycle refusal; callers capture defects as storage failures.
 		 */
-		const run = <A>(effect: Effect.Effect<A, never, RuntimeContext>) =>
+		const run = <A, E>(effect: Effect.Effect<A, E, RuntimeContext>) =>
 			effect.pipe(Effect.provideService(RuntimeContext, runtimeContext), Effect.orDie)
 		const fromTransaction = (transaction: Cloudflare.DurableObjectTransaction): MailboxStorageTransaction => ({
 			get: (key) => run(transaction.get(key)),

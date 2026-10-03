@@ -5,14 +5,14 @@
  */
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto'
 import { it } from '@effect/vitest'
-import { DeliveryAdmission, QueueDeliveryMode, type DeliveryContext } from '@humanlayer/channels-delivery-next'
+import { DeliveryAdmission, QueueDeliveryMode, type DeliveryContext } from '@humanlayer/channels-delivery'
 import {
 	GitHubApi,
 	GitHubBot,
 	GitHubId,
 	GitHubIssueComment,
 	type GitHubReactionTarget,
-} from '@humanlayer/channels-github-next'
+} from '@humanlayer/channels-github'
 import {
 	LinearAgentActivityId,
 	LinearAgentActivityReceipt,
@@ -21,10 +21,10 @@ import {
 	LinearApi,
 	LinearAuth,
 	LinearBot,
-} from '@humanlayer/channels-linear-next'
-import { SlackApi, SlackBot } from '@humanlayer/channels-slack-next'
+} from '@humanlayer/channels-linear'
+import { SlackApi, SlackBot } from '@humanlayer/channels-slack'
 import { Config, Context, Effect, Layer, Match, Option, Predicate, Queue, Redacted, Ref, Schema } from 'effect'
-import { HttpServerRequest, HttpServerResponse } from 'effect/unstable/http'
+import { HttpServerRequest, HttpServerResponse } from 'effect/http'
 
 import {
 	agentSessionPayloads,
@@ -33,8 +33,8 @@ import {
 	linearOrganizationId,
 	linearWebhookSecret,
 	signedLinearInput,
-} from '../../linear-next/test/fixtures'
-import { githubWebhookSecret, issueCommentPayload, signedGitHubInput } from '../../github-next/test/fixtures'
+} from '../../linear/test/fixtures'
+import { githubWebhookSecret, issueCommentPayload, signedGitHubInput } from '../../github/test/fixtures'
 import { ChannelsCloudflare, DeliveryMailboxes } from '../src'
 import { DurableObjectFake, DurableObjectFakeAlarm } from './DurableObjectFake'
 

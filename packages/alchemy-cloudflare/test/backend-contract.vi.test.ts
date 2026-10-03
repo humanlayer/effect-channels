@@ -17,12 +17,12 @@ import {
 	deliveryMailboxKey,
 	makeDeliveryId,
 	parseDeliveryId,
-} from '@humanlayer/channels-delivery-next'
+} from '@humanlayer/channels-delivery'
 import { Clock, Effect, Layer, Option, Schema } from 'effect'
 import { TestClock } from 'effect/testing'
 
-import { mailboxBackendContract, nextBatchIdentity, preparation } from '../../delivery-next/test/backend-contract'
-import { deliveryHandoffContract } from '../../delivery-next/test/delivery-handoff-contract'
+import { mailboxBackendContract, nextBatchIdentity, preparation } from '../../delivery/test/backend-contract'
+import { deliveryHandoffContract } from '../../delivery/test/delivery-handoff-contract'
 import {
 	DeliveryControlBackendFromDurableObjectStorage,
 	MailboxProcessingBackendFromDurableObjectStorage,

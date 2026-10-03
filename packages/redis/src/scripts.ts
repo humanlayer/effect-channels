@@ -18,7 +18,7 @@
  * `attempt`, `stage`, and `delivery`, the JSON of everything else the lifecycle keeps.
  */
 import { Data, Predicate } from 'effect'
-import * as Redis from 'effect/unstable/persistence/Redis'
+import * as Redis from 'effect/persistence/Redis'
 
 import { mailboxEventsKey, mailboxPendingKey, mailboxRetainedKey, mailboxStateKey, readyMailboxesKey } from './Keys'
 

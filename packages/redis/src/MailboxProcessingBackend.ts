@@ -1,5 +1,5 @@
 /**
- * The Redis store behind delivery-next's MailboxProcessingBackend.
+ * The Redis store behind delivery's MailboxProcessingBackend.
  *
  * Every change runs the shared `DeliveryLifecycle` transition in TypeScript and writes it only if the
  * mailbox did not change since it was read; see `DeliverySlot.ts` for the pattern and the layout. Two
@@ -47,9 +47,9 @@ import {
 	type RenewDeliveryOutput,
 	type RenewMailboxClaim,
 	type SettleDeliveryOutput,
-} from '@humanlayer/channels-delivery-next'
+} from '@humanlayer/channels-delivery'
 import { Array as Arr, Clock, Effect, Layer, Match, Option, Predicate, Random, Schema } from 'effect'
-import * as Redis from 'effect/unstable/persistence/Redis'
+import * as Redis from 'effect/persistence/Redis'
 
 import {
 	changeDeliverySlot,

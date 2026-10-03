@@ -2,7 +2,7 @@ import * as NodeCrypto from '@effect/platform-node/NodeCrypto'
 import { ChannelsCloudflare, DeliveryMailboxes } from '@humanlayer/channels-alchemy-cloudflare'
 import * as Cloudflare from 'alchemy/Cloudflare'
 import { Effect, Layer, Schema } from 'effect'
-import { FetchHttpClient, HttpRouter, HttpServerResponse } from 'effect/unstable/http'
+import { FetchHttpClient, HttpRouter, HttpServerResponse } from 'effect/http'
 
 import { bot } from './Bot'
 import { DeliveryMailbox, DeliveryMailboxLive } from './DeliveryMailboxDO'

@@ -10,7 +10,7 @@
  * `plan` makes it keep a three-step plan up to date. A wait outside the allowed range, or text without the
  * command, is not a handoff command.
  */
-import type { SlackContent } from '@humanlayer/channels-slack-next'
+import type { SlackContent } from '@humanlayer/channels-slack'
 import { Effect, Match, Option, Predicate, Schema, SchemaIssue, SchemaTransformation, type Types } from 'effect'
 
 /** How long the remote agent waits before finishing: whole seconds, so a typo cannot park a thread for hours. */
@@ -52,7 +52,7 @@ const commandFromText = (keyword: string) => {
 	return Schema.String.pipe(
 	Schema.decodeTo(
 		HandoffCommand,
-		SchemaTransformation.transformOrFail({
+		SchemaTransformation.transformEffect({
 			decode: (text) =>
 				Option.match(Option.fromNullishOr(pattern.exec(text)), {
 					onNone: () =>

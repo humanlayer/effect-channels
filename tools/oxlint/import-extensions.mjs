@@ -1,4 +1,4 @@
-import { defineRule, eslintCompatPlugin } from '@oxlint/plugins'
+import { defineRule, eslintCompatPlugin } from 'vite-plus/lint/plugins'
 
 const relativeSourceExtension = /^\.{1,2}\/.*\.(?:[cm]?[jt]sx?)(?:[?#].*)?$/u
 

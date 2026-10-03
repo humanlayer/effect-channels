@@ -5,7 +5,7 @@
  * posting that message fails the way an unreachable Slack does, which output treats as retryable.
  * After it, the message posts with the marker removed. Every other call goes to `SlackApiLive`.
  */
-import { SlackApi, SlackApiError, SlackApiLive, SlackMarkdownContent } from '@humanlayer/channels-slack-next'
+import { SlackApi, SlackApiError, SlackApiLive, SlackMarkdownContent } from '@humanlayer/channels-slack'
 import { Clock, Effect, Layer, Option, Predicate } from 'effect'
 
 const MARKER = /\s*\[fail-slack-output-until:(\d+)\]\s*$/

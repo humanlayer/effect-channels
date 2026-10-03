@@ -16,10 +16,10 @@ import {
 	readDeliverySlotStatus,
 	type ApplyDeliveryMutation,
 	type ReadDeliveryStatus,
-} from '@humanlayer/channels-delivery-next'
+} from '@humanlayer/channels-delivery'
 import { Clock, Effect, Layer, Option, type Schema } from 'effect'
-import * as SqlClient from 'effect/unstable/sql/SqlClient'
-import * as SqlError from 'effect/unstable/sql/SqlError'
+import * as SqlClient from 'effect/sql/SqlClient'
+import * as SqlError from 'effect/sql/SqlError'
 
 import { changeDeliverySlot, lockDeliverySlot, type NarrowSqlFailure } from './DeliverySlot'
 

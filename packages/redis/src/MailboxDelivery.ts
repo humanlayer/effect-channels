@@ -8,9 +8,9 @@ import {
 	MailboxDeliveryUnavailable,
 	Timestamp,
 	requestDeliveryInterrupt,
-} from '@humanlayer/channels-delivery-next'
+} from '@humanlayer/channels-delivery'
 import { Clock, Effect, Layer, Option, Predicate, Schema } from 'effect'
-import * as Redis from 'effect/unstable/persistence/Redis'
+import * as Redis from 'effect/persistence/Redis'
 
 import {
 	commitDeliverySlot,

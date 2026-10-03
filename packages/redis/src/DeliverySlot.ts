@@ -39,9 +39,9 @@ import {
 	Timestamp,
 	emptyDeliverySlot,
 	mailboxSchedulerStatus,
-} from '@humanlayer/channels-delivery-next'
+} from '@humanlayer/channels-delivery'
 import { Array as Arr, Clock, Effect, Option, Predicate, Random, Schedule, Schema, Struct } from 'effect'
-import * as Redis from 'effect/unstable/persistence/Redis'
+import * as Redis from 'effect/persistence/Redis'
 
 import * as Scripts from './scripts'
 

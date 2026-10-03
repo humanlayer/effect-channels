@@ -7,10 +7,10 @@ import {
 	MailboxSubscriptionAlreadyExistsResult,
 	type MailboxSubscriptionOperation,
 	MailboxSubscriptions,
-} from '@humanlayer/channels-delivery-next'
+} from '@humanlayer/channels-delivery'
 import { Effect, Layer, Schema } from 'effect'
-import * as SqlClient from 'effect/unstable/sql/SqlClient'
-import * as SqlError from 'effect/unstable/sql/SqlError'
+import * as SqlClient from 'effect/sql/SqlClient'
+import * as SqlError from 'effect/sql/SqlError'
 
 const insertedRows = Schema.Array(
 	Schema.Struct({

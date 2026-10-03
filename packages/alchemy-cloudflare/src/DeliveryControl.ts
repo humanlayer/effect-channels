@@ -16,7 +16,7 @@ import {
 	DeliveryStatus,
 	DeliveryStatusError,
 	parseDeliveryId,
-} from '@humanlayer/channels-delivery-next'
+} from '@humanlayer/channels-delivery'
 import { RuntimeContext } from 'alchemy/RuntimeContext'
 import { Data, Effect, Layer, Match, Redacted, Schema } from 'effect'
 

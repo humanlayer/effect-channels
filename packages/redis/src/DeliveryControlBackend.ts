@@ -17,9 +17,9 @@ import {
 	readDeliverySlotStatus,
 	type ApplyDeliveryMutation,
 	type ReadDeliveryStatus,
-} from '@humanlayer/channels-delivery-next'
+} from '@humanlayer/channels-delivery'
 import { Clock, Effect, Layer, Option } from 'effect'
-import * as Redis from 'effect/unstable/persistence/Redis'
+import * as Redis from 'effect/persistence/Redis'
 
 import { changeDeliverySlot, loadDeliverySlot, type NarrowRedisFailure } from './DeliverySlot'
 
