@@ -12,13 +12,14 @@
 	"scripts": {
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},
-	"dependencies": {
-		"effect": "catalog:",
-		"emulate": "^0.11.2"
-	},
 	"devDependencies": {
 		"@effect/platform-node": "catalog:",
 		"@effect/vitest": "catalog:",
+		"effect": "catalog:",
+		"emulate": "^0.11.2",
 		"typescript": "catalog:"
+	},
+	"peerDependencies": {
+		"effect": "catalog:"
 	}
 }

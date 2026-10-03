@@ -13,6 +13,7 @@ import {
 	type ChannelsProviderRequirements,
 	type MailboxSubscriptions,
 } from '@humanlayer/channels-delivery'
+import type * as Cloudflare from 'alchemy/Cloudflare'
 import { RuntimeContext } from 'alchemy/RuntimeContext'
 import { Context, type Crypto, Effect, Layer } from 'effect'
 import * as HttpRouter from 'effect/http/HttpRouter'

@@ -1,0 +1,79 @@
+name: CI
+
+on:
+    workflow_dispatch:
+    pull_request:
+        types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+    contents: read
+
+concurrency:
+    group: ci-${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
+env:
+    BUN_VERSION: 1.3.14
+    NODE_VERSION: 24
+    RELEASE_VERSION: 0.0.0-ci.0
+
+jobs:
+    check:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: ${{ env.BUN_VERSION }}
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+            - run: bun install --frozen-lockfile
+            - run: bun run check
+
+    test:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: ${{ env.BUN_VERSION }}
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+            - run: bun install --frozen-lockfile
+            - run: bun run test
+
+    backends:
+        runs-on: ubuntu-latest
+        strategy:
+            matrix:
+                backend: [postgres, redis]
+        steps:
+            - uses: actions/checkout@v4
+            - uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: ${{ env.BUN_VERSION }}
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+            - run: bun install --frozen-lockfile
+            - run: bun run test:backend:${{ matrix.backend }}
+
+    release-validation:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: oven-sh/setup-bun@v2
+              with:
+                  bun-version: ${{ env.BUN_VERSION }}
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+                  registry-url: https://registry.npmjs.org
+            - run: npm install --global npm@latest
+            - run: bun install --frozen-lockfile
+            - run: bun run build
+            - run: bun run release:prepare --version "$RELEASE_VERSION"
+            - run: bun run release:validate --version "$RELEASE_VERSION"
+            - run: bun run release:publish --version "$RELEASE_VERSION" --tag ci --dry-run

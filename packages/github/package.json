@@ -13,14 +13,17 @@
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},
 	"dependencies": {
-		"@humanlayer/channels-delivery": "workspace:*",
-		"effect": "catalog:"
+		"@humanlayer/channels-delivery": "workspace:*"
 	},
 	"devDependencies": {
 		"@effect/platform-node": "catalog:",
 		"@effect/vitest": "catalog:",
 		"@emulators/core": "0.11.2",
 		"@emulators/github": "0.11.2",
+		"effect": "catalog:",
 		"typescript": "catalog:"
+	},
+	"peerDependencies": {
+		"effect": "catalog:"
 	}
 }

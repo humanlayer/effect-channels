@@ -13,12 +13,15 @@
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},
 	"dependencies": {
-		"@humanlayer/channels-delivery": "workspace:*",
-		"effect": "catalog:"
+		"@humanlayer/channels-delivery": "workspace:*"
 	},
 	"devDependencies": {
 		"@effect/sql-pg": "catalog:",
 		"@effect/vitest": "catalog:",
+		"effect": "catalog:",
 		"typescript": "catalog:"
+	},
+	"peerDependencies": {
+		"effect": "catalog:"
 	}
 }

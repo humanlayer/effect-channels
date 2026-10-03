@@ -49,8 +49,6 @@
       "version": "0.0.0",
       "dependencies": {
         "@humanlayer/channels-delivery": "workspace:*",
-        "alchemy": "catalog:",
-        "effect": "catalog:",
       },
       "devDependencies": {
         "@effect/platform-node": "catalog:",
@@ -58,20 +56,27 @@
         "@humanlayer/channels-github": "workspace:*",
         "@humanlayer/channels-linear": "workspace:*",
         "@humanlayer/channels-slack": "workspace:*",
+        "alchemy": "catalog:",
+        "effect": "catalog:",
         "typescript": "catalog:",
+      },
+      "peerDependencies": {
+        "alchemy": "catalog:",
+        "effect": "catalog:",
       },
     },
     "packages/delivery": {
       "name": "@humanlayer/channels-delivery",
       "version": "0.0.0",
-      "dependencies": {
-        "effect": "catalog:",
-        "emulate": "^0.11.2",
-      },
       "devDependencies": {
         "@effect/platform-node": "catalog:",
         "@effect/vitest": "catalog:",
+        "effect": "catalog:",
+        "emulate": "^0.11.2",
         "typescript": "catalog:",
+      },
+      "peerDependencies": {
+        "effect": "catalog:",
       },
     },
     "packages/github": {
@@ -79,14 +84,17 @@
       "version": "0.0.0",
       "dependencies": {
         "@humanlayer/channels-delivery": "workspace:*",
-        "effect": "catalog:",
       },
       "devDependencies": {
         "@effect/platform-node": "catalog:",
         "@effect/vitest": "catalog:",
         "@emulators/core": "0.11.2",
         "@emulators/github": "0.11.2",
+        "effect": "catalog:",
         "typescript": "catalog:",
+      },
+      "peerDependencies": {
+        "effect": "catalog:",
       },
     },
     "packages/linear": {
@@ -95,7 +103,6 @@
       "dependencies": {
         "@humanlayer/channels-delivery": "workspace:*",
         "@types/mdast": "^4.0.4",
-        "effect": "catalog:",
         "mdast-util-from-markdown": "^2.0.3",
         "mdast-util-gfm": "^3.1.0",
         "micromark-extension-gfm": "^3.0.0",
@@ -103,7 +110,11 @@
       "devDependencies": {
         "@effect/platform-node": "catalog:",
         "@effect/vitest": "catalog:",
+        "effect": "catalog:",
         "typescript": "catalog:",
+      },
+      "peerDependencies": {
+        "effect": "catalog:",
       },
     },
     "packages/redis": {
@@ -111,14 +122,17 @@
       "version": "0.0.0",
       "dependencies": {
         "@humanlayer/channels-delivery": "workspace:*",
-        "effect": "catalog:",
       },
       "devDependencies": {
         "@effect/platform-node": "catalog:",
         "@effect/vitest": "catalog:",
+        "effect": "catalog:",
         "redis": "^5.11.0",
         "typescript": "catalog:",
         "vitest": "catalog:",
+      },
+      "peerDependencies": {
+        "effect": "catalog:",
       },
     },
     "packages/slack": {
@@ -126,14 +140,17 @@
       "version": "0.0.0",
       "dependencies": {
         "@humanlayer/channels-delivery": "workspace:*",
-        "effect": "catalog:",
       },
       "devDependencies": {
         "@effect/platform-node": "catalog:",
         "@effect/vitest": "catalog:",
         "@emulators/core": "0.11.2",
         "@emulators/slack": "0.11.2",
+        "effect": "catalog:",
         "typescript": "catalog:",
+      },
+      "peerDependencies": {
+        "effect": "catalog:",
       },
     },
     "packages/sql": {
@@ -141,12 +158,15 @@
       "version": "0.0.0",
       "dependencies": {
         "@humanlayer/channels-delivery": "workspace:*",
-        "effect": "catalog:",
       },
       "devDependencies": {
         "@effect/sql-pg": "catalog:",
         "@effect/vitest": "catalog:",
+        "effect": "catalog:",
         "typescript": "catalog:",
+      },
+      "peerDependencies": {
+        "effect": "catalog:",
       },
     },
   },
