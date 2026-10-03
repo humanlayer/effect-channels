@@ -1,6 +1,6 @@
 import { NodeRuntime, NodeServices } from '@effect/platform-node'
 import { Config, Crypto, Data, Effect, Option, Path, Schedule, Schema, Stream } from 'effect'
-import { ChildProcess, ChildProcessSpawner } from 'effect/unstable/process'
+import { ChildProcess, ChildProcessSpawner } from 'effect/process'
 
 class BackendTestFailure extends Data.TaggedError('BackendTestFailure')<{ readonly operation: string }> {}
 
@@ -51,7 +51,7 @@ const program = Effect.gen(function* () {
 	const path = yield* Path.Path
 	const root = yield* path.fromFileUrl(new URL('../', import.meta.url))
 	const crypto = yield* Crypto.Crypto
-	const override = yield* Config.option(Config.string('DOCKER_HOST'))
+	const override = yield* Config.option(Config.String('DOCKER_HOST'))
 	const endpoint = yield* command({
 		executable: 'docker',
 		args: ['context', 'inspect', '--format', '{{.Endpoints.docker.Host}}'],

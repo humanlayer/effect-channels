@@ -6,7 +6,7 @@
  */
 import * as PgClient from '@effect/sql-pg/PgClient'
 import { Config, Effect, Layer, Redacted, Schema } from 'effect'
-import * as SqlClient from 'effect/unstable/sql/SqlClient'
+import * as SqlClient from 'effect/sql/SqlClient'
 
 import { DeliveryControlBackendSql, MailboxDeliverySql, MailboxProcessingBackendSql, migrate } from '../src'
 
@@ -16,7 +16,7 @@ const defaultDatabaseUrl = 'postgres://delivery_test:delivery_test@127.0.0.1:554
 export const client = Layer.unwrap(
 	Effect.gen(function* () {
 		yield* Config.schema(Schema.Literal('disposable'), 'DELIVERY_BACKEND_TEST_CONFIRM')
-		const url = yield* Config.redacted('SQL_BACKEND_TEST_DATABASE_URL').pipe(
+		const url = yield* Config.Redacted('SQL_BACKEND_TEST_DATABASE_URL').pipe(
 			Config.withDefault(Redacted.make(defaultDatabaseUrl)),
 		)
 		return PgClient.layer({ url, connectTimeout: '3 seconds', maxConnections: 4 })

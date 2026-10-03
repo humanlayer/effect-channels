@@ -6,7 +6,7 @@
  */
 import * as NodeRedis from '@effect/platform-node/NodeRedis'
 import { Config, Effect, Layer, Schema } from 'effect'
-import * as Redis from 'effect/unstable/persistence/Redis'
+import * as Redis from 'effect/persistence/Redis'
 
 import { DeliveryControlBackendRedis, MailboxDeliveryRedis, MailboxProcessingBackendRedis } from '../src'
 
@@ -14,7 +14,7 @@ import { DeliveryControlBackendRedis, MailboxDeliveryRedis, MailboxProcessingBac
 export const client = Layer.unwrap(
 	Effect.gen(function* () {
 		yield* Config.schema(Schema.Literal('disposable'), 'DELIVERY_BACKEND_TEST_CONFIRM')
-		const port = yield* Config.port('REDIS_CONTRACT_TEST_PORT')
+		const port = yield* Config.Port('REDIS_CONTRACT_TEST_PORT')
 		return NodeRedis.layer({
 			socket: { host: '127.0.0.1', port, connectTimeout: 3000, reconnectStrategy: false },
 		})

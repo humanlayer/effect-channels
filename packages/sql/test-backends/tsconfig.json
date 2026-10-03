@@ -3,9 +3,9 @@
 	"include": [
 		".",
 		"../src",
-		"../../delivery-next/test/backend-contract.ts",
-		"../../delivery-next/test/delivery-handoff-contract.ts",
-		"../../delivery-next/test/delivery-output-scenarios.ts",
-		"../../delivery-next/test/delivery-api-scenario.ts"
+		"../../delivery/test/backend-contract.ts",
+		"../../delivery/test/delivery-handoff-contract.ts",
+		"../../delivery/test/delivery-output-scenarios.ts",
+		"../../delivery/test/delivery-api-scenario.ts"
 	]
 }

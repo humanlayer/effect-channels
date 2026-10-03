@@ -13,16 +13,16 @@
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},
 	"dependencies": {
-		"@humanlayer/channels-delivery-next": "workspace:*",
+		"@humanlayer/channels-delivery": "workspace:*",
 		"alchemy": "catalog:",
 		"effect": "catalog:"
 	},
 	"devDependencies": {
 		"@effect/platform-node": "catalog:",
 		"@effect/vitest": "catalog:",
-		"@humanlayer/channels-github-next": "workspace:*",
-		"@humanlayer/channels-linear-next": "workspace:*",
-		"@humanlayer/channels-slack-next": "workspace:*",
+		"@humanlayer/channels-github": "workspace:*",
+		"@humanlayer/channels-linear": "workspace:*",
+		"@humanlayer/channels-slack": "workspace:*",
 		"typescript": "catalog:"
 	}
 }

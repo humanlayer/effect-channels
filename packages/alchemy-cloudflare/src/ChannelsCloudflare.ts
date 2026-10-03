@@ -12,10 +12,10 @@ import {
 	deliveryApiRoutes,
 	type ChannelsProviderRequirements,
 	type MailboxSubscriptions,
-} from '@humanlayer/channels-delivery-next'
+} from '@humanlayer/channels-delivery'
 import { RuntimeContext } from 'alchemy/RuntimeContext'
 import { Context, type Crypto, Effect, Layer } from 'effect'
-import * as HttpRouter from 'effect/unstable/http/HttpRouter'
+import * as HttpRouter from 'effect/http/HttpRouter'
 
 import { DeliveryControlAlchemyCloudflare, makeDeliveryRequestHandler } from './DeliveryControl'
 import { DeliveryControlBackendFromDurableObjectStorage } from './DeliveryControlBackend'

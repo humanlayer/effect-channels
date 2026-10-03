@@ -8,10 +8,10 @@
  *
  * All times are milliseconds from Effect's Clock, passed in as parameters, never the database's clock.
  */
-import { MailboxDeliveryUnavailable } from '@humanlayer/channels-delivery-next'
+import { MailboxDeliveryUnavailable } from '@humanlayer/channels-delivery'
 import { Effect, Layer, Schema } from 'effect'
-import * as SqlClient from 'effect/unstable/sql/SqlClient'
-import * as SqlError from 'effect/unstable/sql/SqlError'
+import * as SqlClient from 'effect/sql/SqlClient'
+import * as SqlError from 'effect/sql/SqlError'
 
 const unavailable = <A, R>(effect: Effect.Effect<A, Schema.SchemaError | SqlError.SqlError, R>) =>
 	effect.pipe(

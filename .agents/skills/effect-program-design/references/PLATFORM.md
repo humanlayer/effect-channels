@@ -1,7 +1,7 @@
 # Effect v4 platform services (application code)
 
 Verify APIs against the project's installed Effect v4 declarations. Platform-neutral contracts live in `effect` and
-`effect/unstable/*`; runtime implementations live in packages such as `@effect/platform-node`.
+`effect/*`; runtime implementations live in packages such as `@effect/platform-node`.
 
 ## Non-negotiable boundary
 
@@ -18,11 +18,11 @@ remain explicit. A runtime adapter may use a native constructor only to build th
 | Paths                     | `Path.Path`                                  | `effect`                      |
 | Secure random/UUID/digest | `Crypto.Crypto`                              | `effect`                      |
 | Interactive terminal      | `Terminal.Terminal`                          | `effect`                      |
-| HTTP client/server        | `HttpClient`, `HttpRouter`, `HttpServer`     | `effect/unstable/http`        |
-| Child process             | `ChildProcess`, `ChildProcessSpawner`        | `effect/unstable/process`     |
-| TCP/Unix/WebSocket        | `Socket.Socket`, `SocketServer.SocketServer` | `effect/unstable/socket`      |
-| Redis                     | `Redis.Redis`                                | `effect/unstable/persistence` |
-| Workers                   | `Worker` / worker RPC abstractions           | `effect/unstable/workers`     |
+| HTTP client/server        | `HttpClient`, `HttpRouter`, `HttpServer`     | `effect/http`        |
+| Child process             | `ChildProcess`, `ChildProcessSpawner`        | `effect/process`     |
+| TCP/Unix/WebSocket        | `Socket.Socket`, `SocketServer.SocketServer` | `effect/socket`      |
+| Redis                     | `Redis.Redis`                                | `effect/persistence` |
+| Workers                   | `Worker` / worker RPC abstractions           | `effect/workers`     |
 | Streaming data            | `Stream`, `Sink`, `Channel`                  | `effect`                      |
 
 Also use `Config` rather than `process.env`, `Effect.log`/`Console` rather than `console.*`, and the Effect CLI
@@ -94,7 +94,7 @@ service.
 
 ```ts
 import { Effect, Schema } from "effect";
-import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { HttpClient, HttpClientResponse } from "effect/http";
 
 const User = Schema.Struct({ id: Schema.String, name: Schema.String });
 
@@ -106,7 +106,7 @@ export const getUser = (id: string) =>
   });
 ```
 
-Servers are expressed with `HttpRouter`/`HttpServer` (or `effect/unstable/httpapi` for schema-first APIs). Route
+Servers are expressed with `HttpRouter`/`HttpServer` (or `effect/http-api` for schema-first APIs). Route
 handlers remain platform-neutral; only the executable supplies a Node/Bun/web-handler server layer. Long-running
 server layers are started with `Layer.launch`.
 
@@ -118,7 +118,7 @@ scoped handle for streaming or interaction.
 
 ```ts
 import { Effect, String } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 export const gitHead = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -138,7 +138,7 @@ the application-facing contract for TCP, Unix sockets, and WebSocket-backed tran
 
 ```ts
 import { Effect } from "effect";
-import { Socket } from "effect/unstable/socket";
+import { Socket } from "effect/socket";
 
 export const session = Effect.gen(function* () {
   const socket = yield* Socket.Socket;
@@ -159,7 +159,7 @@ yield `NodeRedis`, expose an `ioredis` client, or construct connections.
 
 ```ts
 import { Effect } from "effect";
-import { Redis } from "effect/unstable/persistence";
+import { Redis } from "effect/persistence";
 
 export const readLease = (key: string) =>
   Effect.gen(function* () {
@@ -173,7 +173,7 @@ management. Map `RedisError` to the owning module's domain error at that module 
 
 ## Workers
 
-Use `effect/unstable/workers` for worker lifecycle, messaging, interruption, and typed worker errors.
+Use `effect/workers` for worker lifecycle, messaging, interruption, and typed worker errors.
 Application code should depend on the worker abstraction or, preferably, a domain service implemented with it.
 The platform edge supplies `WorkerPlatform`/`Spawner`; the worker entry supplies `WorkerRunnerPlatform`. Raw
 `Worker`, `worker_threads`, `postMessage`, and message listeners belong only in those runtime adapters.
@@ -208,7 +208,7 @@ Test application code by replacing the **neutral service tag**, not by mocking N
 
 ## Stability warning
 
-`effect/unstable/*` means the API may break in a minor/beta update. HTTP, HTTP API, process, socket, persistence,
+`effect/*` means the API may break in a minor/beta update. HTTP, HTTP API, process, socket, persistence,
 Redis, CLI, and workers are currently unstable. Pin all Effect ecosystem packages to the same version, inspect the
 installed source before copying examples, and isolate unstable APIs behind deep domain services. Do not copy v3
 imports (`@effect/platform/*`) into v4 code: the neutral v4 modules moved into `effect`.

@@ -161,6 +161,7 @@ export default defineConfig({
 			'no-img-element': 'off',
 			'react-in-jsx-scope': 'off',
 			'exhaustive-deps': 'off',
+			'effecttsgo/unstable-api-usage': 'off',
 		},
 		overrides: [
 			{
@@ -174,29 +175,19 @@ export default defineConfig({
 				},
 			},
 			{
-				files: ['packages/github/src/GitHubRoutes.ts', 'packages/github-next/src/GitHubResources.ts'],
+				files: ['packages/github/src/GitHubResources.ts'],
 				rules: {
 					'typescript/no-misused-spread': 'off',
 				},
 			},
 			{
-				files: ['packages/github/src/GitHubCrypto.ts', 'packages/github-next/src/api/GitHubAppSigner.ts'],
+				files: ['packages/github/src/api/GitHubAppSigner.ts'],
 				rules: {
 					'automation/no-ambient-nondeterminism': 'off',
 				},
 			},
 			{
-				files: [
-					'packages/github/src/GitHubIngress.ts',
-					'packages/slack/src/SlackIngressBindings.ts',
-					'packages/slack/src/SlackTenantCredentials.ts',
-				],
-				rules: {
-					'automation/no-service-option': 'off',
-				},
-			},
-			{
-				files: ['packages/delivery-next/src/Channels.ts'],
+				files: ['packages/delivery/src/Channels.ts'],
 				rules: {
 					'effecttsgo/any-unknown-in-error-context': 'off',
 				},

@@ -5,7 +5,7 @@ import {
 	type MailboxSubscriptionOperation,
 	type MailboxSubscriptionResult,
 	MailboxSubscriptions,
-} from '@humanlayer/channels-delivery-next'
+} from '@humanlayer/channels-delivery'
 import { Effect, Exit, Layer, Predicate, Schema } from 'effect'
 
 import { MailboxStorage } from './MailboxStorage'

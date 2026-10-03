@@ -37,10 +37,10 @@ import {
 	type DeliveryId,
 	type MailboxProcessingBackendError,
 	type ProviderOutputAttempt,
-} from '@humanlayer/channels-delivery-next'
+} from '@humanlayer/channels-delivery'
 import { Array as Arr, Clock, Context, Effect, Fiber, Layer, Option, Queue, Redacted, Schema } from 'effect'
 import { TestClock } from 'effect/testing'
-import * as Redis from 'effect/unstable/persistence/Redis'
+import * as Redis from 'effect/persistence/Redis'
 
 import { commitDeliverySlot, loadDeliverySlot } from '../src/DeliverySlot'
 import {

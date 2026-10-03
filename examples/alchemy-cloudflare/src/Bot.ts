@@ -3,14 +3,14 @@
  * The Worker and the Durable Object both build their half from this one value.
  */
 import { ChannelsCloudflare } from '@humanlayer/channels-alchemy-cloudflare'
-import { DebounceDeliveryMode, ExternalLink, type DeliveryContext } from '@humanlayer/channels-delivery-next'
+import { DebounceDeliveryMode, ExternalLink, type DeliveryContext } from '@humanlayer/channels-delivery'
 import {
 	GitHubBot,
 	GitHubContent,
 	GitHubId,
 	GitHubReaction,
 	type GitHubMentioned,
-} from '@humanlayer/channels-github-next'
+} from '@humanlayer/channels-github'
 import {
 	LinearAuth,
 	LinearBot,
@@ -19,8 +19,8 @@ import {
 	type LinearAgentSessionCreated,
 	type LinearAgentSessionPrompted,
 	type LinearIssueCreated,
-} from '@humanlayer/channels-linear-next'
-import { SlackBot, SlackContent, SlackReaction, type SlackNewMention } from '@humanlayer/channels-slack-next'
+} from '@humanlayer/channels-linear'
+import { SlackBot, SlackContent, SlackReaction, type SlackNewMention } from '@humanlayer/channels-slack'
 import { Config, Effect, Match, Option, Predicate, Duration, Redacted } from 'effect'
 
 import { eventsFromGitHubWriters, isFromGitHubWriter, isFromSlackWorkspace } from './AuthorAccess'
@@ -89,7 +89,7 @@ const handOffMention = Effect.fn('example.slack.hand_off_mention')(function* (
  * which a Slack Connect channel lets in, are ignored.
  */
 const slack = SlackBot.make({
-	signingSecret: Config.redacted('SLACK_SIGNING_SECRET'),
+	signingSecret: Config.Redacted('SLACK_SIGNING_SECRET'),
 	slackApi: FlakySlackApiLive,
 	deliveryMode: DebounceDeliveryMode.make({ quietPeriodMs: 2_000, maxWaitMs: 10_000 }),
 	handlers: {
@@ -179,10 +179,10 @@ const handOffGitHubMention = Effect.fn('example.github.hand_off_mention')(functi
  * checks that the author of what it acts on has write access or higher, and ignores anyone below that.
  */
 const github = GitHubBot.make({
-	webhookSecret: Config.redacted('GITHUB_WEBHOOK_SECRET'),
+	webhookSecret: Config.Redacted('GITHUB_WEBHOOK_SECRET'),
 	deliveryMode: DebounceDeliveryMode.make({ quietPeriodMs: 2_000, maxWaitMs: 10_000 }),
 	bot: Config.all({
-		mentionNames: Config.string('GITHUB_BOT_MENTION_NAME').pipe(Config.map((name) => [name])),
+		mentionNames: Config.String('GITHUB_BOT_MENTION_NAME').pipe(Config.map((name) => [name])),
 		botUserId: Config.schema(GitHubId, 'GITHUB_BOT_USER_ID'),
 	}),
 	handlers: {
@@ -348,7 +348,7 @@ const handOffIssue = Effect.fn('example.linear.hand_off_issue')(function* (
 
 /** Linear Application callbacks for one explicitly configured workspace. */
 const linear = LinearBot.make({
-	webhookSecret: Config.redacted('LINEAR_WEBHOOK_SECRET'),
+	webhookSecret: Config.Redacted('LINEAR_WEBHOOK_SECRET'),
 	bot: Config.all({
 		organizationId: Config.schema(LinearOrganizationId, 'LINEAR_ORGANIZATION_ID'),
 		appUserId: Config.schema(LinearUserId, 'LINEAR_APP_USER_ID'),

@@ -11,7 +11,7 @@
  * past `readyAt` when that output settled, and the mailbox never woke again. So the handler keeps
  * passing while a pass finds work, and when it ends it moves any alarm at or before now forward.
  */
-import { MailboxProcessing } from '@humanlayer/channels-delivery-next'
+import { MailboxProcessing } from '@humanlayer/channels-delivery'
 import { Cause, Clock, Effect, Predicate, Schema } from 'effect'
 
 import { DurableMailboxState, mailboxStateKey } from './MailboxState'

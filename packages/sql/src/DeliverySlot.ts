@@ -40,10 +40,10 @@ import {
 	StoredActiveDelivery,
 	Timestamp,
 	mailboxSchedulerStatus,
-} from '@humanlayer/channels-delivery-next'
+} from '@humanlayer/channels-delivery'
 import { Array as Arr, Clock, Effect, Match, Option, Predicate, Schema, Struct } from 'effect'
-import * as SqlClient from 'effect/unstable/sql/SqlClient'
-import * as SqlError from 'effect/unstable/sql/SqlError'
+import * as SqlClient from 'effect/sql/SqlClient'
+import * as SqlError from 'effect/sql/SqlError'
 
 /** What `delivery_json` holds for the active batch: the fields no column holds. */
 const storedActiveCodec = Schema.fromJsonString(StoredActiveDelivery)

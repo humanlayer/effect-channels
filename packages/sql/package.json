@@ -13,7 +13,7 @@
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},
 	"dependencies": {
-		"@humanlayer/channels-delivery-next": "workspace:*",
+		"@humanlayer/channels-delivery": "workspace:*",
 		"effect": "catalog:"
 	},
 	"devDependencies": {

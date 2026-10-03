@@ -13,8 +13,8 @@ import {
 	type GitHubPrOpened,
 	type GitHubPullRequest,
 	hasGitHubAccess,
-} from '@humanlayer/channels-github-next'
-import type { SlackMessage } from '@humanlayer/channels-slack-next'
+} from '@humanlayer/channels-github'
+import type { SlackMessage } from '@humanlayer/channels-slack'
 import { Array as Arr, Effect, Predicate } from 'effect'
 
 /** The lowest GitHub access whose events the example acts on. */

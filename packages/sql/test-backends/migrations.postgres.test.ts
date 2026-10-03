@@ -5,7 +5,7 @@
  */
 import { describe, it } from '@effect/vitest'
 import { Effect, Layer, Schema, Tracer } from 'effect'
-import * as SqlClient from 'effect/unstable/sql/SqlClient'
+import * as SqlClient from 'effect/sql/SqlClient'
 
 import { ChannelsSql } from '../src'
 import { client } from './postgres'
