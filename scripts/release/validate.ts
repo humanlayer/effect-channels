@@ -104,8 +104,21 @@ try {
 			['npm', 'pack', '--json', '--pack-destination', archives],
 			join(stage, 'packages', directory),
 		)
-		const [packed] = JSON.parse(output) as Array<{ filename: string }>
-		if (packed === undefined) throw new Error(`npm pack produced nothing for ${directory}`)
+		/** npm 10 prints a list of packed packages; npm 11 and later print an object keyed by name. */
+		const parsed: unknown = JSON.parse(output)
+		const entries: Array<unknown> = Array.isArray(parsed)
+			? parsed
+			: typeof parsed === 'object' && parsed !== null
+				? Object.values(parsed)
+				: []
+		const packed = entries.find(
+			(entry): entry is { filename: string } =>
+				typeof entry === 'object' &&
+				entry !== null &&
+				'filename' in entry &&
+				typeof entry.filename === 'string',
+		)
+		if (packed === undefined) throw new Error(`npm pack produced nothing for ${directory}:\n${output}`)
 		tarballs.push(join(archives, packed.filename))
 	}
 
