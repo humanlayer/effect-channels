@@ -564,3 +564,20 @@ bun run format
 `bun run test` needs no database, no credentials, and no network.
 
 Every store must pass one shared suite, [`packages/delivery/test/backend-contract.ts`](./packages/delivery/test/backend-contract.ts). The Postgres and Redis runs live in `packages/sql/test-backends` and `packages/redis/test-backends`, and are left out of `bun run test` because they need a real database.
+
+## Releasing
+
+Every package in `packages/` is published to npm together, at the same version.
+
+- **Check a release without publishing.** Run the _Validate Publish_ workflow in GitHub Actions. It builds every package, installs the packed files into a fresh project, typechecks a sample app against them, loads them in Node.js, and runs `npm publish --dry-run`. Pull requests run the same check.
+- **Publish.** Push a tag: `v0.2.0` publishes as `latest`; `v0.2.0-rc.1` publishes under the `rc` tag, which people only get by asking for it. GitHub signs in to npm through trusted publishing, so no npm token is stored anywhere.
+- **Resume a failed release.** Run the _Release_ workflow by hand with the same version. Packages already on npm are skipped.
+
+To run the same steps locally:
+
+```sh
+bun run build
+bun run release:prepare --version 0.2.0-rc.1
+bun run release:validate --version 0.2.0-rc.1
+bun run release:publish --version 0.2.0-rc.1 --tag rc --dry-run
+```

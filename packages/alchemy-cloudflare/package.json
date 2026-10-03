@@ -13,9 +13,7 @@
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},
 	"dependencies": {
-		"@humanlayer/channels-delivery": "workspace:*",
-		"alchemy": "catalog:",
-		"effect": "catalog:"
+		"@humanlayer/channels-delivery": "workspace:*"
 	},
 	"devDependencies": {
 		"@effect/platform-node": "catalog:",
@@ -23,6 +21,12 @@
 		"@humanlayer/channels-github": "workspace:*",
 		"@humanlayer/channels-linear": "workspace:*",
 		"@humanlayer/channels-slack": "workspace:*",
+		"alchemy": "catalog:",
+		"effect": "catalog:",
 		"typescript": "catalog:"
+	},
+	"peerDependencies": {
+		"alchemy": "catalog:",
+		"effect": "catalog:"
 	}
 }

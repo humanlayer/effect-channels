@@ -1,1 +1,0 @@
-export { Slack, SlackClient, SlackTenantCredentials } from '@humanlayer/channels-slack'
