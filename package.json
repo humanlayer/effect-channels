@@ -26,8 +26,7 @@
 		"release:tag-info": "bun run scripts/release/tag-info.ts",
 		"release:prepare": "bun run scripts/release/prepare.ts",
 		"release:validate": "bun run scripts/release/validate.ts",
-		"release:publish": "bun run scripts/release/publish.ts",
-		"release:trust": "bun run scripts/release/trust.ts"
+		"release:publish": "bun run scripts/release/publish.ts"
 	},
 	"devDependencies": {
 		"@effect/language-service": "0.87.3",
