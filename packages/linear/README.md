@@ -72,16 +72,16 @@ Linear keeps three representations separate:
 
 Every callback receives a `DeliveryContext` and may hand its delivery to a remote worker. The remote worker then drives the output through the delivery API; `LinearBot` sends it to Linear.
 
-| Operation | Agent Session (`onAgentSessionCreated`, `onAgentSessionPrompted`) | Issue (the other callbacks) |
-| --- | --- | --- |
-| `complete` / `fail` (`PresentOutcome`) | one `response`, `error`, or `elicitation` (with `select` choices for `awaitingInput` options); a short default text without Markdown | a comment when there is Markdown, otherwise nothing |
-| `activity.set` `Working` | ephemeral thought, replaced by the next activity | not supported (409) |
-| `activity.set` `Idle` | nothing: Linear sets the session's state from its last activity | not supported (409) |
-| `messages.create` | lasting thought | comment |
-| `messages.update` / `delete` | not supported (409): activities cannot change | edit or delete the comment |
-| `links.add` | a labeled link on the session (`agentSessionUpdate`) | nothing |
-| `reactions.set` | on the comment that started the session, else the issue; not on the session's messages (409) | on the mentioning comment, else the issue, or on a comment the delivery posted |
-| `plan.put` | the whole Agent Plan (`agentSessionUpdate` with `plan`), replaced each time | one plan comment, edited for each later plan |
+| Operation                              | Agent Session (`onAgentSessionCreated`, `onAgentSessionPrompted`)                                                                    | Issue (the other callbacks)                                                    |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ |
+| `complete` / `fail` (`PresentOutcome`) | one `response`, `error`, or `elicitation` (with `select` choices for `awaitingInput` options); a short default text without Markdown | a comment when there is Markdown, otherwise nothing                            |
+| `activity.set` `Working`               | ephemeral thought, replaced by the next activity                                                                                     | not supported (409)                                                            |
+| `activity.set` `Idle`                  | nothing: Linear sets the session's state from its last activity                                                                      | not supported (409)                                                            |
+| `messages.create`                      | lasting thought                                                                                                                      | comment                                                                        |
+| `messages.update` / `delete`           | not supported (409): activities cannot change                                                                                        | edit or delete the comment                                                     |
+| `links.add`                            | a labeled link on the session (`agentSessionUpdate`)                                                                                 | nothing                                                                        |
+| `reactions.set`                        | on the comment that started the session, else the issue; not on the session's messages (409)                                         | on the mentioning comment, else the issue, or on a comment the delivery posted |
+| `plan.put`                             | the whole Agent Plan (`agentSessionUpdate` with `plan`), replaced each time                                                          | one plan comment, edited for each later plan                                   |
 
 `GET /deliveries/<id>` lists what the delivery supports in `supportedOperations`. The final activity replaces any ephemeral thought, so a session turn needs no separate step to clear its activity. Linear marks a session stale after 30 minutes without an activity, and any later activity revives it; on long turns, send `Working` every few minutes.
 

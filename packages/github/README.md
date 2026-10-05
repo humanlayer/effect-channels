@@ -264,7 +264,7 @@ Every callback receives a `DeliveryContext` and may hand its delivery to a remot
 | `messages.create`                      | comment                                                                                                                                                       |
 | `messages.update` / `delete`           | edit or delete the comment                                                                                                                                    |
 | `links.add`                            | nothing                                                                                                                                                       |
-| `reactions.set`                        | the bot's reaction on what started the delivery, or on a comment the delivery posted: `thumbs_up` is `+1`, `thumbs_down` is `-1`; the rest keep their names    |
+| `reactions.set`                        | the bot's reaction on what started the delivery, or on a comment the delivery posted: `thumbs_up` is `+1`, `thumbs_down` is `-1`; the rest keep their names   |
 | `plan.put`                             | one plan comment: the first plan comments it, each later plan edits it, and an unchanged plan makes no call; a deleted plan comment is commented again        |
 
 What started the delivery (its activation target) is the mentioning comment or inline review comment, or the issue or pull request itself when it was opened or mentioned the bot in its body. A subscribed batch has none, so its delivery does not list `SetActivity`, and `activity.set` answers 409. `GET /deliveries/<id>` lists what the delivery supports in `supportedOperations`.

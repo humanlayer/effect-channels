@@ -7,21 +7,26 @@
 	],
 	"type": "module",
 	"scripts": {
-		"build": "vp run -r build",
+		"build": "bun run scripts/build/packages.ts",
 		"dev": "vp run -r --parallel dev",
 		"test": "vp test",
 		"test:live:slack": "bun run --cwd examples/slack-thread-echo live",
-		"check": "bun run lint && bun run typecheck && bun run check:typed",
+		"check": "bun run lint && bun run typecheck && bun run typecheck:scripts && bun run check:typed",
 		"lint": "vp lint",
 		"lint:fix": "vp lint --fix",
 		"format": "vp fmt --check",
 		"format:write": "vp fmt --write",
 		"typecheck": "vp run -r typecheck",
+		"typecheck:scripts": "tsc --noEmit -p scripts/tsconfig.json",
 		"prepare": "effect-tsgo patch --oxlint",
 		"test:backend:postgres": "PHASE2_BACKEND=postgres bun run tools/test-backends.ts",
 		"test:backend:redis": "PHASE2_BACKEND=redis bun run tools/test-backends.ts",
 		"check:typed": "node --import tsx tools/typed/src/cli.ts check --config typed-lint.config.ts",
-		"check:diff": "node --import tsx tools/diff-check/src/main.ts --config tools/diff-check/diff-check.config.json"
+		"check:diff": "node --import tsx tools/diff-check/src/main.ts --config tools/diff-check/diff-check.config.json",
+		"release:tag-info": "bun run scripts/release/tag-info.ts",
+		"release:prepare": "bun run scripts/release/prepare.ts",
+		"release:validate": "bun run scripts/release/validate.ts",
+		"release:publish": "bun run scripts/release/publish.ts"
 	},
 	"devDependencies": {
 		"@effect/language-service": "0.87.3",
@@ -32,9 +37,9 @@
 		"@types/bun": "catalog:",
 		"effect": "catalog:",
 		"emulate": "catalog:",
-		"oxlint": "1.86.0",
 		"eslint-plugin-better-tailwindcss": "4.7.0",
 		"fast-glob": "3.3.3",
+		"oxlint": "1.86.0",
 		"oxlint-tsgolint": "7.0.2003",
 		"tailwindcss": "4.3.3",
 		"tsx": "4.23.12",
@@ -45,7 +50,6 @@
 		"vitest": "catalog:"
 	},
 	"overrides": {
-		"workerd": "1.20261002.1",
 		"@effect/opentelemetry": "4.0.0",
 		"@effect/platform-browser": "4.0.0",
 		"@effect/platform-bun": "4.0.0",
@@ -56,7 +60,8 @@
 		"@effect/sql-sqlite-do": "4.0.0",
 		"@effect/vitest": "4.0.0",
 		"effect": "4.0.0",
-		"vite": "npm:@voidzero-dev/vite-plus-core@1.0.0"
+		"vite": "npm:@voidzero-dev/vite-plus-core@1.0.0",
+		"workerd": "1.20261002.1"
 	},
 	"packageManager": "bun@1.3.14",
 	"catalog": {

@@ -58,6 +58,7 @@ export default defineConfig({
 			'tools/oxlint/automation/**',
 			'tools/diff-check/**',
 			'tools/typed/**',
+			'scripts/**',
 		],
 		categories: {
 			correctness: 'error',

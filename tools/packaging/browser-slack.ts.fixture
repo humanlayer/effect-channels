@@ -1,2 +1,0 @@
-export * from '@humanlayer/channels-slack'
-export * as memory from '@humanlayer/channels-slack/memory'
