@@ -45,10 +45,10 @@ flowchart LR
 
 | Package                                                         | What it is                                                                                      |
 | --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| [`packages/delivery`](./packages/delivery/)           | The core: `Channels.make`, mailboxes, delivery modes, handoff, the delivery API and its client. |
-| [`packages/slack`](./packages/slack/)                 | `SlackBot.make`: Slack events, threads, messages, reactions, files, streaming, status line.     |
-| [`packages/github`](./packages/github/)               | `GitHubBot.make`: GitHub App events, issues, pull requests, reviews, checks, and job logs.      |
-| [`packages/linear`](./packages/linear/)               | `LinearBot.make`: Linear Agent Sessions, issues, comments, reactions, and files.                |
+| [`packages/delivery`](./packages/delivery/)                     | The core: `Channels.make`, mailboxes, delivery modes, handoff, the delivery API and its client. |
+| [`packages/slack`](./packages/slack/)                           | `SlackBot.make`: Slack events, threads, messages, reactions, files, streaming, status line.     |
+| [`packages/github`](./packages/github/)                         | `GitHubBot.make`: GitHub App events, issues, pull requests, reviews, checks, and job logs.      |
+| [`packages/linear`](./packages/linear/)                         | `LinearBot.make`: Linear Agent Sessions, issues, comments, reactions, and files.                |
 | [`packages/sql`](./packages/sql/)                               | Mailbox storage on Postgres.                                                                    |
 | [`packages/redis`](./packages/redis/)                           | Mailbox storage on Redis.                                                                       |
 | [`packages/alchemy-cloudflare`](./packages/alchemy-cloudflare/) | Mailbox storage on Cloudflare Durable Objects, one object per mailbox, woken by its alarm.      |
@@ -352,7 +352,7 @@ Nothing runs until one of these is built, and a program that uses more than one 
 | ---------- | --------------------------------------------------------------- | ------------------------- |
 | Postgres   | [`packages/sql`](./packages/sql/)                               | `ChannelsSql.make`        |
 | Redis      | [`packages/redis`](./packages/redis/)                           | `ChannelsRedis.make`      |
-| Memory     | [`packages/delivery`](./packages/delivery/)           | `ChannelsMemory.make`     |
+| Memory     | [`packages/delivery`](./packages/delivery/)                     | `ChannelsMemory.make`     |
 | Cloudflare | [`packages/alchemy-cloudflare`](./packages/alchemy-cloudflare/) | `ChannelsCloudflare.make` |
 
 Every store supports handoff. Memory is for tests and local work: it forgets everything when the process stops.
