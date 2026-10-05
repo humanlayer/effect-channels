@@ -26,7 +26,8 @@
 		"release:tag-info": "bun run scripts/release/tag-info.ts",
 		"release:prepare": "bun run scripts/release/prepare.ts",
 		"release:validate": "bun run scripts/release/validate.ts",
-		"release:publish": "bun run scripts/release/publish.ts"
+		"release:publish": "bun run scripts/release/publish.ts",
+		"release:trust": "bun run scripts/release/trust.ts"
 	},
 	"devDependencies": {
 		"@effect/language-service": "0.87.3",
@@ -50,7 +51,6 @@
 		"vitest": "catalog:"
 	},
 	"overrides": {
-		"workerd": "1.20261002.1",
 		"@effect/opentelemetry": "4.0.0",
 		"@effect/platform-browser": "4.0.0",
 		"@effect/platform-bun": "4.0.0",
@@ -61,7 +61,8 @@
 		"@effect/sql-sqlite-do": "4.0.0",
 		"@effect/vitest": "4.0.0",
 		"effect": "4.0.0",
-		"vite": "npm:@voidzero-dev/vite-plus-core@1.0.0"
+		"vite": "npm:@voidzero-dev/vite-plus-core@1.0.0",
+		"workerd": "1.20261002.1"
 	},
 	"packageManager": "bun@1.3.14",
 	"catalog": {

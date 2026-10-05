@@ -581,3 +581,5 @@ bun run release:prepare --version 0.2.0-rc.1
 bun run release:validate --version 0.2.0-rc.1
 bun run release:publish --version 0.2.0-rc.1 --tag rc --dry-run
 ```
+
+The first release of a new package has to come from a laptop, because npm only lets GitHub publish a package that already exists. Sign in with `npm login` (your account needs two-factor login on), run the four commands above without `--dry-run`, then connect every package to GitHub with `bun run release:trust`. It skips packages that are already connected.
