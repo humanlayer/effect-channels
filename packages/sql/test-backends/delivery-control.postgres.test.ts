@@ -35,7 +35,7 @@ import {
 	type DeliveryId,
 	type MailboxProcessingBackendError,
 	type ProviderOutputAttempt,
-} from '@humanlayer/channels-delivery-next'
+} from '@humanlayer/channels-delivery'
 import {
 	Array as Arr,
 	Clock,
@@ -50,7 +50,7 @@ import {
 	Schema,
 } from 'effect'
 import { TestClock } from 'effect/testing'
-import * as SqlClient from 'effect/unstable/sql/SqlClient'
+import * as SqlClient from 'effect/sql/SqlClient'
 
 import { migrateBatches, migrateMailboxTables, migrate } from '../src/Migrations'
 import { client, emptyTables, storeOverClient } from './postgres'

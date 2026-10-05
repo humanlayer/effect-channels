@@ -4,9 +4,9 @@ import {
 	MailboxSubscriptionAlreadyExistsResult,
 	type MailboxSubscriptionOperation,
 	MailboxSubscriptions,
-} from '@humanlayer/channels-delivery-next'
+} from '@humanlayer/channels-delivery'
 import { Effect, Layer, Schema } from 'effect'
-import * as Redis from 'effect/unstable/persistence/Redis'
+import * as Redis from 'effect/persistence/Redis'
 
 import { mailboxSubscriptionsKey } from './Keys'
 

@@ -6,10 +6,10 @@ import {
 	MailboxDelivery,
 	MailboxDeliveryUnavailable,
 	requestDeliveryInterrupt,
-} from '@humanlayer/channels-delivery-next'
+} from '@humanlayer/channels-delivery'
 import { Clock, Effect, Layer, Option, Schema } from 'effect'
-import * as SqlClient from 'effect/unstable/sql/SqlClient'
-import * as SqlError from 'effect/unstable/sql/SqlError'
+import * as SqlClient from 'effect/sql/SqlClient'
+import * as SqlError from 'effect/sql/SqlError'
 
 import { loadDeliverySlot, writeDeliverySlot } from './DeliverySlot'
 

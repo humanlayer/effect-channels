@@ -13,7 +13,7 @@ import {
 	readDeliverySlotStatus,
 	type ApplyDeliveryMutation,
 	type ReadDeliveryStatus,
-} from '@humanlayer/channels-delivery-next'
+} from '@humanlayer/channels-delivery'
 import { Array as Arr, Clock, Effect, Layer, Option, Predicate, type Schema } from 'effect'
 
 import { mailboxStateKey } from './MailboxState'

@@ -1,0 +1,26 @@
+{
+	"name": "@humanlayer/channels-github",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"sideEffects": false,
+	"module": "./src/index.ts",
+	"types": "./src/index.ts",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"dependencies": {
+		"@humanlayer/channels-delivery": "workspace:*",
+		"effect": "catalog:"
+	},
+	"devDependencies": {
+		"@effect/platform-node": "catalog:",
+		"@effect/vitest": "catalog:",
+		"@emulators/core": "0.11.2",
+		"@emulators/github": "0.11.2",
+		"typescript": "catalog:"
+	}
+}

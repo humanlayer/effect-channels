@@ -4,7 +4,7 @@ import {
 	MailboxSequence,
 	Timestamp,
 	emptyDeliverySlot,
-} from '@humanlayer/channels-delivery-next'
+} from '@humanlayer/channels-delivery'
 import { Schema } from 'effect'
 
 /** One event waiting in the mailbox for a later batch. */

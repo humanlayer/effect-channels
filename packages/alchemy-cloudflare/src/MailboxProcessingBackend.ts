@@ -33,7 +33,7 @@ import {
 	type RenewDeliveryOutput,
 	type RenewMailboxClaim,
 	type SettleDeliveryOutput,
-} from '@humanlayer/channels-delivery-next'
+} from '@humanlayer/channels-delivery'
 import { Array as Arr, Clock, Effect, Layer, Match, Option, Predicate, Random, type Schema } from 'effect'
 
 import { DurableMailboxState, mailboxStateKey, type WaitingAdmission } from './MailboxState'

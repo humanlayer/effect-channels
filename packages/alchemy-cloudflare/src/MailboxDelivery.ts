@@ -6,7 +6,7 @@ import {
 	MailboxDeliveryUnavailable,
 	Timestamp,
 	requestDeliveryInterrupt,
-} from '@humanlayer/channels-delivery-next'
+} from '@humanlayer/channels-delivery'
 import { RuntimeContext } from 'alchemy/RuntimeContext'
 import { Clock, Context, Effect, Layer, Predicate, Schema } from 'effect'
 

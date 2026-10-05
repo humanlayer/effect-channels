@@ -1,0 +1,24 @@
+{
+	"name": "@humanlayer/channels-delivery",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"sideEffects": false,
+	"module": "./src/index.ts",
+	"types": "./src/index.ts",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"scripts": {
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"dependencies": {
+		"effect": "catalog:",
+		"emulate": "^0.11.2"
+	},
+	"devDependencies": {
+		"@effect/platform-node": "catalog:",
+		"@effect/vitest": "catalog:",
+		"typescript": "catalog:"
+	}
+}

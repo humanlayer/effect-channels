@@ -75,7 +75,7 @@ Routes remain neutral. Creating the native server is an allowed edge operation b
 ```ts
 import { NodeHttpServer, NodeRuntime } from "@effect/platform-node";
 import { Layer } from "effect";
-import { HttpRouter, HttpServerResponse } from "effect/unstable/http";
+import { HttpRouter, HttpServerResponse } from "effect/http";
 import { createServer } from "node:http";
 
 const Routes = HttpRouter.add("GET", "/health", HttpServerResponse.text("ok"));
@@ -237,7 +237,7 @@ this guarantee.
 ## Review checklist
 
 - [ ] `@effect/platform-node` and `node:*` appear only in composition roots/interop adapters.
-- [ ] Application code yields neutral services from `effect` / `effect/unstable/*`.
+- [ ] Application code yields neutral services from `effect` / `effect/*`.
 - [ ] `NodeServices.layer` is not assumed to include HTTP, socket, Redis, or worker support.
 - [ ] `NodeRuntime.runMain` owns process shutdown; no eager `process.exit()`.
 - [ ] Servers, agents/dispatchers, Redis clients, sockets, processes, streams, and workers have explicit scopes.
@@ -246,7 +246,7 @@ this guarantee.
 
 ## Unstable API caution
 
-HTTP, process, socket, persistence/Redis, and worker modules are under `effect/unstable/*` and can change during a
+HTTP, process, socket, persistence/Redis, and worker modules are under `effect/*` and can change during a
 minor/beta upgrade. Check the installed `effect` and `@effect/platform-node` source before changing wiring; do not
 assume current online docs match the repository pin. Keep these APIs behind domain services and keep Node layer
 selection in one small composition module.

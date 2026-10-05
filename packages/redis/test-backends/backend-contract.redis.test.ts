@@ -7,9 +7,9 @@
  */
 import { describe } from '@effect/vitest'
 
-import { mailboxBackendContract } from '../../delivery-next/test/backend-contract'
-import { deliveryHandoffContract } from '../../delivery-next/test/delivery-handoff-contract'
-import { deliveryOutputScenarios } from '../../delivery-next/test/delivery-output-scenarios'
+import { mailboxBackendContract } from '../../delivery/test/backend-contract'
+import { deliveryHandoffContract } from '../../delivery/test/delivery-handoff-contract'
+import { deliveryOutputScenarios } from '../../delivery/test/delivery-output-scenarios'
 import { emptyStore } from './redis'
 
 describe('redis store contracts', () => {

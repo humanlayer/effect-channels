@@ -40,11 +40,11 @@ import {
 	type DeliveryClient,
 	type DeliveryStatus,
 	type PortableReaction,
-} from '@humanlayer/channels-delivery-next'
+} from '@humanlayer/channels-delivery'
 import * as Cloudflare from 'alchemy/Cloudflare'
 import type { RuntimeContext } from 'alchemy/RuntimeContext'
 import { Clock, Context, Effect, Option, Schema } from 'effect'
-import { HttpClient } from 'effect/unstable/http'
+import { HttpClient } from 'effect/http'
 
 import { withFlakyOutputMarker } from './FlakySlackApi'
 
@@ -393,7 +393,7 @@ export class FakeRemoteAgent extends Cloudflare.DurableObject<
  * at deploy and which can only be read per instance. `start` saves the job once and sets the alarm; the
  * alarm completes the delivery and deletes the job.
  */
-export const FakeRemoteAgentLive = FakeRemoteAgent.make<HttpClient.HttpClient>(
+export const FakeRemoteAgentLive = FakeRemoteAgent.make(
 	Effect.gen(function* () {
 		const state = yield* Cloudflare.DurableObjectState
 		const workerUrl = yield* Cloudflare.Worker.URL

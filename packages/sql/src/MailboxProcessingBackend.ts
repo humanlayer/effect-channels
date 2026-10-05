@@ -1,5 +1,5 @@
 /**
- * The SQL store behind delivery-next's MailboxProcessingBackend.
+ * The SQL store behind delivery's MailboxProcessingBackend.
  *
  * Every change runs the shared `DeliveryLifecycle` transition inside one transaction, on the mailbox
  * row it locked; see `DeliverySlot.ts` for the pattern and the layout. The claims pollers make take
@@ -47,10 +47,10 @@ import {
 	type RenewDeliveryOutput,
 	type RenewMailboxClaim,
 	type SettleDeliveryOutput,
-} from '@humanlayer/channels-delivery-next'
+} from '@humanlayer/channels-delivery'
 import { Array as Arr, Clock, Effect, Layer, Match, Option, Predicate, Random, Schema } from 'effect'
-import * as SqlClient from 'effect/unstable/sql/SqlClient'
-import * as SqlError from 'effect/unstable/sql/SqlError'
+import * as SqlClient from 'effect/sql/SqlClient'
+import * as SqlError from 'effect/sql/SqlError'
 
 import {
 	changeDeliverySlot,

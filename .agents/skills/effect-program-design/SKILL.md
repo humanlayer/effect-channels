@@ -22,7 +22,7 @@ Check these before guessing:
 3. the Effect v4 docs at <https://effect.website/docs/v4>;
 4. the installed package source and declarations, plus an upstream source checkout when available, when docs do not settle an API.
 
-`effect/unstable/*` can change between beta/minor versions. Typecheck examples against the installed version. Local
+`effect/*` can change between beta/minor versions. Typecheck examples against the installed version. Local
 project conventions take precedence unless the task explicitly changes them.
 
 ## References

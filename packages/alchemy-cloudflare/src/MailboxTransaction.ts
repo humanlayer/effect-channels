@@ -5,7 +5,7 @@
  * `deliveries.readyAt`. A transaction closure may run outside the calling fiber, so changes need no
  * services: the caller reads the clock first and passes the time in.
  */
-import type { DeliverySlot } from '@humanlayer/channels-delivery-next'
+import type { DeliverySlot } from '@humanlayer/channels-delivery'
 import { Effect, Option, Predicate, Schema } from 'effect'
 
 import { DurableMailboxState, mailboxStateKey } from './MailboxState'
