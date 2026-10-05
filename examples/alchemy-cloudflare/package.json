@@ -3,11 +3,12 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
+		"deploy": "alchemy deploy --stage dev_kylemistele",
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},
 	"dependencies": {
-		"@effect/platform-node": "catalog:",
 		"@effect/platform-bun": "catalog:",
+		"@effect/platform-node": "catalog:",
 		"@humanlayer/channels-alchemy-cloudflare": "workspace:*",
 		"@humanlayer/channels-delivery": "workspace:*",
 		"@humanlayer/channels-github": "workspace:*",
