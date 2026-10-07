@@ -28,18 +28,25 @@ export class MailboxStorage extends Context.Service<
 	}
 >()('@humanlayer/channels-alchemy-cloudflare/MailboxStorage') {}
 
+/**
+ * Alchemy marks native Durable Object storage effects with `RuntimeContext` to prevent them from
+ * running outside an active runtime, but its storage adapter closes over native storage and never
+ * reads that service. This removes the type-only marker at our Durable Object storage boundary.
+ */
+const eraseAlchemyRuntimeContext = <A, E>(effect: Effect.Effect<A, E, RuntimeContext>): Effect.Effect<A, E> =>
+	effect.pipe(Effect.provide(RuntimeContext.phantom))
+
 /** Mailbox storage over the current Durable Object's persistent storage. */
 export const MailboxStorageFromDurableObjectState = Layer.effect(
 	MailboxStorage,
 	Effect.gen(function* () {
 		const { storage } = yield* Cloudflare.DurableObjectState
-		const runtimeContext = yield* RuntimeContext
 		/**
 		 * A storage call can fail with `DurableObjectStorageError`. Make it a defect, so it can never pass
 		 * for a typed error such as a lifecycle refusal; callers capture defects as storage failures.
 		 */
 		const run = <A, E>(effect: Effect.Effect<A, E, RuntimeContext>) =>
-			effect.pipe(Effect.provideService(RuntimeContext, runtimeContext), Effect.orDie)
+			eraseAlchemyRuntimeContext(effect).pipe(Effect.orDie)
 		const fromTransaction = (transaction: Cloudflare.DurableObjectTransaction): MailboxStorageTransaction => ({
 			get: (key) => run(transaction.get(key)),
 			put: (key, value) => run(transaction.put(key, value)),
