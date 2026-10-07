@@ -24,7 +24,7 @@ import {
 } from '@humanlayer/channels-linear'
 import { SlackApi, SlackBot } from '@humanlayer/channels-slack'
 import { Config, Context, Effect, Layer, Match, Option, Predicate, Queue, Redacted, Ref, Schema } from 'effect'
-import { HttpServerRequest, HttpServerResponse } from 'effect/http'
+import { HttpRouter, HttpServerRequest, HttpServerResponse } from 'effect/http'
 
 import { githubWebhookSecret, issueCommentPayload, signedGitHubInput } from '../../github/test/fixtures'
 import {
@@ -136,11 +136,14 @@ const setUp = Effect.gen(function* () {
 	const options = makeOptions({ seen, shown, duringSummary })
 	const bot = ChannelsCloudflare.make(options)
 	const durableObject = yield* Layer.build(DurableObjectFake)
-	const mailbox = yield* ChannelsCloudflare.makeMailbox(
-		options,
-		{ rearmAfterMs: 1_000 },
-		Layer.succeedContext(durableObject),
-	).pipe(Effect.provide(NodeCrypto.layer))
+	const { processing, deliveryControl, processingBackend, subscriptions, deliveryControlBackend } = bot.layers.mailbox
+	const MailboxLive = Layer.merge(processing, deliveryControl).pipe(
+		Layer.provide(Layer.mergeAll(processingBackend, subscriptions, deliveryControlBackend)),
+		Layer.provideMerge(Layer.succeedContext(durableObject)),
+	)
+	const mailbox = yield* bot
+		.mailbox({ rearmAfterMs: 1_000 })
+		.pipe(Effect.provide(MailboxLive.pipe(Layer.provideMerge(NodeCrypto.layer))), Effect.orDie)
 	const alarm = Context.get(durableObject, DurableObjectFakeAlarm)
 	const routedTo = yield* Ref.make<ReadonlyArray<string>>([])
 	const mailboxes = DeliveryMailboxes.of({
@@ -150,7 +153,11 @@ const setUp = Effect.gen(function* () {
 			deliveryRequest: mailbox.deliveryRequest,
 		}),
 	})
-	const fetch = yield* bot.fetch.pipe(
+	const RoutesLive = Layer.merge(bot.routes, bot.deliveryApi).pipe(
+		Layer.provide(Layer.merge(bot.layers.worker.mailboxDelivery, bot.layers.worker.deliveryControl)),
+	)
+	const fetch = yield* HttpRouter.toHttpEffect(RoutesLive).pipe(
+		Effect.provideService(HttpRouter.RouterConfig, bot.routerConfig),
 		Effect.provide(Layer.merge(NodeCrypto.layer, Layer.succeed(DeliveryMailboxes, mailboxes))),
 	)
 	const request = (path: string, init: RequestInit) =>

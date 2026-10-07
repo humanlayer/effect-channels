@@ -2,7 +2,7 @@ import * as NodeCrypto from '@effect/platform-node/NodeCrypto'
 import { DeliveryMailboxes } from '@humanlayer/channels-alchemy-cloudflare'
 import * as Cloudflare from 'alchemy/Cloudflare'
 import { Effect, Layer } from 'effect'
-import { FetchHttpClient } from 'effect/http'
+import { FetchHttpClient, HttpRouter } from 'effect/http'
 
 import { bot } from './Bot'
 import { DeliveryMailbox, DeliveryMailboxDOLive } from './DeliveryMailboxDO'
@@ -10,11 +10,19 @@ import { DeliveryMailbox, DeliveryMailboxDOLive } from './DeliveryMailboxDO'
 /** Give Channels access to this application's Durable Object mailbox namespace. */
 const ChannelsDeliveryMailboxesLive = Layer.effect(DeliveryMailboxes, DeliveryMailbox)
 
+const { mailboxDelivery, deliveryControl } = bot.layers.worker
+
+/** Provider webhooks and the delivery API, with their Cloudflare adapters. */
+const RoutesLive = Layer.merge(bot.routes, bot.deliveryApi).pipe(
+	Layer.provide(Layer.merge(mailboxDelivery, deliveryControl)),
+)
+
 /** Everything the Worker and its mailbox Durable Objects need. */
 const WorkerLive = ChannelsDeliveryMailboxesLive.pipe(
 	Layer.provideMerge(DeliveryMailboxDOLive),
 	Layer.provideMerge(FetchHttpClient.layer),
 	Layer.provideMerge(NodeCrypto.layer),
+	Layer.provideMerge(Layer.succeed(HttpRouter.RouterConfig, bot.routerConfig)),
 )
 
 /**
@@ -27,7 +35,7 @@ export default Cloudflare.Worker(
 	'IngressWorker',
 	{ main: import.meta.url, compatibility: { date: '2026-10-01' }, name: 'humanlayer-channels-app' },
 	Effect.gen(function* () {
-		const fetch = yield* bot.fetch
+		const fetch = yield* HttpRouter.toHttpEffect(RoutesLive)
 		return { fetch }
 	}).pipe(Effect.provide(WorkerLive)),
 )

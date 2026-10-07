@@ -365,26 +365,56 @@ On Cloudflare the Worker takes webhooks and the mailbox Durable Object runs call
 // Bot.ts: one declaration for both halves.
 export const bot = ChannelsCloudflare.make({ namespace, providers: [slack, github, linear], eventProcessing })
 
-// DeliveryMailboxDO.ts: your Durable Object class, one per mailbox.
+// DeliveryMailboxDO.ts: compose the replaceable mailbox layers at the DO entrypoint.
 export class DeliveryMailbox extends Cloudflare.DurableObject<DeliveryMailbox, MailboxMethods>()('DeliveryMailbox') {}
-export const DeliveryMailboxDOLive = DeliveryMailbox.make(bot.mailbox({ rearmAfterMs: 1_000 }))
+const mailboxLayers = bot.layers.mailbox
+const MailboxLive = Layer.merge(mailboxLayers.processing, mailboxLayers.deliveryControl).pipe(
+	Layer.provide(
+		Layer.mergeAll(
+			mailboxLayers.processingBackend,
+			mailboxLayers.subscriptions,
+			mailboxLayers.deliveryControlBackend,
+		),
+	),
+	Layer.provideMerge(mailboxLayers.storage),
+)
+const MailboxImplementation = Effect.gen(function* () {
+	const state = yield* Cloudflare.DurableObjectState
+	const crypto = yield* Crypto.Crypto
+	// Yield any other services required by your callbacks here.
+	return { state, crypto }
+}).pipe(
+	Effect.map(({ state, crypto }) => {
+		const MailboxInstanceLive = MailboxLive.pipe(
+			Layer.provide(
+				Layer.merge(Layer.succeed(Cloudflare.DurableObjectState, state), Layer.succeed(Crypto.Crypto, crypto)),
+			),
+		)
+		return bot.mailbox({ rearmAfterMs: 1_000 }).pipe(Effect.provide(MailboxInstanceLive), Effect.orDie)
+	}),
+)
+export const DeliveryMailboxDOLive = DeliveryMailbox.make(MailboxImplementation)
 
-// Worker.ts: connect Channels to this Worker's mailbox Durable Object.
+// Worker.ts: compose routes and their replaceable Cloudflare adapters at the Worker entrypoint.
 const ChannelsDeliveryMailboxesLive = Layer.effect(DeliveryMailboxes, DeliveryMailbox)
+const RoutesLive = Layer.merge(bot.routes, bot.deliveryApi).pipe(
+	Layer.provide(Layer.merge(bot.layers.worker.mailboxDelivery, bot.layers.worker.deliveryControl)),
+)
 const WorkerLive = ChannelsDeliveryMailboxesLive.pipe(
 	Layer.provideMerge(DeliveryMailboxDOLive),
 	Layer.provideMerge(NodeCrypto.layer),
+	Layer.provideMerge(Layer.succeed(HttpRouter.RouterConfig, bot.routerConfig)),
 )
 export default Cloudflare.Worker(
 	'IngressWorker',
 	{ main: import.meta.url },
 	Effect.gen(function* () {
-		return { fetch: yield* bot.fetch }
+		return { fetch: yield* HttpRouter.toHttpEffect(RoutesLive) }
 	}).pipe(Effect.provide(WorkerLive)),
 )
 ```
 
-The mailbox class may carry methods of its own, but not its own alarm: a Durable Object has one, and the mailbox uses it. See [`examples/alchemy-cloudflare/src`](./examples/alchemy-cloudflare/src/) for the full files.
+Alchemy's outer Durable Object Effect resolves the state reference and shared services. The returned inner Effect receives `RuntimeContext` from Alchemy and builds the mailbox handlers. Yield every callback service explicitly in the outer Effect rather than forwarding an arbitrary `Context`. The mailbox class may carry methods of its own, but not its own alarm: a Durable Object has one, and the mailbox uses it. See [`examples/alchemy-cloudflare/src`](./examples/alchemy-cloudflare/src/) for the full files.
 
 ## Hand off to a remote agent
 
