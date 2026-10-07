@@ -3,7 +3,8 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"deploy": "alchemy deploy --stage dev_kylemistele",
+		"alchemy:plan": "alchemy plan --stage live_kylemistele",
+		"alchemy:deploy": "alchemy deploy --stage live_kylemistele",
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},
 	"dependencies": {

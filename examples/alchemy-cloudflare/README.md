@@ -164,10 +164,11 @@ https://<your-worker-hostname>/integrations/slack/webhook
 
 ## Whom the example listens to
 
-The example checks authors in its own callbacks (`src/AuthorAccess.ts`); the libraries do not do it for you.
+The GitHub `onMentioned` handler in `src/Bot.ts` checks the mentioning user's repository access before entering either the issue or PR handler. The libraries do not enforce this application policy.
 
-- **GitHub requires write access.** Anyone can comment on a public repository, so every GitHub callback looks up the author's access to the repository with `fetchUserAccess(login)` before it acts. Authors below `write` (`none`, `read`, `triage`) are ignored: no comment, no reaction, and the log line `Example ignored GitHub author without write access` with their login and access level. In a subscribed batch the example acts only on new comments and review comments, so it checks each of those on its own and looks up each author once per batch; it does not look up the authors of events it does nothing with, such as check runs, whose sender is usually an app. If GitHub answers `not_found` (the login is not a user, such as a bot account), the author counts as `none` and the event is ignored and logged. Any other failed lookup fails the callback, which is retried like any other failure; the event never gets through unchecked. The bot's own events are dropped before any callback runs.
-- **Slack ignores other workspaces.** In a Slack Connect channel, people from another workspace can mention the bot. Slack marks their messages with `user_team`, which `SlackMessage.authorTeamId` carries. A mention or thread message whose author workspace differs from the installation's is ignored, with the log line `Example ignored Slack author from another workspace`. A message without `user_team` counts as local.
+Users with `write` access or higher get an `eyes` reaction on the mentioning issue, PR, or comment. Users below `write` get a thumbs-down reaction and a maintainer-only notice once per issue or PR. Further denied mentions get only thumbs down. Only a matching notice authored by the configured bot user counts as an existing notice; another user copying it cannot suppress the reply.
+
+A permission lookup returning `not_found` counts as no access. Other lookup failures fail the callback without granting access. The bot's own events are dropped before callbacks run.
 
 ## Fake remote agent
 

@@ -13,4 +13,4 @@ export class DeliveryMailbox extends Cloudflare.DurableObject<DeliveryMailbox, M
  * The mailbox's implementation. Its layer requires what the bot's callbacks need, such as `Crypto`
  * and the `FakeRemoteAgent` namespace; the host Worker provides them.
  */
-export const DeliveryMailboxLive = DeliveryMailbox.make(bot.mailbox({ rearmAfterMs: 1_000 }))
+export const DeliveryMailboxDOLive = DeliveryMailbox.make(bot.mailbox({ rearmAfterMs: 1_000 }))
