@@ -10,7 +10,7 @@ npm install @humanlayer/channels-alchemy-cloudflare @humanlayer/channels-deliver
 export const bot = ChannelsCloudflare.make({ namespace: 'my-app', providers: [slack], eventProcessing })
 
 export class DeliveryMailbox extends Cloudflare.DurableObject<DeliveryMailbox, MailboxMethods>()('DeliveryMailbox') {}
-export const DeliveryMailboxLive = DeliveryMailbox.make(bot.mailbox({ rearmAfterMs: 1_000 }))
+export const DeliveryMailboxDOLive = DeliveryMailbox.make(bot.mailbox({ rearmAfterMs: 1_000 }))
 ```
 
 The Durable Object's alarm belongs to the mailbox; don't use it for anything else. See [`examples/alchemy-cloudflare`](https://github.com/humanlayer/effect-channels/tree/main/examples/alchemy-cloudflare) for a complete Slack, GitHub, and Linear app.

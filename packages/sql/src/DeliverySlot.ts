@@ -22,8 +22,9 @@
  * - the active batch keeps its stage in `stage`, its callback choice in `prepared_json`, its token in
  *   `access_token`, and the rest of `ActiveDelivery` in `delivery_json`. Its admissions are the
  *   admission rows with its `batch_id`;
- * - a retained delivery is a batch row in stage `Retired`, with its `RetainedDelivery` in
- *   `delivery_json` and its end in `retain_until`. One the lifecycle drops becomes `Pruned`;
+ * - retained callback deliveries are the mailbox's `retained_json` list. Each has its batch ID,
+ *   callback index, and token, so a finished step cannot overwrite the next active step. A finished
+ *   batch also keeps its last step in `delivery_json` as history;
  * - claim rows are the attempt history. A mailbox has at most one live claim row: the claim that
  *   owns the batch, or the attempt waiting to retry.
  */
@@ -51,6 +52,7 @@ const storedActiveCodec = Schema.fromJsonString(StoredActiveDelivery)
 /** What `delivery_json` holds for a retired batch: the fields no column holds. */
 const StoredRetainedDelivery = RetainedDelivery.mapFields(Struct.omit(['batchId', 'accessToken', 'retainUntil']))
 const storedRetainedCodec = Schema.fromJsonString(StoredRetainedDelivery)
+const retainedCodec = Schema.fromJsonString(Schema.Array(RetainedDelivery))
 
 const lockedRows = Schema.Array(Schema.Struct({ mailbox_key: Schema.NonEmptyString })).check(Schema.isMaxLength(1))
 
@@ -75,14 +77,11 @@ const activeBatchRows = Schema.Tuple([
 /** A batch's admissions, in arrival order. A batch always has at least one. */
 const batchAdmissionRows = Schema.NonEmptyArray(Schema.Struct({ admission_json: DeliveryAdmissionJson }))
 
-const retainedRows = Schema.Array(
+const retainedRows = Schema.Tuple([
 	Schema.Struct({
-		batch_id: BatchId,
-		access_token: DeliveryAccessToken,
-		retain_until: Timestamp,
-		delivery_json: storedRetainedCodec,
+		retained_json: retainedCodec,
 	}),
-)
+])
 
 /**
  * How a change locks the mailbox row.
@@ -130,6 +129,7 @@ export const LoadedDeliverySlot = Schema.Struct({
 	provider: Schema.NonEmptyString,
 	slot: DeliverySlot,
 	hasWaiting: Schema.Boolean,
+	retainedLoaded: Schema.Boolean,
 })
 export interface LoadedDeliverySlot extends Schema.Schema.Type<typeof LoadedDeliverySlot> {}
 
@@ -160,19 +160,10 @@ const loadActiveDelivery = (batchId: BatchId) =>
 const loadRetainedDeliveries = (input: { readonly mailboxKey: string; readonly now: number }) =>
 	Effect.gen(function* () {
 		const sql = (yield* SqlClient.SqlClient).withoutTransforms()
-		const rows = yield* Schema.decodeUnknownEffect(retainedRows)(
-			yield* sql`SELECT batch_id, access_token, retain_until, delivery_json FROM delivery_next_batches
-				WHERE mailbox_key = ${input.mailboxKey} AND stage = 'Retired' AND retain_until > ${input.now}
-				ORDER BY retired_order DESC LIMIT ${MAX_RETAINED_DELIVERIES}`,
+		const [row] = yield* Schema.decodeUnknownEffect(retainedRows)(
+			yield* sql`SELECT retained_json FROM delivery_next_mailboxes WHERE mailbox_key = ${input.mailboxKey}`,
 		)
-		return rows.toReversed().map((row) =>
-			RetainedDelivery.make({
-				...row.delivery_json,
-				batchId: row.batch_id,
-				accessToken: row.access_token,
-				retainUntil: row.retain_until,
-			}),
-		)
+		return row.retained_json.filter(({ retainUntil }) => retainUntil > input.now).slice(-MAX_RETAINED_DELIVERIES)
 	})
 
 /**
@@ -205,6 +196,7 @@ export const loadDeliverySlot = (input: {
 			mailboxKey: input.mailboxKey,
 			provider: mailbox.provider,
 			hasWaiting: mailbox.has_waiting,
+			retainedLoaded: input.withRetained,
 			slot: DeliverySlot.make({ active, readyAt: mailbox.ready_at, retained }),
 		})
 	})
@@ -266,7 +258,7 @@ const writeActiveBatch = (input: {
 			return
 		}
 		yield* sql`UPDATE delivery_next_batches
-			SET stage = ${active.stage}, delivery_json = ${deliveryJson}, prepared_json = ${preparedJson}::text,
+			SET access_token = ${active.accessToken}, stage = ${active.stage}, delivery_json = ${deliveryJson}, prepared_json = ${preparedJson}::text,
 				prepared_at = CASE WHEN prepared_at IS NULL AND ${preparedJson}::text IS NOT NULL
 					THEN ${now}::double precision ELSE prepared_at END
 			WHERE batch_id = ${active.batchId}`
@@ -298,17 +290,24 @@ const writeOwningClaim = (input: {
 	})
 
 /** Save deliveries that just retired, and mark those the lifecycle no longer keeps as pruned. */
-const writeRetainedDeliveries = (input: { readonly before: DeliverySlot; readonly slot: DeliverySlot }) =>
+const writeRetainedDeliveries = (input: {
+	readonly mailboxKey: string
+	readonly before: DeliverySlot
+	readonly slot: DeliverySlot
+}) =>
 	Effect.gen(function* () {
+		if (input.before.retained === input.slot.retained) return
 		const sql = (yield* SqlClient.SqlClient).withoutTransforms()
-		const keptBefore = new Set(input.before.retained.map(({ batchId }) => batchId))
+		const retainedJson = yield* Schema.encodeEffect(retainedCodec)(input.slot.retained)
+		yield* sql`UPDATE delivery_next_mailboxes SET retained_json = ${retainedJson} WHERE mailbox_key = ${input.mailboxKey}`
 		const keptNow = new Set(input.slot.retained.map(({ batchId }) => batchId))
-		const retired = input.slot.retained.filter(({ batchId }) => !keptBefore.has(batchId))
+		const finished = input.slot.retained.findLast(({ batchId }) => batchId === input.before.active?.batchId)
+		const retired = finished !== undefined && finished.batchId !== input.slot.active?.batchId ? [finished] : []
 		yield* Effect.forEach(retired, (delivery) =>
 			Effect.gen(function* () {
 				const deliveryJson = yield* Schema.encodeEffect(storedRetainedCodec)(delivery)
 				yield* sql`UPDATE delivery_next_batches
-					SET stage = 'Retired', delivery_json = ${deliveryJson}, retain_until = ${delivery.retainUntil},
+					SET stage = 'Retired', access_token = ${delivery.accessToken}, delivery_json = ${deliveryJson}, retain_until = ${delivery.retainUntil},
 						retired_order = nextval('delivery_next_batches_retired_order')
 					WHERE batch_id = ${delivery.batchId}`
 			}),
@@ -316,7 +315,8 @@ const writeRetainedDeliveries = (input: { readonly before: DeliverySlot; readonl
 		const pruned = input.before.retained.filter(({ batchId }) => !keptNow.has(batchId))
 		yield* Effect.forEach(
 			pruned,
-			({ batchId }) => sql`UPDATE delivery_next_batches SET stage = 'Pruned' WHERE batch_id = ${batchId}`,
+			({ batchId }) =>
+				sql`UPDATE delivery_next_batches SET stage = 'Pruned' WHERE batch_id = ${batchId} AND stage = 'Retired'`,
 		)
 	})
 
@@ -403,7 +403,7 @@ export const writeDeliverySlot = (input: {
 			yield* writeActiveBatch({ mailboxKey, before: before.active, active, now: input.now })
 		}
 		yield* writeOwningClaim({ mailboxKey, before: before.active, slot: input.slot, now: input.now })
-		yield* writeRetainedDeliveries({ before, slot: input.slot })
+		if (input.loaded.retainedLoaded) yield* writeRetainedDeliveries({ mailboxKey, before, slot: input.slot })
 		yield* sql`UPDATE delivery_next_mailboxes
 			SET status = ${mailboxSchedulerStatus(input.slot)}, ready_at = ${readyAt}::double precision,
 				active_batch_id = ${active?.batchId ?? null}::text

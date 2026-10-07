@@ -9,7 +9,7 @@
 import { Context, Effect, Layer, Predicate, Schema } from 'effect'
 
 import { SetActivity } from './DeliveryActivity'
-import { PreparedDeliveryInvocation } from './DeliveryContext'
+import { PreparedDeliveryCallback } from './DeliveryContext'
 import { AddExternalLink } from './DeliveryLink'
 import { CreateMessage, ProviderDeleteMessage, ProviderUpdateMessage } from './DeliveryMessage'
 import { DeliveryOperationId } from './DeliveryOperation'
@@ -60,7 +60,7 @@ export const ProviderOutputAttempt = Schema.Struct({
 	attempt: Schema.Int.check(Schema.isGreaterThan(0)),
 	hadAmbiguousAttempt: Schema.Boolean,
 	idempotencyKey: Schema.NonEmptyString,
-	prepared: PreparedDeliveryInvocation,
+	prepared: PreparedDeliveryCallback,
 	operation: ProviderOutputOperation,
 })
 export type ProviderOutputAttempt = typeof ProviderOutputAttempt.Type

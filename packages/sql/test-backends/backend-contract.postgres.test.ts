@@ -11,9 +11,11 @@ import { mailboxBackendContract } from '../../delivery/test/backend-contract'
 import { deliveryHandoffContract } from '../../delivery/test/delivery-handoff-contract'
 import { deliveryOutputScenarios } from '../../delivery/test/delivery-output-scenarios'
 import { emptyStore } from './postgres'
+import { sequentialCallbackContract } from './sequential-callback-contract'
 
 describe('sql store contracts', () => {
 	mailboxBackendContract('sql', () => emptyStore)
 	deliveryHandoffContract('sql', () => emptyStore)
 	deliveryOutputScenarios('sql', () => emptyStore)
+	sequentialCallbackContract('sql', () => emptyStore)
 })

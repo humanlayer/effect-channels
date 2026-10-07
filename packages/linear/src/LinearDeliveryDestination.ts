@@ -130,13 +130,14 @@ export const encodeLinearDeliveryPreparation = Effect.fn('linear.delivery.encode
 ) {
 	const destination = yield* encodeDestination(preparation.destination)
 	const fields = {
-		callback: preparation.callback,
+		name: preparation.callback,
 		presentationVersion: LinearDeliveryPresentationVersion,
 		destination,
 		supportedOperations: linearSupportedOperations(preparation.destination),
 		reactionTargets: linearReactionTargets(preparation),
 	}
-	if (Predicate.isUndefined(preparation.activationTarget)) return PreparedDeliveryInvocation.make(fields)
+	if (Predicate.isUndefined(preparation.activationTarget))
+		return PreparedDeliveryInvocation.make({ callbacks: [fields] })
 	const activationTarget = yield* encodeActivationTarget(preparation.activationTarget)
-	return PreparedDeliveryInvocation.make({ ...fields, activationTarget })
+	return PreparedDeliveryInvocation.make({ callbacks: [{ ...fields, activationTarget }] })
 })

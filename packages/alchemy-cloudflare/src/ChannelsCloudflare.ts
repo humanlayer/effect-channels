@@ -21,10 +21,7 @@ import * as HttpRouter from 'effect/http/HttpRouter'
 import { DeliveryControlAlchemyCloudflare, makeDeliveryRequestHandler } from './DeliveryControl'
 import { DeliveryControlBackendFromDurableObjectStorage } from './DeliveryControlBackend'
 import { makeMailboxAlarmHandler, type MailboxAlarmHandlerOptions } from './MailboxAlarm'
-import {
-	MailboxDeliveryAlchemyCloudflare,
-	makeDeliverFromDurableObjectStorage,
-} from './MailboxDelivery'
+import { MailboxDeliveryAlchemyCloudflare, makeDeliverFromDurableObjectStorage } from './MailboxDelivery'
 import { MailboxProcessingBackendFromDurableObjectStorage } from './MailboxProcessingBackend'
 import { type MailboxStorage, MailboxStorageFromDurableObjectState } from './MailboxStorage'
 import { MailboxSubscriptionsFromDurableObjectStorage } from './MailboxSubscriptions'
@@ -67,9 +64,7 @@ export const makeMailbox = <const Requirements extends ReadonlyArray<ChannelsPro
  * itself supplies `RuntimeContext`, so callbacks can call other Durable Objects.
  */
 export type MailboxServices<Requirements extends ReadonlyArray<ChannelsProviderRequirements>> = Exclude<
-	| Crypto.Crypto
-	| Requirements[number]['build']
-	| Exclude<Requirements[number]['process'], MailboxSubscriptions>,
+	Crypto.Crypto | Requirements[number]['build'] | Exclude<Requirements[number]['process'], MailboxSubscriptions>,
 	RuntimeContext
 >
 
@@ -108,14 +103,15 @@ export const make = <const Requirements extends ReadonlyArray<ChannelsProviderRe
 	 */
 	const deliveryApi = deliveryApiRoutes(options).pipe(Layer.provide(DeliveryControlAlchemyCloudflare))
 
-	return { mailbox, routes, deliveryApi }
+	/** Provider webhooks as a Worker's `fetch`, without the delivery API. */
+	const webhookFetch = HttpRouter.toHttpEffect(routes).pipe(
+		Effect.provideService(HttpRouter.RouterConfig, Channels.routerConfig),
+	)
+
+	/** Provider webhooks and the delivery API as a Worker's `fetch`. */
+	const fetch = HttpRouter.toHttpEffect(Layer.merge(routes, deliveryApi)).pipe(
+		Effect.provideService(HttpRouter.RouterConfig, Channels.routerConfig),
+	)
+
+	return { mailbox, routes, deliveryApi, webhookFetch, fetch }
 }
-
-/**
- * A Worker's `fetch` from the bot's routes. Raises the router's path-parameter limit, because a
- * delivery ID is longer than the default 100 characters. Fails as the providers do when they cannot
- * be built, such as with a `ConfigError` for a missing secret, so Alchemy reports it at deploy.
- */
-export const serve = <E, R>(routes: Layer.Layer<never, E, R | HttpRouter.HttpRouter>) =>
-	HttpRouter.toHttpEffect(routes).pipe(Effect.provideService(HttpRouter.RouterConfig, Channels.routerConfig))
-

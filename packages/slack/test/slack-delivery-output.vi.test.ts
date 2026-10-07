@@ -9,7 +9,7 @@ import {
 	DeliveryOperationId,
 	DeliveryOutcome,
 	MessageId,
-	PreparedDeliveryInvocation,
+	PreparedDeliveryCallback,
 	DeliveryActivity,
 	ProviderDeleteMessage,
 	ProviderPresentOutcome,
@@ -24,7 +24,6 @@ import {
 import { Effect, Layer, Ref, Result, Schema } from 'effect'
 
 import { commentOutputScenarios } from '../../delivery/test/comment-output-scenarios'
-
 import {
 	SlackApi,
 	SlackApiError,
@@ -61,9 +60,9 @@ const threadTs = SlackMessageTs.make('1700000000.000001')
 const thread = SlackThreadRef.make({ teamId, channelId, threadTs, isDm: false })
 const postedRef = SlackMessageRef.make({ teamId, channelId, messageTs: SlackMessageTs.make('1700000009.000009') })
 
-const prepared = (overrides: Partial<PreparedDeliveryInvocation> = {}) =>
-	PreparedDeliveryInvocation.make({
-		callback: 'onNewMention',
+const prepared = (overrides: Partial<PreparedDeliveryCallback> = {}) =>
+	PreparedDeliveryCallback.make({
+		name: 'onNewMention',
 		presentationVersion: slackPresentationVersion,
 		destination: Schema.encodeSync(SlackDeliveryDestinationJson)(SlackDeliveryDestination.make({ thread })),
 		supportedOperations: slackThreadSupportedOperations,
@@ -123,12 +122,19 @@ const recordingSlackApi = (calls: Ref.Ref<SlackCalls>, failWith?: string) =>
 			}),
 		addReaction: (request) =>
 			Effect.gen(function* () {
-				yield* Ref.update(calls, (all) => ({ ...all, reactions: [...all.reactions, { change: 'add' as const, request }] }))
-				if (failWith !== undefined) return yield* SlackApiError.make({ operation: 'add_reaction', message: failWith })
+				yield* Ref.update(calls, (all) => ({
+					...all,
+					reactions: [...all.reactions, { change: 'add' as const, request }],
+				}))
+				if (failWith !== undefined)
+					return yield* SlackApiError.make({ operation: 'add_reaction', message: failWith })
 			}),
 		removeReaction: (request) =>
 			Effect.gen(function* () {
-				yield* Ref.update(calls, (all) => ({ ...all, reactions: [...all.reactions, { change: 'remove' as const, request }] }))
+				yield* Ref.update(calls, (all) => ({
+					...all,
+					reactions: [...all.reactions, { change: 'remove' as const, request }],
+				}))
 				if (failWith !== undefined) {
 					return yield* SlackApiError.make({ operation: 'remove_reaction', message: failWith })
 				}
@@ -159,7 +165,7 @@ const recordingSlackApi = (calls: Ref.Ref<SlackCalls>, failWith?: string) =>
 
 const run = (
 	operation: ProviderOutputOperation,
-	options: { readonly failWith?: string; readonly invocation?: PreparedDeliveryInvocation } = {},
+	options: { readonly failWith?: string; readonly invocation?: PreparedDeliveryCallback } = {},
 ) =>
 	Effect.gen(function* () {
 		const calls = yield* Ref.make<SlackCalls>({
@@ -191,13 +197,19 @@ commentOutputScenarios({
 		run(operation, {
 			failWith: options.fault === undefined ? undefined : slackFaults[options.fault],
 			invocation:
-				options.futureVersion === true ? prepared({ presentationVersion: slackPresentationVersion + 1 }) : undefined,
+				options.futureVersion === true
+					? prepared({ presentationVersion: slackPresentationVersion + 1 })
+					: undefined,
 		}).pipe(
 			Effect.map(({ result, posts, updates, deletes }) => ({
 				result,
 				shown: [
-					...posts.map(({ content }) => `post: ${Schema.is(SlackMarkdownContent)(content) ? content.markdown : '?'}`),
-					...updates.map(({ content }) => `edit: ${Schema.is(SlackMarkdownContent)(content) ? content.markdown : '?'}`),
+					...posts.map(
+						({ content }) => `post: ${Schema.is(SlackMarkdownContent)(content) ? content.markdown : '?'}`,
+					),
+					...updates.map(
+						({ content }) => `edit: ${Schema.is(SlackMarkdownContent)(content) ? content.markdown : '?'}`,
+					),
 					...deletes.map(() => 'delete'),
 				],
 			})),
@@ -354,13 +366,22 @@ describe('Slack delivery output', () => {
 	)
 
 	describe('portable reactions', () => {
-		const triggerRef = SlackMessageRef.make({ teamId, channelId, messageTs: SlackMessageTs.make('1700000005.000005') })
+		const triggerRef = SlackMessageRef.make({
+			teamId,
+			channelId,
+			messageTs: SlackMessageTs.make('1700000005.000005'),
+		})
 		const withTrigger = prepared({
-			activationTarget: Schema.encodeSync(SlackActivationTargetJson)(SlackActivationTarget.make({ message: triggerRef })),
+			activationTarget: Schema.encodeSync(SlackActivationTargetJson)(
+				SlackActivationTarget.make({ message: triggerRef }),
+			),
 		})
 		const onActivation = ProviderReactionTarget.cases.ActivationTarget.make({})
-		const react = (target: ProviderReactionTarget, reaction: ProviderSetMessageReaction['reaction'], active: boolean) =>
-			ProviderSetMessageReaction.make({ target, reaction, active })
+		const react = (
+			target: ProviderReactionTarget,
+			reaction: ProviderSetMessageReaction['reaction'],
+			active: boolean,
+		) => ProviderSetMessageReaction.make({ target, reaction, active })
 
 		it.effect("adds and removes Slack's emoji on the message that started the delivery", ({ expect }) =>
 			Effect.gen(function* () {
@@ -378,7 +399,11 @@ describe('Slack delivery output', () => {
 		it.effect('reacts on a message the delivery posted, through its receipt', ({ expect }) =>
 			Effect.gen(function* () {
 				const { result, reactions } = yield* run(
-					react(ProviderReactionTarget.cases.MessageTarget.make({ messageId, reference: postedReference }), 'eyes', true),
+					react(
+						ProviderReactionTarget.cases.MessageTarget.make({ messageId, reference: postedReference }),
+						'eyes',
+						true,
+					),
 				)
 				expect(Result.isSuccess(result)).toBe(true)
 				expect(reactions).toEqual([{ change: 'add', request: { message: postedRef, reaction: 'eyes' } }])
@@ -387,13 +412,23 @@ describe('Slack delivery output', () => {
 
 		it.effect('counts a reaction already there, or already gone, as done', ({ expect }) =>
 			Effect.gen(function* () {
-				const again = yield* run(react(onActivation, 'eyes', true), { invocation: withTrigger, failWith: 'already_reacted' })
-				const gone = yield* run(react(onActivation, 'eyes', false), { invocation: withTrigger, failWith: 'no_reaction' })
+				const again = yield* run(react(onActivation, 'eyes', true), {
+					invocation: withTrigger,
+					failWith: 'already_reacted',
+				})
+				const gone = yield* run(react(onActivation, 'eyes', false), {
+					invocation: withTrigger,
+					failWith: 'no_reaction',
+				})
 				const messageGone = yield* run(react(onActivation, 'eyes', false), {
 					invocation: withTrigger,
 					failWith: 'message_not_found',
 				})
-				expect([again, gone, messageGone].map(({ result }) => Result.isSuccess(result))).toEqual([true, true, true])
+				expect([again, gone, messageGone].map(({ result }) => Result.isSuccess(result))).toEqual([
+					true,
+					true,
+					true,
+				])
 			}),
 		)
 
@@ -403,7 +438,10 @@ describe('Slack delivery output', () => {
 					invocation: withTrigger,
 					failWith: 'Could not reach Slack',
 				})
-				const archived = yield* run(react(onActivation, 'eyes', true), { invocation: withTrigger, failWith: 'is_archived' })
+				const archived = yield* run(react(onActivation, 'eyes', true), {
+					invocation: withTrigger,
+					failWith: 'is_archived',
+				})
 				const noTarget = yield* run(react(onActivation, 'eyes', true))
 				if (
 					!Result.isFailure(unreachable.result) ||
@@ -414,7 +452,10 @@ describe('Slack delivery output', () => {
 				}
 				expect(unreachable.result.failure).toMatchObject({ retryable: true, safeCode: 'slack_reaction_failed' })
 				expect(archived.result.failure).toMatchObject({ retryable: false, safeCode: 'slack_reaction_failed' })
-				expect(noTarget.result.failure).toMatchObject({ retryable: false, safeCode: 'activation_target_missing' })
+				expect(noTarget.result.failure).toMatchObject({
+					retryable: false,
+					safeCode: 'activation_target_missing',
+				})
 				expect(noTarget.reactions).toEqual([])
 			}),
 		)

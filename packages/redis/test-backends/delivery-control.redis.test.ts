@@ -39,8 +39,8 @@ import {
 	type ProviderOutputAttempt,
 } from '@humanlayer/channels-delivery'
 import { Array as Arr, Clock, Context, Effect, Fiber, Layer, Option, Queue, Redacted, Schema } from 'effect'
-import { TestClock } from 'effect/testing'
 import * as Redis from 'effect/persistence/Redis'
+import { TestClock } from 'effect/testing'
 
 import { commitDeliverySlot, loadDeliverySlot } from '../src/DeliverySlot'
 import {
@@ -67,10 +67,14 @@ const admission = (eventId: string, resourceId = 'thread-1') =>
 const keyOf = (resourceId: string) => deliveryMailboxKey(admission('any', resourceId))
 
 const preparation = PreparedDeliveryInvocation.make({
-	callback: 'onEvent',
-	presentationVersion: 1,
-	destination: { thread: 'thread-1' },
-	supportedOperations: ['PresentOutcome', 'AddExternalLink'],
+	callbacks: [
+		{
+			name: 'onEvent',
+			presentationVersion: 1,
+			destination: { thread: 'thread-1' },
+			supportedOperations: ['PresentOutcome', 'AddExternalLink'],
+		},
+	],
 })
 
 type Store = MailboxDelivery | MailboxProcessingBackend | DeliveryControlBackend | Redis.Redis
@@ -135,7 +139,12 @@ const handedOffDelivery = (resourceId: string) =>
 		const backend = yield* MailboxProcessingBackend
 		yield* (yield* MailboxDelivery).deliver(admission(`event-${resourceId}`, resourceId))
 		const claim = Option.getOrThrow(yield* claimWaiting(keyOf(resourceId)))
-		yield* backend.prepareDelivery({ mailboxKey: claim.mailboxKey, claimId: claim.claimId, prepared: preparation })
+		yield* backend.prepareDelivery({
+			mailboxKey: claim.mailboxKey,
+			claimId: claim.claimId,
+			prepared: preparation,
+			callbackAccessTokens: [claim.accessToken],
+		})
 		yield* backend.handOffDelivery({
 			mailboxKey: claim.mailboxKey,
 			claimId: claim.claimId,
@@ -258,27 +267,33 @@ const pollTogetherUntilQuiet = (
 const applied = () => Effect.succeed(DeliveryOutputApplied.make({}))
 
 describe('redis store: several processes', () => {
-	it.effect('a write decided on a read another process has since changed is refused, and nothing is written', ({ expect }) =>
-		Effect.gen(function* () {
-			yield* emptyDatabase
-			const first = yield* startProcess
-			const second = yield* startProcess
-			yield* inProcess(first)(MailboxDelivery.use((delivery) => delivery.deliver(admission('a'))))
-			const stale = Option.getOrThrow(yield* inProcess(first)(loadDeliverySlot({ mailboxKey: keyOf('thread-1') })))
+	it.effect(
+		'a write decided on a read another process has since changed is refused, and nothing is written',
+		({ expect }) =>
+			Effect.gen(function* () {
+				yield* emptyDatabase
+				const first = yield* startProcess
+				const second = yield* startProcess
+				yield* inProcess(first)(MailboxDelivery.use((delivery) => delivery.deliver(admission('a'))))
+				const stale = Option.getOrThrow(
+					yield* inProcess(first)(loadDeliverySlot({ mailboxKey: keyOf('thread-1') })),
+				)
 
-			const claim = Option.getOrThrow(yield* inProcess(second)(claimWaiting(keyOf('thread-1'))))
-			const refused = yield* inProcess(first)(
-				commitDeliverySlot({
-					loaded: stale,
-					provider: 'example',
-					slot: { ...stale.slot, readyAt: null },
-				}),
-			).pipe(Effect.flip)
-			expect(refused._tag).toBe('SlotChanged')
-			const current = Option.getOrThrow(yield* inProcess(first)(loadDeliverySlot({ mailboxKey: keyOf('thread-1') })))
-			expect(current.slot.active?.claimId).toBe(claim.claimId)
-			expect(current.slot.readyAt).toBe(leaseMs)
-		}).pipe(Effect.scoped),
+				const claim = Option.getOrThrow(yield* inProcess(second)(claimWaiting(keyOf('thread-1'))))
+				const refused = yield* inProcess(first)(
+					commitDeliverySlot({
+						loaded: stale,
+						provider: 'example',
+						slot: { ...stale.slot, readyAt: null },
+					}),
+				).pipe(Effect.flip)
+				expect(refused._tag).toBe('SlotChanged')
+				const current = Option.getOrThrow(
+					yield* inProcess(first)(loadDeliverySlot({ mailboxKey: keyOf('thread-1') })),
+				)
+				expect(current.slot.active?.claimId).toBe(claim.claimId)
+				expect(current.slot.readyAt).toBe(leaseMs)
+			}).pipe(Effect.scoped),
 	)
 
 	it.effect('many claimers racing for one mailbox: exactly one takes the batch', ({ expect }) =>
@@ -309,7 +324,9 @@ describe('redis store: several processes', () => {
 			const pollerB = yield* processingFor({ process: second, handedOff, attempts, answer: applied })
 			const threads = Arr.makeBy(12, (index) => `thread-${index}`)
 			yield* Effect.forEach(threads, (thread) =>
-				inProcess(first)(MailboxDelivery.use((delivery) => delivery.deliver(admission(`event-${thread}`, thread)))),
+				inProcess(first)(
+					MailboxDelivery.use((delivery) => delivery.deliver(admission(`event-${thread}`, thread))),
+				),
 			)
 
 			expect(yield* pollTogetherUntilQuiet(pollerA, pollerB)).toEqual({ claimed: 12, output: 0 })
@@ -359,9 +376,9 @@ describe('redis store: several processes', () => {
 			const stale = Option.getOrThrow(yield* inProcess(first)(claimWaiting(keyOf('thread-1'))))
 			yield* TestClock.adjust(leaseMs)
 
-			expect(yield* inProcess(second)(MailboxProcessingBackend.use((backend) => backend.findReadyMailboxes))).toEqual([
-				RecoverableMailbox.make({ mailboxKey: keyOf('thread-1') }),
-			])
+			expect(
+				yield* inProcess(second)(MailboxProcessingBackend.use((backend) => backend.findReadyMailboxes)),
+			).toEqual([RecoverableMailbox.make({ mailboxKey: keyOf('thread-1') })])
 			const taken = Option.getOrThrow(yield* inProcess(second)(claimFrozen(keyOf('thread-1'))))
 			expect(taken.batchId).toBe(stale.batchId)
 			expect(taken.attempt).toBe(2)
@@ -377,7 +394,9 @@ describe('redis store: several processes', () => {
 				'MailboxProcessingClaimLost',
 			)
 			yield* inProcess(second)(recordCompleted(taken))
-			expect(yield* inProcess(first)(MailboxProcessingBackend.use((backend) => backend.findReadyMailboxes))).toEqual([])
+			expect(
+				yield* inProcess(first)(MailboxProcessingBackend.use((backend) => backend.findReadyMailboxes)),
+			).toEqual([])
 		}).pipe(Effect.scoped),
 	)
 
@@ -412,7 +431,9 @@ describe('redis store: several processes', () => {
 							settledAt: yield* now,
 						})
 					})
-				expect((yield* inProcess(first)(settle(stale)).pipe(Effect.flip))._tag).toBe('MailboxProcessingClaimLost')
+				expect((yield* inProcess(first)(settle(stale)).pipe(Effect.flip))._tag).toBe(
+					'MailboxProcessingClaimLost',
+				)
 				yield* inProcess(second)(settle(taken))
 				const retired = yield* inProcess(first)(status(claim))
 				expect(retired.stage).toBe('Retired')
@@ -511,7 +532,7 @@ const stateFieldRows = Schema.Array(Schema.NullOr(Schema.String))
 
 describe('redis store: layout', () => {
 	it.effect(
-		'keeps the token out of the delivery JSON, and lets the finished deliveries expire with their retention',
+		'persists callback tokens in delivery JSON, and lets finished deliveries expire with their retention',
 		({ expect }) =>
 			Effect.gen(function* () {
 				yield* emptyDatabase
@@ -523,7 +544,7 @@ describe('redis store: layout', () => {
 					yield* redis.send('HMGET', mailboxStateKey(claim.mailboxKey), 'delivery', 'stage'),
 				)
 				expect(stage).toBe('Finishing')
-				expect(delivery).not.toContain(claim.accessToken)
+				expect(delivery).toContain(claim.accessToken)
 				expect(delivery).not.toContain('admissions')
 
 				yield* inProcess(process)(sendOutput(claim.mailboxKey))
@@ -543,7 +564,6 @@ describe('redis store: layout', () => {
 
 const batchCodec = Schema.fromJsonString(DeliveryAdmissionBatch)
 const admissionCodec = Schema.fromJsonString(DeliveryAdmission)
-const preparedCodec = Schema.fromJsonString(PreparedDeliveryInvocation)
 
 /**
  * A mailbox as the release before handoff wrote it: its state hash with a frozen batch and no stage
@@ -580,7 +600,8 @@ const writeOldMailbox = (input: {
 			batch,
 			...input.fields.flat(),
 		)
-		if (Arr.isReadonlyArrayNonEmpty(entries)) yield* input.redis.send('RPUSH', mailboxPendingKey(mailboxKey), ...entries)
+		if (Arr.isReadonlyArrayNonEmpty(entries))
+			yield* input.redis.send('RPUSH', mailboxPendingKey(mailboxKey), ...entries)
 		yield* input.redis.send(
 			'SADD',
 			mailboxEventsKey(mailboxKey),
@@ -591,146 +612,58 @@ const writeOldMailbox = (input: {
 	})
 
 describe('redis store: data from earlier releases', () => {
+	it.effect('rejects a stored batch without the required sequential callback state', ({ expect }) =>
+		Effect.gen(function* () {
+			yield* emptyDatabase
+			const process = yield* startProcess
+			const redis = Context.get(process, Redis.Redis)
+			const mailboxKey = yield* writeOldMailbox({
+				redis,
+				resourceId: 'missing-index',
+				frozen: [admission('old')],
+				waiting: [],
+				readyAt: 0,
+				fields: [
+					['status', 'retry'],
+					['attempt', '1'],
+					['batch_id', 'old'],
+					['access_token', 'token'],
+					['stage', 'Retry'],
+				],
+			})
+			const failure = yield* inProcess(process)(claimFrozen(mailboxKey)).pipe(Effect.flip)
+			expect(failure._tag).toBe('MailboxProcessingUnavailable')
+		}).pipe(Effect.scoped),
+	)
+
 	it.effect(
-		'a running batch, a batch waiting to retry, and a batch saved before batches had IDs all carry on',
+		'hands back a claimed admission exactly as delivered, with no cjson round trip turning [] into {}',
 		({ expect }) =>
 			Effect.gen(function* () {
 				yield* emptyDatabase
 				const process = yield* startProcess
-				const redis = Context.get(process, Redis.Redis)
-				const preparedJson = yield* Schema.encodeEffect(preparedCodec)(preparation)
-
-				const running = yield* writeOldMailbox({
-					redis,
-					resourceId: 'running',
-					frozen: [admission('e1', 'running')],
-					waiting: [admission('e1-later', 'running')],
-					readyAt: leaseMs,
-					fields: [
-						['status', 'active'],
-						['claim_id', 'old-claim-1'],
-						['attempt', '1'],
-						['batch_id', 'b1'],
-						['access_token', 'token1'],
-						['prepared', preparedJson],
-					],
+				const odd = DeliveryAdmission.make({
+					namespace: 'redis',
+					provider: 'example',
+					installationId: 'installation',
+					resourceId: 'thread|with|pipes',
+					eventId: 'event|1',
+					payload: { empty: [], nested: { list: [[]], text: 'a|b', big: 9007199254740991, ratio: 0.1 } },
+					interrupt: true,
 				})
-				const retrying = yield* writeOldMailbox({
-					redis,
-					resourceId: 'retrying',
-					frozen: [admission('e2', 'retrying')],
-					waiting: [],
-					readyAt: 5_000,
-					fields: [
-						['status', 'retry'],
-						['attempt', '1'],
-						['batch_id', 'b2'],
-						['access_token', 'token2'],
-						['last_result', '{"_tag":"RetryableFailure","safeCode":"temporary"}'],
-					],
-				})
-				const beforeBatches = yield* writeOldMailbox({
-					redis,
-					resourceId: 'before-batches',
-					frozen: [admission('e0', 'before-batches')],
-					waiting: [],
-					readyAt: leaseMs,
-					fields: [
-						['status', 'active'],
-						['claim_id', 'old-claim-0'],
-						['attempt', '1'],
-					],
-				})
-
-				yield* inProcess(process)(
-					Effect.gen(function* () {
-						const backend = yield* MailboxProcessingBackend
-						expect(yield* backend.findReadyMailboxes).toEqual([])
-						yield* TestClock.adjust(leaseMs)
-						expect((yield* backend.findReadyMailboxes).map(({ mailboxKey }) => mailboxKey).toSorted()).toEqual(
-							[running, beforeBatches].toSorted(),
-						)
-
-						/** The old process is gone: the batch is taken over with its ID, token and preparation, and the old claim is refused. */
-						const resumed = Option.getOrThrow(yield* claimFrozen(running))
-						const lost = yield* backend
-							.renewClaim({ mailboxKey: running, claimId: 'old-claim-1', leaseMs })
-							.pipe(Effect.flip)
-						expect(lost._tag).toBe('MailboxProcessingClaimLost')
-						expect(resumed.attempt).toBe(2)
-						expect(resumed.batchId).toBe('b1')
-						expect(resumed.accessToken).toBe('token1')
-						expect(resumed.prepared).toEqual(preparation)
-						expect(resumed.admissions.map(({ eventId }) => eventId)).toEqual(['e1'])
-						yield* backend.handOffDelivery({
-							mailboxKey: running,
-							claimId: resumed.claimId,
-							handedOffAt: yield* now,
-							links: [],
-						})
-						yield* recordCompleted(resumed)
-						expect((yield* status(resumed)).stage).toBe('ExternalWaiting')
-						expect((yield* complete(resumed)).status).toBe('accepted')
-						yield* sendOutput(running)
-						expect((yield* status(resumed)).stage).toBe('Retired')
-						const later = Option.getOrThrow(yield* claimWaiting(running))
-						expect(later.admissions.map(({ eventId }) => eventId)).toEqual(['e1-later'])
-						yield* recordCompleted(later)
-
-						/** A batch saved before IDs gets one ID and token, kept from then on. */
-						const legacy = Option.getOrThrow(yield* claimFrozen(beforeBatches))
-						expect(legacy.attempt).toBe(2)
-						expect(legacy.batchId).toMatch(/^legacy-[0-9a-f]{32}$/)
-						expect(legacy.accessToken).toMatch(/^[0-9a-f]{40}$/)
-						expect(legacy.admissions.map(({ eventId }) => eventId)).toEqual(['e0'])
-						yield* TestClock.adjust(leaseMs)
-						const legacyAgain = Option.getOrThrow(yield* claimFrozen(beforeBatches))
-						expect(legacyAgain.batchId).toBe(legacy.batchId)
-						expect(legacyAgain.accessToken).toBe(legacy.accessToken)
-						yield* recordCompleted(legacyAgain)
-
-						/** A batch waiting to retry runs again when its time comes, with no preparation yet. */
-						yield* TestClock.adjust(5_000)
-						expect(yield* backend.findReadyMailboxes).toEqual([RecoverableMailbox.make({ mailboxKey: retrying })])
-						const retry = Option.getOrThrow(yield* claimFrozen(retrying))
-						expect(retry.batchId).toBe('b2')
-						expect(retry.attempt).toBe(2)
-						expect(retry.prepared).toBeUndefined()
-						yield* recordCompleted(retry)
-						expect(yield* backend.findReadyMailboxes).toEqual([])
-
-						/** An old idle mailbox takes new events as before. */
-						yield* (yield* MailboxDelivery).deliver(admission('fresh', 'retrying'))
-						expect((yield* backend.findReadyMailboxes).filter(Schema.is(WaitingMailbox))).toHaveLength(1)
-					}),
+				const { mailboxKey } = yield* inProcess(process)(
+					MailboxDelivery.use((delivery) => delivery.deliver(odd)),
 				)
-			}).pipe(Effect.scoped),
-	)
-
-	it.effect('hands back a claimed admission exactly as delivered, with no cjson round trip turning [] into {}', ({ expect }) =>
-		Effect.gen(function* () {
-			yield* emptyDatabase
-			const process = yield* startProcess
-			const odd = DeliveryAdmission.make({
-				namespace: 'redis',
-				provider: 'example',
-				installationId: 'installation',
-				resourceId: 'thread|with|pipes',
-				eventId: 'event|1',
-				payload: { empty: [], nested: { list: [[]], text: 'a|b', big: 9007199254740991, ratio: 0.1 } },
-				interrupt: true,
-			})
-			const { mailboxKey } = yield* inProcess(process)(MailboxDelivery.use((delivery) => delivery.deliver(odd)))
-			const claim = Option.getOrThrow(
-				yield* inProcess(process)(
-					MailboxProcessingBackend.use((backend) =>
-						backend.claimMailbox(
-							ClaimWaitingEvents.make({ mailboxKey, upToSequence: 0, leaseMs, ...nextIdentity() }),
+				const claim = Option.getOrThrow(
+					yield* inProcess(process)(
+						MailboxProcessingBackend.use((backend) =>
+							backend.claimMailbox(
+								ClaimWaitingEvents.make({ mailboxKey, upToSequence: 0, leaseMs, ...nextIdentity() }),
+							),
 						),
 					),
-				),
-			)
-			expect(claim.admissions).toEqual([odd])
-		}).pipe(Effect.scoped),
+				)
+				expect(claim.admissions).toEqual([odd])
+			}).pipe(Effect.scoped),
 	)
 })

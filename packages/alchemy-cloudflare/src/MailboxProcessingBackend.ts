@@ -279,6 +279,7 @@ export const makeMailboxProcessingBackendFromDurableObjectStorage = Effect.gen(f
 			yield* changeClaimedDeliveries('Cloudflare mailbox result recording failed', input.claim, (current) =>
 				recordDeliveryAttempt(current.deliveries, {
 					claimId: input.claim.claimId,
+					succeeded: Predicate.isTagged(input.result, 'Completed'),
 					retryAfterMs,
 					now: input.finishedAt,
 					hasWaiting: Arr.isReadonlyArrayNonEmpty(current.waiting),
@@ -298,7 +299,11 @@ export const makeMailboxProcessingBackendFromDurableObjectStorage = Effect.gen(f
 						PreparationMismatch: ({ batchId }) =>
 							Effect.fail(
 								new DeliveryPreparationConflict({
-									deliveryId: makeDeliveryId({ mailboxKey: input.mailboxKey, batchId }),
+									deliveryId: makeDeliveryId({
+										mailboxKey: input.mailboxKey,
+										batchId,
+										callbackIndex: current.deliveries.active?.callbackIndex ?? 0,
+									}),
 								}),
 							),
 					}),

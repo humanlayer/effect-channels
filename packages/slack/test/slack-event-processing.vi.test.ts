@@ -397,24 +397,35 @@ describe('Slack event batch processing', () => {
 		}),
 	)
 
-	it.effect('fails an event at once when Slack refuses the bot token, and retries other Slack failures', ({ expect }) =>
-		Effect.gen(function* () {
-			const failingWith = (message: string) =>
-				Layer.merge(
-					Layer.mock(SlackApi, {
-						resolveParticipant: () => Effect.fail(SlackApiError.make({ operation: 'resolve_participant', message })),
+	it.effect(
+		'fails an event at once when Slack refuses the bot token, and retries other Slack failures',
+		({ expect }) =>
+			Effect.gen(function* () {
+				const failingWith = (message: string) =>
+					Layer.merge(
+						Layer.mock(SlackApi, {
+							resolveParticipant: () =>
+								Effect.fail(SlackApiError.make({ operation: 'resolve_participant', message })),
+						}),
+						MailboxSubscriptionsMemory,
+					)
+				const run = (message: string) =>
+					process({ onNewMention: () => Effect.void }, mentionBatch(), failingWith(message)).pipe(Effect.flip)
+				expect(yield* run('invalid_auth')).toEqual(
+					ProviderEventExecutionFailed.make({
+						provider: 'slack',
+						retryable: false,
+						safeCode: 'slack_token_rejected',
 					}),
-					MailboxSubscriptionsMemory,
 				)
-			const run = (message: string) =>
-				process({ onNewMention: () => Effect.void }, mentionBatch(), failingWith(message)).pipe(Effect.flip)
-			expect(yield* run('invalid_auth')).toEqual(
-				ProviderEventExecutionFailed.make({ provider: 'slack', retryable: false, safeCode: 'slack_token_rejected' }),
-			)
-			expect(yield* run('Could not reach Slack')).toEqual(
-				ProviderEventExecutionFailed.make({ provider: 'slack', retryable: true, safeCode: 'slack_api_failed' }),
-			)
-		}),
+				expect(yield* run('Could not reach Slack')).toEqual(
+					ProviderEventExecutionFailed.make({
+						provider: 'slack',
+						retryable: true,
+						safeCode: 'slack_api_failed',
+					}),
+				)
+			}),
 	)
 
 	it.effect('preserves callback failure retryability and rejects mixed resource identity', ({ expect }) =>
@@ -544,6 +555,44 @@ const threadSupportedOperations: ReadonlyArray<DeliveryOperationKind> = [
 ]
 
 describe('Slack delivery preparation', () => {
+	it.effect(
+		'rejects invalid callback indices and non-singleton plans before running or preparing a callback',
+		({ expect }) =>
+			Effect.gen(function* () {
+				const test = yield* makeTestDeliveryExecution()
+				const spec = {
+					name: 'onNewMention',
+					presentationVersion: 1,
+					destination: null,
+					supportedOperations: [],
+				}
+				const singleton = PreparedDeliveryInvocation.make({ callbacks: [spec] })
+				const multiple = PreparedDeliveryInvocation.make({ callbacks: [spec, spec] })
+				const executions = [
+					...[-1, 1, 0.5, NaN].flatMap((callbackIndex) => [
+						new ProviderDeliveryExecution({ ...test.execution, callbackIndex }),
+						new ProviderDeliveryExecution({
+							...test.execution,
+							callbackIndex,
+							prepared: Option.some(singleton),
+						}),
+					]),
+					new ProviderDeliveryExecution({ ...test.execution, prepared: Option.some(multiple) }),
+				]
+				for (const execution of executions) {
+					expect(yield* processor.process(mentionBatch(), execution).pipe(Effect.flip)).toEqual(
+						ProviderEventExecutionFailed.make({
+							provider: 'slack',
+							retryable: false,
+							safeCode: 'prepared_callback_invalid',
+						}),
+					)
+				}
+				expect(yield* Ref.get(test.preparations)).toEqual([])
+				expect(yield* Ref.get(test.handoffs)).toEqual([])
+			}).pipe(Effect.provide(sharedRuntimeLayer({ onNewMention: () => Effect.die('must not run') }))),
+	)
+
 	it.effect('prepares the callback, thread, and trigger message once before the callback runs', ({ expect }) => {
 		const preparedBeforeCallback: Array<number> = []
 		const deliveryIds: Array<string> = []
@@ -565,15 +614,22 @@ describe('Slack delivery preparation', () => {
 			expect(deliveryIds).toEqual([test.execution.deliveryId])
 			expect(yield* Ref.get(test.preparations)).toEqual([
 				PreparedDeliveryInvocation.make({
-					callback: 'onNewMention',
-					presentationVersion: 1,
-					destination: {
-						_tag: 'SlackThread',
-						thread: { teamId, channelId, threadTs: rootTs, isDm: false },
-					},
-					activationTarget: { _tag: 'SlackMessage', message: { teamId, channelId, messageTs: rootTs } },
-					supportedOperations: threadSupportedOperations,
-					reactionTargets: ['ActivationTarget', 'MessageTarget'],
+					callbacks: [
+						{
+							name: 'onNewMention',
+							presentationVersion: 1,
+							destination: {
+								_tag: 'SlackThread',
+								thread: { teamId, channelId, threadTs: rootTs, isDm: false },
+							},
+							activationTarget: {
+								_tag: 'SlackMessage',
+								message: { teamId, channelId, messageTs: rootTs },
+							},
+							supportedOperations: threadSupportedOperations,
+							reactionTargets: ['ActivationTarget', 'MessageTarget'],
+						},
+					],
 				}),
 			])
 		})
@@ -594,14 +650,18 @@ describe('Slack delivery preparation', () => {
 				)
 			expect(yield* Ref.get(test.preparations)).toEqual([
 				PreparedDeliveryInvocation.make({
-					callback: 'onSubscribedThreadEvents',
-					presentationVersion: 1,
-					destination: {
-						_tag: 'SlackThread',
-						thread: { teamId, channelId, threadTs: rootTs, isDm: false },
-					},
-					supportedOperations: threadSupportedOperations,
-					reactionTargets: ['MessageTarget'],
+					callbacks: [
+						{
+							name: 'onSubscribedThreadEvents',
+							presentationVersion: 1,
+							destination: {
+								_tag: 'SlackThread',
+								thread: { teamId, channelId, threadTs: rootTs, isDm: false },
+							},
+							supportedOperations: threadSupportedOperations,
+							reactionTargets: ['MessageTarget'],
+						},
+					],
 				}),
 			])
 		}),
@@ -642,7 +702,7 @@ describe('Slack delivery preparation', () => {
 			)
 
 			const second = yield* first.retry
-			expect(Option.map(second.execution.prepared, ({ callback }) => callback)).toEqual(
+			expect(Option.map(second.execution.prepared, ({ callbacks }) => callbacks[0].name)).toEqual(
 				Option.some('onNewMention'),
 			)
 			expect(yield* processor.process(mentionBatch(), second.execution)).toEqual(ProviderEventHandled.make({}))
@@ -715,10 +775,14 @@ describe('Slack delivery preparation', () => {
 					...test.execution,
 					prepared: Option.some(
 						PreparedDeliveryInvocation.make({
-							callback,
-							presentationVersion: 1,
-							destination: null,
-							supportedOperations: [],
+							callbacks: [
+								{
+									name: callback,
+									presentationVersion: 1,
+									destination: null,
+									supportedOperations: [],
+								},
+							],
 						}),
 					),
 				})
@@ -746,10 +810,14 @@ describe('Slack delivery preparation', () => {
 				...test.execution,
 				prepared: Option.some(
 					PreparedDeliveryInvocation.make({
-						callback: 'onNewMention',
-						presentationVersion: 1,
-						destination: null,
-						supportedOperations: [],
+						callbacks: [
+							{
+								name: 'onNewMention',
+								presentationVersion: 1,
+								destination: null,
+								supportedOperations: [],
+							},
+						],
 					}),
 				),
 			})

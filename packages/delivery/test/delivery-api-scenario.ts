@@ -73,10 +73,14 @@ const handingOffProvider = (
 				Effect.gen(function* () {
 					yield* execution.prepare(
 						PreparedDeliveryInvocation.make({
-							callback: 'onEvent',
-							presentationVersion: 1,
-							destination: { resource: 'resource' },
-							supportedOperations: ['PresentOutcome', 'AddExternalLink'],
+							callbacks: [
+								{
+									name: 'onEvent',
+									presentationVersion: 1,
+									destination: { resource: 'resource' },
+									supportedOperations: ['PresentOutcome', 'AddExternalLink'],
+								},
+							],
 						}),
 					)
 					yield* Queue.offer(contexts, execution.context)

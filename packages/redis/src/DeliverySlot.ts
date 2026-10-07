@@ -17,9 +17,8 @@
  * - `readyAt` is the state hash's `ready_at`, and the mailbox's score in the shared ready set;
  * - the active delivery keeps its admissions in `batch`, its ID and token in `batch_id` and
  *   `access_token`, its callback choice in `prepared`, its owner in `claim_id`, and its `attempt` and
- *   `stage` in fields of their own, as the store kept them before handoff existed. The rest of
- *   `ActiveDelivery` is the JSON in `delivery`. A batch saved before then has no `stage` or `delivery`:
- *   it reads as `Local` or `Retry`, with no links or output;
+ *   `stage` in fields of their own. The rest of `ActiveDelivery`, including callback index,
+ *   callback tokens, and continuation eligibility, is the JSON in `delivery`;
  * - the finished deliveries are one JSON list under the mailbox's retained key. The key expires when
  *   the last of them leaves its retention period; deleting them earlier is left to the lifecycle's limit.
  */
@@ -40,7 +39,7 @@ import {
 	emptyDeliverySlot,
 	mailboxSchedulerStatus,
 } from '@humanlayer/channels-delivery'
-import { Array as Arr, Clock, Effect, Option, Predicate, Random, Schedule, Schema, Struct } from 'effect'
+import { Array as Arr, Clock, Effect, Option, Predicate, Schedule, Schema, Struct } from 'effect'
 import * as Redis from 'effect/persistence/Redis'
 
 import * as Scripts from './scripts'
@@ -133,25 +132,18 @@ export const LoadedDeliverySlot = Schema.Struct({
 })
 export interface LoadedDeliverySlot extends Schema.Schema.Type<typeof LoadedDeliverySlot> {}
 
-/** The stage of a batch saved before stages were stored: its scheduler status says whether it waits to retry. */
-export const legacyStage = (status: MailboxSchedulerStatus): ActiveDeliveryStage =>
-	status === 'retry' ? 'Retry' : 'Local'
-
 const toActiveDelivery = (state: typeof StoredState.Type) => {
 	const [, , , , status, batch, batchId, accessToken, prepared, claimId, attempt, stage, delivery] = state
 	if (status === null || status === 'idle' || batch === null) return Effect.succeed(null)
 	const active = {
-		links: [],
-		operations: [],
 		...delivery,
 		batchId,
 		accessToken,
 		admissions: batch,
 		attempt,
 		claimId,
-		stage: stage ?? legacyStage(status),
+		stage,
 	}
-	/** A batch always has its ID and token by now: `load` gives an older batch its own. */
 	return Schema.decodeUnknownEffect(Schema.toType(ActiveDelivery))(
 		Predicate.isNull(prepared) ? active : { ...active, prepared },
 	)
@@ -165,13 +157,10 @@ const toActiveDelivery = (state: typeof StoredState.Type) => {
 export const loadDeliverySlot = (input: { readonly mailboxKey: string; readonly waitingUpTo?: number }) =>
 	Effect.gen(function* () {
 		const redis = yield* Redis.Redis
-		const now = yield* Clock.currentTimeMillis
 		const loaded = yield* Schema.decodeUnknownEffect(Loaded)(
 			yield* redis.eval(Scripts.load)({
 				mailboxKey: input.mailboxKey,
 				pendingUpTo: input.waitingUpTo ?? null,
-				legacySeed: `${now}-${Math.abs(yield* Random.nextInt)}`,
-				now,
 				fields: stateFields,
 			}),
 		)
@@ -215,8 +204,9 @@ const stateWrites = (loaded: LoadedDeliverySlot, slot: DeliverySlot) =>
 		const remove: Array<string> = []
 		if (loaded.slot.active?.batchId !== active.batchId) {
 			set.push(['batch', yield* Schema.encodeEffect(batchCodec)(active.admissions)])
-			set.push(['batch_id', active.batchId], ['access_token', active.accessToken])
+			set.push(['batch_id', active.batchId])
 		}
+		set.push(['access_token', active.accessToken])
 		if (Predicate.isUndefined(active.prepared)) remove.push('prepared')
 		else set.push(['prepared', yield* Schema.encodeEffect(PreparedDeliveryInvocationJson)(active.prepared)])
 		if (Predicate.isNull(active.claimId)) remove.push('claim_id')

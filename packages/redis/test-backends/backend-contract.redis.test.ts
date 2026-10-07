@@ -10,10 +10,12 @@ import { describe } from '@effect/vitest'
 import { mailboxBackendContract } from '../../delivery/test/backend-contract'
 import { deliveryHandoffContract } from '../../delivery/test/delivery-handoff-contract'
 import { deliveryOutputScenarios } from '../../delivery/test/delivery-output-scenarios'
+import { sequentialCallbackContract } from '../../sql/test-backends/sequential-callback-contract'
 import { emptyStore } from './redis'
 
 describe('redis store contracts', () => {
 	mailboxBackendContract('redis', () => emptyStore)
 	deliveryHandoffContract('redis', () => emptyStore)
 	deliveryOutputScenarios('redis', () => emptyStore)
+	sequentialCallbackContract('redis', () => emptyStore)
 })

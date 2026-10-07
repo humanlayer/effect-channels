@@ -161,6 +161,12 @@ export const migrateMailboxSubscriptions = Effect.gen(function* () {
 	)`
 })
 
+/** Per-callback retention cannot share the single active batch row. */
+export const migrateSequentialCallbacks = Effect.gen(function* () {
+	const sql = (yield* SqlClient.SqlClient).withoutTransforms()
+	yield* sql`ALTER TABLE delivery_next_mailboxes ADD COLUMN IF NOT EXISTS retained_json text NOT NULL DEFAULT '[]'`
+})
+
 /**
  * Create or bring up to date every mailbox table, in order. Stores that start together, such as
  * several pollers, take turns: a transaction-scoped advisory lock lets one migrate at a time.
@@ -174,6 +180,7 @@ export const migrate = Effect.gen(function* () {
 			yield* migrateBatches
 			yield* migrateDeliveryControl
 			yield* migrateMailboxSubscriptions
+			yield* migrateSequentialCallbacks
 		}),
 	)
 }).pipe(unavailable, Effect.asVoid, Effect.withSpan('delivery.sql.migrate'))

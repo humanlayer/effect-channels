@@ -53,7 +53,6 @@ import * as Redis from 'effect/persistence/Redis'
 
 import {
 	changeDeliverySlot,
-	legacyStage,
 	nextClaimId,
 	type LoadedDeliverySlot,
 	type NarrowRedisFailure,
@@ -73,7 +72,7 @@ const IdleLook = Schema.Tuple([
 	Schema.FiniteFromString.pipe(Schema.decodeTo(Timestamp)),
 	Schema.Literal(''),
 ])
-/** What the look script reports about a mailbox with an active delivery. A batch saved before stages were stored has none. */
+/** What the look script reports about a mailbox with an active delivery. */
 const BusyLook = Schema.Tuple([
 	Schema.Literals(['active', 'retry']),
 	Schema.String,
@@ -82,7 +81,7 @@ const BusyLook = Schema.Tuple([
 	Schema.String,
 	Schema.String,
 	Schema.String,
-	Schema.Union([ActiveDeliveryStage, Schema.Literal('')]),
+	ActiveDeliveryStage,
 ])
 const Look = Schema.NullOr(Schema.Union([IdleLook, BusyLook]))
 
@@ -120,8 +119,7 @@ const lookAtMailbox = (mailboxKey: string, now: number) =>
 		const look = yield* Schema.decodeUnknownEffect(Look)(yield* redis.eval(Scripts.look)({ mailboxKey, now }))
 		if (Predicate.isNull(look)) return Option.none<ReadyMailbox>()
 		if (look[0] !== 'idle') {
-			const [status, , , , , , , storedStage] = look
-			const stage = storedStage === '' ? legacyStage(status) : storedStage
+			const [, , , , , , , stage] = look
 			return Option.some<ReadyMailbox>(
 				activeDeliveryWork({ stage }) === 'Output'
 					? OutputReadyMailbox.make({ mailboxKey })
@@ -284,6 +282,7 @@ const recordProcessingAttemptResult = (input: RecordProcessingAttemptResult) =>
 		yield* changeClaimedSlot(claim, (loaded) =>
 			recordDeliveryAttempt(loaded.slot, {
 				claimId: claim.claimId,
+				succeeded: Predicate.isTagged(input.result, 'Completed'),
 				retryAfterMs,
 				now: input.finishedAt,
 				hasWaiting: loaded.hasWaiting,
@@ -315,7 +314,11 @@ const prepareDelivery = (input: PrepareMailboxDelivery) =>
 				PreparationMismatch: ({ batchId }) =>
 					Effect.fail(
 						new DeliveryPreparationConflict({
-							deliveryId: makeDeliveryId({ mailboxKey: input.mailboxKey, batchId }),
+							deliveryId: makeDeliveryId({
+								mailboxKey: input.mailboxKey,
+								batchId,
+								callbackIndex: slot.active?.callbackIndex ?? 0,
+							}),
 						}),
 					),
 			}),

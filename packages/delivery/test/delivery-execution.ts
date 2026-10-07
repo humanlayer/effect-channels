@@ -4,18 +4,18 @@
  * It records every preparation and handoff, and saves the first preparation the way a store does, so
  * a test can run a processor twice and check that the second attempt reuses the saved callback.
  */
-import { Effect, Option, Redacted, Ref } from 'effect'
+import { Effect, Option, Redacted, Ref, Schema } from 'effect'
 
 import {
 	BatchId,
 	DeliveryContext,
 	DeliveryHandoff,
 	DeliveryPreparationConflict,
+	PreparedDeliveryInvocation,
 	ProviderDeliveryExecution,
 	makeConversationId,
 	makeDeliveryId,
 	type HandoffOptions,
-	type PreparedDeliveryInvocation,
 } from '../src'
 
 /** The idempotency key every test execution carries: stable across attempts, as in a real store. */
@@ -42,6 +42,7 @@ const make = (input: {
 		const handoffs = yield* Ref.make<ReadonlyArray<HandoffOptions | undefined>>([])
 		const prepared = yield* Ref.get(input.saved)
 		const execution = new ProviderDeliveryExecution({
+			callbackIndex: 0,
 			deliveryId,
 			idempotencyKey: TEST_DELIVERY_IDEMPOTENCY_KEY,
 			prepared,
@@ -53,7 +54,7 @@ const make = (input: {
 						yield* Ref.set(input.saved, Option.some(proposed))
 						return proposed
 					}
-					return current.value.callback === proposed.callback
+					return Schema.toEquivalence(PreparedDeliveryInvocation)(current.value, proposed)
 						? current.value
 						: yield* new DeliveryPreparationConflict({ deliveryId })
 				}),
@@ -62,7 +63,9 @@ const make = (input: {
 				conversationId: makeConversationId(input.mailboxKey),
 				accessToken: Redacted.make('test-access-token'),
 				handoff: (options) =>
-					Ref.update(handoffs, (all) => [...all, options]).pipe(Effect.as(DeliveryHandoff.make({ deliveryId }))),
+					Ref.update(handoffs, (all) => [...all, options]).pipe(
+						Effect.as(DeliveryHandoff.make({ deliveryId })),
+					),
 			}),
 		})
 		return { execution, preparations, handoffs, retry: make(input) }

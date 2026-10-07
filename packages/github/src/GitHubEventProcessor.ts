@@ -6,6 +6,7 @@ import {
 	type DeliveryCallbackResult,
 	type DeliveryContext,
 	MailboxSubscriptions,
+	PreparedDeliveryCallback,
 	PreparedDeliveryInvocation,
 	type ProviderDeliveryExecution,
 	ProviderEventExecutionFailed,
@@ -759,16 +760,14 @@ const buildPrCreated = (prEvents: ReadonlyArray<NormalizedPrEvent>) => {
 /** Rebuild the event value for a callback an earlier attempt chose. */
 const buildInvocation = (
 	callback: GitHubCallbackName,
-	callbacks: typeof GitHubCallbacks.Service,
 	batch: GitHubBatchEvents,
+	includeOpened: boolean,
 ): Option.Option<GitHubInvocation> =>
 	GitHubBatchEvents.$match(batch, {
 		Issue: ({ events }) =>
 			Match.value(callback).pipe(
 				Match.when('onIssueCreated', () => buildIssueCreated(events)),
-				Match.when('onMentioned', () =>
-					buildIssueMention(events, Predicate.isNotUndefined(callbacks.onIssueCreated)),
-				),
+				Match.when('onMentioned', () => buildIssueMention(events, includeOpened)),
 				Match.when('onSubscribedIssueEvents', () => buildSubscribedIssueEvents(events)),
 				Match.whenOr('onPrCreated', 'onSubscribedPrEvents', () => Option.none<GitHubInvocation>()),
 				Match.exhaustive,
@@ -776,33 +775,28 @@ const buildInvocation = (
 		PullRequest: ({ events }) =>
 			Match.value(callback).pipe(
 				Match.when('onPrCreated', () => buildPrCreated(events)),
-				Match.when('onMentioned', () =>
-					buildPrMention(events, Predicate.isNotUndefined(callbacks.onPrCreated)),
-				),
+				Match.when('onMentioned', () => buildPrMention(events, includeOpened)),
 				Match.when('onSubscribedPrEvents', () => buildSubscribedPrEvents(events)),
 				Match.whenOr('onIssueCreated', 'onSubscribedIssueEvents', () => Option.none<GitHubInvocation>()),
 				Match.exhaustive,
 			),
 	})
 
-/** Which callback a new batch runs, or why it runs none. Ignoring a batch is a normal outcome, not an error. */
+/** The ordered callbacks a new batch runs, or why it runs none. */
 type CallbackSelection = Data.TaggedEnum<{
-	Selected: { readonly invocation: GitHubInvocation }
+	Selected: { readonly invocations: readonly [GitHubInvocation, ...Array<GitHubInvocation>] }
 	Ignored: { readonly reason: string }
 }>
 const CallbackSelection = Data.taggedEnum<CallbackSelection>()
 
 const ignored = (reason: string) => CallbackSelection.Ignored({ reason })
 
-const fromBuilt = (built: Option.Option<GitHubInvocation>, reason: string) =>
-	Option.match(built, {
-		onNone: () => ignored(reason),
-		onSome: (invocation) => CallbackSelection.Selected({ invocation }),
-	})
+const fromBuilt = (invocations: ReadonlyArray<GitHubInvocation>, reason: string) =>
+	Arr.isReadonlyArrayNonEmpty(invocations) ? CallbackSelection.Selected({ invocations }) : ignored(reason)
 
 /**
- * Choose the callback for a batch no attempt has prepared yet. Subscribed batches go to the subscribed
- * callback; otherwise a mention wins over an opening event, and an unconfigured callback is skipped.
+ * Freeze creation first, then the normal mention/subscription route. Subscription changes made by
+ * creation cannot change this batch's continuation. Unconfigured callbacks are skipped.
  */
 const selectInvocation = (input: {
 	readonly callbacks: typeof GitHubCallbacks.Service
@@ -813,41 +807,49 @@ const selectInvocation = (input: {
 	return GitHubBatchEvents.$match(input.batch, {
 		Issue: ({ events }) => {
 			if (Arr.isReadonlyArrayEmpty(events)) return ignored('no_relevant_event')
-			if (subscribed) {
-				if (Predicate.isUndefined(callbacks.onSubscribedIssueEvents)) return ignored('callback_not_configured')
-				return fromBuilt(buildSubscribedIssueEvents(events), 'no_relevant_event')
-			}
 			const mentioned = events.some(({ mentionsBot: mention }) => mention)
 			const opened = events.some(({ event }) => isIssueOpened(event))
-			if (mentioned && Predicate.isNotUndefined(callbacks.onMentioned)) {
-				return fromBuilt(
-					buildIssueMention(events, Predicate.isNotUndefined(callbacks.onIssueCreated)),
-					'no_activation_event',
-				)
-			}
-			if (opened && Predicate.isNotUndefined(callbacks.onIssueCreated)) {
-				return fromBuilt(buildIssueCreated(events), 'no_activation_event')
-			}
-			return ignored(!opened && !mentioned ? 'no_activation_event' : 'callback_not_configured')
+			const creation = Predicate.isNotUndefined(callbacks.onIssueCreated)
+				? Option.toArray(buildIssueCreated(events))
+				: []
+			const continuation = subscribed
+				? Predicate.isNotUndefined(callbacks.onSubscribedIssueEvents)
+					? Option.toArray(buildSubscribedIssueEvents(events))
+					: []
+				: mentioned && Predicate.isNotUndefined(callbacks.onMentioned)
+					? Option.toArray(buildIssueMention(events, creation.length > 0))
+					: []
+			return fromBuilt(
+				[...creation, ...continuation],
+				subscribed
+					? 'no_relevant_event'
+					: !opened && !mentioned
+						? 'no_activation_event'
+						: 'callback_not_configured',
+			)
 		},
 		PullRequest: ({ events }) => {
 			if (Arr.isReadonlyArrayEmpty(events)) return ignored('no_relevant_event')
-			if (subscribed) {
-				if (Predicate.isUndefined(callbacks.onSubscribedPrEvents)) return ignored('callback_not_configured')
-				return fromBuilt(buildSubscribedPrEvents(events), 'no_relevant_event')
-			}
 			const mentioned = events.some(({ mentionsBot: mention }) => mention)
 			const opened = events.some(({ event }) => isPrOpened(event))
-			if (mentioned && Predicate.isNotUndefined(callbacks.onMentioned)) {
-				return fromBuilt(
-					buildPrMention(events, Predicate.isNotUndefined(callbacks.onPrCreated)),
-					'no_activation_event',
-				)
-			}
-			if (opened && Predicate.isNotUndefined(callbacks.onPrCreated)) {
-				return fromBuilt(buildPrCreated(events), 'no_activation_event')
-			}
-			return ignored(!opened && !mentioned ? 'no_activation_event' : 'callback_not_configured')
+			const creation = Predicate.isNotUndefined(callbacks.onPrCreated)
+				? Option.toArray(buildPrCreated(events))
+				: []
+			const continuation = subscribed
+				? Predicate.isNotUndefined(callbacks.onSubscribedPrEvents)
+					? Option.toArray(buildSubscribedPrEvents(events))
+					: []
+				: mentioned && Predicate.isNotUndefined(callbacks.onMentioned)
+					? Option.toArray(buildPrMention(events, creation.length > 0))
+					: []
+			return fromBuilt(
+				[...creation, ...continuation],
+				subscribed
+					? 'no_relevant_event'
+					: !opened && !mentioned
+						? 'no_activation_event'
+						: 'callback_not_configured',
+			)
 		},
 	})
 }
@@ -905,8 +907,8 @@ const preparedInvocation = Effect.fn('github.prepared_invocation')(function* (in
 	const activationTarget = yield* Effect.transposeOption(
 		Option.map(target, Schema.encodeEffect(GitHubActivationTargetJson)),
 	)
-	return PreparedDeliveryInvocation.make({
-		callback: invocationCallbackName(invocation),
+	return PreparedDeliveryCallback.make({
+		name: invocationCallbackName(invocation),
 		presentationVersion: gitHubPresentationVersion,
 		destination,
 		...Option.match(activationTarget, { onNone: () => ({}), onSome: (target) => ({ activationTarget: target }) }),
@@ -918,16 +920,17 @@ const preparedInvocation = Effect.fn('github.prepared_invocation')(function* (in
 /** Save the callback choice before any application code runs, so every retry runs the same callback. */
 const prepareInvocation = Effect.fn('github.prepare_delivery')(function* (
 	execution: ProviderDeliveryExecution,
-	invocation: GitHubInvocation,
+	invocations: readonly [GitHubInvocation, ...Array<GitHubInvocation>],
 ) {
-	const prepared = yield* preparedInvocation(invocation).pipe(
+	const steps = yield* Effect.forEach(invocations, preparedInvocation).pipe(
 		Effect.tapError((error) => Effect.logError('GitHub delivery destination could not be encoded', error)),
 		Effect.mapError(() => nonRetryableFailure('delivery_destination_unencodable')),
 	)
-	yield* execution.prepare(prepared).pipe(
+	if (!Arr.isReadonlyArrayNonEmpty(steps)) return yield* nonRetryableFailure('prepared_callback_missing')
+	return yield* execution.prepare(PreparedDeliveryInvocation.make({ callbacks: steps })).pipe(
 		Effect.tapError((error) =>
 			Effect.logError('GitHub delivery preparation failed', error).pipe(
-				Effect.annotateLogs({ deliveryId: execution.deliveryId, callback: prepared.callback }),
+				Effect.annotateLogs({ deliveryId: execution.deliveryId, callbacks: steps.map(({ name }) => name) }),
 			),
 		),
 		Effect.catchTags({
@@ -971,11 +974,14 @@ const runInvocation = (
 const runPreparedInvocation = Effect.fn('github.run_prepared_invocation')(function* (input: {
 	readonly callbacks: typeof GitHubCallbacks.Service
 	readonly prepared: PreparedDeliveryInvocation
+	readonly callbackIndex: number
 	readonly batch: GitHubBatchEvents
 	readonly delivery: DeliveryContext
 }) {
-	const annotations = { deliveryId: input.delivery.deliveryId, callback: input.prepared.callback }
-	const callback = yield* Schema.decodeUnknownEffect(GitHubCallbackName)(input.prepared.callback).pipe(
+	const step = input.prepared.callbacks[input.callbackIndex]
+	if (Predicate.isUndefined(step)) return yield* nonRetryableFailure('prepared_callback_missing')
+	const annotations = { deliveryId: input.delivery.deliveryId, callback: step.name }
+	const callback = yield* Schema.decodeUnknownEffect(GitHubCallbackName)(step.name).pipe(
 		Effect.tapError((error) =>
 			Effect.logError('Prepared GitHub callback is unknown', error).pipe(Effect.annotateLogs(annotations)),
 		),
@@ -987,7 +993,10 @@ const runPreparedInvocation = Effect.fn('github.run_prepared_invocation')(functi
 		)
 		return yield* nonRetryableFailure('prepared_callback_missing')
 	}
-	const invocation = buildInvocation(callback, input.callbacks, input.batch)
+	const includeOpened = input.prepared.callbacks.some(
+		({ name }) => name === 'onIssueCreated' || name === 'onPrCreated',
+	)
+	const invocation = buildInvocation(callback, input.batch, includeOpened)
 	if (Option.isNone(invocation)) {
 		yield* Effect.logError('Prepared GitHub callback cannot be rebuilt from its batch').pipe(
 			Effect.annotateLogs(annotations),
@@ -1027,6 +1036,7 @@ const processGitHubBatch = (options: GitHubEventProcessorOptions) =>
 			return yield* runPreparedInvocation({
 				callbacks,
 				prepared: execution.prepared.value,
+				callbackIndex: execution.callbackIndex,
 				batch,
 				delivery: execution.context,
 			})
@@ -1042,9 +1052,17 @@ const processGitHubBatch = (options: GitHubEventProcessorOptions) =>
 
 		return yield* CallbackSelection.$match(selectInvocation({ callbacks, batch, subscribed }), {
 			Ignored: ({ reason }) => Effect.succeed(ProviderEventIgnored.make({ reason })),
-			Selected: ({ invocation }) =>
-				prepareInvocation(execution, invocation).pipe(
-					Effect.andThen(runInvocation(callbacks, invocation, execution.context)),
+			Selected: ({ invocations }) =>
+				prepareInvocation(execution, invocations).pipe(
+					Effect.flatMap((prepared) =>
+						runPreparedInvocation({
+							callbacks,
+							prepared,
+							callbackIndex: execution.callbackIndex,
+							batch,
+							delivery: execution.context,
+						}),
+					),
 				),
 		})
 	})

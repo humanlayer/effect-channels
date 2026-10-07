@@ -26,6 +26,7 @@ import { SlackApi, SlackBot } from '@humanlayer/channels-slack'
 import { Config, Context, Effect, Layer, Match, Option, Predicate, Queue, Redacted, Ref, Schema } from 'effect'
 import { HttpServerRequest, HttpServerResponse } from 'effect/http'
 
+import { githubWebhookSecret, issueCommentPayload, signedGitHubInput } from '../../github/test/fixtures'
 import {
 	agentSessionPayloads,
 	linearAppUserId,
@@ -34,7 +35,6 @@ import {
 	linearWebhookSecret,
 	signedLinearInput,
 } from '../../linear/test/fixtures'
-import { githubWebhookSecret, issueCommentPayload, signedGitHubInput } from '../../github/test/fixtures'
 import { ChannelsCloudflare, DeliveryMailboxes } from '../src'
 import { DurableObjectFake, DurableObjectFakeAlarm } from './DurableObjectFake'
 
@@ -74,7 +74,8 @@ const makeOptions = (input: {
 		gitHubApi: Layer.mock(GitHubApi, {
 			postIssueComment: ({ issue, content }) =>
 				Effect.gen(function* () {
-					if (content.markdown === 'Summary') yield* Effect.flatten(Ref.getAndSet(input.duringSummary, Effect.void))
+					if (content.markdown === 'Summary')
+						yield* Effect.flatten(Ref.getAndSet(input.duringSummary, Effect.void))
 					yield* Queue.offer(input.shown, `comment: ${content.markdown}`)
 					return GitHubIssueComment.make({
 						ref: { discussion: { _tag: 'Issue', ref: issue }, id: GitHubId.make(900) },
@@ -83,7 +84,8 @@ const makeOptions = (input: {
 						author: null,
 					})
 				}),
-			addReaction: ({ target }) => Queue.offer(input.shown, `eyes on ${reactionTargetName(target)}`).pipe(Effect.asVoid),
+			addReaction: ({ target }) =>
+				Queue.offer(input.shown, `eyes on ${reactionTargetName(target)}`).pipe(Effect.asVoid),
 			removeReaction: ({ target }) =>
 				Queue.offer(input.shown, `eyes off ${reactionTargetName(target)}`).pipe(Effect.asVoid),
 		}),
@@ -102,7 +104,8 @@ const makeOptions = (input: {
 		linearApi: Layer.mock(LinearApi, {
 			createAgentActivity: (request) =>
 				Effect.gen(function* () {
-					if (request.content.body === 'Summary') yield* Effect.flatten(Ref.getAndSet(input.duringSummary, Effect.void))
+					if (request.content.body === 'Summary')
+						yield* Effect.flatten(Ref.getAndSet(input.duringSummary, Effect.void))
 					const kind = request.ephemeral ? 'thought~' : request.content._tag.toLowerCase()
 					yield* Queue.offer(input.shown, `${kind}: ${request.content.body}`)
 					return LinearAgentActivityReceipt.make({
@@ -114,7 +117,8 @@ const makeOptions = (input: {
 		handlers: {
 			onAgentSessionCreated: (event, delivery) =>
 				Queue.offer(input.seen, { event, delivery }).pipe(Effect.andThen(delivery.handoff())),
-			onAgentSessionPrompted: (event, delivery) => Queue.offer(input.seen, { event, delivery }).pipe(Effect.asVoid),
+			onAgentSessionPrompted: (event, delivery) =>
+				Queue.offer(input.seen, { event, delivery }).pipe(Effect.asVoid),
 		},
 	})
 	return {
@@ -146,7 +150,7 @@ const setUp = Effect.gen(function* () {
 			deliveryRequest: mailbox.deliveryRequest,
 		}),
 	})
-	const fetch = yield* ChannelsCloudflare.serve(Layer.merge(bot.routes, bot.deliveryApi)).pipe(
+	const fetch = yield* bot.fetch.pipe(
 		Effect.provide(Layer.merge(NodeCrypto.layer, Layer.succeed(DeliveryMailboxes, mailboxes))),
 	)
 	const request = (path: string, init: RequestInit) =>
@@ -158,7 +162,7 @@ const setUp = Effect.gen(function* () {
 			Effect.map((response) => HttpServerResponse.toWeb(response).status),
 			Effect.orDie,
 		)
-	const sendLinear = (payload: typeof agentSessionPayloads[number], deliveryId: string) => {
+	const sendLinear = (payload: (typeof agentSessionPayloads)[number], deliveryId: string) => {
 		const signed = signedLinearInput(payload, 'AgentSessionEvent', deliveryId)
 		return request('/integrations/linear/webhook', {
 			method: 'POST',
@@ -188,7 +192,18 @@ const setUp = Effect.gen(function* () {
 		if (Predicate.isNotUndefined(body)) init.body = JSON.stringify(body)
 		return request(`/deliveries/${delivery.deliveryId}${path}`, init)
 	}
-	return { seen, shown, duringSummary, mailbox, alarm, routedTo, request, sendLinear, sendGitHubMention, callDelivery }
+	return {
+		seen,
+		shown,
+		duringSummary,
+		mailbox,
+		alarm,
+		routedTo,
+		request,
+		sendLinear,
+		sendGitHubMention,
+		callDelivery,
+	}
 })
 
 it.effect(
@@ -222,7 +237,9 @@ it.effect(
 
 			const working = { activity: { _tag: 'Working', message: 'Running tests' } }
 			expect(yield* callDelivery(delivery, '/activity', 'PUT', working)).toEqual(202)
-			expect(yield* callDelivery(delivery, '/messages', 'POST', { messageId: 'summary', markdown: 'Summary' })).toEqual(202)
+			expect(
+				yield* callDelivery(delivery, '/messages', 'POST', { messageId: 'summary', markdown: 'Summary' }),
+			).toEqual(202)
 			yield* sendLinear(agentSessionPayloads[1], 'delivery-prompted')
 			const statuses = yield* Ref.make<ReadonlyArray<number>>([])
 			yield* Ref.set(
@@ -236,7 +253,11 @@ it.effect(
 			yield* alarm.clearAsCloudflareDoesBeforeTheHandler
 			yield* mailbox.alarm()
 			expect(yield* Ref.get(statuses)).toEqual([202])
-			expect(Array.from(yield* Queue.takeAll(shown))).toEqual(['thought~: Running tests', 'thought: Summary', 'response: Done.'])
+			expect(Array.from(yield* Queue.takeAll(shown))).toEqual([
+				'thought~: Running tests',
+				'thought: Summary',
+				'response: Done.',
+			])
 			const next = Option.getOrThrow(yield* Queue.poll(seen))
 			expect(next.delivery.deliveryId === delivery.deliveryId).toBe(false)
 			expect(yield* callDelivery(delivery, '', 'GET')).toEqual(200)
@@ -254,7 +275,9 @@ it.effect(
 
 			const working = { activity: { _tag: 'Working', message: 'Running tests' } }
 			expect(yield* callDelivery(delivery, '/activity', 'PUT', working)).toEqual(202)
-			expect(yield* callDelivery(delivery, '/messages', 'POST', { messageId: 'summary', markdown: 'Summary' })).toEqual(202)
+			expect(
+				yield* callDelivery(delivery, '/messages', 'POST', { messageId: 'summary', markdown: 'Summary' }),
+			).toEqual(202)
 			expect(yield* sendGitHubMention(501, 'github-mention-2')).toEqual(200)
 			const statuses = yield* Ref.make<ReadonlyArray<number>>([])
 			const record = (status: number) => Ref.update(statuses, (all) => [...all, status])

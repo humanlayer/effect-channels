@@ -34,18 +34,20 @@ import {
 	DeliveryPreparationConflict,
 	DeliveryPreparationUnavailable,
 	PreparedDeliveryInvocation,
+	PreparedDeliveryCallback,
 	ProviderDeliveryExecution,
 	type DeliveryHandoffUnsupported,
 	type HandoffOptions,
 } from './DeliveryContext'
-import { ExternalLink } from './DeliveryLink'
 import {
 	activityToClear,
+	currentPreparedCallback,
 	reactionAddedReference,
 	renderedDeliveryPlan,
 	sentMessageReference,
 	type ActiveDelivery,
 } from './DeliveryLifecycle'
+import { ExternalLink } from './DeliveryLink'
 import { ProviderDeleteMessage, ProviderMessageReference, ProviderUpdateMessage } from './DeliveryMessage'
 import {
 	DeliveryOperationId,
@@ -66,7 +68,6 @@ import {
 	makeDeliveryId,
 	makeDeliveryIdempotencyKey,
 } from './DeliveryReference'
-
 import {
 	decideMailboxClaim,
 	MailboxClaimDecision,
@@ -76,18 +77,18 @@ import {
 	type DeliveryMode,
 } from './MailboxPolicy'
 import {
-	ProviderOutputAttempt,
-	ProviderOutputDispatcher,
-	ProviderPresentOutcome,
-	type ProviderOutputOperation,
-} from './ProviderOutput'
-import {
 	DeliveryAdmissionBatch,
 	processProviderEvent,
 	type ProviderEventProcessingError,
 	type ProviderEventResult,
 	type ProviderEventProcessor,
 } from './ProviderEventProcessing'
+import {
+	ProviderOutputAttempt,
+	ProviderOutputDispatcher,
+	ProviderPresentOutcome,
+	type ProviderOutputOperation,
+} from './ProviderOutput'
 
 const LeaseMilliseconds = Schema.Int.check(Schema.isGreaterThan(0)).check(
 	Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER),
@@ -174,6 +175,7 @@ export type RenewMailboxClaim = typeof RenewMailboxClaim.Type
  */
 export const ClaimedMailboxBatch = Schema.Struct({
 	mailboxKey: Schema.NonEmptyString,
+	callbackIndex: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
 	batchId: BatchId,
 	claimId: Schema.NonEmptyString,
 	attempt: Schema.Int.check(Schema.isGreaterThan(0)),
@@ -193,6 +195,7 @@ export const toClaimedMailboxBatch = (input: {
 	const claimed = {
 		mailboxKey: input.mailboxKey,
 		batchId: active.batchId,
+		callbackIndex: active.callbackIndex,
 		claimId: input.claimId,
 		attempt: active.attempt,
 		accessToken: active.accessToken,
@@ -222,6 +225,7 @@ export const PrepareMailboxDelivery = Schema.Struct({
 	mailboxKey: Schema.NonEmptyString,
 	claimId: Schema.NonEmptyString,
 	prepared: PreparedDeliveryInvocation,
+	callbackAccessTokens: Schema.NonEmptyArray(DeliveryAccessToken),
 })
 export type PrepareMailboxDelivery = typeof PrepareMailboxDelivery.Type
 
@@ -264,11 +268,12 @@ export type ClaimDeliveryOutput = typeof ClaimDeliveryOutput.Type
  */
 export const ClaimedDeliveryOutput = Schema.Struct({
 	mailboxKey: Schema.NonEmptyString,
+	callbackIndex: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
 	batchId: BatchId,
 	claimId: Schema.NonEmptyString,
 	namespace: Schema.NonEmptyString,
 	provider: Schema.NonEmptyString,
-	prepared: Schema.optionalKey(PreparedDeliveryInvocation),
+	prepared: Schema.optionalKey(PreparedDeliveryCallback),
 	operationId: DeliveryOperationId,
 	operation: DeliveryOutputOperation,
 	messageReference: Schema.optionalKey(ProviderMessageReference),
@@ -299,6 +304,7 @@ export const toClaimedDeliveryOutput = (input: {
 	const claimed = {
 		mailboxKey: input.mailboxKey,
 		batchId: active.batchId,
+		callbackIndex: active.callbackIndex,
 		claimId: input.claimId,
 		namespace: first.namespace,
 		provider: first.provider,
@@ -314,11 +320,12 @@ export const toClaimedDeliveryOutput = (input: {
 	const withReference = Predicate.isUndefined(addedReference)
 		? withMessage
 		: { ...withMessage, reactionAddedReference: addedReference }
-	const renderedPlan = Predicate.isTagged(operation.operation, 'RenderPlan') ? renderedDeliveryPlan(active) : undefined
+	const renderedPlan = Predicate.isTagged(operation.operation, 'RenderPlan')
+		? renderedDeliveryPlan(active)
+		: undefined
 	const withPlan = Predicate.isUndefined(renderedPlan) ? withReference : { ...withReference, renderedPlan }
-	return ClaimedDeliveryOutput.make(
-		Predicate.isUndefined(active.prepared) ? withPlan : { ...withPlan, prepared: active.prepared },
-	)
+	const prepared = currentPreparedCallback(active)
+	return ClaimedDeliveryOutput.make(Predicate.isUndefined(prepared) ? withPlan : { ...withPlan, prepared })
 }
 
 /** "Still sending": move the lease of a live output attempt forward by `leaseMs` from now. */
@@ -456,7 +463,9 @@ export class MailboxProcessingBackend extends Context.Service<
 		 * Record how an output attempt ended. A delivery whose result is in and whose output is all
 		 * settled retires, and the events waiting behind it become due.
 		 */
-		readonly settleDeliveryOutput: (input: SettleDeliveryOutput) => Effect.Effect<void, MailboxProcessingBackendError>
+		readonly settleDeliveryOutput: (
+			input: SettleDeliveryOutput,
+		) => Effect.Effect<void, MailboxProcessingBackendError>
 	}
 >()('@humanlayer/channels-delivery/MailboxProcessingBackend') {}
 
@@ -616,22 +625,37 @@ const makeProviderDeliveryExecution = (input: {
 	Effect.gen(function* () {
 		const { claim } = input
 		const backend = yield* MailboxProcessingBackend
-		const deliveryId = makeDeliveryId({ mailboxKey: claim.mailboxKey, batchId: claim.batchId })
+		const crypto = yield* Crypto.Crypto
+		const deliveryId = makeDeliveryId({
+			mailboxKey: claim.mailboxKey,
+			batchId: claim.batchId,
+			callbackIndex: claim.callbackIndex,
+		})
 		const idempotencyKey = yield* makeDeliveryIdempotencyKey(deliveryId)
 		const owner = { mailboxKey: claim.mailboxKey, claimId: claim.claimId }
 
 		const prepare = (prepared: PreparedDeliveryInvocation) =>
-			backend.prepareDelivery({ ...owner, prepared }).pipe(
+			Effect.gen(function* () {
+				const remaining = yield* Effect.forEach(prepared.callbacks.slice(1), () => makeDeliveryAccessToken)
+				return yield* backend.prepareDelivery({
+					...owner,
+					prepared,
+					callbackAccessTokens: [claim.accessToken, ...remaining],
+				})
+			}).pipe(
 				Effect.tapError((error) =>
 					Effect.logWarning('Delivery preparation failed', error).pipe(
 						Effect.annotateLogs({ mailbox_key: claim.mailboxKey, claim_id: claim.claimId }),
 					),
 				),
 				Effect.catchTags({
+					PlatformError: () =>
+						Effect.fail(new DeliveryPreparationUnavailable({ reason: 'random_unavailable' })),
 					MailboxProcessingUnavailable: ({ reason }) =>
 						Effect.fail(new DeliveryPreparationUnavailable({ reason })),
 					MailboxProcessingClaimLost: () => Effect.fail(new DeliveryPreparationConflict({ deliveryId })),
 				}),
+				Effect.provideService(Crypto.Crypto, crypto),
 				Effect.withSpan('delivery.prepare'),
 			)
 
@@ -641,25 +665,31 @@ const makeProviderDeliveryExecution = (input: {
 				const failAfterMs = yield* handoffFailAfterMs(options?.failAfter ?? DEFAULT_HANDOFF_FAIL_AFTER)
 				const request = { ...owner, handedOffAt, links: options?.links ?? [] }
 				yield* backend
-					.handOffDelivery(Option.match(failAfterMs, { onNone: () => request, onSome: (ms) => ({ ...request, failAfterMs: ms }) }))
+					.handOffDelivery(
+						Option.match(failAfterMs, {
+							onNone: () => request,
+							onSome: (ms) => ({ ...request, failAfterMs: ms }),
+						}),
+					)
 					.pipe(
-					Effect.tapError((error) =>
-						Effect.logWarning('Delivery handoff failed', error).pipe(
-							Effect.annotateLogs({ mailbox_key: claim.mailboxKey, claim_id: claim.claimId }),
+						Effect.tapError((error) =>
+							Effect.logWarning('Delivery handoff failed', error).pipe(
+								Effect.annotateLogs({ mailbox_key: claim.mailboxKey, claim_id: claim.claimId }),
+							),
 						),
-					),
-					Effect.catchTags({
-						MailboxProcessingUnavailable: ({ reason }) =>
-							Effect.fail(new DeliveryHandoffUnavailable({ reason })),
-						MailboxProcessingClaimLost: () => Effect.fail(new DeliveryHandoffRejected({ deliveryId })),
-					}),
-				)
+						Effect.catchTags({
+							MailboxProcessingUnavailable: ({ reason }) =>
+								Effect.fail(new DeliveryHandoffUnavailable({ reason })),
+							MailboxProcessingClaimLost: () => Effect.fail(new DeliveryHandoffRejected({ deliveryId })),
+						}),
+					)
 				yield* Ref.set(input.handedOff, true)
 				return DeliveryHandoff.make({ deliveryId })
 			}).pipe(Effect.withSpan('delivery.handoff'))
 
 		return new ProviderDeliveryExecution({
 			deliveryId,
+			callbackIndex: claim.callbackIndex,
 			idempotencyKey,
 			prepared: Option.fromUndefinedOr(claim.prepared),
 			prepare,
@@ -794,9 +824,7 @@ class OutputNotSendable extends Data.TaggedError('OutputNotSendable')<{ readonly
  * be sent. A reaction removal also takes the receipt of the add it undoes, when there is one. A plan
  * takes the plan the provider last showed.
  */
-const providerOperation = (
-	claim: ClaimedDeliveryOutput,
-): Effect.Effect<ProviderOutputOperation, OutputNotSendable> => {
+const providerOperation = (claim: ClaimedDeliveryOutput): Effect.Effect<ProviderOutputOperation, OutputNotSendable> => {
 	const messageReference = Effect.fromOption(Option.fromUndefinedOr(claim.messageReference)).pipe(
 		Effect.mapError(() => new OutputNotSendable({ safeCode: 'message_not_created' })),
 	)
@@ -817,7 +845,9 @@ const providerOperation = (
 			AddExternalLink: (operation) => Effect.succeed(operation),
 			CreateMessage: (operation) => Effect.succeed(operation),
 			UpdateMessage: ({ messageId, markdown }) =>
-				Effect.map(messageReference, (reference) => ProviderUpdateMessage.make({ messageId, markdown, reference })),
+				Effect.map(messageReference, (reference) =>
+					ProviderUpdateMessage.make({ messageId, markdown, reference }),
+				),
 			DeleteMessage: ({ messageId }) =>
 				Effect.map(messageReference, (reference) => ProviderDeleteMessage.make({ messageId, reference })),
 			SetMessageReaction: ({ target, reaction, active }) =>
@@ -825,12 +855,14 @@ const providerOperation = (
 					const providerTarget = yield* Match.value(target).pipe(
 						Match.withReturnType<Effect.Effect<ProviderReactionTarget, OutputNotSendable>>(),
 						Match.tagsExhaustive({
-							ActivationTarget: () => Effect.succeed(ProviderReactionTarget.cases.ActivationTarget.make({})),
+							ActivationTarget: () =>
+								Effect.succeed(ProviderReactionTarget.cases.ActivationTarget.make({})),
 							MessageTarget: ({ messageId }) =>
 								Effect.map(messageReference, (reference) =>
 									ProviderReactionTarget.cases.MessageTarget.make({ messageId, reference }),
 								),
-							PlanTarget: () => Effect.fail(new OutputNotSendable({ safeCode: 'reaction_target_unavailable' })),
+							PlanTarget: () =>
+								Effect.fail(new OutputNotSendable({ safeCode: 'reaction_target_unavailable' })),
 						}),
 					)
 					const request = { target: providerTarget, reaction, active }
@@ -877,12 +909,18 @@ const keepOutputLeaseAlive = (input: { readonly claim: ClaimedDeliveryOutput; re
  * after a doubling wait, until `maxAttempts`; anything else fails the operation for good. Either way
  * the delivery's result stands: a failed output never changes `completed` to `failed`.
  */
-export const processOutputClaim = Effect.fn('delivery.process_output_claim')(function* (input: ProcessOutputClaimInput) {
+export const processOutputClaim = Effect.fn('delivery.process_output_claim')(function* (
+	input: ProcessOutputClaimInput,
+) {
 	const { claim, maxAttempts, leaseMs } = input
 	const mailboxProcessingBackend = yield* MailboxProcessingBackend
 	const providerOutputDispatcher = yield* ProviderOutputDispatcher
 	const startedAt = yield* Clock.currentTimeMillis
-	const deliveryId = makeDeliveryId({ mailboxKey: claim.mailboxKey, batchId: claim.batchId })
+	const deliveryId = makeDeliveryId({
+		mailboxKey: claim.mailboxKey,
+		batchId: claim.batchId,
+		callbackIndex: claim.callbackIndex,
+	})
 	const annotations = {
 		mailbox_key: claim.mailboxKey,
 		batch_id: claim.batchId,
@@ -895,7 +933,7 @@ export const processOutputClaim = Effect.fn('delivery.process_output_claim')(fun
 	}
 	const failed = (safeCode: string) => DeliveryOutputSettlement.cases.Failed.make({ safeCode })
 
-	const sendUnderLease = (prepared: PreparedDeliveryInvocation, operation: ProviderOutputOperation) =>
+	const sendUnderLease = (prepared: PreparedDeliveryCallback, operation: ProviderOutputOperation) =>
 		Effect.raceFirst(
 			providerOutputDispatcher
 				.process({
@@ -923,16 +961,19 @@ export const processOutputClaim = Effect.fn('delivery.process_output_claim')(fun
 								if (claim.attempt >= maxAttempts) return failed('attempts_exhausted')
 								const now = yield* Clock.currentTimeMillis
 								const waitMs = retryAfterMs ?? (yield* outputRetryDelayMs(claim.attempt))
-								return DeliveryOutputSettlement.cases.Retry.make({ readyAt: Timestamp.make(now + waitMs) })
+								return DeliveryOutputSettlement.cases.Retry.make({
+									readyAt: Timestamp.make(now + waitMs),
+								})
 							}),
 					}),
 				),
 			keepOutputLeaseAlive({ claim, leaseMs }),
 		).pipe(
 			Effect.tapError((error) =>
-				Effect.logWarning('Delivery output lease was lost while its provider call ran; call interrupted', error).pipe(
-					Effect.annotateLogs(annotations),
-				),
+				Effect.logWarning(
+					'Delivery output lease was lost while its provider call ran; call interrupted',
+					error,
+				).pipe(Effect.annotateLogs(annotations)),
 			),
 		)
 
@@ -943,9 +984,9 @@ export const processOutputClaim = Effect.fn('delivery.process_output_claim')(fun
 		claim.operation.outcome.reason === 'TimedOut' &&
 		claim.attempt === 1
 	) {
-		yield* Effect.logWarning('Delivery timed out: its remote worker sent no request within the handoff time limit').pipe(
-			Effect.annotateLogs(annotations),
-		)
+		yield* Effect.logWarning(
+			'Delivery timed out: its remote worker sent no request within the handoff time limit',
+		).pipe(Effect.annotateLogs(annotations))
 	}
 	const prepared = claim.prepared
 	const settlement =
@@ -1039,7 +1080,9 @@ export const claimOrDeferReadyMailbox = Effect.fn('delivery.claim_or_defer_ready
 				}).pipe(
 					Effect.catchTag('PlatformError', (error) =>
 						Effect.logError('Random output idempotency key could not be made', error).pipe(
-							Effect.andThen(Effect.fail(new MailboxProcessingUnavailable({ reason: 'random_unavailable' }))),
+							Effect.andThen(
+								Effect.fail(new MailboxProcessingUnavailable({ reason: 'random_unavailable' })),
+							),
 						),
 					),
 				),
@@ -1057,14 +1100,22 @@ export const claimOrDeferReadyMailbox = Effect.fn('delivery.claim_or_defer_ready
 								const batchId = yield* makeBatchId
 								const accessToken = yield* makeDeliveryAccessToken
 								const claimed = yield* mailboxProcessingBackend.claimMailbox(
-									ClaimWaitingEvents.make({ mailboxKey, upToSequence, leaseMs, batchId, accessToken }),
+									ClaimWaitingEvents.make({
+										mailboxKey,
+										upToSequence,
+										leaseMs,
+										batchId,
+										accessToken,
+									}),
 								)
 								return claimedOrSkipped(claimed)
 							}).pipe(
 								Effect.catchTag('PlatformError', (error) =>
 									Effect.logError('Random batch identity could not be made', error).pipe(
 										Effect.andThen(
-											Effect.fail(new MailboxProcessingUnavailable({ reason: 'random_unavailable' })),
+											Effect.fail(
+												new MailboxProcessingUnavailable({ reason: 'random_unavailable' }),
+											),
 										),
 									),
 								),

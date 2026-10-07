@@ -337,7 +337,7 @@ const recordProcessingAttemptResult = (input: RecordProcessingAttemptResult) =>
 				const sql = (yield* SqlClient.SqlClient).withoutTransforms()
 				const resultJson = yield* Schema.encodeEffect(resultCodec)(input.result)
 				const status =
-					slot.active?.stage === 'Retry'
+					slot.active?.stage === 'Retry' && Predicate.isTagged(input.result, 'RetryableFailure')
 						? 'retry'
 						: Predicate.isTagged(input.result, 'Completed')
 							? 'completed'
@@ -351,6 +351,7 @@ const recordProcessingAttemptResult = (input: RecordProcessingAttemptResult) =>
 			change: (loaded) =>
 				recordDeliveryAttempt(loaded.slot, {
 					claimId: claim.claimId,
+					succeeded: Predicate.isTagged(input.result, 'Completed'),
 					retryAfterMs,
 					now: input.finishedAt,
 					hasWaiting: loaded.hasWaiting,
@@ -385,7 +386,11 @@ const prepareDelivery = (input: PrepareMailboxDelivery) =>
 					PreparationMismatch: ({ batchId }) =>
 						Effect.fail(
 							new DeliveryPreparationConflict({
-								deliveryId: makeDeliveryId({ mailboxKey: input.mailboxKey, batchId }),
+								deliveryId: makeDeliveryId({
+									mailboxKey: input.mailboxKey,
+									batchId,
+									callbackIndex: slot.active?.callbackIndex ?? 0,
+								}),
 							}),
 						),
 				}),

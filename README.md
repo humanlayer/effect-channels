@@ -367,18 +367,20 @@ export const bot = ChannelsCloudflare.make({ namespace, providers: [slack, githu
 
 // DeliveryMailboxDO.ts: your Durable Object class, one per mailbox.
 export class DeliveryMailbox extends Cloudflare.DurableObject<DeliveryMailbox, MailboxMethods>()('DeliveryMailbox') {}
-export const DeliveryMailboxLive = DeliveryMailbox.make(bot.mailbox({ rearmAfterMs: 1_000 }))
+export const DeliveryMailboxDOLive = DeliveryMailbox.make(bot.mailbox({ rearmAfterMs: 1_000 }))
 
-// Worker.ts: webhooks and the delivery API, routed to the right mailbox object.
-const Routes = Layer.mergeAll(bot.routes, bot.deliveryApi, MyRoutes).pipe(
-	Layer.provide(Layer.effect(DeliveryMailboxes, DeliveryMailbox)),
+// Worker.ts: connect Channels to this Worker's mailbox Durable Object.
+const ChannelsDeliveryMailboxesLive = Layer.effect(DeliveryMailboxes, DeliveryMailbox)
+const WorkerLive = ChannelsDeliveryMailboxesLive.pipe(
+	Layer.provideMerge(DeliveryMailboxDOLive),
+	Layer.provideMerge(NodeCrypto.layer),
 )
 export default Cloudflare.Worker(
 	'IngressWorker',
 	{ main: import.meta.url },
 	Effect.gen(function* () {
-		return { fetch: yield* ChannelsCloudflare.serve(Routes) }
-	}).pipe(Effect.provide(DeliveryMailboxLive.pipe(Layer.provideMerge(NodeCrypto.layer)))),
+		return { fetch: yield* bot.fetch }
+	}).pipe(Effect.provide(WorkerLive)),
 )
 ```
 
