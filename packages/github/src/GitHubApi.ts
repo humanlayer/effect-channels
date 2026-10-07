@@ -39,6 +39,9 @@ import type {
 export const GitHubIssueRequest = Schema.Struct({ issue: GitHubIssueRef })
 export interface GitHubIssueRequest extends Schema.Schema.Type<typeof GitHubIssueRequest> {}
 
+export const GitHubRepositoryRequest = Schema.Struct({ repository: GitHubRepositoryRef })
+export interface GitHubRepositoryRequest extends Schema.Schema.Type<typeof GitHubRepositoryRequest> {}
+
 export const GitHubPullRequestRequest = Schema.Struct({ pullRequest: GitHubPullRequestRef })
 export interface GitHubPullRequestRequest extends Schema.Schema.Type<typeof GitHubPullRequestRequest> {}
 
@@ -182,6 +185,7 @@ export const GitHubApiOperation = Schema.Literals([
 	'fetch_pull_request_diff',
 	'list_pull_request_commits',
 	'list_issue_labels',
+	'list_repository_labels',
 	'list_pull_request_labels',
 	'add_issue_labels',
 	'add_pull_request_labels',
@@ -265,6 +269,9 @@ export class GitHubApi extends Context.Service<
 			input: GitHubPullRequestRequest,
 		) => Effect.Effect<GitHubCommits, GitHubApiError>
 		readonly listIssueLabels: (input: GitHubIssueRequest) => Effect.Effect<GitHubLabelsResult, GitHubApiError>
+		readonly listRepositoryLabels: (
+			input: GitHubRepositoryRequest,
+		) => Effect.Effect<GitHubLabelsResult, GitHubApiError>
 		readonly listPullRequestLabels: (
 			input: GitHubPullRequestRequest,
 		) => Effect.Effect<GitHubLabelsResult, GitHubApiError>

@@ -11,6 +11,7 @@ import {
 	GitHubContent,
 	GitHubIssueRef,
 	GitHubPullRequestRef,
+	GitHubRepositoryRef,
 } from '../src/GitHubModels'
 
 const issue = GitHubIssueRef.make({
@@ -22,6 +23,13 @@ const issue = GitHubIssueRef.make({
 })
 
 const pullRequest = GitHubPullRequestRef.make({ ...issue, number: GitHubId.make(43) })
+
+const repository = GitHubRepositoryRef.make({
+	installationId: issue.installationId,
+	repositoryId: issue.repositoryId,
+	owner: issue.owner,
+	repository: issue.repository,
+})
 
 const checkRun = GitHubCheckRunRef.make({
 	installationId: issue.installationId,
@@ -168,6 +176,136 @@ const observeRequest = (request: Request): Effect.Effect<ObservedRequest> =>
 	})
 
 describe('GitHubApiLive agent capabilities', () => {
+	it.effect('lists all repository labels across pages and preserves descriptions', ({ expect }) =>
+		Effect.gen(function* () {
+			const calls = yield* Queue.unbounded<ObservedRequest>()
+			const httpClient = HttpClient.make((request) =>
+				Effect.gen(function* () {
+					const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie)
+					const url = new URL(web.url)
+					const observed = yield* observeRequest(web)
+					yield* Queue.offer(calls, observed)
+					if (url.pathname === '/app/installations/100/access_tokens') {
+						expect(observed.method).toBe('POST')
+						expect(observed.body).toBe('{"repository_ids":[200]}')
+						return HttpClientResponse.fromWeb(request, tokenResponse())
+					}
+					expect(url.pathname).toBe('/repos/humanlayer/channels/labels')
+					if (url.searchParams.get('page') === '2') {
+						return HttpClientResponse.fromWeb(
+							request,
+							Response.json([{ name: 'enhancement', color: 'a2eeef', description: null }]),
+						)
+					}
+					return HttpClientResponse.fromWeb(
+						request,
+						Response.json(
+							[{ id: 1, name: 'bug', color: 'd73a4a', description: "Something isn't working" }],
+							{
+								headers: {
+									link: '<https://api.github.test/repos/humanlayer/channels/labels?per_page=100&page=2>; rel="next"',
+								},
+							},
+						),
+					)
+				}),
+			)
+
+			const labels = yield* Effect.flatMap(GitHubApi, (api) => api.listRepositoryLabels({ repository })).pipe(
+				Effect.provide(makeLayer(httpClient)),
+			)
+
+			expect(labels).toEqual([
+				{ id: 1, name: 'bug', color: 'd73a4a', description: "Something isn't working" },
+				{ name: 'enhancement', color: 'a2eeef', description: null },
+			])
+			const observed = Array.from(yield* Queue.takeAll(calls))
+			expect(observed).toHaveLength(3)
+			expect(observed.slice(1)).toMatchObject([
+				{
+					method: 'GET',
+					path: '/repos/humanlayer/channels/labels',
+					search: '?per_page=100',
+					authorization: 'Bearer installation-token-never-log',
+					accept: 'application/vnd.github+json',
+					body: '',
+				},
+				{
+					method: 'GET',
+					path: '/repos/humanlayer/channels/labels',
+					search: '?per_page=100&page=2',
+					authorization: 'Bearer installation-token-never-log',
+					body: '',
+				},
+			])
+		}),
+	)
+
+	it.effect('returns an empty result for a repository without labels', ({ expect }) =>
+		Effect.gen(function* () {
+			const calls = yield* Queue.unbounded<ObservedRequest>()
+			const httpClient = HttpClient.make((request) =>
+				Effect.gen(function* () {
+					const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie)
+					if (new URL(web.url).pathname.startsWith('/app/installations/')) {
+						return HttpClientResponse.fromWeb(request, tokenResponse())
+					}
+					yield* Queue.offer(calls, yield* observeRequest(web))
+					return HttpClientResponse.fromWeb(request, Response.json([]))
+				}),
+			)
+			const labels = yield* Effect.flatMap(GitHubApi, (api) => api.listRepositoryLabels({ repository })).pipe(
+				Effect.provide(makeLayer(httpClient)),
+			)
+			expect(labels).toEqual([])
+			expect(Array.from(yield* Queue.takeAll(calls))).toMatchObject([
+				{ method: 'GET', path: '/repos/humanlayer/channels/labels', search: '?per_page=100' },
+			])
+		}),
+	)
+
+	it.effect('keeps repository label HTTP and decoding failures in the existing API error vocabulary', ({ expect }) =>
+		Effect.gen(function* () {
+			const response = yield* Ref.make(Response.json({ message: 'Not Found' }, { status: 404 }))
+			const calls = yield* Queue.unbounded<ObservedRequest>()
+			const httpClient = HttpClient.make((request) =>
+				Effect.gen(function* () {
+					const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie)
+					if (new URL(web.url).pathname.startsWith('/app/installations/')) {
+						return HttpClientResponse.fromWeb(request, tokenResponse())
+					}
+					yield* Queue.offer(calls, yield* observeRequest(web))
+					return HttpClientResponse.fromWeb(request, yield* Ref.get(response))
+				}),
+			)
+			const layer = makeLayer(httpClient)
+			for (const scenario of [
+				{ status: 403, reason: 'forbidden', retryable: false },
+				{ status: 404, reason: 'not_found', retryable: false },
+				{ status: 429, reason: 'rate_limited', retryable: true },
+				{ status: 500, reason: 'unavailable', retryable: true },
+				{ status: 200, reason: 'invalid_response', retryable: false },
+			]) {
+				yield* Ref.set(
+					response,
+					scenario.status === 200
+						? Response.json([{ name: 'bug', color: 'd73a4a', description: 123 }])
+						: Response.json({ message: 'Label request failed' }, { status: scenario.status }),
+				)
+				const error = yield* Effect.flatMap(GitHubApi, (api) => api.listRepositoryLabels({ repository })).pipe(
+					Effect.provide(layer),
+					Effect.flip,
+				)
+				expect(error).toMatchObject({
+					_tag: 'GitHubApiError',
+					operation: 'list_repository_labels',
+					...scenario,
+				})
+			}
+			expect(Array.from(yield* Queue.takeAll(calls))).toHaveLength(5)
+		}),
+	)
+
 	it.effect('fetches pull request files, a text diff, and commits through their HTTP seams', ({ expect }) =>
 		Effect.gen(function* () {
 			const calls = yield* Queue.unbounded<ObservedRequest>()

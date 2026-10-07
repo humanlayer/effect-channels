@@ -1,6 +1,6 @@
-# Alchemy Cloudflare Slack, GitHub, and Linear mailbox example
+# Alchemy Cloudflare GitHub mailbox example
 
-This example receives Slack, GitHub, and Linear webhooks in a Cloudflare Worker, stores each event in a mailbox Durable Object, and processes mailboxes from Durable Object alarms. All providers are declared in `src/Bot.ts`; `src/Worker.ts` builds webhook ingress and `src/DurableObject.ts` builds persistent processing from that same declaration.
+This deployment receives GitHub webhooks in a Cloudflare Worker, stores each event in a mailbox Durable Object, and processes mailboxes from Durable Object alarms. `src/Bot.ts` declares the GitHub callbacks, `src/Worker.ts` builds ingress and the Workers AI binding, and `src/DeliveryMailboxDO.ts` builds persistent processing. New issues and PRs are labeled with Clef; authorized mentions receive an eyes reaction. Fold is not connected yet. The older Slack, Linear, and fake-agent walkthroughs below are not part of the current deployment.
 
 ## Linear Application setup
 
@@ -135,15 +135,29 @@ GitHub App bot identities such as `my-reviewer[bot]` are not native mentionable 
 
 The GitHub provider reads these values while the Worker is constructed, so Alchemy binds them as Cloudflare secrets during deployment and its Durable Objects share the same bindings. The webhook secret verifies incoming requests. The App ID and private key create short-lived installation tokens for API calls. The bot user ID prevents the app from responding to its own events. Secrets are not stored in mailbox admissions or Durable Object storage.
 
+Optional Workers AI labeling settings (the defaults are shown):
+
+```dotenv
+GITHUB_LABEL_MODEL=@cf/cloudflare/clef
+GITHUB_LABEL_THRESHOLD=0.8
+GITHUB_LABEL_TIMEOUT="60 seconds"
+```
+
+`@cf/cloudflare/clef-flash` is also supported. Alchemy attaches a native binding named `AI` to the host Worker, and the mailbox's callbacks use it through the captured labeler service. No separate model API key is needed; inference uses the Cloudflare account's Workers AI service and incurs its normal usage charges. The pinned PR preview contains the Workers AI fix; main's unpublished Iceberg dependency currently prevents installing the main preview.
+
 Restart `bun alchemy dev` after changing `.env`. For a deployed stack, deploy the updated secrets with:
 
 ```bash
-bun alchemy deploy
+bun run alchemy:deploy
 ```
 
 ### 7. Test with a repository
 
-Open an issue or pull request in an installed repository. The sample callback reads the discussion and its existing comments (and PR reviews), subscribes the discussion, posts a confirmation comment, and adds an `eyes` reaction to that comment. You can also invoke `@<app-slug>` in an issue body, PR body, issue comment, PR comment, or inline review comment. On every subscribed PR event batch, the example calls `pullRequest.listComments()` and `pullRequest.listReviewComments()`, then logs both current comment counts. Later subscribed comments and inline review comments receive an `eyes` reaction; all subscribed events are logged by the Durable Object. Completed-check callback events include both `headSha` and `checkRunId`, which can be passed to the check-run resource methods without accidentally inspecting a newer push.
+After deployment, set the GitHub App's webhook URL to `https://<your-worker-hostname>/integrations/github/webhook`. Open a new issue describing a clear bug, then a new PR describing a documentation change. After the ten-second debounce and processing, Clef should add matching labels whose yes-probability meets the configured threshold. It considers only GitHub's nine default label names that already exist on this repository, can add multiple labels, and preserves existing labels. A null body is evaluated using the title. No confident matches means no label changes. Historical issues/PRs are not scanned automatically.
+
+Creation labeling does not require a maintainer mention. To test mention access separately, invoke `@<app-slug>` in an issue body, PR body, issue comment, PR comment, or inline review comment. Write access or higher gets eyes; other users get thumbs down and one maintainer-only notice per discussion. Creation labeling runs before a mention in the same opening batch. A failed labeling callback is logged and retried by mailbox processing; the later mention waits until that callback succeeds or the delivery terminates.
+
+Use Cloudflare Worker logs to look for `Workers AI label inference started`, `Workers AI label inference completed`, and `GitHub labels added`. Effect log annotations include repository, discussion number/type, model, threshold, candidate/selected labels, and probabilities. Creation callbacks also annotate the webhook event ID and delivery ID. Failures log `GitHub auto-label failed` with an error tag/reason; a missing runtime `AI` binding reports `binding_missing`. Request titles, bodies, credentials, and raw model responses are not logged. The `bot.github.auto_label` Effect span carries repository, number, and model attributes. This has been verified with a substituted native binding in tests, not live inference.
 
 In the GitHub App settings, **Advanced → Recent Deliveries** shows each webhook request, response status, and redelivery control. A successful admission returns HTTP 200. If GitHub reports 401, check the webhook secret. If callbacks fail with 403, check the app permissions and make sure the installation includes the repository.
 

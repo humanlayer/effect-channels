@@ -26,9 +26,11 @@ import {
 	type GitHubReactionRequest,
 	type GitHubUserAccessRequest,
 } from '@humanlayer/channels-github'
+import { RuntimeContext } from 'alchemy/RuntimeContext'
 import { ConfigProvider, Effect, Layer, Logger, Ref } from 'effect'
 
 import { makeTestDeliveryExecution } from '../../../packages/delivery/test/delivery-execution'
+import { AutoLabel } from '../src/AutoLabel'
 import { githubHandlers, maintainerOnlyNotice, respondToMentionAccess } from '../src/Bot'
 
 const repository = {
@@ -403,6 +405,10 @@ describe('the registered GitHub onMentioned handler', () => {
 							if (access === 'read') yield* registered.onMentioned(fixture.event, execution.context)
 						}).pipe(
 							Effect.provide(GitHubCallbacks.layer(githubHandlers)),
+							Effect.provide(Layer.mock(AutoLabel, {})),
+							Effect.provide(
+								Layer.mock(RuntimeContext, { Type: 'Worker', id: 'mention-access-test', env: {} }),
+							),
 							Effect.provide(api.layer),
 							Effect.provide(logger),
 						)

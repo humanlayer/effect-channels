@@ -1,12 +1,13 @@
 import * as Cloudflare from 'alchemy/Cloudflare'
 import { Crypto, Effect, Layer } from 'effect'
 
+import { AutoLabel } from './AutoLabel'
 import { bot } from './Bot'
 
 /** The mailbox's RPC methods and alarm. */
 type MailboxMethods = Effect.Success<ReturnType<typeof bot.mailbox>>
 
-/** The application-owned mailbox Durable Object: one per Slack thread. */
+/** The application-owned mailbox Durable Object: one per GitHub issue or pull request. */
 export class DeliveryMailbox extends Cloudflare.DurableObject<DeliveryMailbox, MailboxMethods>()('DeliveryMailbox') {}
 
 const { processing, deliveryControl, processingBackend, subscriptions, deliveryControlBackend, storage } =
@@ -25,14 +26,16 @@ const MailboxLive = Layer.merge(processing, deliveryControl).pipe(
 const MailboxImplementation = Effect.gen(function* () {
 	const state = yield* Cloudflare.DurableObjectState
 	const crypto = yield* Crypto.Crypto
-	return { state, crypto }
+	const autoLabel = yield* AutoLabel
+	return { state, crypto, autoLabel }
 }).pipe(
-	Effect.map(({ state, crypto }) => {
+	Effect.map(({ state, crypto, autoLabel }) => {
 		const MailboxInstanceLive = MailboxLive.pipe(
 			Layer.provide(
 				Layer.mergeAll(
 					Layer.succeed(Cloudflare.DurableObjectState, state),
 					Layer.succeed(Crypto.Crypto, crypto),
+					Layer.succeed(AutoLabel, autoLabel),
 				),
 			),
 		)
@@ -41,7 +44,7 @@ const MailboxImplementation = Effect.gen(function* () {
 )
 
 /**
- * The mailbox's implementation. Its layer requires what the bot's callbacks need, such as `Crypto`
- * and the `FakeRemoteAgent` namespace; the host Worker provides them.
+ * The mailbox's implementation. The host Worker provides crypto and the Workers AI labeler
+ * before this constructor captures the callbacks' services.
  */
 export const DeliveryMailboxDOLive = DeliveryMailbox.make(MailboxImplementation)

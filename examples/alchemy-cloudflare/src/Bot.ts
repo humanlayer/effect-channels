@@ -13,14 +13,28 @@ import {
 	GitHubReaction,
 	GitHubReactionTarget,
 	hasGitHubAccess,
+	type GitHubApiError,
+	type GitHubCallbackHandlers,
 	type GitHubIssueCreated,
 	type GitHubMentioned,
 	type GitHubPrCreated,
+	type GitHubRepositoryRef,
 } from '@humanlayer/channels-github'
+import type { RuntimeContext } from 'alchemy/RuntimeContext'
 import { Config, Effect, Match, Predicate } from 'effect'
+
+import { AutoLabel, type AutoLabelError } from './AutoLabel'
 
 export const maintainerOnlyNotice =
 	'This agent can only be invoked by maintainers (users with write access or higher to this repository).'
+
+const gitHubMentionDiscussion = (event: GitHubMentioned) =>
+	Match.value(event).pipe(
+		Match.tagsExhaustive({
+			GitHubIssueMentioned: ({ issue }) => issue,
+			GitHubPrMentioned: ({ pullRequest }) => pullRequest,
+		}),
+	)
 
 /**
  * check if a user has mention access. if so, send eyes when we start working.
@@ -29,12 +43,7 @@ export const maintainerOnlyNotice =
 export const respondToMentionAccess = Effect.fn('bot.github.respondToMentionAccess')(function* (
 	event: GitHubMentioned,
 ) {
-	const discussion = Match.value(event).pipe(
-		Match.tagsExhaustive({
-			GitHubIssueMentioned: ({ issue }) => issue,
-			GitHubPrMentioned: ({ pullRequest }) => pullRequest,
-		}),
-	)
+	const discussion = gitHubMentionDiscussion(event)
 	const access = yield* discussion.fetchUserAccess(event.trigger.actor.login).pipe(
 		Effect.catchIf(
 			(error) => error.reason === 'not_found',
@@ -93,44 +102,60 @@ const gitHubMentionText = (event: GitHubMentioned) =>
 		}),
 	)
 
+const githubRepositoryLogAnnotations = (ref: GitHubRepositoryRef) => ({
+	'github.owner': ref.owner,
+	'github.repository': ref.repository,
+	'github.repository_id': ref.repositoryId,
+	'github.installation_id': ref.installationId,
+})
+
 /**
- * GitHub App callbacks. `GitHubApiLive`, the default, reads the App ID and private key. Each callback first
- * checks that the mention author has write access or higher, reacting and explaining denied access.
+ * GitHub App callbacks. Creation labels public submissions; mentions require write access or higher.
+ * `GitHubApiLive`, the default, reads the App ID and private key.
  */
-export const githubHandlers = {
+export const githubHandlers: GitHubCallbackHandlers<
+	GitHubApiError | AutoLabelError | Config.ConfigError,
+	GitHubApi | AutoLabel | RuntimeContext
+> = {
 	/** Here is where you would e.g. do code review / automatic triage */
 	onIssueCreated: (event: GitHubIssueCreated, context: DeliveryContext) =>
 		Effect.gen(function* () {
-			yield* Effect.logInfo(`New issue created! Preparing auto-label`)
-			const issueText = event.trigger.body
-			if (Predicate.isNull(issueText)) {
-				yield* Effect.logWarning('GithubIssueOpened event has a null body; skipping')
-				return
-			}
-
-			/** TODO label the PR */
+			const labeler = yield* AutoLabel
+			yield* labeler.apply({
+				discussion: event.issue,
+				kind: 'issue',
+				title: event.trigger.title,
+				body: event.trigger.body,
+			})
 		}).pipe(
 			Effect.annotateLogs({
+				...githubRepositoryLogAnnotations(event.issue.ref),
 				'github.issue_number': event.issue.ref.number,
+				'github.event_id': event.trigger.eventId,
+				'delivery.id': context.deliveryId,
 			}),
 		),
 	onPrCreated: (event: GitHubPrCreated, context: DeliveryContext) =>
 		Effect.gen(function* () {
-			yield* Effect.logInfo(`New PR created! Preparing auto-label`)
-			const prText = event.trigger.body
-			if (Predicate.isNull(prText)) {
-				yield* Effect.logWarning('GithubPrOpened event has a null body; skipping')
-				return
-			}
-			/** TODO auto-label the PR */
+			const labeler = yield* AutoLabel
+			yield* labeler.apply({
+				discussion: event.pullRequest,
+				kind: 'pull_request',
+				title: event.trigger.title,
+				body: event.trigger.body,
+			})
 		}).pipe(
 			Effect.annotateLogs({
+				...githubRepositoryLogAnnotations(event.pullRequest.ref),
 				'github.pr_number': event.pullRequest.ref.number,
+				'github.event_id': event.trigger.eventId,
+				'delivery.id': context.deliveryId,
 			}),
 		),
 
-	onMentioned: (event: GitHubMentioned, context: DeliveryContext) =>
-		Effect.gen(function* () {
+	onMentioned: (event: GitHubMentioned, context: DeliveryContext) => {
+		const discussion = gitHubMentionDiscussion(event)
+		return Effect.gen(function* () {
 			if (!(yield* respondToMentionAccess(event))) return
 
 			const mentionText = gitHubMentionText(event)
@@ -159,7 +184,16 @@ export const githubHandlers = {
 						),
 				}),
 			)
-		}),
+		}).pipe(
+			Effect.annotateLogs({
+				...githubRepositoryLogAnnotations(discussion.ref),
+				'github.discussion_number': discussion.ref.number,
+				'github.event_id': event.trigger.eventId,
+				'github.actor': event.trigger.actor.login,
+				'delivery.id': context.deliveryId,
+			}),
+		)
+	},
 }
 
 const github = GitHubBot.make({

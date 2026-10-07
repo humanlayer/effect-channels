@@ -29,6 +29,7 @@ import {
 	listPullRequestLabels,
 	listPullRequestReviewComments,
 	listPullRequestReviews,
+	listRepositoryLabels,
 	mergePullRequest,
 	postIssueComment,
 	postPullRequestComment,
@@ -68,6 +69,8 @@ const GitHubApiOperationsLive = Layer.effect(
 			listPullRequestCommits: (input) =>
 				listPullRequestCommits(input).pipe(Effect.provideService(GitHubApiClient, client)),
 			listIssueLabels: (input) => listIssueLabels(input).pipe(Effect.provideService(GitHubApiClient, client)),
+			listRepositoryLabels: (input) =>
+				listRepositoryLabels(input).pipe(Effect.provideService(GitHubApiClient, client)),
 			listPullRequestLabels: (input) =>
 				listPullRequestLabels(input).pipe(Effect.provideService(GitHubApiClient, client)),
 			addIssueLabels: (input) => addIssueLabels(input).pipe(Effect.provideService(GitHubApiClient, client)),
