@@ -63,10 +63,13 @@ import {
 	DeliveryAccessToken,
 	isRoutableMailboxKey,
 	makeBatchId,
+	makeBatchIdWith,
 	makeConversationId,
 	makeDeliveryAccessToken,
+	makeDeliveryAccessTokenWith,
 	makeDeliveryId,
 	makeDeliveryIdempotencyKey,
+	makeDeliveryIdempotencyKeyWith,
 } from './DeliveryReference'
 import {
 	decideMailboxClaim,
@@ -87,6 +90,7 @@ import {
 	ProviderOutputAttempt,
 	ProviderOutputDispatcher,
 	ProviderPresentOutcome,
+	type ProviderOutputDispatcherOperations,
 	type ProviderOutputOperation,
 } from './ProviderOutput'
 
@@ -489,12 +493,13 @@ export type MailboxProcessingSummary = typeof MailboxProcessingSummary.Type
  *
  */
 
-export class MailboxProcessing extends Context.Service<
-	MailboxProcessing,
-	{
-		readonly processReady: Effect.Effect<MailboxProcessingSummary, MailboxProcessingBackendError>
-	}
->()('@humanlayer/channels-delivery/MailboxProcessing') {}
+export type MailboxProcessingOperations<R = never> = {
+	readonly processReady: Effect.Effect<MailboxProcessingSummary, MailboxProcessingBackendError, R>
+}
+
+export class MailboxProcessing extends Context.Service<MailboxProcessing, MailboxProcessingOperations>()(
+	'@humanlayer/channels-delivery/MailboxProcessing',
+) {}
 
 /** Convert a provider processing success to a mailbox processing success result */
 const providerSuccessToAttemptResult = (result: ProviderEventResult) =>
@@ -536,15 +541,16 @@ const providerFailureToAttemptResult = (error: ProviderEventProcessingError) =>
 /**
  * Given events from the mailbox hand them off for provider processing
  */
-export class ProviderEventDispatcher extends Context.Service<
-	ProviderEventDispatcher,
-	{
-		readonly process: (
-			admissions: DeliveryAdmissionBatch,
-			execution: ProviderDeliveryExecution,
-		) => Effect.Effect<ProviderEventResult, ProviderEventProcessingError>
-	}
->()('@humanlayer/channels-delivery/ProviderEventDispatcher') {}
+export type ProviderEventDispatcherOperations<R = never> = {
+	readonly process: (
+		admissions: DeliveryAdmissionBatch,
+		execution: ProviderDeliveryExecution,
+	) => Effect.Effect<ProviderEventResult, ProviderEventProcessingError, R>
+}
+
+export class ProviderEventDispatcher extends Context.Service<ProviderEventDispatcher, ProviderEventDispatcherOperations>()(
+	'@humanlayer/channels-delivery/ProviderEventDispatcher',
+) {}
 
 /**
  * A list of event processors where each entry keeps its own requirements, so processors that need
@@ -553,6 +559,12 @@ export class ProviderEventDispatcher extends Context.Service<
 export type ProviderEventProcessors<Requirements extends ReadonlyArray<unknown>> = {
 	readonly [Index in keyof Requirements]: ProviderEventProcessor<Requirements[Index]>
 }
+
+export const makeProviderEventDispatcher = <const Requirements extends ReadonlyArray<unknown>>(
+	processors: ProviderEventProcessors<Requirements>,
+): ProviderEventDispatcherOperations<Requirements[number]> => ({
+	process: processProviderEvent<Requirements[number]>(processors),
+})
 
 /**
  * Constructor for ProviderEventDispatcher live layer which accepts a set of processors
@@ -596,12 +608,14 @@ export type ProcessClaimInput = {
  * Renews three times per lease, so one or two renewals may fail before the lease lapses.
  * Never succeeds: it runs until it is interrupted, or fails once the claim belongs to someone else.
  */
-const keepClaimLeaseAlive = (input: { readonly claim: ClaimedMailboxBatch; readonly leaseMs: number }) =>
+const keepClaimLeaseAlive = (
+	backend: typeof MailboxProcessingBackend.Service,
+	input: { readonly claim: ClaimedMailboxBatch; readonly leaseMs: number },
+) =>
 	Effect.gen(function* () {
-		const mailboxProcessingBackend = yield* MailboxProcessingBackend
 		return yield* Effect.sleep(Duration.millis(Math.max(1, Math.floor(input.leaseMs / 3)))).pipe(
 			Effect.andThen(
-				mailboxProcessingBackend.renewClaim({
+				backend.renewClaim({
 					mailboxKey: input.claim.mailboxKey,
 					claimId: input.claim.claimId,
 					leaseMs: input.leaseMs,
@@ -618,25 +632,25 @@ const keepClaimLeaseAlive = (input: { readonly claim: ClaimedMailboxBatch; reado
  * The execution a provider receives for one attempt: the delivery's identity, what an earlier attempt
  * saved, and the claim-guarded prepare and handoff operations.
  */
-const makeProviderDeliveryExecution = (input: {
+const makeProviderDeliveryExecution = (backend: typeof MailboxProcessingBackend.Service, crypto: typeof Crypto.Crypto.Service, input: {
 	readonly claim: ClaimedMailboxBatch
 	readonly handedOff: Ref.Ref<boolean>
 }) =>
 	Effect.gen(function* () {
 		const { claim } = input
-		const backend = yield* MailboxProcessingBackend
-		const crypto = yield* Crypto.Crypto
 		const deliveryId = makeDeliveryId({
 			mailboxKey: claim.mailboxKey,
 			batchId: claim.batchId,
 			callbackIndex: claim.callbackIndex,
 		})
-		const idempotencyKey = yield* makeDeliveryIdempotencyKey(deliveryId)
+		const idempotencyKey = yield* makeDeliveryIdempotencyKeyWith(crypto, deliveryId)
 		const owner = { mailboxKey: claim.mailboxKey, claimId: claim.claimId }
 
 		const prepare = (prepared: PreparedDeliveryInvocation) =>
 			Effect.gen(function* () {
-				const remaining = yield* Effect.forEach(prepared.callbacks.slice(1), () => makeDeliveryAccessToken)
+				const remaining = yield* Effect.forEach(prepared.callbacks.slice(1), () =>
+					makeDeliveryAccessTokenWith(crypto),
+				)
 				return yield* backend.prepareDelivery({
 					...owner,
 					prepared,
@@ -655,7 +669,6 @@ const makeProviderDeliveryExecution = (input: {
 						Effect.fail(new DeliveryPreparationUnavailable({ reason })),
 					MailboxProcessingClaimLost: () => Effect.fail(new DeliveryPreparationConflict({ deliveryId })),
 				}),
-				Effect.provideService(Crypto.Crypto, crypto),
 				Effect.withSpan('delivery.prepare'),
 			)
 
@@ -702,10 +715,13 @@ const makeProviderDeliveryExecution = (input: {
 		})
 	})
 
-export const processClaim = Effect.fn('delivery.process_mailbox_claim')(function* (input: ProcessClaimInput) {
+const processClaimWith = <R>(
+	backend: typeof MailboxProcessingBackend.Service,
+	crypto: typeof Crypto.Crypto.Service,
+	dispatcher: ProviderEventDispatcherOperations<R>,
+	input: ProcessClaimInput,
+) => Effect.gen(function* () {
 	const { claim, maxAttempts, leaseMs } = input
-	const mailboxProcessingBackend = yield* MailboxProcessingBackend
-	const providerEventDispatcher = yield* ProviderEventDispatcher
 	const startedAt = yield* Clock.currentTimeMillis
 	const claimAnnotations = {
 		mailbox_key: claim.mailboxKey,
@@ -721,15 +737,15 @@ export const processClaim = Effect.fn('delivery.process_mailbox_claim')(function
 	const handedOff = yield* Ref.make(false)
 
 	const runCallbackUnderLease = Effect.gen(function* () {
-		const execution = yield* makeProviderDeliveryExecution({ claim, handedOff })
+		const execution = yield* makeProviderDeliveryExecution(backend, crypto, { claim, handedOff })
 		return yield* Effect.raceFirst(
-			providerEventDispatcher.process(claim.admissions, execution).pipe(
+			dispatcher.process(claim.admissions, execution).pipe(
 				Effect.match({
 					onSuccess: providerSuccessToAttemptResult,
 					onFailure: providerFailureToAttemptResult,
 				}),
 			),
-			keepClaimLeaseAlive({ claim, leaseMs }),
+			keepClaimLeaseAlive(backend, { claim, leaseMs }),
 		)
 	}).pipe(
 		Effect.catchTag('PlatformError', (error) =>
@@ -759,7 +775,7 @@ export const processClaim = Effect.fn('delivery.process_mailbox_claim')(function
 		Match.orElse((result) => result),
 	)
 	const processingFinishedAt = yield* Clock.currentTimeMillis
-	yield* mailboxProcessingBackend.recordProcessingAttemptResult({
+	yield* backend.recordProcessingAttemptResult({
 		claim,
 		result: processingResult,
 		finishedAt: Timestamp.make(processingFinishedAt),
@@ -799,7 +815,15 @@ export const processClaim = Effect.fn('delivery.process_mailbox_claim')(function
 		}),
 		Effect.annotateLogs(recordedAnnotations),
 	)
-})
+}).pipe(Effect.withSpan('delivery.process_mailbox_claim'))
+
+export const processClaim = (input: ProcessClaimInput) =>
+	Effect.gen(function* () {
+		const backend = yield* MailboxProcessingBackend
+		const dispatcher = yield* ProviderEventDispatcher
+		const crypto = yield* Crypto.Crypto
+		return yield* processClaimWith<never>(backend, crypto, dispatcher, input)
+	})
 
 /** How many times one output operation is tried before it fails for good. */
 export const DEFAULT_OUTPUT_MAX_ATTEMPTS = 8
@@ -883,12 +907,14 @@ export type ProcessOutputClaimInput = {
 }
 
 /** Tell the store "still sending" for as long as the provider call runs. See `keepClaimLeaseAlive`. */
-const keepOutputLeaseAlive = (input: { readonly claim: ClaimedDeliveryOutput; readonly leaseMs: number }) =>
+const keepOutputLeaseAlive = (
+	backend: typeof MailboxProcessingBackend.Service,
+	input: { readonly claim: ClaimedDeliveryOutput; readonly leaseMs: number },
+) =>
 	Effect.gen(function* () {
-		const mailboxProcessingBackend = yield* MailboxProcessingBackend
 		return yield* Effect.sleep(Duration.millis(Math.max(1, Math.floor(input.leaseMs / 3)))).pipe(
 			Effect.andThen(
-				mailboxProcessingBackend.renewDeliveryOutput({
+				backend.renewDeliveryOutput({
 					mailboxKey: input.claim.mailboxKey,
 					operationId: input.claim.operationId,
 					claimId: input.claim.claimId,
@@ -909,12 +935,12 @@ const keepOutputLeaseAlive = (input: { readonly claim: ClaimedDeliveryOutput; re
  * after a doubling wait, until `maxAttempts`; anything else fails the operation for good. Either way
  * the delivery's result stands: a failed output never changes `completed` to `failed`.
  */
-export const processOutputClaim = Effect.fn('delivery.process_output_claim')(function* (
+const processOutputClaimWith = <R>(
+	backend: typeof MailboxProcessingBackend.Service,
+	dispatcher: ProviderOutputDispatcherOperations<R>,
 	input: ProcessOutputClaimInput,
-) {
+) => Effect.gen(function* () {
 	const { claim, maxAttempts, leaseMs } = input
-	const mailboxProcessingBackend = yield* MailboxProcessingBackend
-	const providerOutputDispatcher = yield* ProviderOutputDispatcher
 	const startedAt = yield* Clock.currentTimeMillis
 	const deliveryId = makeDeliveryId({
 		mailboxKey: claim.mailboxKey,
@@ -935,7 +961,7 @@ export const processOutputClaim = Effect.fn('delivery.process_output_claim')(fun
 
 	const sendUnderLease = (prepared: PreparedDeliveryCallback, operation: ProviderOutputOperation) =>
 		Effect.raceFirst(
-			providerOutputDispatcher
+			dispatcher
 				.process({
 					namespace: claim.namespace,
 					provider: claim.provider,
@@ -967,7 +993,7 @@ export const processOutputClaim = Effect.fn('delivery.process_output_claim')(fun
 							}),
 					}),
 				),
-			keepOutputLeaseAlive({ claim, leaseMs }),
+			keepOutputLeaseAlive(backend, { claim, leaseMs }),
 		).pipe(
 			Effect.tapError((error) =>
 				Effect.logWarning(
@@ -999,7 +1025,7 @@ export const processOutputClaim = Effect.fn('delivery.process_output_claim')(fun
 						Effect.catchTag('OutputNotSendable', ({ safeCode }) => Effect.succeed(failed(safeCode))),
 					)
 	const settledAt = Timestamp.make(yield* Clock.currentTimeMillis)
-	yield* mailboxProcessingBackend.settleDeliveryOutput({
+	yield* backend.settleDeliveryOutput({
 		mailboxKey: claim.mailboxKey,
 		operationId: claim.operationId,
 		claimId: claim.claimId,
@@ -1015,8 +1041,15 @@ export const processOutputClaim = Effect.fn('delivery.process_output_claim')(fun
 			),
 		Failed: ({ safeCode }) =>
 			Effect.logWarning('Delivery output permanently failed').pipe(Effect.annotateLogs({ safe_code: safeCode })),
-	}).pipe(Effect.annotateLogs(settledAnnotations))
-})
+}).pipe(Effect.annotateLogs(settledAnnotations))
+}).pipe(Effect.withSpan('delivery.process_output_claim'))
+
+export const processOutputClaim = (input: ProcessOutputClaimInput) =>
+	Effect.gen(function* () {
+		const backend = yield* MailboxProcessingBackend
+		const dispatcher = yield* ProviderOutputDispatcher
+		return yield* processOutputClaimWith<never>(backend, dispatcher, input)
+	})
 
 export type MailboxProcessingOptions = {
 	/** How many mailboxes one pass works on at the same time. */
@@ -1058,18 +1091,17 @@ const claimedOrSkipped = (claimed: Option.Option<ClaimedMailboxBatch>) =>
  * Look at one ready mailbox and either take a batch from it or put it off until later.
  * A frozen batch is always taken as it is. For waiting events the delivery mode decides.
  */
-export const claimOrDeferReadyMailbox = Effect.fn('delivery.claim_or_defer_ready_mailbox')(function* (input: {
+const claimOrDeferReadyMailboxWith = (mailboxProcessingBackend: typeof MailboxProcessingBackend.Service, crypto: typeof Crypto.Crypto.Service, input: {
 	readonly mailbox: ReadyMailbox
 	readonly leaseMs: number
 	readonly deliveryModeFor: (provider: string) => DeliveryMode
-}) {
-	const mailboxProcessingBackend = yield* MailboxProcessingBackend
+}) => Effect.gen(function* () {
 	const { leaseMs } = input
 	return yield* Match.value(input.mailbox).pipe(
 		Match.tagsExhaustive({
 			OutputReadyMailbox: ({ mailboxKey }) =>
 				Effect.gen(function* () {
-					const idempotencyKey = yield* (yield* Crypto.Crypto).randomUUIDv4
+					const idempotencyKey = yield* crypto.randomUUIDv4
 					const claimed = yield* mailboxProcessingBackend.claimDeliveryOutput(
 						ClaimDeliveryOutput.make({ mailboxKey, leaseMs, idempotencyKey }),
 					)
@@ -1097,8 +1129,8 @@ export const claimOrDeferReadyMailbox = Effect.fn('delivery.claim_or_defer_ready
 					return yield* MailboxClaimDecision.$match(decision, {
 						ClaimUpTo: ({ upToSequence }) =>
 							Effect.gen(function* () {
-								const batchId = yield* makeBatchId
-								const accessToken = yield* makeDeliveryAccessToken
+								const batchId = yield* makeBatchIdWith(crypto)
+								const accessToken = yield* makeDeliveryAccessTokenWith(crypto)
 								const claimed = yield* mailboxProcessingBackend.claimMailbox(
 									ClaimWaitingEvents.make({
 										mailboxKey,
@@ -1128,33 +1160,40 @@ export const claimOrDeferReadyMailbox = Effect.fn('delivery.claim_or_defer_ready
 				}),
 		}),
 	)
+}).pipe(Effect.withSpan('delivery.claim_or_defer_ready_mailbox'))
+
+export const claimOrDeferReadyMailbox = (input: {
+	readonly mailbox: ReadyMailbox
+	readonly leaseMs: number
+	readonly deliveryModeFor: (provider: string) => DeliveryMode
+}) => Effect.gen(function* () {
+	const backend = yield* MailboxProcessingBackend
+	const crypto = yield* Crypto.Crypto
+	return yield* claimOrDeferReadyMailboxWith(backend, crypto, input)
 })
 
-/** Construct the storage-agnostic mailbox processing service. */
-export const makeMailboxProcessing = (options: MailboxProcessingOptions) =>
+export const makeMailboxProcessingWith = <EventR, OutputR>(
+	options: MailboxProcessingOptions,
+	eventDispatcher: ProviderEventDispatcherOperations<EventR>,
+	outputDispatcher: ProviderOutputDispatcherOperations<OutputR>,
+) =>
 	Effect.gen(function* () {
 		const processingBackend = yield* MailboxProcessingBackend
-		const providerEventDispatcher = yield* ProviderEventDispatcher
-		const providerOutputDispatcher = yield* ProviderOutputDispatcher
-		/** Makes each new batch's ID and remote-worker token, and each output operation's idempotency key. */
 		const crypto = yield* Crypto.Crypto
 
 		const runClaim = (claim: ClaimedMailboxBatch) =>
-			processClaim({ claim, maxAttempts: options.maxAttempts ?? 5, leaseMs: options.leaseMs }).pipe(
-				Effect.provideService(MailboxProcessingBackend, processingBackend),
-				Effect.provideService(ProviderEventDispatcher, providerEventDispatcher),
-				Effect.provideService(Crypto.Crypto, crypto),
-			)
+			processClaimWith(processingBackend, crypto, eventDispatcher, {
+				claim,
+				maxAttempts: options.maxAttempts ?? 5,
+				leaseMs: options.leaseMs,
+			})
 
 		const runOutput = (claim: ClaimedDeliveryOutput) =>
-			processOutputClaim({
+			processOutputClaimWith(processingBackend, outputDispatcher, {
 				claim,
 				maxAttempts: options.outputMaxAttempts ?? DEFAULT_OUTPUT_MAX_ATTEMPTS,
 				leaseMs: options.leaseMs,
-			}).pipe(
-				Effect.provideService(MailboxProcessingBackend, processingBackend),
-				Effect.provideService(ProviderOutputDispatcher, providerOutputDispatcher),
-			)
+			})
 
 		/** Run one claimed piece of work. A failure is logged here so one mailbox cannot stop the pass. */
 		const runLogged = <E, R>(
@@ -1176,13 +1215,11 @@ export const makeMailboxProcessing = (options: MailboxProcessingOptions) =>
 		 */
 		const processReadyMailbox = (mailbox: ReadyMailbox) =>
 			Effect.gen(function* () {
-				const outcome = yield* claimOrDeferReadyMailbox({
+				const outcome = yield* claimOrDeferReadyMailboxWith(processingBackend, crypto, {
 					mailbox,
 					leaseMs: options.leaseMs,
 					deliveryModeFor: options.deliveryModeFor,
 				}).pipe(
-					Effect.provideService(MailboxProcessingBackend, processingBackend),
-					Effect.provideService(Crypto.Crypto, crypto),
 					Effect.catchTag('MailboxProcessingUnavailable', (error) =>
 						Effect.logError('Mailbox could not be claimed or deferred', error).pipe(
 							Effect.annotateLogs({ mailbox_key: mailbox.mailboxKey }),
@@ -1201,7 +1238,7 @@ export const makeMailboxProcessing = (options: MailboxProcessingOptions) =>
 				return outcome
 			})
 
-		return MailboxProcessing.of({
+		return {
 			processReady: Effect.gen(function* () {
 				const ready = yield* processingBackend.findReadyMailboxes
 				const outcomes = yield* Effect.forEach(ready, processReadyMailbox, {
@@ -1217,7 +1254,17 @@ export const makeMailboxProcessing = (options: MailboxProcessingOptions) =>
 				}
 				return summary
 			}).pipe(Effect.withSpan('delivery.process_ready')),
-		})
+		} satisfies MailboxProcessingOperations<EventR | OutputR>
+	})
+
+/** Construct the storage-agnostic mailbox processing service. */
+export const makeMailboxProcessing = (options: MailboxProcessingOptions) =>
+	Effect.gen(function* () {
+		const eventDispatcher = yield* ProviderEventDispatcher
+		const outputDispatcher = yield* ProviderOutputDispatcher
+		return MailboxProcessing.of(
+			yield* makeMailboxProcessingWith<never, never>(options, eventDispatcher, outputDispatcher),
+		)
 	})
 
 /**

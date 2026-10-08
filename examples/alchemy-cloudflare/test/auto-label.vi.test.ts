@@ -24,7 +24,7 @@ import { TestClock } from 'effect/testing'
 
 import { makeTestDeliveryExecution } from '../../../packages/delivery/test/delivery-execution'
 import { AutoLabel } from '../src/AutoLabel'
-import { githubHandlers } from '../src/Bot'
+import { githubHandlers } from '../src/GithubBot'
 
 const repository = {
 	installationId: GitHubId.make(100),

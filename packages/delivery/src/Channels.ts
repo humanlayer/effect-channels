@@ -16,10 +16,15 @@ import { DELIVERY_ID_MAX_LENGTH } from './DeliveryReference'
 import { MailboxDelivery } from './MailboxDelivery'
 import { QueueDeliveryMode } from './MailboxPolicy'
 import type { DeliveryMode } from './MailboxPolicy'
-import { MailboxProcessingLive, ProviderEventDispatcherLive } from './MailboxProcessing'
-import { ProviderOutputDispatcherLive } from './ProviderOutput'
+import {
+	MailboxProcessingLive,
+	makeMailboxProcessingWith,
+	makeProviderEventDispatcher,
+	ProviderEventDispatcherLive,
+} from './MailboxProcessing'
 import type { MailboxProcessingOptions } from './MailboxProcessing'
 import type { MailboxSubscriptions } from './MailboxSubscriptions'
+import { makeProviderOutputDispatcher, ProviderOutputDispatcherLive } from './ProviderOutput'
 import { webhookRoutes } from './ProviderWebhooks'
 import type { WebhookRoutesOptions } from './ProviderWebhooks'
 
@@ -94,7 +99,9 @@ export const processingLayer = <const Requirements extends ReadonlyArray<Channel
 					const outputProcessors = yield* Effect.forEach(providers, (provider) =>
 						Predicate.isUndefined(provider.outputProcessor)
 							? Effect.succeed([])
-							: Effect.map(provider.outputProcessor({ namespace: options.namespace }), (processor) => [processor]),
+							: Effect.map(provider.outputProcessor({ namespace: options.namespace }), (processor) => [
+									processor,
+								]),
 					)
 					return Layer.merge(
 						ProviderEventDispatcherLive(eventProcessors),
@@ -104,6 +111,34 @@ export const processingLayer = <const Requirements extends ReadonlyArray<Channel
 			),
 		),
 	)
+}
+
+/** Construct one mailbox processor while preserving provider runtime requirements. */
+export const makeProcessing = <const Requirements extends ReadonlyArray<ChannelsProviderRequirements>>(
+	options: Options<Requirements>,
+) => {
+	const providers: ReadonlyArray<ChannelsProvider<Requirements[number]>> = options.providers
+	return Effect.gen(function* () {
+		const eventProcessors = yield* Effect.forEach(providers, (provider) => {
+			const build = provider.runtimeEventProcessor ?? provider.eventProcessor
+			return build({ namespace: options.namespace })
+		})
+		const outputProcessors = yield* Effect.forEach(providers, (provider) => {
+			const build = provider.runtimeOutputProcessor ?? provider.outputProcessor
+			return Predicate.isUndefined(build)
+				? Effect.succeed([])
+				: Effect.map(build({ namespace: options.namespace }), (processor) => [processor])
+		})
+		return yield* makeMailboxProcessingWith(
+			{
+				...options.eventProcessing,
+				polling: 'disabled',
+				deliveryModeFor: deliveryModeForProviders(providers),
+			},
+			makeProviderEventDispatcher(eventProcessors),
+			makeProviderOutputDispatcher(outputProcessors.flat()),
+		)
+	})
 }
 
 export type MakeOptions<

@@ -158,10 +158,8 @@ const run = (
 			addReaction: ({ target, reaction }) => record(`react + ${reaction} on ${reactionTarget(target)}`),
 			removeReaction: ({ target, reaction }) => record(`react - ${reaction} on ${reactionTarget(target)}`),
 		})
-		const processor = yield* makeGitHubOutputProcessor({ namespace: 'github-output-test' }).pipe(
-			Effect.provide(api),
-		)
-		const result = yield* processor.process(attempt(operation, invocation)).pipe(Effect.result)
+		const processor = yield* makeGitHubOutputProcessor({ namespace: 'github-output-test' })
+		const result = yield* processor.process(attempt(operation, invocation)).pipe(Effect.provide(api), Effect.result)
 		return { result, calls: yield* Ref.get(calls) }
 	})
 
@@ -236,9 +234,7 @@ describe('GitHub delivery output', () => {
 			const deleted = Schema.encodeSync(GitHubOutputReceiptJson)(
 				GitHubOutputReceipt.make({ comment: mentionComment }),
 			)
-			const processor = yield* makeGitHubOutputProcessor({ namespace: 'github-output-test' }).pipe(
-				Effect.provide(api),
-			)
+			const processor = yield* makeGitHubOutputProcessor({ namespace: 'github-output-test' })
 			const applied = yield* processor.process(
 				attempt(
 					ProviderRenderPlan.make({
@@ -252,7 +248,7 @@ describe('GitHub delivery output', () => {
 					}),
 					prepared({}),
 				),
-			)
+			).pipe(Effect.provide(api))
 			expect(yield* Ref.get(calls)).toEqual(['edit 500', 'post'])
 			const receipt = yield* Schema.decodeUnknownEffect(GitHubOutputReceiptJson)(applied.receipt)
 			expect(receipt.comment.id).toEqual(GitHubId.make(901))

@@ -12,7 +12,7 @@ import type { Config, Redacted } from 'effect'
 
 import { GitHubApi } from './GitHubApi'
 import { GitHubApiLive } from './GitHubApiLive'
-import { GitHubCallbacks, type GitHubCallbackHandlers } from './GitHubCallbacks'
+import { GitHubCallbacks, type GitHubCallbackHandlers, makeGitHubCallbacks } from './GitHubCallbacks'
 import { makeGitHubOutputProcessor } from './GitHubDeliveryOutput'
 import { GitHubBotConfiguration, makeGitHubEventProcessor } from './GitHubEventProcessor'
 import { makeGitHubWebhookProvider } from './GitHubWebhookProvider'
@@ -39,6 +39,7 @@ export const make = <E, R, ApiError = never, ApiRequirements = never>(
 ): ChannelsProvider<{
 	readonly build: ApiRequirements
 	readonly process: Exclude<R, GitHubApi>
+	readonly runtime: R | GitHubApi
 	readonly error: Config.ConfigError | ApiError
 }> => {
 	const callbacks = GitHubCallbacks.layer(options.handlers)
@@ -79,7 +80,16 @@ export const make = <E, R, ApiError = never, ApiRequirements = never>(
 		/** Sends a handed-off delivery's output: comments, and the `eyes` reaction while it works. */
 		outputProcessor: Effect.fn('github.bot.build_output_processor')(function* ({ namespace }) {
 			const gitHubApi = yield* buildGitHubApi
-			return yield* makeGitHubOutputProcessor({ namespace }).pipe(Effect.provide(gitHubApi))
+			const outputProcessor = yield* makeGitHubOutputProcessor({ namespace })
+			return {
+				...outputProcessor,
+				process: (attempt) => outputProcessor.process(attempt).pipe(Effect.provide(gitHubApi)),
+			}
 		}),
+		runtimeEventProcessor: Effect.fn('github.bot.build_runtime_event_processor')(function* ({ namespace }) {
+			const bot = yield* readBotConfiguration
+			return makeGitHubEventProcessor({ namespace, bot }, makeGitHubCallbacks(options.handlers))
+		}),
+		runtimeOutputProcessor: ({ namespace }) => makeGitHubOutputProcessor({ namespace }),
 	}
 }

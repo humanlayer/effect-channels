@@ -16,7 +16,7 @@ import { Effect } from 'effect'
 
 import { DeliveryControlAlchemyCloudflare, makeDeliveryRequestHandler } from './DeliveryControl'
 import { DeliveryControlBackendFromDurableObjectStorage } from './DeliveryControlBackend'
-import { makeMailboxAlarmHandler, type MailboxAlarmHandlerOptions } from './MailboxAlarm'
+import { makeMailboxAlarmHandler, makeMailboxAlarmHandlerWith, type MailboxAlarmHandlerOptions } from './MailboxAlarm'
 import { MailboxDeliveryAlchemyCloudflare, makeDeliverFromDurableObjectStorage } from './MailboxDelivery'
 import { MailboxProcessingBackendFromDurableObjectStorage } from './MailboxProcessingBackend'
 import { MailboxStorageFromDurableObjectState } from './MailboxStorage'
@@ -35,7 +35,14 @@ export const make = <const Requirements extends ReadonlyArray<ChannelsProviderRe
 	options: Channels.Options<Requirements>,
 ) => {
 	/** Build the Durable Object handlers from services supplied by the Durable Object entrypoint. */
-	const mailbox = makeMailbox
+	const mailbox = (alarmOptions: MailboxAlarmHandlerOptions) =>
+		Effect.gen(function* () {
+			const processing = yield* Channels.makeProcessing(options)
+			const deliver = yield* makeDeliverFromDurableObjectStorage
+			const deliveryRequest = yield* makeDeliveryRequestHandler
+			const alarm = yield* makeMailboxAlarmHandlerWith(alarmOptions, processing)
+			return { deliver, deliveryRequest, alarm }
+		})
 
 	/** Provider webhook routes. The Worker entrypoint supplies `MailboxDelivery`. */
 	const routes = Channels.routesLayer(options)
@@ -54,6 +61,7 @@ export const make = <const Requirements extends ReadonlyArray<ChannelsProviderRe
 				deliveryControl: DeliveryControlAlchemyCloudflare,
 			},
 			mailbox: {
+				/** Compatibility layer for single-runtime hosts; split Durable Objects use `mailbox()` directly. */
 				processing: Channels.processingLayer(options, 'disabled'),
 				deliveryControl: DeliveryControlLive,
 				processingBackend: MailboxProcessingBackendFromDurableObjectStorage,

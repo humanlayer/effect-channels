@@ -67,7 +67,12 @@ import {
 	GitHubSubscribedIssueEvents,
 	GitHubSubscribedPrEvents,
 } from './GitHubCallbackEvents'
-import { type GitHubCallbackError, GitHubCallbackName, GitHubCallbacks } from './GitHubCallbacks'
+import {
+	type GitHubCallbackError,
+	GitHubCallbackName,
+	type GitHubCallbackOperations,
+	GitHubCallbacks,
+} from './GitHubCallbacks'
 import {
 	GitHubActivationTarget,
 	GitHubActivationTargetJson,
@@ -576,7 +581,7 @@ const normalizeWebhook = (
 	)
 }
 
-const runCallback = (effect: Effect.Effect<DeliveryCallbackResult, { readonly retryable: boolean }>) =>
+const runCallback = <R>(effect: Effect.Effect<DeliveryCallbackResult, { readonly retryable: boolean }, R>) =>
 	effect.pipe(
 		Effect.mapError((error) =>
 			ProviderEventExecutionFailed.make({
@@ -798,8 +803,8 @@ const fromBuilt = (invocations: ReadonlyArray<GitHubInvocation>, reason: string)
  * Freeze creation first, then the normal mention/subscription route. Subscription changes made by
  * creation cannot change this batch's continuation. Unconfigured callbacks are skipped.
  */
-const selectInvocation = (input: {
-	readonly callbacks: typeof GitHubCallbacks.Service
+const selectInvocation = <R>(input: {
+	readonly callbacks: GitHubCallbackOperations<R>
 	readonly batch: GitHubBatchEvents
 	readonly subscribed: boolean
 }): CallbackSelection => {
@@ -854,7 +859,7 @@ const selectInvocation = (input: {
 	})
 }
 
-const isCallbackConfigured = (callbacks: typeof GitHubCallbacks.Service, callback: GitHubCallbackName) =>
+const isCallbackConfigured = <R>(callbacks: GitHubCallbackOperations<R>, callback: GitHubCallbackName) =>
 	Predicate.isNotUndefined(callbacks[callback])
 
 const invocationDestination = GitHubInvocation.$match({
@@ -940,11 +945,11 @@ const prepareInvocation = Effect.fn('github.prepare_delivery')(function* (
 	)
 })
 
-const invokeCallback = (
-	callbacks: typeof GitHubCallbacks.Service,
+const invokeCallback = <R>(
+	callbacks: GitHubCallbackOperations<R>,
 	invocation: GitHubInvocation,
 	delivery: DeliveryContext,
-): Option.Option<Effect.Effect<DeliveryCallbackResult, GitHubCallbackError>> =>
+): Option.Option<Effect.Effect<DeliveryCallbackResult, GitHubCallbackError, R>> =>
 	GitHubInvocation.$match(invocation, {
 		IssueCreated: ({ event }) =>
 			Option.map(Option.fromUndefinedOr(callbacks.onIssueCreated), (callback) => callback(event, delivery)),
@@ -960,8 +965,8 @@ const invokeCallback = (
 			Option.map(Option.fromUndefinedOr(callbacks.onSubscribedPrEvents), (callback) => callback(event, delivery)),
 	})
 
-const runInvocation = (
-	callbacks: typeof GitHubCallbacks.Service,
+const runInvocation = <R>(
+	callbacks: GitHubCallbackOperations<R>,
 	invocation: GitHubInvocation,
 	delivery: DeliveryContext,
 ) =>
@@ -971,8 +976,8 @@ const runInvocation = (
 	})
 
 /** Run the callback an earlier attempt saved, without choosing again. */
-const runPreparedInvocation = Effect.fn('github.run_prepared_invocation')(function* (input: {
-	readonly callbacks: typeof GitHubCallbacks.Service
+const runPreparedInvocation = Effect.fn('github.run_prepared_invocation')(function* <R>(input: {
+	readonly callbacks: GitHubCallbackOperations<R>
 	readonly prepared: PreparedDeliveryInvocation
 	readonly callbackIndex: number
 	readonly batch: GitHubBatchEvents
@@ -1006,13 +1011,12 @@ const runPreparedInvocation = Effect.fn('github.run_prepared_invocation')(functi
 	return yield* runInvocation(input.callbacks, invocation.value, input.delivery)
 })
 
-const processGitHubBatch = (options: GitHubEventProcessorOptions) =>
+const processGitHubBatch = <R>(options: GitHubEventProcessorOptions, callbacks: GitHubCallbackOperations<R>) =>
 	Effect.fn('github.process_event_batch')(function* (
 		admissions: DeliveryAdmissionBatch,
 		execution: ProviderDeliveryExecution,
 	) {
 		yield* GitHubApi
-		const callbacks = yield* GitHubCallbacks
 		const { first, address, webhooks } = yield* decodeGitHubBatch(options, admissions)
 		const mailboxKey = deliveryMailboxKey(first)
 		const normalized = webhooks
@@ -1067,10 +1071,25 @@ const processGitHubBatch = (options: GitHubEventProcessorOptions) =>
 		})
 	})
 
-export const makeGitHubEventProcessor = (
+export function makeGitHubEventProcessor(
 	options: GitHubEventProcessorOptions,
-): ProviderEventProcessor<GitHubCallbacks | GitHubApi | MailboxSubscriptions> => ({
-	namespace: options.namespace,
-	providerName: 'github',
-	process: processGitHubBatch(options),
-})
+): ProviderEventProcessor<GitHubCallbacks | GitHubApi | MailboxSubscriptions>
+export function makeGitHubEventProcessor<R>(
+	options: GitHubEventProcessorOptions,
+	callbacks: GitHubCallbackOperations<R>,
+): ProviderEventProcessor<GitHubApi | MailboxSubscriptions | R>
+export function makeGitHubEventProcessor<R>(
+	options: GitHubEventProcessorOptions,
+	callbacks?: GitHubCallbackOperations<R>,
+) {
+	return {
+		namespace: options.namespace,
+		providerName: 'github',
+		process: Predicate.isUndefined(callbacks)
+			? (admissions: DeliveryAdmissionBatch, execution: ProviderDeliveryExecution) =>
+					Effect.flatMap(GitHubCallbacks, (service) =>
+						processGitHubBatch(options, service)(admissions, execution),
+					)
+			: processGitHubBatch(options, callbacks),
+	}
+}

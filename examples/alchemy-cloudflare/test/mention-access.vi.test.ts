@@ -31,7 +31,7 @@ import { ConfigProvider, Effect, Layer, Logger, Ref } from 'effect'
 
 import { makeTestDeliveryExecution } from '../../../packages/delivery/test/delivery-execution'
 import { AutoLabel } from '../src/AutoLabel'
-import { githubHandlers, maintainerOnlyNotice, respondToMentionAccess } from '../src/Bot'
+import { githubHandlers, maintainerOnlyNotice, respondToMentionAccess } from '../src/GithubBot'
 
 const repository = {
 	installationId: GitHubId.make(100),

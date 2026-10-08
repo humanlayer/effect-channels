@@ -194,6 +194,16 @@ export const githubHandlers: GitHubCallbackHandlers<
 			}),
 		)
 	},
+	onSubscribedPrEvents: (event, context) =>
+		Effect.gen(function* () {
+			/** TODO if the issue(s) are failing CI checks then we shoudl like address them */
+		}).pipe(
+			Effect.annotateLogs({
+				...githubRepositoryLogAnnotations(event.pullRequest.ref),
+				'github.pr_number': event.pullRequest.ref.number,
+				'delivery.id': context.deliveryId,
+			}),
+		),
 }
 
 const github = GitHubBot.make({

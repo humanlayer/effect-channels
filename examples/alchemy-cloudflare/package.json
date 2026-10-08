@@ -8,17 +8,23 @@
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},
 	"dependencies": {
+		"@cloudflare/computer": "catalog:",
 		"@effect/platform-bun": "catalog:",
 		"@effect/platform-node": "catalog:",
+		"@effect/sql-sqlite-do": "catalog:",
 		"@humanlayer/channels-alchemy-cloudflare": "workspace:*",
 		"@humanlayer/channels-delivery": "workspace:*",
 		"@humanlayer/channels-github": "workspace:*",
 		"@humanlayer/channels-linear": "workspace:*",
 		"@humanlayer/channels-slack": "workspace:*",
+		"@humanlayer/fold-agent": "catalog:",
+		"@humanlayer/fold-core": "catalog:",
+		"@platformatic/vfs": "catalog:",
 		"alchemy": "catalog:",
 		"effect": "catalog:"
 	},
 	"devDependencies": {
+		"@cloudflare/workers-types": "catalog:",
 		"@types/bun": "catalog:",
 		"typescript": "catalog:"
 	}

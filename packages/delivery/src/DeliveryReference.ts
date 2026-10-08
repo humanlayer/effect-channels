@@ -99,16 +99,14 @@ export const parseDeliveryId = (input: string): Option.Option<DeliveryReference>
 }
 
 /** A new batch ID. */
-export const makeBatchId = Effect.gen(function* () {
-	const crypto = yield* Crypto.Crypto
-	return BatchId.make(Base64Url.encode(yield* crypto.randomBytes(16)))
-})
+export const makeBatchIdWith = (crypto: typeof Crypto.Crypto.Service) =>
+	Effect.map(crypto.randomBytes(16), (bytes) => BatchId.make(Base64Url.encode(bytes)))
+export const makeBatchId = Effect.flatMap(Crypto.Crypto, makeBatchIdWith)
 
 /** A new access token: 32 random bytes. */
-export const makeDeliveryAccessToken = Effect.gen(function* () {
-	const crypto = yield* Crypto.Crypto
-	return DeliveryAccessToken.make(Base64Url.encode(yield* crypto.randomBytes(32)))
-})
+export const makeDeliveryAccessTokenWith = (crypto: typeof Crypto.Crypto.Service) =>
+	Effect.map(crypto.randomBytes(32), (bytes) => DeliveryAccessToken.make(Base64Url.encode(bytes)))
+export const makeDeliveryAccessToken = Effect.flatMap(Crypto.Crypto, makeDeliveryAccessTokenWith)
 
 /** Sixteen bytes as a UUID v4 string: sets the version and variant bits, then formats them. */
 const formatUuidV4 = (bytes: Uint8Array) => {
@@ -130,9 +128,13 @@ export const makeDeliveryIdempotencyKey = Effect.fn('delivery.make_idempotency_k
 	deliveryId: DeliveryId,
 ) {
 	const crypto = yield* Crypto.Crypto
-	const digest = yield* crypto.digest('SHA-256', new TextEncoder().encode(`delivery-idempotency:v1:${deliveryId}`))
-	return formatUuidV4(digest)
+	return yield* makeDeliveryIdempotencyKeyWith(crypto, deliveryId)
 })
+
+export const makeDeliveryIdempotencyKeyWith = (crypto: typeof Crypto.Crypto.Service, deliveryId: DeliveryId) =>
+	crypto
+		.digest('SHA-256', new TextEncoder().encode(`delivery-idempotency:v1:${deliveryId}`))
+		.pipe(Effect.map(formatUuidV4))
 
 /**
  * Compare a presented token with the saved one. Takes the same time for any presented token of the

@@ -32,7 +32,12 @@ export type ChannelsProviderRequirements = {
 	readonly build: unknown
 	readonly process: unknown
 	readonly error: unknown
+	readonly runtime?: unknown
 }
+
+type ProviderRuntimeRequirements<R extends ChannelsProviderRequirements> = R extends { readonly runtime: infer Runtime }
+	? Runtime
+	: R['process']
 
 /**
  * One provider as `Channels.make` sees it.
@@ -61,7 +66,18 @@ export type ChannelsProvider<
 		R['error'],
 		R['build'] | Scope.Scope
 	>
+	/** Requirement-preserving constructor for split runtimes such as Durable Objects. */
+	readonly runtimeEventProcessor?: (
+		input: ChannelsProviderBuildInput,
+	) => Effect.Effect<
+		ProviderEventProcessor<ProviderRuntimeRequirements<R> | MailboxSubscriptions>,
+		R['error'],
+		R['build'] | Scope.Scope
+	>
 	readonly outputProcessor?: (
 		input: ChannelsProviderBuildInput,
-	) => Effect.Effect<ProviderOutputProcessor, R['error'], R['build'] | Scope.Scope>
+	) => Effect.Effect<ProviderOutputProcessor<R['process']>, R['error'], R['build'] | Scope.Scope>
+	readonly runtimeOutputProcessor?: (
+		input: ChannelsProviderBuildInput,
+	) => Effect.Effect<ProviderOutputProcessor<ProviderRuntimeRequirements<R>>, R['error'], R['build'] | Scope.Scope>
 }

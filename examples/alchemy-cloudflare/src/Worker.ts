@@ -1,12 +1,13 @@
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto'
 import { DeliveryMailboxes } from '@humanlayer/channels-alchemy-cloudflare'
+import { GitHubApiLive } from '@humanlayer/channels-github'
 import * as Cloudflare from 'alchemy/Cloudflare'
 import { Effect, Layer } from 'effect'
 import { FetchHttpClient, HttpRouter } from 'effect/http'
 
 import { AutoLabel } from './AutoLabel'
-import { bot } from './Bot'
 import { DeliveryMailbox, DeliveryMailboxDOLive } from './DeliveryMailboxDO'
+import { bot } from './GithubBot'
 
 /** Give Channels access to this application's Durable Object mailbox namespace. */
 const ChannelsDeliveryMailboxesLive = Layer.effect(DeliveryMailboxes, DeliveryMailbox)
@@ -22,6 +23,7 @@ const RoutesLive = Layer.merge(bot.routes, bot.deliveryApi).pipe(
 const WorkerLive = ChannelsDeliveryMailboxesLive.pipe(
 	Layer.provideMerge(DeliveryMailboxDOLive),
 	Layer.provideMerge(AutoLabel.layer),
+	Layer.provideMerge(GitHubApiLive),
 	Layer.provideMerge(Cloudflare.Workers.AIBinding),
 	Layer.provideMerge(FetchHttpClient.layer),
 	Layer.provideMerge(NodeCrypto.layer),
