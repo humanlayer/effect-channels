@@ -9,6 +9,7 @@
 import {
 	Channels,
 	DeliveryControlLive,
+	MailboxSubscriptions,
 	deliveryApiRoutes,
 	type ChannelsProviderRequirements,
 } from '@humanlayer/channels-delivery'
@@ -34,13 +35,19 @@ export const makeMailbox = (alarmOptions: MailboxAlarmHandlerOptions) =>
 export const make = <const Requirements extends ReadonlyArray<ChannelsProviderRequirements>>(
 	options: Channels.Options<Requirements>,
 ) => {
-	/** Build the Durable Object handlers from services supplied by the Durable Object entrypoint. */
+	/**
+	 * Build the Durable Object handlers from services supplied by the Durable Object entrypoint. When the
+	 * alarm runs, Alchemy supplies only the Worker's services, so the alarm's processing uses this mailbox's
+	 * own subscriptions, which exist only here.
+	 */
 	const mailbox = (alarmOptions: MailboxAlarmHandlerOptions) =>
 		Effect.gen(function* () {
 			const processing = yield* Channels.makeProcessing(options)
 			const deliver = yield* makeDeliverFromDurableObjectStorage
 			const deliveryRequest = yield* makeDeliveryRequestHandler
-			const alarm = yield* makeMailboxAlarmHandlerWith(alarmOptions, processing)
+			const subscriptions = yield* MailboxSubscriptions
+			const runAlarm = yield* makeMailboxAlarmHandlerWith(alarmOptions, processing)
+			const alarm = () => runAlarm().pipe(Effect.provideService(MailboxSubscriptions, subscriptions))
 			return { deliver, deliveryRequest, alarm }
 		})
 

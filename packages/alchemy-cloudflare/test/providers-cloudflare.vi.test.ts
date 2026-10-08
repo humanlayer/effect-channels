@@ -67,28 +67,30 @@ const makeOptions = (input: {
 		slackApi: Layer.mock(SlackApi, {}),
 		handlers: { onNewMention: () => Effect.die('no Slack events in this test') },
 	})
+	/** The fake GitHub API. The Worker supplies it to the mailbox's methods as well as to the bot. */
+	const gitHubApi = Layer.mock(GitHubApi, {
+		postIssueComment: ({ issue, content }) =>
+			Effect.gen(function* () {
+				if (content.markdown === 'Summary')
+					yield* Effect.flatten(Ref.getAndSet(input.duringSummary, Effect.void))
+				yield* Queue.offer(input.shown, `comment: ${content.markdown}`)
+				return GitHubIssueComment.make({
+					ref: { discussion: { _tag: 'Issue', ref: issue }, id: GitHubId.make(900) },
+					body: content.markdown,
+					url: 'https://github.com/alice/project/issues/42#issuecomment-900',
+					author: null,
+				})
+			}),
+		addReaction: ({ target }) =>
+			Queue.offer(input.shown, `eyes on ${reactionTargetName(target)}`).pipe(Effect.asVoid),
+		removeReaction: ({ target }) =>
+			Queue.offer(input.shown, `eyes off ${reactionTargetName(target)}`).pipe(Effect.asVoid),
+	})
 	const github = GitHubBot.make({
 		webhookSecret: Config.succeed(Redacted.make(githubWebhookSecret)),
 		deliveryMode: QueueDeliveryMode.make({}),
 		bot: { mentionNames: ['bot'], botUserId: GitHubId.make(1) },
-		gitHubApi: Layer.mock(GitHubApi, {
-			postIssueComment: ({ issue, content }) =>
-				Effect.gen(function* () {
-					if (content.markdown === 'Summary')
-						yield* Effect.flatten(Ref.getAndSet(input.duringSummary, Effect.void))
-					yield* Queue.offer(input.shown, `comment: ${content.markdown}`)
-					return GitHubIssueComment.make({
-						ref: { discussion: { _tag: 'Issue', ref: issue }, id: GitHubId.make(900) },
-						body: content.markdown,
-						url: 'https://github.com/alice/project/issues/42#issuecomment-900',
-						author: null,
-					})
-				}),
-			addReaction: ({ target }) =>
-				Queue.offer(input.shown, `eyes on ${reactionTargetName(target)}`).pipe(Effect.asVoid),
-			removeReaction: ({ target }) =>
-				Queue.offer(input.shown, `eyes off ${reactionTargetName(target)}`).pipe(Effect.asVoid),
-		}),
+		gitHubApi,
 		handlers: {
 			onMentioned: (event, delivery) =>
 				Queue.offer(input.seen, { event, delivery }).pipe(Effect.andThen(delivery.handoff())),
@@ -122,18 +124,21 @@ const makeOptions = (input: {
 		},
 	})
 	return {
-		namespace: 'providers-cloudflare-test',
-		basePath: '/api/channels',
-		providers: [slack, github, linear],
-		eventProcessing: { concurrency: 1, leaseMs: 30_000 },
-	} as const
+		gitHubApi,
+		options: {
+			namespace: 'providers-cloudflare-test',
+			basePath: '/api/channels',
+			providers: [slack, github, linear],
+			eventProcessing: { concurrency: 1, leaseMs: 30_000 },
+		} as const,
+	}
 }
 
 const setUp = Effect.gen(function* () {
 	const seen = yield* Queue.unbounded<Seen>()
 	const shown = yield* Queue.unbounded<string>()
 	const duringSummary = yield* Ref.make<Effect.Effect<void>>(Effect.void)
-	const options = makeOptions({ seen, shown, duringSummary })
+	const { options, gitHubApi } = makeOptions({ seen, shown, duringSummary })
 	const bot = ChannelsCloudflare.make(options)
 	const durableObject = yield* Layer.build(DurableObjectFake)
 	const { processing, deliveryControl, processingBackend, subscriptions, deliveryControlBackend } = bot.layers.mailbox
@@ -141,14 +146,14 @@ const setUp = Effect.gen(function* () {
 		Layer.provideMerge(Layer.mergeAll(processingBackend, subscriptions, deliveryControlBackend)),
 		Layer.provideMerge(Layer.succeedContext(durableObject)),
 	)
-	/** The mailbox object's services, which Alchemy gives its constructor and every method call. */
+	/** The mailbox object's services, which Alchemy gives its constructor. Its methods get only the Worker's. */
 	const mailboxServices = yield* Layer.build(MailboxLive.pipe(Layer.provideMerge(NodeCrypto.layer)))
 	const handlers = yield* bot
 		.mailbox({ rearmAfterMs: 1_000 })
 		.pipe(Effect.provideContext(mailboxServices), Effect.orDie)
 	const mailbox = {
 		...handlers,
-		alarm: () => handlers.alarm().pipe(Effect.provideContext(mailboxServices)),
+		alarm: () => handlers.alarm().pipe(Effect.provide(gitHubApi)),
 	}
 	const alarm = Context.get(durableObject, DurableObjectFakeAlarm)
 	const routedTo = yield* Ref.make<ReadonlyArray<string>>([])

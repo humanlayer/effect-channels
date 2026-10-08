@@ -146,14 +146,14 @@ it.effect('ChannelsCloudflare mailbox: deliver sets the alarm and the alarm runs
 			Layer.provideMerge(Layer.mergeAll(processingBackend, subscriptions, deliveryControlBackend)),
 			Layer.provideMerge(Layer.succeedContext(durableObject)),
 		)
-		/** The mailbox object's services, which Alchemy gives its constructor and every method call. */
+		/** The mailbox object's services, which Alchemy gives its constructor. Its methods get only the Worker's. */
 		const mailboxServices = yield* Layer.build(MailboxLive.pipe(Layer.provideMerge(NodeCrypto.layer)))
 		const handlers = yield* bot
 			.mailbox({ rearmAfterMs: 1_000 })
 			.pipe(Effect.provideContext(mailboxServices), Effect.orDie)
 		const mailbox = {
 			...handlers,
-			alarm: () => handlers.alarm().pipe(Effect.provideContext(mailboxServices)),
+			alarm: () => handlers.alarm(),
 		}
 		const alarm = Context.get(durableObject, DurableObjectFakeAlarm)
 
@@ -219,14 +219,14 @@ it.effect(
 				Layer.provideMerge(Layer.mergeAll(processingBackend, subscriptions, deliveryControlBackend)),
 				Layer.provideMerge(Layer.succeedContext(durableObject)),
 			)
-			/** The mailbox object's services, which Alchemy gives its constructor and every method call. */
+			/** The mailbox object's services, which Alchemy gives its constructor. Its methods get only the Worker's. */
 			const mailboxServices = yield* Layer.build(MailboxLive.pipe(Layer.provideMerge(NodeCrypto.layer)))
 			const handlers = yield* bot
 				.mailbox({ rearmAfterMs: 1_000 })
 				.pipe(Effect.provideContext(mailboxServices), Effect.orDie)
 			const mailbox = {
 				...handlers,
-				alarm: () => handlers.alarm().pipe(Effect.provideContext(mailboxServices)),
+				alarm: () => handlers.alarm(),
 			}
 			const alarm = Context.get(durableObject, DurableObjectFakeAlarm)
 
@@ -422,14 +422,14 @@ const interleaving = (request: { readonly path: string; readonly method: 'POST' 
 			Layer.provideMerge(Layer.mergeAll(processingBackend, subscriptions, deliveryControlBackend)),
 			Layer.provideMerge(Layer.succeedContext(durableObject)),
 		)
-		/** The mailbox object's services, which Alchemy gives its constructor and every method call. */
+		/** The mailbox object's services, which Alchemy gives its constructor. Its methods get only the Worker's. */
 		const mailboxServices = yield* Layer.build(MailboxLive.pipe(Layer.provideMerge(NodeCrypto.layer)))
 		const handlers = yield* bot
 			.mailbox({ rearmAfterMs: 1_000 })
 			.pipe(Effect.provideContext(mailboxServices), Effect.orDie)
 		const mailbox = {
 			...handlers,
-			alarm: () => handlers.alarm().pipe(Effect.provideContext(mailboxServices)),
+			alarm: () => handlers.alarm(),
 		}
 		const alarm = Context.get(durableObject, DurableObjectFakeAlarm)
 		const mailboxes = DeliveryMailboxes.of({
