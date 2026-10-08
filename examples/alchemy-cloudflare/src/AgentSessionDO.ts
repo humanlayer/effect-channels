@@ -1,14 +1,10 @@
 import * as SqliteClient from '@effect/sql-sqlite-do/SqliteClient'
-import { GitHubApi, GitHubIssue, GitHubPullRequest } from '@humanlayer/channels-github'
+import { GitHubApi, type GitHubIssue, type GitHubPullRequest } from '@humanlayer/channels-github'
 import { skillsFromDisk } from '@humanlayer/fold-agent/skills'
 import { fileTools, Photon } from '@humanlayer/fold-agent/tools/files'
 import {
-	type AgentFinishedLogEntry,
-	type AgentId,
 	type FoldSession,
 	EventLog,
-	type LogEntry,
-	type UserMessageLogEntry,
 	customModel,
 	defineAgent,
 	eventLogSource,
@@ -33,31 +29,23 @@ import {
 	SynchronizedRef,
 } from 'effect'
 import { LanguageModel } from 'effect/ai'
-import { FetchHttpClient } from 'effect/http'
 
 import { bashTool } from './BashTool'
 import { COMPUTER_WORKER_NAME, WORKSPACE_ROOT } from './computer/Contract'
+import { DeliveryApi } from './DeliveryApi'
+import { ActiveDelivery, AgentConversation, AgentSessionMessage, DeliveryTurns } from './DeliveryTurn'
 import { layer as DurableObjectSqliteFoldAgentEventLogLive } from './DurableObjectSqliteFoldAgentEventLog'
 import { githubTools } from './GitHubTools'
 import { SessionExpiry } from './SessionExpiry'
 import { RunRecovery } from './SessionRecovery'
-import { Computer, Repo, RepoCloneError, Workspace, repoName } from './Workspace'
+import { Computer, type Repo, Workspace, repoName } from './Workspace'
 
 const MODEL = '@cf/zai-org/glm-5.3'
 const HOME = '/root'
-const RESTART_NUDGE =
-	'<system-information>A restart cut you off before you finished. Continue where you left off.</system-information>'
-const MAX_RESTART_NUDGES = 3
 const WORKSPACE_GRACE_MILLIS = 24 * 60 * 60 * 1_000
 
-export const AgentSessionMessage = Schema.Struct({
-	prompt: Schema.String,
-	githubDiscussion: Schema.Union([GitHubIssue, GitHubPullRequest]),
-})
-export type AgentSessionMessage = typeof AgentSessionMessage.Type
-
 const AgentSessionMetadata = Schema.Struct({
-	githubDiscussion: Schema.Union([GitHubIssue, GitHubPullRequest]),
+	githubDiscussion: AgentSessionMessage.fields.githubDiscussion,
 	repositoryName: Schema.String,
 })
 type AgentSessionMetadata = typeof AgentSessionMetadata.Type
@@ -86,53 +74,63 @@ const repoSkills = (repositoryName: string) =>
 		}),
 	)
 
-const openRootMessages = (entries: ReadonlyArray<LogEntry>, rootAgentId: AgentId) => {
-	const lastFinishedSeq =
-		entries.findLast((entry) => Predicate.isTagged(entry, 'agent-finished') && entry.agentId === rootAgentId)
-			?.seq ?? -1
-	return entries.filter(
-		(entry): entry is UserMessageLogEntry =>
-			Predicate.isTagged(entry, 'user-message') && entry.agentId === rootAgentId && entry.seq > lastFinishedSeq,
-	)
-}
-
-const isRestartNudge = ({ message }: UserMessageLogEntry) =>
-	Predicate.isString(message.content)
-		? message.content === RESTART_NUDGE
-		: message.content.some((part) => part.type === 'text' && part.text === RESTART_NUDGE)
-
-/** Queue a message into a running turn and resolve when the run that consumed it finishes. */
-const deliver = (session: FoldSession, prompt: string) =>
-	session.send(prompt).pipe(Effect.catchTag('SubagentNotFoundError', (error) => Effect.die(error)))
-
-/** The AgentSession namespace; callers address it directly by the GitHub discussion's mailbox key. */
+/**
+ * The AgentSession namespace; callers address it directly by the GitHub discussion's mailbox key. `send`
+ * saves the handed-off delivery and starts its turn in the background, returning once the turn is accepted;
+ * the turn reports its result to the delivery.
+ */
 export class AgentSession extends Cloudflare.DurableObject<
 	AgentSession,
 	{
-		readonly send: (input: AgentSessionMessage) => Effect.Effect<AgentFinishedLogEntry, RepoCloneError>
+		readonly send: (input: typeof AgentSessionMessage.Encoded) => Effect.Effect<void>
 		readonly alarm: () => Effect.Effect<void>
 	}
->()('AgentSession', { errors: [RepoCloneError] }) {}
+>()('AgentSession') {}
 
-const AgentSessionImplementation = Effect.gen(function* () {
-	const state = yield* Cloudflare.DurableObjectState
-	const ai = yield* Cloudflare.Workers.AI()
-	const computers = yield* Computer.from(COMPUTER_WORKER_NAME)
-	const githubApi = yield* GitHubApi
-	const SqliteLive = SqliteClient.layer({ storage: state.raw.storage })
-	const EventLogLive = DurableObjectSqliteFoldAgentEventLogLive.pipe(
-		Layer.provide(SqliteLive),
-		Layer.provide(layerLiveIdFactory),
-	)
-	const InstanceLive = Layer.mergeAll(EventLogLive, RunRecovery.layer, SessionExpiry.layer)
+/**
+ * The AgentSession namespace as a service, as `DeliveryMailboxes` is for mailboxes. The Worker entrypoint
+ * provides it from {@link AgentSession}.
+ */
+export class AgentSessions extends Context.Service<
+	AgentSessions,
+	{
+		readonly getByName: (mailboxKey: string) => {
+			readonly send: (input: typeof AgentSessionMessage.Encoded) => Effect.Effect<void>
+		}
+	}
+>()('alchemy-cloudflare/AgentSessions') {}
 
-	// Alchemy evaluates this returned Effect once per AgentSession object, with RuntimeContext available.
-	return Effect.gen(function* () {
-		const mailboxKey = yield* Schema.decodeUnknownEffect(Schema.NonEmptyString)(state.id.name)
-		const workspace = Workspace.make(computers.getByName(mailboxKey))
+/** Fold's model: GLM through the Workers AI binding, at its highest reasoning level. */
+const foldModel = Effect.gen(function* () {
+	const languageModel = yield* LanguageModel.LanguageModel
+	return customModel({
+		activeModel: {
+			providerId: 'cloudflare-workers-ai',
+			providerKind: 'openai-compatible',
+			modelId: MODEL,
+			role: null,
+			requestedReasoningLevel: 'max',
+			reasoning: resolveOpenAiReasoning('max'),
+		},
+		make: Effect.succeed(languageModel),
+	})
+})
+
+/**
+ * The AgentSession's Fold conversation over its Workspace and Fold log. The first message clones the
+ * discussion's repository and starts the session; later ones, and a fresh object, resume it. The session
+ * lives as long as this layer.
+ */
+const AgentConversationLive = Layer.effect(
+	AgentConversation,
+	Effect.gen(function* () {
+		const scope = yield* Scope.Scope
+		const workspace = yield* Workspace
 		const eventLog = yield* EventLog
-		const recovery = yield* RunRecovery
-		const expiry = yield* SessionExpiry
+		const githubApi = yield* GitHubApi
+		const path = yield* Path.Path
+		const photon = yield* Photon
+		const model = yield* foldModel
 		const log = eventLogSource(Effect.succeed(eventLog))
 		const initialEntries = yield* Stream.runCollect(eventLog.entries())
 		const isEmpty = initialEntries.length === 0
@@ -140,20 +138,6 @@ const AgentSessionImplementation = Effect.gen(function* () {
 		const resumedMetadata = Predicate.isUndefined(started)
 			? Option.none<AgentSessionMetadata>()
 			: Option.some(yield* Schema.decodeUnknownEffect(AgentSessionMetadata)(started.meta))
-		const languageModel = yield* Layer.build(ai.model({ model: MODEL })).pipe(
-			Effect.map((context) => Context.get(context, LanguageModel.LanguageModel)),
-		)
-		const model = customModel({
-			activeModel: {
-				providerId: 'cloudflare-workers-ai',
-				providerKind: 'openai-compatible',
-				modelId: MODEL,
-				role: null,
-				requestedReasoningLevel: 'max',
-				reasoning: resolveOpenAiReasoning('max'),
-			},
-			make: Effect.succeed(languageModel),
-		})
 		const agentFor = (metadata: AgentSessionMetadata) =>
 			defineAgent({
 				name: 'github-agent',
@@ -166,13 +150,12 @@ const AgentSessionImplementation = Effect.gen(function* () {
 					...githubTools(metadata.githubDiscussion),
 				],
 			})
-		const instanceScope = yield* Scope.make()
 
 		const start = (message: AgentSessionMessage) =>
 			Effect.gen(function* () {
 				const repository = repositoryFor(message.githubDiscussion)
 				yield* workspace.prepare([repository])
-				yield* Effect.forkIn(workspace.startContainer, instanceScope)
+				yield* Effect.forkIn(workspace.startContainer, scope)
 				const metadata = AgentSessionMetadata.make({
 					githubDiscussion: message.githubDiscussion,
 					repositoryName: repoName(repository),
@@ -185,67 +168,99 @@ const AgentSessionImplementation = Effect.gen(function* () {
 					meta: encodedMetadata,
 				})
 			})
-
 		const resume = Option.match(resumedMetadata, {
 			onNone: () => Effect.die(new Error('AgentSession log has no valid session-started metadata')),
 			onSome: (metadata) => resumeSession({ agent: agentFor(metadata), log }),
 		})
 		const opened = yield* SynchronizedRef.make(Option.none<FoldSession>())
-		const open = (message?: AgentSessionMessage) =>
-			SynchronizedRef.modifyEffect(opened, (current) =>
-				Option.match(current, {
-					onSome: (session) => Effect.succeed([session, current] as const),
-					onNone: () =>
-						(isEmpty
-							? Predicate.isUndefined(message)
-								? Effect.die(new Error('Cannot recover an AgentSession before its first message'))
-								: start(message)
-							: resume
-						).pipe(
-							Effect.provideService(FileSystem.FileSystem, workspace.fileSystem),
-							Effect.provideService(GitHubApi, githubApi),
-							Effect.provide(Layer.mergeAll(Path.layer, FetchHttpClient.layer, Photon.layer)),
-							Scope.provide(instanceScope),
-							Effect.map((session) => [session, Option.some(session)] as const),
-						),
-				}),
-			)
 
-		if (!isEmpty && !(yield* expiry.expired)) {
-			yield* expiry.ensureScheduled
-			yield* Effect.forkIn(
-				Effect.gen(function* () {
-					const session = yield* open()
-					const cutOff = openRootMessages(yield* session.entries, session.rootAgentId)
-					if (cutOff.length === 0 || cutOff.filter(isRestartNudge).length >= MAX_RESTART_NUDGES) return
-					yield* recovery.run(deliver(session, RESTART_NUDGE))
-				}),
-				instanceScope,
-			)
+		return AgentConversation.of({
+			open: (message) =>
+				SynchronizedRef.modifyEffect(opened, (current) =>
+					Option.match(current, {
+						onSome: (session) => Effect.succeed([session, current] as const),
+						onNone: () =>
+							(isEmpty ? start(message) : resume).pipe(
+								Effect.provideService(FileSystem.FileSystem, workspace.fileSystem),
+								Effect.provideService(GitHubApi, githubApi),
+								Effect.provideService(Path.Path, path),
+								Effect.provideService(Photon, photon),
+								Scope.provide(scope),
+								Effect.map((session) => [session, Option.some(session)] as const),
+							),
+					}),
+				).pipe(Effect.withSpan('agent_session.open_conversation')),
+		})
+	}),
+)
+
+const AgentSessionImplementation = Effect.gen(function* () {
+	const state = yield* Cloudflare.DurableObjectState
+	const ai = yield* Cloudflare.Workers.AI()
+	const computers = yield* Computer.from(COMPUTER_WORKER_NAME)
+	const githubApi = yield* GitHubApi
+	const deliveryApi = yield* DeliveryApi
+	const EventLogLive = DurableObjectSqliteFoldAgentEventLogLive.pipe(
+		Layer.provide(SqliteClient.layer({ storage: state.raw.storage })),
+		Layer.provide(layerLiveIdFactory),
+	)
+
+	/** Alchemy evaluates this returned Effect once per AgentSession object, with RuntimeContext available. */
+	return Effect.gen(function* () {
+		const mailboxKey = yield* Schema.decodeUnknownEffect(Schema.NonEmptyString)(state.id.name)
+
+		/** This object's services. Built once into a scope that is never closed: they live as long as the object. */
+		const InstanceLive = DeliveryTurns.layer.pipe(
+			Layer.provideMerge(AgentConversationLive),
+			Layer.provideMerge(Layer.mergeAll(ActiveDelivery.layer, RunRecovery.layer, SessionExpiry.layer)),
+			Layer.provideMerge(EventLogLive),
+			Layer.provideMerge(Layer.succeed(Workspace, Workspace.make(computers.getByName(mailboxKey)))),
+			Layer.provideMerge(ai.model({ model: MODEL })),
+			Layer.provideMerge(Layer.mergeAll(Path.layer, Photon.layer)),
+			Layer.provideMerge(Layer.succeed(GitHubApi, githubApi)),
+			Layer.provideMerge(Layer.succeed(DeliveryApi, deliveryApi)),
+		)
+		const instance = yield* Layer.buildWithScope(InstanceLive, yield* Scope.make())
+
+		return yield* agentSessionMethods(mailboxKey).pipe(Effect.provideContext(instance))
+	}).pipe(
+		Effect.tapCause((cause) => Effect.logError('AgentSession could not start', cause)),
+		Effect.orDie,
+	)
+})
+
+/** The RPC methods, after recovering a turn a deploy or crash cut off. */
+const agentSessionMethods = (mailboxKey: string) =>
+	Effect.gen(function* () {
+		const workspace = yield* Workspace
+		const recovery = yield* RunRecovery
+		const expiry = yield* SessionExpiry
+		const turns = yield* DeliveryTurns
+		const hasLog = (yield* Stream.runCount((yield* EventLog).entries())) > 0
+
+		if (!(yield* expiry.expired)) {
+			if (hasLog) yield* expiry.ensureScheduled
+			yield* turns.recover
 		}
 
 		return {
-			send: (input: AgentSessionMessage) =>
-				recovery.run(
-					Effect.gen(function* () {
-						const message = yield* Schema.decodeUnknownEffect(AgentSessionMessage)(input).pipe(Effect.orDie)
-						if (message.githubDiscussion.mailboxKey !== mailboxKey) {
-							return yield* Effect.die(
-								new Error('AgentSession message does not match this Durable Object mailbox key'),
-							)
-						}
-						const deadline = yield* expiry.touch
-						yield* workspace.expireAt(deadline + WORKSPACE_GRACE_MILLIS)
-						return yield* deliver(yield* open(message), message.prompt)
-					}),
-				),
+			send: Effect.fn('agent_session.send')(function* (input: typeof AgentSessionMessage.Encoded) {
+				const message = yield* Schema.decodeEffect(AgentSessionMessage)(input).pipe(Effect.orDie)
+				if (message.githubDiscussion.mailboxKey !== mailboxKey) {
+					return yield* Effect.die(
+						new Error('AgentSession message does not match this Durable Object mailbox key'),
+					)
+				}
+				const deadline = yield* expiry.touch
+				yield* workspace.expireAt(deadline + WORKSPACE_GRACE_MILLIS)
+				return yield* turns.accept(message)
+			}),
 			alarm: () =>
 				Effect.flatMap(recovery.alarm, (recoveryOwnsAlarm) =>
 					recoveryOwnsAlarm ? Effect.void : expiry.alarm(workspace.destroy),
 				),
 		}
-	}).pipe(Effect.provide(InstanceLive), Effect.orDie)
-})
+	})
 
 /** Register the AgentSession implementation in the Worker runtime. */
 export const AgentSessionDOLive = AgentSession.make(AgentSessionImplementation)

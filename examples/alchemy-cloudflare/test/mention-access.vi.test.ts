@@ -1,4 +1,5 @@
 import { describe, it } from '@effect/vitest'
+import { MailboxSubscriptionCreatedResult, MailboxSubscriptions } from '@humanlayer/channels-delivery'
 import {
 	type GitHubAccessLevel,
 	GitHubApi,
@@ -27,11 +28,13 @@ import {
 	type GitHubUserAccessRequest,
 } from '@humanlayer/channels-github'
 import { RuntimeContext } from 'alchemy/RuntimeContext'
-import { ConfigProvider, Effect, Layer, Logger, Ref } from 'effect'
+import { ConfigProvider, Effect, Layer, Ref } from 'effect'
 
 import { makeTestDeliveryExecution } from '../../../packages/delivery/test/delivery-execution'
+import { AgentSessions } from '../src/AgentSessionDO'
 import { AutoLabel } from '../src/AutoLabel'
-import { maintainerOnlyNotice, makeOnMentioned, respondToMentionAccess } from '../src/GithubBot'
+import { AgentSessionMessage } from '../src/DeliveryTurn'
+import { githubHandlers, maintainerOnlyNotice, respondToMentionAccess } from '../src/GithubBot'
 
 const repository = {
 	installationId: GitHubId.make(100),
@@ -106,6 +109,7 @@ const fixtures = (actor = person(1)) => {
 		},
 		{
 			name: 'PR opening',
+			prompt: 'Help\n@agent help',
 			event: GitHubPrMentioned.make({ pullRequest, trigger: prOpened, events: [prOpened] }),
 			discussion: prDiscussion,
 			target: GitHubReactionTarget.cases.Discussion.make({ discussion: prDiscussion }),
@@ -384,57 +388,110 @@ describe('respondToMentionAccess', () => {
 	}
 })
 
+interface CallbackState {
+	readonly subscribed: ReadonlyArray<string>
+	readonly sent: ReadonlyArray<{ readonly mailboxKey: string; readonly message: typeof AgentSessionMessage.Encoded }>
+	readonly handoffsBeforeSend: ReadonlyArray<number>
+}
+
+const runOnMentioned = (
+	fixture: ReturnType<typeof fixtures>[number],
+	access: GitHubAccessLevel,
+	options: { readonly send?: Effect.Effect<void> } = {},
+) =>
+	Effect.gen(function* () {
+		const api = yield* makeApi(Effect.succeed(access))
+		const delivery = yield* makeTestDeliveryExecution(
+			fixture.discussion === issueDiscussion ? issue.mailboxKey : pullRequest.mailboxKey,
+		)
+		const state = yield* Ref.make<CallbackState>({ subscribed: [], sent: [], handoffsBeforeSend: [] })
+		const agentSessions = AgentSessions.of({
+			getByName: (mailboxKey: string) => ({
+				send: (message: typeof AgentSessionMessage.Encoded) =>
+					Effect.gen(function* () {
+						const handoffs = yield* Ref.get(delivery.handoffs)
+						yield* Ref.update(state, (current) => ({
+							...current,
+							sent: [...current.sent, { mailboxKey, message }],
+							handoffsBeforeSend: [...current.handoffsBeforeSend, handoffs.length],
+						}))
+						yield* options.send ?? Effect.void
+					}),
+			}),
+		})
+		const exit = yield* Effect.exit(
+			githubHandlers.onMentioned(fixture.event, delivery.execution.context).pipe(
+				Effect.provide(
+					Layer.mergeAll(
+						Layer.succeed(AgentSessions, agentSessions),
+						Layer.mock(MailboxSubscriptions, {
+							subscribe: ({ mailboxKey }) =>
+								Ref.update(state, (current) => ({
+									...current,
+									subscribed: [...current.subscribed, mailboxKey],
+								})).pipe(Effect.as(MailboxSubscriptionCreatedResult.make({}))),
+						}),
+						Layer.mock(AutoLabel, {}),
+						Layer.mock(RuntimeContext, { Type: 'Worker', id: 'mention-access-test', env: {} }),
+						api.layer,
+					),
+				),
+			),
+		)
+		return {
+			exit,
+			api: yield* Ref.get(api.state),
+			callback: yield* Ref.get(state),
+			handoffs: yield* Ref.get(delivery.handoffs),
+			deliveryId: delivery.execution.context.deliveryId,
+		}
+	})
+
 describe('the registered GitHub onMentioned handler', () => {
 	for (const fixture of fixtures()) {
-		for (const access of ['write', 'read'] as const) {
-			it.effect(
-				`${fixture.name}: the handler applies ${access} access before entering its branch`,
-				({ expect }) =>
-					Effect.gen(function* () {
-						const api = yield* makeApi(Effect.succeed(access))
-						const logs: Array<string> = []
-						const logger = Logger.layer([
-							Logger.make((entry) => logs.push(JSON.stringify(Logger.formatStructured.log(entry)))),
-						])
-						yield* Effect.gen(function* () {
-							const registered = yield* GitHubCallbacks
-							if (registered.onMentioned === undefined)
-								return yield* Effect.die('onMentioned is not registered')
-							const { execution } = yield* makeTestDeliveryExecution()
-							yield* registered.onMentioned(fixture.event, execution.context)
-							if (access === 'read') yield* registered.onMentioned(fixture.event, execution.context)
-						}).pipe(
-							Effect.provide(
-								GitHubCallbacks.layer({ onMentioned: makeOnMentioned(() => Effect.succeed(null)) }),
-							),
-							Effect.provide(Layer.mock(AutoLabel, {})),
-							Effect.provide(
-								Layer.mock(RuntimeContext, { Type: 'Worker', id: 'mention-access-test', env: {} }),
-							),
-							Effect.provide(api.layer),
-							Effect.provide(logger),
-						)
-						const state = yield* Ref.get(api.state)
-						const branchLog =
-							fixture.discussion === issueDiscussion
-								? 'Authorized issue mention received'
-								: 'Authorized PR mention received'
-						if (access === 'write') {
-							expect(state.reactions).toEqual([{ target: fixture.target, reaction: 'eyes' }])
-							expect(state.posts).toEqual([])
-							expect(logs.some((entry) => entry.includes(branchLog))).toBe(true)
-						} else {
-							expect(state.reactions).toEqual([
-								{ target: fixture.target, reaction: '-1' },
-								{ target: fixture.target, reaction: '-1' },
-							])
-							expect(state.posts).toEqual([
-								{ discussion: fixture.discussion, content: { markdown: maintainerOnlyNotice } },
-							])
-							expect(logs.some((entry) => entry.includes(branchLog))).toBe(false)
-						}
-					}),
-			)
-		}
+		const mailboxKey = fixture.discussion === issueDiscussion ? issue.mailboxKey : pullRequest.mailboxKey
+
+		it.effect(`${fixture.name}: reacts, subscribes, sends to the AgentSession, then hands off`, ({ expect }) =>
+			Effect.gen(function* () {
+				const result = yield* runOnMentioned(fixture, 'write')
+				expect(result.exit._tag).toBe('Success')
+				expect(result.api.reactions).toEqual([{ target: fixture.target, reaction: 'eyes' }])
+				expect(result.api.posts).toEqual([])
+				expect(result.callback.subscribed).toEqual([mailboxKey])
+				expect(result.callback.sent).toHaveLength(1)
+				const [sent] = result.callback.sent
+				expect(sent?.mailboxKey).toBe(mailboxKey)
+				expect(sent?.message).toMatchObject({
+					prompt: fixture.prompt ?? '@agent help',
+					deliveryId: result.deliveryId,
+					accessToken: 'test-access-token',
+					githubDiscussion: { mailboxKey },
+				})
+				expect(result.callback.handoffsBeforeSend).toEqual([0])
+				expect(result.handoffs).toEqual([undefined])
+			}),
+		)
+
+		it.effect(`${fixture.name}: a denied mention never subscribes, sends, or hands off`, ({ expect }) =>
+			Effect.gen(function* () {
+				const result = yield* runOnMentioned(fixture, 'read')
+				expect(result.exit._tag).toBe('Success')
+				expect(result.api.reactions).toEqual([{ target: fixture.target, reaction: '-1' }])
+				expect(result.api.posts).toEqual([
+					{ discussion: fixture.discussion, content: { markdown: maintainerOnlyNotice } },
+				])
+				expect(result.callback).toEqual({ subscribed: [], sent: [], handoffsBeforeSend: [] })
+				expect(result.handoffs).toEqual([])
+			}),
+		)
+
+		it.effect(`${fixture.name}: a failed send does not hand off`, ({ expect }) =>
+			Effect.gen(function* () {
+				const result = yield* runOnMentioned(fixture, 'write', { send: Effect.die('rpc failed') })
+				expect(result.exit._tag).toBe('Failure')
+				expect(result.callback.sent).toHaveLength(1)
+				expect(result.handoffs).toEqual([])
+			}),
+		)
 	}
 })

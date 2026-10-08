@@ -3,7 +3,13 @@
  * The Worker and the Durable Object both build their half from this one value.
  */
 import { ChannelsCloudflare } from '@humanlayer/channels-alchemy-cloudflare'
-import { DebounceDeliveryMode, type DeliveryContext } from '@humanlayer/channels-delivery'
+import {
+	DebounceDeliveryMode,
+	type DeliveryContext,
+	type DeliveryHandoffError,
+	type MailboxSubscriptionError,
+	type MailboxSubscriptions,
+} from '@humanlayer/channels-delivery'
 import {
 	GitHubApi,
 	GitHubBot,
@@ -20,13 +26,12 @@ import {
 	type GitHubPrCreated,
 	type GitHubRepositoryRef,
 } from '@humanlayer/channels-github'
-import type * as Cloudflare from 'alchemy/Cloudflare'
 import type { RuntimeContext } from 'alchemy/RuntimeContext'
-import { Config, Effect, Match, Predicate } from 'effect'
+import { Config, Effect, Match, Predicate, Schema } from 'effect'
 
-import { AgentSession } from './AgentSessionDO'
+import { AgentSessions } from './AgentSessionDO'
 import { AutoLabel, type AutoLabelError } from './AutoLabel'
-import type { RepoCloneError } from './Workspace'
+import { AgentSessionMessage } from './DeliveryTurn'
 
 export const maintainerOnlyNotice =
 	'This agent can only be invoked by maintainers (users with write access or higher to this repository).'
@@ -105,60 +110,40 @@ const gitHubMentionText = (event: GitHubMentioned) =>
 		}),
 	)
 
-type GitHubDiscussion = ReturnType<typeof gitHubMentionDiscussion>
+/**
+ * An authorized mention subscribes the discussion, so later comments and checks reach this mailbox, and
+ * hands the delivery to the discussion's AgentSession, which finishes it when its turn ends. Until then the
+ * mailbox holds later events back.
+ */
+const onMentioned = (event: GitHubMentioned, context: DeliveryContext) => {
+	const discussion = gitHubMentionDiscussion(event)
+	return Effect.gen(function* () {
+		if (!(yield* respondToMentionAccess(event))) return
 
-export const makeOnMentioned =
-	<E, R>(send: (discussion: GitHubDiscussion, prompt: string) => Effect.Effect<string | null, E, R>) =>
-	(event: GitHubMentioned, context: DeliveryContext) => {
-		const discussion = gitHubMentionDiscussion(event)
-		return Effect.gen(function* () {
-			if (!(yield* respondToMentionAccess(event))) return
-
-			const mentionText = gitHubMentionText(event)
-			yield* Match.value(event).pipe(
-				Match.tagsExhaustive({
-					GitHubIssueMentioned: (issueEvent) =>
-						Effect.logInfo('Authorized issue mention received').pipe(
-							Effect.annotateLogs({
-								'github.issue_number': issueEvent.issue.ref.number,
-								'github.issue_event': issueEvent.trigger.eventId,
-								'github.actor': issueEvent.trigger.actor.login,
-							}),
-						),
-					GitHubPrMentioned: (prEvent) =>
-						Effect.logInfo('Authorized PR mention received').pipe(
-							Effect.annotateLogs({
-								'github.pr_number': prEvent.pullRequest.ref.number,
-								'github.pr_event': prEvent.trigger.eventId,
-								'github.actor': prEvent.trigger.actor.login,
-							}),
-						),
-				}),
-			)
-			const resultText = yield* send(discussion, mentionText)
-			if (resultText !== null) {
-				yield* discussion.postComment(GitHubContent.make({ markdown: resultText }))
-			}
-		}).pipe(
-			Effect.annotateLogs({
-				...githubRepositoryLogAnnotations(discussion.ref),
-				'github.discussion_number': discussion.ref.number,
-				'github.event_id': event.trigger.eventId,
-				'github.actor': event.trigger.actor.login,
-				'delivery.id': context.deliveryId,
+		yield* Effect.logInfo('Authorized mention received')
+		yield* discussion.subscribe()
+		const message = yield* Schema.encodeEffect(AgentSessionMessage)(
+			AgentSessionMessage.make({
+				prompt: gitHubMentionText(event),
+				githubDiscussion: discussion,
+				deliveryId: context.deliveryId,
+				accessToken: context.accessToken,
 			}),
-		)
-	}
-
-const sendToAgentSession = (discussion: GitHubDiscussion, prompt: string) =>
-	Effect.gen(function* () {
-		const agentSessions = yield* AgentSession
-		const finished = yield* agentSessions.getByName(discussion.mailboxKey).send({
-			prompt,
-			githubDiscussion: discussion,
-		})
-		return finished.resultText
-	})
+		).pipe(Effect.orDie)
+		const agentSessions = yield* AgentSessions
+		yield* agentSessions.getByName(discussion.mailboxKey).send(message)
+		return yield* context.handoff()
+	}).pipe(
+		Effect.annotateLogs({
+			...githubRepositoryLogAnnotations(discussion.ref),
+			'github.discussion_kind': discussion._tag,
+			'github.discussion_number': discussion.ref.number,
+			'github.event_id': event.trigger.eventId,
+			'github.actor': event.trigger.actor.login,
+			'delivery.id': context.deliveryId,
+		}),
+	)
+}
 
 const githubRepositoryLogAnnotations = (ref: GitHubRepositoryRef) => ({
 	'github.owner': ref.owner,
@@ -208,7 +193,7 @@ export const githubHandlers = {
 			}),
 		),
 
-	onMentioned: makeOnMentioned(sendToAgentSession),
+	onMentioned,
 	onSubscribedPrEvents: (event, context) =>
 		Effect.gen(function* () {
 			/** TODO if the issue(s) are failing CI checks then we shoudl like address them */
@@ -220,13 +205,13 @@ export const githubHandlers = {
 			}),
 		),
 } satisfies GitHubCallbackHandlers<
-	GitHubApiError | AutoLabelError | Config.ConfigError | RepoCloneError,
-	GitHubApi | AutoLabel | RuntimeContext | Cloudflare.Worker | AgentSession
+	GitHubApiError | AutoLabelError | Config.ConfigError | MailboxSubscriptionError | DeliveryHandoffError,
+	GitHubApi | AutoLabel | RuntimeContext | AgentSessions | MailboxSubscriptions
 >
 
 const github = GitHubBot.make<
-	GitHubApiError | AutoLabelError | Config.ConfigError | RepoCloneError,
-	GitHubApi | AutoLabel | RuntimeContext | Cloudflare.Worker | AgentSession
+	GitHubApiError | AutoLabelError | Config.ConfigError | MailboxSubscriptionError | DeliveryHandoffError,
+	GitHubApi | AutoLabel | RuntimeContext | AgentSessions | MailboxSubscriptions
 >({
 	webhookSecret: Config.Redacted('GITHUB_WEBHOOK_SECRET'),
 	deliveryMode: DebounceDeliveryMode.make({ quietPeriodMs: 10_000, maxWaitMs: 10_000 }),

@@ -6,15 +6,20 @@
  * the current alarm fires.
  */
 import * as Cloudflare from 'alchemy/Cloudflare'
-import { Clock, Context, Effect, Layer, Ref } from 'effect'
+import { Clock, Context, Effect, Layer, Ref, Scope } from 'effect'
 
 const RECOVERY_WAKE_MILLIS = 30_000
 
 export class RunRecovery extends Context.Service<
 	RunRecovery,
 	{
-		/** Run an agent operation while maintaining its crash-recovery alarm. */
-		readonly run: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
+		/**
+		 * Run an agent operation in the background, keeping its crash-recovery alarm until it ends. Returns once
+		 * the alarm is set, so a crash after that still wakes the object. The operation lives as long as this
+		 * layer, which the AgentSession builds for the object's lifetime; pending I/O keeps the object resident
+		 * meanwhile, so it needs no `waitUntil`.
+		 */
+		readonly fork: (effect: Effect.Effect<void>) => Effect.Effect<void>
 		/**
 		 * Re-arm when this object instance still has an active operation. Returns whether recovery owns the
 		 * alarm; otherwise the caller may use the alarm for session expiry.
@@ -26,19 +31,23 @@ export class RunRecovery extends Context.Service<
 		RunRecovery,
 		Effect.gen(function* () {
 			const { raw } = yield* Cloudflare.DurableObjectState
+			const scope = yield* Scope.Scope
 			const active = yield* Ref.make(0)
 			const scheduleRecoveryWake = Effect.flatMap(Clock.currentTimeMillis, (now) =>
 				Effect.promise(() => raw.storage.setAlarm(now + RECOVERY_WAKE_MILLIS)),
 			)
 
 			return RunRecovery.of({
-				run: (effect) =>
-					Effect.acquireUseRelease(
-						Ref.updateAndGet(active, (count) => count + 1).pipe(
-							Effect.tap((count) => (count === 1 ? scheduleRecoveryWake : Effect.void)),
+				fork: (effect) =>
+					Ref.updateAndGet(active, (count) => count + 1).pipe(
+						Effect.tap((count) => (count === 1 ? scheduleRecoveryWake : Effect.void)),
+						Effect.andThen(
+							effect.pipe(
+								Effect.ensuring(Ref.update(active, (count) => count - 1)),
+								Effect.forkIn(scope),
+							),
 						),
-						() => effect,
-						() => Ref.update(active, (count) => count - 1),
+						Effect.asVoid,
 					),
 				alarm: Effect.flatMap(Ref.get(active), (count) =>
 					count > 0 ? Effect.as(scheduleRecoveryWake, true) : Effect.succeed(false),
