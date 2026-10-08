@@ -143,12 +143,18 @@ it.effect('ChannelsCloudflare mailbox: deliver sets the alarm and the alarm runs
 		const { processing, deliveryControl, processingBackend, subscriptions, deliveryControlBackend } =
 			bot.layers.mailbox
 		const MailboxLive = Layer.merge(processing, deliveryControl).pipe(
-			Layer.provide(Layer.mergeAll(processingBackend, subscriptions, deliveryControlBackend)),
+			Layer.provideMerge(Layer.mergeAll(processingBackend, subscriptions, deliveryControlBackend)),
 			Layer.provideMerge(Layer.succeedContext(durableObject)),
 		)
-		const mailbox = yield* bot
+		/** The mailbox object's services, which Alchemy gives its constructor and every method call. */
+		const mailboxServices = yield* Layer.build(MailboxLive.pipe(Layer.provideMerge(NodeCrypto.layer)))
+		const handlers = yield* bot
 			.mailbox({ rearmAfterMs: 1_000 })
-			.pipe(Effect.provide(MailboxLive.pipe(Layer.provideMerge(NodeCrypto.layer))), Effect.orDie)
+			.pipe(Effect.provideContext(mailboxServices), Effect.orDie)
+		const mailbox = {
+			...handlers,
+			alarm: () => handlers.alarm().pipe(Effect.provideContext(mailboxServices)),
+		}
 		const alarm = Context.get(durableObject, DurableObjectFakeAlarm)
 
 		const receipt = yield* mailbox.deliver(admission('channels-cloudflare-test'))
@@ -210,12 +216,18 @@ it.effect(
 			const { processing, deliveryControl, processingBackend, subscriptions, deliveryControlBackend } =
 				bot.layers.mailbox
 			const MailboxLive = Layer.merge(processing, deliveryControl).pipe(
-				Layer.provide(Layer.mergeAll(processingBackend, subscriptions, deliveryControlBackend)),
+				Layer.provideMerge(Layer.mergeAll(processingBackend, subscriptions, deliveryControlBackend)),
 				Layer.provideMerge(Layer.succeedContext(durableObject)),
 			)
-			const mailbox = yield* bot
+			/** The mailbox object's services, which Alchemy gives its constructor and every method call. */
+			const mailboxServices = yield* Layer.build(MailboxLive.pipe(Layer.provideMerge(NodeCrypto.layer)))
+			const handlers = yield* bot
 				.mailbox({ rearmAfterMs: 1_000 })
-				.pipe(Effect.provide(MailboxLive.pipe(Layer.provideMerge(NodeCrypto.layer))), Effect.orDie)
+				.pipe(Effect.provideContext(mailboxServices), Effect.orDie)
+			const mailbox = {
+				...handlers,
+				alarm: () => handlers.alarm().pipe(Effect.provideContext(mailboxServices)),
+			}
 			const alarm = Context.get(durableObject, DurableObjectFakeAlarm)
 
 			yield* mailbox.deliver(admission('channels-cloudflare-test'))
@@ -407,12 +419,18 @@ const interleaving = (request: { readonly path: string; readonly method: 'POST' 
 		const { processing, deliveryControl, processingBackend, subscriptions, deliveryControlBackend } =
 			bot.layers.mailbox
 		const MailboxLive = Layer.merge(processing, deliveryControl).pipe(
-			Layer.provide(Layer.mergeAll(processingBackend, subscriptions, deliveryControlBackend)),
+			Layer.provideMerge(Layer.mergeAll(processingBackend, subscriptions, deliveryControlBackend)),
 			Layer.provideMerge(Layer.succeedContext(durableObject)),
 		)
-		const mailbox = yield* bot
+		/** The mailbox object's services, which Alchemy gives its constructor and every method call. */
+		const mailboxServices = yield* Layer.build(MailboxLive.pipe(Layer.provideMerge(NodeCrypto.layer)))
+		const handlers = yield* bot
 			.mailbox({ rearmAfterMs: 1_000 })
-			.pipe(Effect.provide(MailboxLive.pipe(Layer.provideMerge(NodeCrypto.layer))), Effect.orDie)
+			.pipe(Effect.provideContext(mailboxServices), Effect.orDie)
+		const mailbox = {
+			...handlers,
+			alarm: () => handlers.alarm().pipe(Effect.provideContext(mailboxServices)),
+		}
 		const alarm = Context.get(durableObject, DurableObjectFakeAlarm)
 		const mailboxes = DeliveryMailboxes.of({
 			getByName: () => ({ deliver: mailbox.deliver, deliveryRequest: mailbox.deliveryRequest }),

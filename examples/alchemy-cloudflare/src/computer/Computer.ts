@@ -1,4 +1,3 @@
-/// <reference types="@cloudflare/workers-types/experimental" />
 /**
  * The Computer Durable Object: one `@cloudflare/computer` Workspace per AgentSession Durable Object, using
  * the same object name. The Workspace is a virtual filesystem in the object's SQLite, with git, and two places to run
@@ -38,8 +37,10 @@ import {
 	WORKSPACE_ROOT,
 } from './Contract'
 
-// Entrypoints the backends reach this object through, via `ctx.exports`: the shell calls back into the
-// workspace through WorkspaceServiceProxy, and the container dials its connection in through WorkspaceProxy.
+/**
+ * Entrypoints the backends reach this object through, via `ctx.exports`: the shell calls back into the
+ * workspace through WorkspaceServiceProxy, and the container dials its connection in through WorkspaceProxy.
+ */
 export { WorkspaceProxy, WorkspaceServiceProxy } from '@cloudflare/computer'
 
 type Env = {
@@ -111,8 +112,10 @@ const attempt = <A>(operation: () => Promise<A>): Promise<ComputerResult<A>> =>
 const abortQuietly = (abort: () => void) => Effect.runSync(Effect.ignore(Effect.try(abort)))
 
 class ComputerBase extends withWorkspaceContainer(class extends DurableObject<Env> {}) {
-	// For withWorkspace's options, which see the instance but not `ctx` or `env`: DurableObject keeps them
-	// protected.
+	/**
+	 * For withWorkspace's options, which see the instance but not `ctx` or `env`: DurableObject keeps them
+	 * protected.
+	 */
 	readonly storage = workspaceStorage(this.ctx.storage)
 	readonly shell = new WorkerShellBackend({
 		id: 'shell' satisfies Backend,
@@ -125,7 +128,7 @@ class ComputerBase extends withWorkspaceContainer(class extends DurableObject<En
 		id: 'container' satisfies Backend,
 		container: () => containerHost(this),
 		workspace: { binding: COMPUTER_BINDING, id: this.ctx.id.toString() },
-		// Commands may install packages.
+		/** Commands may install packages. */
 		egress: { mode: 'direct' },
 	})
 }
@@ -181,8 +184,10 @@ export class Computer extends withWorkspace(ComputerBase, (self) => ({
 		return cloned
 	}
 
-	// The file methods fold's read, write, edit and apply_patch tools and its skill loader need. Paths are
-	// absolute.
+	/**
+	 * The file methods fold's read, write, edit and apply_patch tools and its skill loader need. Paths are
+	 * absolute.
+	 */
 
 	async readFile(path: string): Promise<ComputerResult<Uint8Array>> {
 		using workspace = await getWorkspace(this)
@@ -236,8 +241,10 @@ export class Computer extends withWorkspace(ComputerBase, (self) => ({
 		if (this.ctx.container?.running === true) await this.ctx.container.destroy('workspace deleted')
 		await this.ctx.storage.deleteAlarm()
 		await this.ctx.storage.deleteAll()
-		// The in-memory workspace must go: its tables are gone. Wait until this call has answered: Cloudflare
-		// holds the answer until the delete is saved, and an abort before then fails the call.
+		/**
+		 * The in-memory workspace must go: its tables are gone. Wait until this call has answered: Cloudflare
+		 * holds the answer until the delete is saved, and an abort before then fails the call.
+		 */
 		setTimeout(() => abortQuietly(() => this.ctx.abort('workspace deleted')), RESTART_DELAY_MILLIS)
 	}
 

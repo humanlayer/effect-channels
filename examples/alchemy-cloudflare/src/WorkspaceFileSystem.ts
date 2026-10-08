@@ -31,6 +31,23 @@ const SYSTEM_ERROR_TAGS = new Map<string, PlatformError.SystemErrorTag>([
 	['EINVAL', 'InvalidData'],
 ])
 
+/** A failed workspace file call, as the `FileSystem` error fold's tools read. */
+const workspaceFileError = (input: {
+	readonly kind: PlatformError.SystemErrorTag
+	readonly method: string
+	readonly path: string
+	readonly description: string
+	readonly cause: RpcCallError | { readonly code: string }
+}) =>
+	PlatformError.systemError({
+		_tag: input.kind,
+		module: 'FileSystem',
+		method: input.method,
+		pathOrDescriptor: input.path,
+		description: input.description,
+		cause: input.cause,
+	})
+
 /**
  * One Computer call as an Effect. A failed operation keeps its code in `cause.code`, where fold's tools
  * read it; a failed RPC is `Unknown`, so the tool call fails and the session goes on.
@@ -42,24 +59,16 @@ const run = <A>(
 ): Effect.Effect<A, PlatformError.PlatformError> =>
 	call.pipe(
 		Effect.mapError((cause) =>
-			PlatformError.systemError({
-				_tag: 'Unknown',
-				module: 'FileSystem',
-				method,
-				pathOrDescriptor: path,
-				description: cause.message,
-				cause,
-			}),
+			workspaceFileError({ kind: 'Unknown', method, path, description: cause.message, cause }),
 		),
 		Effect.flatMap((result) =>
 			result.ok
 				? Effect.succeed(result.value)
 				: Effect.fail(
-						PlatformError.systemError({
-							_tag: SYSTEM_ERROR_TAGS.get(result.code) ?? 'Unknown',
-							module: 'FileSystem',
+						workspaceFileError({
+							kind: SYSTEM_ERROR_TAGS.get(result.code) ?? 'Unknown',
 							method,
-							pathOrDescriptor: path,
+							path,
 							description: result.message,
 							cause: { code: result.code },
 						}),

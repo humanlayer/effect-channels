@@ -138,12 +138,18 @@ const setUp = Effect.gen(function* () {
 	const durableObject = yield* Layer.build(DurableObjectFake)
 	const { processing, deliveryControl, processingBackend, subscriptions, deliveryControlBackend } = bot.layers.mailbox
 	const MailboxLive = Layer.merge(processing, deliveryControl).pipe(
-		Layer.provide(Layer.mergeAll(processingBackend, subscriptions, deliveryControlBackend)),
+		Layer.provideMerge(Layer.mergeAll(processingBackend, subscriptions, deliveryControlBackend)),
 		Layer.provideMerge(Layer.succeedContext(durableObject)),
 	)
-	const mailbox = yield* bot
+	/** The mailbox object's services, which Alchemy gives its constructor and every method call. */
+	const mailboxServices = yield* Layer.build(MailboxLive.pipe(Layer.provideMerge(NodeCrypto.layer)))
+	const handlers = yield* bot
 		.mailbox({ rearmAfterMs: 1_000 })
-		.pipe(Effect.provide(MailboxLive.pipe(Layer.provideMerge(NodeCrypto.layer))), Effect.orDie)
+		.pipe(Effect.provideContext(mailboxServices), Effect.orDie)
+	const mailbox = {
+		...handlers,
+		alarm: () => handlers.alarm().pipe(Effect.provideContext(mailboxServices)),
+	}
 	const alarm = Context.get(durableObject, DurableObjectFakeAlarm)
 	const routedTo = yield* Ref.make<ReadonlyArray<string>>([])
 	const mailboxes = DeliveryMailboxes.of({
