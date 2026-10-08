@@ -1,10 +1,11 @@
 import { describe, it } from '@effect/vitest'
-import { Array as Arr, Clock, ConfigProvider, Effect, Layer, Logger, Match, Queue, Ref } from 'effect'
-import { TestClock } from 'effect/testing'
+import { Array as Arr, Clock, ConfigProvider, Effect, Layer, Logger, Match, Queue, Redacted, Ref } from 'effect'
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/http'
+import { TestClock } from 'effect/testing'
 
 import { GitHubApi } from '../src/GitHubApi'
 import { GitHubApiLiveBase, GitHubAppSigner } from '../src/GitHubApiLive'
+import { GitHubGitCredentials } from '../src/GitHubGitCredentials'
 import { GitHubId } from '../src/GitHubIdentity'
 import {
 	GitHubAccessLevel,
@@ -140,9 +141,13 @@ describe('GitHubApiLive', () => {
 	it.effect('logs app credentials GitHub refuses even with a new installation token, without the key', ({ expect }) =>
 		Effect.gen(function* () {
 			const logs: Array<string> = []
-			const logger = Logger.layer([Logger.make((entry) => logs.push(JSON.stringify(Logger.formatStructured.log(entry))))])
+			const logger = Logger.layer([
+				Logger.make((entry) => logs.push(JSON.stringify(Logger.formatStructured.log(entry)))),
+			])
 			const httpClient = HttpClient.make((request) =>
-				Effect.succeed(HttpClientResponse.fromWeb(request, Response.json({ message: 'Bad credentials' }, { status: 401 }))),
+				Effect.succeed(
+					HttpClientResponse.fromWeb(request, Response.json({ message: 'Bad credentials' }, { status: 401 })),
+				),
 			)
 			const error = yield* Effect.flatMap(GitHubApi, (api) => api.fetchIssue({ issue })).pipe(
 				Effect.provide(makeLayer(httpClient)),
@@ -197,6 +202,53 @@ describe('GitHubApiLive', () => {
 			expect(info.title).toBe('Adapter')
 			expect(yield* Ref.get(tokenRequests)).toBe(2)
 			expect(yield* Ref.get(apiRequests)).toBe(2)
+		}),
+	)
+
+	it.effect('gives git the same cached installation token as Basic auth, and narrows a refused token', ({ expect }) =>
+		Effect.gen(function* () {
+			const tokenRequests = yield* Ref.make(0)
+			const httpClient = HttpClient.make((request) =>
+				Effect.gen(function* () {
+					const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie)
+					const url = new URL(web.url)
+					if (url.pathname === '/app/installations/100/access_tokens') {
+						yield* Ref.update(tokenRequests, (count) => count + 1)
+						expect(yield* Effect.promise(() => web.json())).toEqual({ repository_ids: [200] })
+						return HttpClientResponse.fromWeb(request, tokenResponse())
+					}
+					if (url.pathname === '/app/installations/101/access_tokens') {
+						return HttpClientResponse.fromWeb(request, Response.json({}, { status: 403 }))
+					}
+					return HttpClientResponse.fromWeb(
+						request,
+						Response.json({
+							number: 42,
+							title: 'Adapter',
+							body: null,
+							state: 'open',
+							html_url: 'https://github.test/humanlayer/channels/issues/42',
+							user: participant,
+						}),
+					)
+				}),
+			)
+
+			const [authorization, refused] = yield* Effect.gen(function* () {
+				const api = yield* GitHubApi
+				const git = yield* GitHubGitCredentials
+				yield* api.fetchIssue({ issue })
+				const authorization = yield* git.authorization({ repository: issue })
+				const refused = yield* Effect.flip(
+					git.authorization({ repository: { ...issue, installationId: GitHubId.make(101) } }),
+				)
+				return [authorization, refused] as const
+			}).pipe(Effect.provide(makeLayer(httpClient)))
+
+			expect(Redacted.value(authorization)).toBe(`Basic ${btoa('x-access-token:installation-token-never-log')}`)
+			expect(JSON.stringify(authorization)).not.toContain('installation-token-never-log')
+			expect(yield* Ref.get(tokenRequests)).toBe(1)
+			expect(refused).toMatchObject({ operation: 'create_git_credentials', reason: 'forbidden', status: 403 })
 		}),
 	)
 
@@ -285,7 +337,11 @@ describe('GitHubApiLive', () => {
 
 	it.effect('reacts to an issue or pull request itself, and removes only the bot’s own reaction', ({ expect }) =>
 		Effect.gen(function* () {
-			const calls = yield* Queue.unbounded<{ readonly method: string; readonly path: string; readonly body: string }>()
+			const calls = yield* Queue.unbounded<{
+				readonly method: string
+				readonly path: string
+				readonly body: string
+			}>()
 			const httpClient = HttpClient.make((request) =>
 				Effect.gen(function* () {
 					const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie)
@@ -308,13 +364,19 @@ describe('GitHubApiLive', () => {
 						return HttpClientResponse.fromWeb(request, new Response(null, { status: 204 }))
 					}
 					/** GitHub answers 200, not 201, when the bot already has this reaction. */
-					return HttpClientResponse.fromWeb(request, Response.json({ id: 702, content: 'eyes', user: participant }))
+					return HttpClientResponse.fromWeb(
+						request,
+						Response.json({ id: 702, content: 'eyes', user: participant }),
+					)
 				}),
 			)
 
 			yield* Effect.gen(function* () {
 				const api = yield* GitHubApi
-				yield* api.addReaction({ target: { _tag: 'Discussion', discussion: { _tag: 'Issue', ref: issue } }, reaction: 'eyes' })
+				yield* api.addReaction({
+					target: { _tag: 'Discussion', discussion: { _tag: 'Issue', ref: issue } },
+					reaction: 'eyes',
+				})
 				yield* api.addReaction({
 					target: { _tag: 'Discussion', discussion: { _tag: 'PullRequest', ref: pullRequest } },
 					reaction: 'eyes',

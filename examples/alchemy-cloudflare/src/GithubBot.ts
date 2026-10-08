@@ -115,35 +115,6 @@ const gitHubMentionText = (event: GitHubMentioned) =>
  * hands the delivery to the discussion's AgentSession, which finishes it when its turn ends. Until then the
  * mailbox holds later events back.
  */
-const onMentioned = (event: GitHubMentioned, context: DeliveryContext) => {
-	const discussion = gitHubMentionDiscussion(event)
-	return Effect.gen(function* () {
-		if (!(yield* respondToMentionAccess(event))) return
-
-		yield* Effect.logInfo('Authorized mention received')
-		yield* discussion.subscribe()
-		const message = yield* Schema.encodeEffect(AgentSessionMessage)(
-			AgentSessionMessage.make({
-				prompt: gitHubMentionText(event),
-				githubDiscussion: discussion,
-				deliveryId: context.deliveryId,
-				accessToken: context.accessToken,
-			}),
-		).pipe(Effect.orDie)
-		const agentSessions = yield* AgentSessions
-		yield* agentSessions.getByName(discussion.mailboxKey).send(message)
-		return yield* context.handoff()
-	}).pipe(
-		Effect.annotateLogs({
-			...githubRepositoryLogAnnotations(discussion.ref),
-			'github.discussion_kind': discussion._tag,
-			'github.discussion_number': discussion.ref.number,
-			'github.event_id': event.trigger.eventId,
-			'github.actor': event.trigger.actor.login,
-			'delivery.id': context.deliveryId,
-		}),
-	)
-}
 
 const githubRepositoryLogAnnotations = (ref: GitHubRepositoryRef) => ({
 	'github.owner': ref.owner,
@@ -193,7 +164,35 @@ export const githubHandlers = {
 			}),
 		),
 
-	onMentioned,
+	onMentioned: (event: GitHubMentioned, context: DeliveryContext) => {
+		const discussion = gitHubMentionDiscussion(event)
+		return Effect.gen(function* () {
+			if (!(yield* respondToMentionAccess(event))) return
+
+			yield* Effect.logInfo('Authorized mention received')
+			yield* discussion.subscribe()
+			const message = yield* Schema.encodeEffect(AgentSessionMessage)(
+				AgentSessionMessage.make({
+					prompt: gitHubMentionText(event),
+					githubDiscussion: discussion,
+					deliveryId: context.deliveryId,
+					accessToken: context.accessToken,
+				}),
+			).pipe(Effect.orDie)
+			const agentSessions = yield* AgentSessions
+			yield* agentSessions.getByName(discussion.mailboxKey).send(message)
+			return yield* context.handoff()
+		}).pipe(
+			Effect.annotateLogs({
+				...githubRepositoryLogAnnotations(discussion.ref),
+				'github.discussion_kind': discussion._tag,
+				'github.discussion_number': discussion.ref.number,
+				'github.event_id': event.trigger.eventId,
+				'github.actor': event.trigger.actor.login,
+				'delivery.id': context.deliveryId,
+			}),
+		)
+	},
 	onSubscribedPrEvents: (event, context) =>
 		Effect.gen(function* () {
 			/** TODO if the issue(s) are failing CI checks then we shoudl like address them */

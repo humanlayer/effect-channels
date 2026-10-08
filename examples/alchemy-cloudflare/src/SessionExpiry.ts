@@ -36,7 +36,7 @@ export class SessionExpiry extends Context.Service<
 		readonly touch: Effect.Effect<number>
 		/** Whether the deadline has passed: the session is waiting for its alarm to delete it. */
 		readonly expired: Effect.Effect<boolean>
-		/** Give a written session an alarm if it has none, such as one written before expiry existed. */
+		/** Give a session with a deadline an alarm if it has none. */
 		readonly ensureScheduled: Effect.Effect<void>
 		/**
 		 * The object's alarm when no turn holds it: past the deadline, run `deleteWorkspace` and delete the
@@ -61,8 +61,8 @@ export class SessionExpiry extends Context.Service<
 			}),
 			ensureScheduled: Effect.gen(function* () {
 				if ((yield* storage.getAlarm) !== null) return
-				const deadline = (yield* storage.get(DEADLINE_KEY)) ?? (yield* touch)
-				yield* storage.setAlarm(deadline)
+				const deadline = yield* storage.get(DEADLINE_KEY)
+				if (deadline !== undefined) yield* storage.setAlarm(deadline)
 			}),
 			alarm: (deleteWorkspace) =>
 				Effect.gen(function* () {

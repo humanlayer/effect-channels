@@ -20,20 +20,26 @@ import {
 	withWorkspaceContainer,
 } from '@cloudflare/computer/backends/container'
 import { WorkerShellBackend } from '@cloudflare/computer/backends/worker-shell'
-import { createGitClient, type GitClient, type GitCloneOptions } from '@cloudflare/computer/git'
+import { createGitClient, type GitClient } from '@cloudflare/computer/git'
 import jq from '@cloudflare/computer/shell/jq'
 import { DurableObject } from 'cloudflare:workers'
 import { Data, Effect, Option, Schema } from 'effect'
 
 import {
 	type Backend,
-	type ClonedRepo,
 	type CommandInput,
 	type CommandOutput,
 	COMPUTER_BINDING,
 	type ComputerResult,
+	type FetchedBranch,
 	type FileInfo,
-	type RepoSpec,
+	GIT_IDENTITY,
+	type GitHeaders,
+	type MergedRef,
+	type PreparedRepo,
+	type PrepareRepoInput,
+	type PulledRepo,
+	type PushedBranch,
 	WORKSPACE_ROOT,
 } from './Contract'
 
@@ -108,6 +114,84 @@ const attempt = <A>(operation: () => Promise<A>): Promise<ComputerResult<A>> =>
 		),
 	)
 
+/** Replace each header value in `text`, so a credential in an error message goes no further. */
+const scrub = (text: string, headers: GitHeaders) =>
+	Object.values(headers).reduce((scrubbed, value) => scrubbed.replaceAll(value, '[redacted]'), text)
+
+/** {@link attempt} for a git network operation, scrubbing its headers from any failure. */
+const attemptGit = async <A>(headers: GitHeaders, operation: () => Promise<A>): Promise<ComputerResult<A>> => {
+	const result = await attempt(operation)
+	return result.ok ? result : { ...result, message: scrub(result.message, headers) }
+}
+
+const repoDir = (name: string) => `${WORKSPACE_ROOT}/${name}`
+
+/** The remote has no such ref: isomorphic-git's `NotFoundError`, wrapped in the git client's error. */
+const RefNotFound = Schema.Struct({ cause: Schema.Struct({ code: Schema.Literal('NotFoundError') }) })
+const isRefNotFound = Schema.is(RefNotFound)
+
+const currentBranchOf = async (git: GitClient, dir: string) => {
+	const branch = await git.currentBranch({ dir })
+	if (branch === undefined) throw new Error(`${dir} has no branch checked out`)
+	return branch
+}
+
+/** Make `git pull` on `branch` pull the remote branch of the same name. */
+const trackOrigin = async (git: GitClient, dir: string, branch: string) => {
+	await git.configSet({ dir, path: `branch.${branch}.remote`, value: 'origin' })
+	await git.configSet({ dir, path: `branch.${branch}.merge`, value: `refs/heads/${branch}` })
+}
+
+const pushToOrigin = async (git: GitClient, dir: string, branch: string, headers: Record<string, string>) => {
+	const result = await git.push({ dir, remote: 'origin', ref: branch, remoteRef: branch, headers })
+	if (!result.ok) throw new Error(`git push of ${branch} was rejected: ${result.error ?? 'no reason given'}`)
+}
+
+/** The workspace file methods `prepareRepo` uses. */
+type RepoFiles = {
+	readonly mkdir: (path: string, options: { readonly recursive: boolean }) => Promise<void>
+	readonly rm: (path: string, options: { readonly recursive: boolean; readonly force: boolean }) => Promise<void>
+}
+
+/** Clone the repo and check out its work branch; see `Computer.prepare`. */
+const prepareRepo = async (git: GitClient, fs: RepoFiles, input: PrepareRepoInput): Promise<PreparedRepo> => {
+	const dir = repoDir(input.name)
+	const headers = { ...input.headers }
+	await fs.mkdir(WORKSPACE_ROOT, { recursive: true })
+	await fs.rm(dir, { recursive: true, force: true })
+	await git.clone({ url: input.url, dir, headers })
+	const defaultBranch = await currentBranchOf(git, dir)
+	await git.configSet({ dir, path: 'user.name', value: GIT_IDENTITY.name })
+	await git.configSet({ dir, path: 'user.email', value: GIT_IDENTITY.email })
+
+	let createdBranch = false
+	if (input.branch !== null && input.branch !== defaultBranch) {
+		const remoteHasBranch = await git
+			.fetch({ dir, remote: 'origin', ref: input.branch, singleBranch: true, headers })
+			.then(
+				() => true,
+				(cause: unknown) => (isRefNotFound(cause) ? false : Promise.reject(cause)),
+			)
+		if (remoteHasBranch) {
+			await git.branch({ dir, name: input.branch, startPoint: `refs/remotes/origin/${input.branch}` })
+			await git.checkout({ dir, ref: input.branch, force: true })
+		} else {
+			await git.branch({ dir, name: input.branch, checkout: true })
+			await pushToOrigin(git, dir, input.branch, headers)
+			createdBranch = true
+		}
+		await trackOrigin(git, dir, input.branch)
+	}
+
+	return {
+		dir,
+		branch: input.branch ?? defaultBranch,
+		defaultBranch,
+		commit: await git.revParse({ dir, ref: 'HEAD' }),
+		createdBranch,
+	}
+}
+
 /** Abort the object so it restarts empty. abort throws to unwind; the object resets either way. */
 const abortQuietly = (abort: () => void) => Effect.runSync(Effect.ignore(Effect.try(abort)))
 
@@ -157,31 +241,100 @@ export class Computer extends withWorkspace(ComputerBase, (self) => ({
 	}
 
 	/**
-	 * Clone each repo into `/workspace/<name>`, one at a time, replacing whatever a cut-off earlier attempt
-	 * left there. Rejects with the first repo that fails.
+	 * Clone the repo into `/workspace/<name>`, replacing whatever a cut-off earlier attempt left there, and
+	 * check out the branch to work on. A branch the remote has is checked out from it; a new one is made
+	 * from the default branch and pushed, so the remote has it from the start. Rejects with what failed.
 	 */
-	async prepare(repos: ReadonlyArray<RepoSpec>): Promise<ReadonlyArray<ClonedRepo>> {
+	async prepare(input: PrepareRepoInput): Promise<PreparedRepo> {
+		using workspace = await getWorkspace(this)
+		return await prepareRepo(workspace.git, workspace.fs, input).catch((cause: unknown) => {
+			throw new Error(scrub(`Preparing ${input.name} from ${input.url} failed: ${String(cause)}`, input.headers))
+		})
+	}
+
+	/**
+	 * Fast-forward the current branch of `/workspace/<name>` to its remote branch, so the agent sees commits
+	 * pushed since it was cloned. Fails rather than merge, such as when local commits or edits are in the way.
+	 */
+	async pull(input: { readonly name: string; readonly headers: GitHeaders }): Promise<ComputerResult<PulledRepo>> {
 		using workspace = await getWorkspace(this)
 		const git: GitClient = workspace.git
-		await workspace.fs.mkdir(WORKSPACE_ROOT, { recursive: true })
+		const dir = repoDir(input.name)
+		return await attemptGit(input.headers, async () => {
+			const before = await git.revParse({ dir, ref: 'HEAD' })
+			await git.pull({ dir, fastForwardOnly: true, headers: { ...input.headers } })
+			return { before, after: await git.revParse({ dir, ref: 'HEAD' }) }
+		})
+	}
 
-		const cloned: Array<ClonedRepo> = []
-		const clone = async (repo: RepoSpec): Promise<ClonedRepo> => {
-			const dir = `${WORKSPACE_ROOT}/${repo.name}`
-			await workspace.fs.rm(dir, { recursive: true, force: true })
-			const options: GitCloneOptions = { url: repo.url, dir }
-			if (repo.ref !== null) options.ref = repo.ref
-			await git.clone(options)
-			return { ...repo, dir, commit: await git.revParse({ dir, ref: 'HEAD' }) }
-		}
-		for (const repo of repos) {
-			cloned.push(
-				await clone(repo).catch((cause: unknown) => {
-					throw new Error(`Cloning ${repo.name} from ${repo.url} failed: ${String(cause)}`, { cause })
-				}),
-			)
-		}
-		return cloned
+	/** Fetch the remote's `branch` into `origin/<branch>`, leaving the working tree alone. */
+	async fetchBranch(input: {
+		readonly name: string
+		readonly branch: string
+		readonly headers: GitHeaders
+	}): Promise<ComputerResult<FetchedBranch>> {
+		using workspace = await getWorkspace(this)
+		const git: GitClient = workspace.git
+		const dir = repoDir(input.name)
+		return await attemptGit(input.headers, async () => {
+			await git.fetch({
+				dir,
+				remote: 'origin',
+				ref: input.branch,
+				singleBranch: true,
+				headers: { ...input.headers },
+			})
+			return {
+				branch: input.branch,
+				commit: await git.revParse({ dir, ref: `refs/remotes/origin/${input.branch}` }),
+			}
+		})
+	}
+
+	/** Push `branch` to the remote branch of the same name. Fails unless `branch` is checked out. */
+	async pushBranch(input: {
+		readonly name: string
+		readonly branch: string
+		readonly headers: GitHeaders
+	}): Promise<ComputerResult<PushedBranch>> {
+		using workspace = await getWorkspace(this)
+		const git: GitClient = workspace.git
+		const dir = repoDir(input.name)
+		return await attemptGit(input.headers, async () => {
+			const current = await git.currentBranch({ dir })
+			if (current !== input.branch) {
+				throw new Error(`The checked-out branch is ${current ?? 'none (detached HEAD)'}, not ${input.branch}.`)
+			}
+			await pushToOrigin(git, dir, input.branch, { ...input.headers })
+			return { branch: input.branch, commit: await git.revParse({ dir, ref: 'HEAD' }) }
+		})
+	}
+
+	/**
+	 * Merge `ref`, such as `origin/main`, into the current branch, fast-forwarding when it can, and update the
+	 * working tree to the result. Refuses while tracked files have uncommitted changes. A conflict aborts the
+	 * merge and leaves everything as it was.
+	 */
+	async mergeRef(input: { readonly name: string; readonly ref: string }): Promise<ComputerResult<MergedRef>> {
+		using workspace = await getWorkspace(this)
+		const git: GitClient = workspace.git
+		const dir = repoDir(input.name)
+		return await attempt(async () => {
+			const changed = (await git.status({ dir })).filter((entry) => entry.worktree !== '?')
+			if (changed.length > 0) {
+				throw new Error(
+					`Commit or discard the changes to ${changed.map((entry) => entry.path).join(', ')} before merging.`,
+				)
+			}
+			const branch = await currentBranchOf(git, dir)
+			const result = await git.merge({ dir, theirs: input.ref })
+			await git.checkout({ dir, ref: branch, force: true })
+			return {
+				commit: await git.revParse({ dir, ref: 'HEAD' }),
+				fastForward: result.fastForward === true,
+				alreadyMerged: result.alreadyMerged === true,
+			}
+		})
 	}
 
 	/**

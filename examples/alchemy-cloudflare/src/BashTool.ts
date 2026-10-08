@@ -3,9 +3,12 @@
  * (just-bash, fast, with the common text commands and git) or the container (Linux, with package managers
  * and language runtimes, slower to start). fold-agent's bash tool starts real processes, which a Worker
  * cannot; this one keeps its parameters and its output handling - stdout and stderr trimmed to the last
- * 2000 lines or 50KB, and a failure carrying the output when the command fails - and adds `backend`.
+ * 2000 lines or 50KB with the whole output saved to a file in the workspace, and a failure carrying the
+ * output when the command fails - and adds `backend`.
  */
+import { OutputStore } from '@humanlayer/fold-agent'
 import {
+	CurrentToolCall,
 	defaultMaxBytes,
 	defaultMaxLines,
 	defineTool,
@@ -17,8 +20,8 @@ import {
 } from '@humanlayer/fold-core'
 import { Effect, Schema } from 'effect'
 
-import { type CommandInput, type CommandOutput, WORKSPACE_ROOT } from './computer/Contract'
-import type { ShellError } from './Workspace'
+import { type CommandOutput, WORKSPACE_ROOT } from './computer/Contract'
+import { Workspace } from './Workspace'
 
 const DEFAULT_TIMEOUT_MS = 120_000
 const MAX_TIMEOUT_MS = 600_000
@@ -44,7 +47,7 @@ const BashParameters = Schema.Struct({
 const DESCRIPTION =
 	`Run a bash command in the session's workspace, where the repo(s) are cloned under ${WORKSPACE_ROOT}. ` +
 	'Returns stdout then stderr, keeping the last ' +
-	`${defaultMaxLines} lines or ${formatSize(defaultMaxBytes)}. Commands start in ${WORKSPACE_ROOT} unless ` +
+	`${defaultMaxLines} lines or ${formatSize(defaultMaxBytes)}, with the full output saved to a file you can read. Commands start in ${WORKSPACE_ROOT} unless ` +
 	'you pass workdir.\n\n' +
 	'Commands run in one of two places, which see the same files:\n' +
 	'- backend "shell" (the default): a lightweight shell (just-bash), not a full Linux machine. It has the ' +
@@ -64,51 +67,74 @@ const DESCRIPTION =
 	'file tools.\n\n' +
 	'Try the shell first, and switch to the container when a command is not found or needs a real machine.'
 
-/** The command's output as the model sees it: stdout, then stderr, trimmed from the front. */
-const formatOutput = ({ stdout, stderr }: CommandOutput) => {
-	const text = stdout.length > 0 && stderr.length > 0 ? `${stdout.replace(/\n?$/, '\n')}${stderr}` : stdout + stderr
-	const truncation = truncateTail(text)
-	if (!truncation.truncated) return text
-	return `[Showing the last ${truncation.outputLines} of ${truncation.totalLines} lines]\n${truncation.content}`
-}
+/** The command's whole output: stdout, then stderr. */
+const combinedOutput = ({ stdout, stderr }: CommandOutput) =>
+	stdout.length > 0 && stderr.length > 0 ? `${stdout.replace(/\n?$/, '\n')}${stderr}` : stdout + stderr
 
-/** Build the bash tool over one session's shell. */
-export const bashTool = (run: (input: CommandInput) => Effect.Effect<CommandOutput, ShellError>): FoldTool =>
-	defineTool({
-		name: 'bash',
-		description: DESCRIPTION,
-		parameters: BashParameters,
-		success: ToolResultText,
-		failure: ToolResultFailure,
-		handler: (params) =>
-			Effect.gen(function* () {
-				const timeoutMs = params.timeout_ms ?? DEFAULT_TIMEOUT_MS
-				if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_TIMEOUT_MS) {
-					return yield* Effect.fail(
-						`Invalid timeout_ms: must be between 1 and ${MAX_TIMEOUT_MS} milliseconds`,
-					)
-				}
-				const cwd =
-					params.workdir === undefined
-						? WORKSPACE_ROOT
-						: params.workdir.startsWith('/')
-							? params.workdir
-							: `${WORKSPACE_ROOT}/${params.workdir}`
+/**
+ * The output as the model sees it: its tail, and when that is not all of it, where the whole output is
+ * saved. Saving is best-effort; the notice says when it failed.
+ */
+const visibleOutput = (text: string) =>
+	Effect.gen(function* () {
+		const truncation = truncateTail(text)
+		if (!truncation.truncated) return text
+		const outputStore = yield* OutputStore
+		const { toolCallId } = yield* CurrentToolCall
+		const saved = yield* outputStore.append(toolCallId, text).pipe(
+			Effect.tap((ref) =>
+				Effect.logInfo('bash.output_saved').pipe(
+					Effect.annotateLogs({ path: ref.path, lines: truncation.totalLines, bytes: text.length }),
+				),
+			),
+			Effect.map((ref) => `Full output: ${ref.path}`),
+			Effect.catch((error) =>
+				Effect.logWarning('bash.output_save failed', error).pipe(
+					Effect.as('The full output could not be saved'),
+				),
+			),
+		)
+		const start = truncation.totalLines - truncation.outputLines + 1
+		return `${truncation.content}\n\n[Showing lines ${start}-${truncation.totalLines} of ${truncation.totalLines}. ${saved}]`
+	})
 
-				const output = yield* run({
+/** The bash tool, over the session's {@link Workspace}, saving long output to the {@link OutputStore}. */
+export const bashTool: FoldTool<Workspace | OutputStore> = defineTool({
+	name: 'bash',
+	description: DESCRIPTION,
+	parameters: BashParameters,
+	success: ToolResultText,
+	failure: ToolResultFailure,
+	handler: (params) =>
+		Effect.gen(function* () {
+			const timeoutMs = params.timeout_ms ?? DEFAULT_TIMEOUT_MS
+			if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_TIMEOUT_MS) {
+				return yield* Effect.fail(`Invalid timeout_ms: must be between 1 and ${MAX_TIMEOUT_MS} milliseconds`)
+			}
+			const cwd =
+				params.workdir === undefined
+					? WORKSPACE_ROOT
+					: params.workdir.startsWith('/')
+						? params.workdir
+						: `${WORKSPACE_ROOT}/${params.workdir}`
+
+			const workspace = yield* Workspace
+			const output = yield* workspace
+				.exec({
 					backend: params.backend ?? 'shell',
 					command: params.command,
 					cwd,
 					timeoutMs,
-				}).pipe(Effect.mapError((error) => `The shell could not run the command: ${error.message}`))
-				const text = formatOutput(output).replace(/\n+$/, '')
+				})
+				.pipe(Effect.mapError((error) => `The shell could not run the command: ${error.message}`))
+			const text = (yield* visibleOutput(combinedOutput(output))).replace(/\n+$/, '')
 
-				if (output.status === 'cancelled') {
-					return yield* Effect.fail(`${text}\n\nCommand timed out after ${timeoutMs} milliseconds`)
-				}
-				if (output.exitCode !== 0) {
-					return yield* Effect.fail(`${text}\n\nCommand exited with code ${output.exitCode}`)
-				}
-				return ToolResultText.make({ text: text.length === 0 ? '(no output)' : text })
-			}).pipe(Effect.mapError((text) => ToolResultFailure.make({ text }))),
-	})
+			if (output.status === 'cancelled') {
+				return yield* Effect.fail(`${text}\n\nCommand timed out after ${timeoutMs} milliseconds`)
+			}
+			if (output.exitCode !== 0) {
+				return yield* Effect.fail(`${text}\n\nCommand exited with code ${output.exitCode}`)
+			}
+			return ToolResultText.make({ text: text.length === 0 ? '(no output)' : text })
+		}).pipe(Effect.mapError((text) => ToolResultFailure.make({ text }))),
+})

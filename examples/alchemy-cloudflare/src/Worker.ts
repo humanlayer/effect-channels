@@ -1,6 +1,7 @@
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto'
 import { DeliveryMailboxes } from '@humanlayer/channels-alchemy-cloudflare'
 import { GitHubApiLive } from '@humanlayer/channels-github'
+import { Photon } from '@humanlayer/fold-agent/tools/files'
 import * as Cloudflare from 'alchemy/Cloudflare'
 import { Effect, Layer } from 'effect'
 import { FetchHttpClient, HttpRouter } from 'effect/http'
@@ -32,6 +33,7 @@ const WorkerLive = ChannelsDeliveryMailboxesLive.pipe(
 	Layer.provideMerge(DeliveryApi.layerSelfBinding),
 	Layer.provideMerge(AutoLabel.layer),
 	Layer.provideMerge(GitHubApiLive),
+	Layer.provideMerge(Photon.layer),
 	Layer.provideMerge(Cloudflare.Workers.AIBinding),
 	Layer.provideMerge(FetchHttpClient.layer),
 	Layer.provideMerge(NodeCrypto.layer),

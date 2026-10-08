@@ -15,17 +15,63 @@ export const WORKSPACE_ROOT = '/workspace'
 /** The Computer's binding name on its own Worker, which the shell uses to call back into it. */
 export const COMPUTER_BINDING = 'Computer'
 
-export type RepoSpec = {
+/**
+ * Request headers for one git network operation, such as a private repository's `Authorization`. Sent with
+ * that request only: never written to the remote's URL, `.git/config`, or a log.
+ */
+export type GitHeaders = Readonly<Record<string, string>>
+
+/** Who the agent's commits are by. Written to each repo's own git config. */
+export const GIT_IDENTITY = { name: 'HumanLayer Agent', email: 'agent@humanlayer.dev' } as const
+
+export type PrepareRepoInput = {
+	/** The directory under `/workspace`. */
 	readonly name: string
+	/** An https URL with no credentials. */
 	readonly url: string
-	/** Branch, tag, or commit; the remote's default branch when null. */
-	readonly ref: string | null
+	/**
+	 * The branch to work on: checked out from the remote when it is there, otherwise created from the
+	 * default branch and pushed. `null` stays on the default branch.
+	 */
+	readonly branch: string | null
+	readonly headers: GitHeaders
 }
 
-export type ClonedRepo = RepoSpec & {
+export type PreparedRepo = {
 	readonly dir: string
+	/** The branch checked out. */
+	readonly branch: string
+	/** The remote's default branch. */
+	readonly defaultBranch: string
 	/** The commit checked out. */
 	readonly commit: string
+	/** Whether `branch` was new, so this created it and pushed it. */
+	readonly createdBranch: boolean
+}
+
+/** A pulled repo's commit before and after the pull; the same commit when nothing came in. */
+export type PulledRepo = {
+	readonly before: string
+	readonly after: string
+}
+
+/** A remote branch fetched into `origin/<branch>`. */
+export type FetchedBranch = {
+	readonly branch: string
+	readonly commit: string
+}
+
+/** A branch pushed to the remote branch of the same name. */
+export type PushedBranch = {
+	readonly branch: string
+	readonly commit: string
+}
+
+/** A ref merged into the current branch. */
+export type MergedRef = {
+	readonly commit: string
+	readonly fastForward: boolean
+	readonly alreadyMerged: boolean
 }
 
 /**

@@ -215,6 +215,7 @@ export const GitHubApiOperation = Schema.Literals([
 	'fetch_actions_job',
 	'download_actions_job_log',
 	'fetch_user_access',
+	'create_git_credentials',
 ])
 export type GitHubApiOperation = typeof GitHubApiOperation.Type
 

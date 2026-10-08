@@ -19,13 +19,13 @@ import {
 	AgentFinishedLogEntry,
 	AgentId,
 	EventId,
-	EventLog,
 	MessageId,
 	UserMessageLogEntry,
 	type LogEntry,
 } from '@humanlayer/fold-core'
 import * as Cloudflare from 'alchemy/Cloudflare'
-import { Deferred, Effect, Fiber, Layer, Option, Predicate, Queue, Redacted, Ref, Stream } from 'effect'
+import { RuntimeContext } from 'alchemy/RuntimeContext'
+import { Deferred, Effect, Fiber, Layer, Option, Predicate, Queue, Redacted, Ref } from 'effect'
 import { HttpClient, HttpRouter, HttpServerRequest } from 'effect/http'
 
 import { DeliveryApi } from '../src/DeliveryApi'
@@ -36,6 +36,7 @@ import {
 	AgentSessionMessage,
 	DeliveryTurns,
 	RESTART_NUDGE,
+	RepositoryUpdate,
 	type TurnSession,
 } from '../src/DeliveryTurn'
 import { RunRecovery } from '../src/SessionRecovery'
@@ -91,7 +92,8 @@ const agentFinished = (seq: number, outcome: AgentFinishedLogEntry['outcome'], r
 const working = SetDeliveryActivity.make({
 	activity: DeliveryActivity.cases.Working.make({ message: 'Working on it' }),
 })
-const somethingWentWrong = FailDelivery.make({ markdown: 'Something went wrong, and I could not finish.' })
+const somethingWentWrong = (details: string) =>
+	FailDelivery.make({ markdown: `Something went wrong, and I could not finish.\n\n\`\`\`\n${details}\n\`\`\`` })
 
 interface Applied {
 	readonly deliveryId: string
@@ -113,6 +115,7 @@ const makeHarness = (
 		readonly open?: Effect.Effect<void, RepoCloneError>
 		readonly gate?: Deferred.Deferred<void>
 		readonly finishError?: DeliveryMutationError
+		readonly repository?: RepositoryUpdate
 	} = {},
 ) =>
 	Effect.gen(function* () {
@@ -121,6 +124,8 @@ const makeHarness = (
 		const sent = yield* Ref.make<ReadonlyArray<string>>([])
 		const applied = yield* Ref.make<ReadonlyArray<Applied>>([])
 		const turns = yield* Queue.unbounded<Fiber.Fiber<void>>()
+		const pulls = yield* Ref.make(0)
+		const promptSent = yield* Deferred.make<void>()
 
 		const session: TurnSession = {
 			rootAgentId,
@@ -128,6 +133,7 @@ const makeHarness = (
 			send: (prompt) =>
 				Effect.gen(function* () {
 					yield* Ref.update(sent, (all) => [...all, prompt])
+					yield* Deferred.succeed(promptSent, undefined)
 					if (options.gate !== undefined) yield* Deferred.await(options.gate)
 					const seq = (yield* Ref.get(log)).length
 					const finished = agentFinished(seq + 1, options.outcome ?? 'completed', 'done')
@@ -188,7 +194,13 @@ const makeHarness = (
 			),
 			Layer.succeed(
 				AgentConversation,
-				AgentConversation.of({ open: () => (options.open ?? Effect.void).pipe(Effect.as(session)) }),
+				AgentConversation.of({
+					open: () => (options.open ?? Effect.void).pipe(Effect.as(session)),
+					pullRepository: () =>
+						Ref.update(pulls, (count) => count + 1).pipe(
+							Effect.as(options.repository ?? RepositoryUpdate.Unchanged()),
+						),
+				}),
 			),
 			Layer.succeed(
 				RunRecovery,
@@ -201,16 +213,21 @@ const makeHarness = (
 					alarm: Effect.die('unexpected recovery alarm'),
 				}),
 			),
-			Layer.mock(EventLog, { entries: () => Stream.fromIterableEffect(Ref.get(log)) }),
 		)
 
 		return {
-			layer: DeliveryTurns.layer.pipe(Layer.provide(dependencies)),
+			layer: DeliveryTurns.layer.pipe(
+				Layer.provide(dependencies),
+				Layer.merge(Layer.mock(RuntimeContext, { Type: 'Worker', id: 'delivery-turns-test', env: {} })),
+			),
+			/** Wait until the fake session receives a prompt. */
+			promptSent: Deferred.await(promptSent),
 			/** Wait for the next turn started in the background to end. */
 			nextTurnEnded: Effect.flatMap(Queue.take(turns), Fiber.join),
 			startedTurns: Queue.size(turns),
 			saved: Ref.get(saved),
 			sent: Ref.get(sent),
+			pulls: Ref.get(pulls),
 			applied: Ref.get(applied),
 		}
 	})
@@ -225,6 +242,7 @@ describe('DeliveryTurns.accept', () => {
 			yield* Effect.gen(function* () {
 				const turns = yield* DeliveryTurns
 				yield* turns.accept(message)
+				yield* harness.promptSent
 				expect(yield* harness.saved).toEqual(Option.some(ActiveDeliveryRecord.make({ message, fromSeq: 0 })))
 				yield* Deferred.succeed(gate, undefined)
 				yield* harness.nextTurnEnded
@@ -266,23 +284,31 @@ describe('DeliveryTurns.accept', () => {
 		}),
 	)
 
-	it.effect('records where the Fold log ended, so a later turn reads only its own entries', ({ expect }) =>
-		Effect.gen(function* () {
-			const harness = yield* makeHarness({
-				log: [userMessage(0, 'earlier'), agentFinished(1, 'completed', 'old')],
-			})
-			const message = messageFor('two')
+	it.effect(
+		'records where the Fold log ended before sending, so a later turn reads only its own entries',
+		({ expect }) =>
+			Effect.gen(function* () {
+				const gate = yield* Deferred.make<void>()
+				const harness = yield* makeHarness({
+					gate,
+					log: [userMessage(0, 'earlier'), agentFinished(1, 'completed', 'old')],
+				})
+				const message = messageFor('two')
 
-			yield* Effect.gen(function* () {
-				const turns = yield* DeliveryTurns
-				yield* turns.accept(message)
-				expect(yield* harness.saved).toEqual(Option.some(ActiveDeliveryRecord.make({ message, fromSeq: 2 })))
-				yield* harness.nextTurnEnded
-			}).pipe(Effect.provide(harness.layer))
+				yield* Effect.gen(function* () {
+					const turns = yield* DeliveryTurns
+					yield* turns.accept(message)
+					yield* harness.promptSent
+					expect(yield* harness.saved).toEqual(
+						Option.some(ActiveDeliveryRecord.make({ message, fromSeq: 2 })),
+					)
+					yield* Deferred.succeed(gate, undefined)
+					yield* harness.nextTurnEnded
+				}).pipe(Effect.provide(harness.layer))
 
-			expect(yield* harness.sent).toEqual(['fix the bug'])
-			expect((yield* harness.applied).at(-1)?.mutation).toEqual(CompleteDelivery.make({ markdown: 'done' }))
-		}),
+				expect(yield* harness.sent).toEqual(['fix the bug'])
+				expect((yield* harness.applied).at(-1)?.mutation).toEqual(CompleteDelivery.make({ markdown: 'done' }))
+			}),
 	)
 
 	it.effect('fails the delivery when the Fold run ends in an error', ({ expect }) =>
@@ -311,7 +337,10 @@ describe('DeliveryTurns.accept', () => {
 			}).pipe(Effect.provide(harness.layer))
 
 			expect(yield* harness.sent).toEqual([])
-			expect((yield* harness.applied).map(({ mutation }) => mutation)).toEqual([working, somethingWentWrong])
+			expect((yield* harness.applied).map(({ mutation }) => mutation)).toEqual([
+				working,
+				somethingWentWrong('no access'),
+			])
 			expect(yield* harness.saved).toEqual(Option.none())
 		}),
 	)
@@ -326,6 +355,51 @@ describe('DeliveryTurns.accept', () => {
 			}).pipe(Effect.provide(harness.layer))
 
 			expect(yield* harness.saved).toEqual(Option.none())
+		}),
+	)
+})
+
+describe('DeliveryTurns: pulling before a new turn', () => {
+	const run = (harness: Effect.Success<ReturnType<typeof makeHarness>>) =>
+		Effect.gen(function* () {
+			yield* (yield* DeliveryTurns).accept(messageFor('one'))
+			yield* harness.nextTurnEnded
+		}).pipe(Effect.provide(harness.layer))
+
+	it.effect('sends the prompt unchanged when no new commits came in', ({ expect }) =>
+		Effect.gen(function* () {
+			const harness = yield* makeHarness()
+			yield* run(harness)
+
+			expect(yield* harness.pulls).toBe(1)
+			expect(yield* harness.sent).toEqual(['fix the bug'])
+		}),
+	)
+
+	it.effect('tells the agent when new commits were pulled', ({ expect }) =>
+		Effect.gen(function* () {
+			const harness = yield* makeHarness({
+				repository: RepositoryUpdate.Updated({ before: 'aaaaaaa111', after: 'bbbbbbb222' }),
+			})
+			yield* run(harness)
+
+			expect(yield* harness.sent).toEqual([
+				'fix the bug\n\n<system-information>New commits were pulled into the repository since your last turn (aaaaaaa to bbbbbbb).</system-information>',
+			])
+		}),
+	)
+
+	it.effect('carries on, telling the agent, when the pull fails', ({ expect }) =>
+		Effect.gen(function* () {
+			const harness = yield* makeHarness({
+				repository: RepositoryUpdate.Failed({ reason: 'not a fast-forward' }),
+			})
+			yield* run(harness)
+
+			expect(yield* harness.sent).toEqual([
+				'fix the bug\n\n<system-information>Pulling the latest commits failed, so the repository may be behind: not a fast-forward</system-information>',
+			])
+			expect((yield* harness.applied).at(-1)?.mutation).toEqual(CompleteDelivery.make({ markdown: 'done' }))
 		}),
 	)
 })
@@ -346,6 +420,7 @@ describe('DeliveryTurns.recover', () => {
 			yield* recover(harness)
 
 			expect(yield* harness.sent).toEqual([RESTART_NUDGE])
+			expect(yield* harness.pulls).toBe(0)
 			expect(yield* harness.applied).toEqual([
 				{ deliveryId: message.deliveryId, accessToken: 'secret-token', mutation: working },
 				{
@@ -373,6 +448,19 @@ describe('DeliveryTurns.recover', () => {
 		}),
 	)
 
+	it.effect('sends the prompt when the turn was cut off before it saved where the log ended', ({ expect }) =>
+		Effect.gen(function* () {
+			const harness = yield* makeHarness({
+				saved: ActiveDeliveryRecord.make({ message }),
+				log: [userMessage(0, 'earlier'), agentFinished(1, 'completed', 'old')],
+			})
+			yield* recover(harness)
+
+			expect(yield* harness.sent).toEqual(['fix the bug'])
+			expect((yield* harness.applied).at(-1)?.mutation).toEqual(CompleteDelivery.make({ markdown: 'done' }))
+		}),
+	)
+
 	it.effect('sends the prompt when it never reached Fold', ({ expect }) =>
 		Effect.gen(function* () {
 			const harness = yield* makeHarness({ saved })
@@ -397,7 +485,9 @@ describe('DeliveryTurns.recover', () => {
 			yield* recover(harness)
 
 			expect(yield* harness.sent).toEqual([])
-			expect((yield* harness.applied).at(-1)?.mutation).toEqual(somethingWentWrong)
+			expect((yield* harness.applied).at(-1)?.mutation).toEqual(
+				somethingWentWrong('Restarts cut the turn off 3 times, so I gave up.'),
+			)
 			expect(yield* harness.saved).toEqual(Option.none())
 		}),
 	)

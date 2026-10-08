@@ -1,7 +1,8 @@
 /**
  * Effect's `FileSystem` over a session's Computer, so fold's file tools and skill loader work on the
  * workspace unchanged. It covers what they call: reading, writing, making directories, removing,
- * `stat`, `access`, `exists`, `realPath` and listing a directory. Every other method is Effect's no-op.
+ * `stat`, `access`, `exists`, `realPath` and listing a directory, and appending, which fold's output store
+ * does. Every other method is Effect's no-op.
  *
  * The workspace has no permissions, so `access` only checks the path exists. It has symlinks, but
  * `realPath` returns the path unchanged: fold only uses it to key its per-file write lock.
@@ -99,9 +100,20 @@ const toInfo = (info: FileInfo): FileSystem.File.Info => ({
 	blocks: Option.none(),
 })
 
-export const workspaceFileSystem = (computer: ComputerFiles): FileSystem.FileSystem => {
-	const stat = (path: string) => run('stat', path, computer.stat(path)).pipe(Effect.map(toInfo))
-	const readFile = (path: string) => run('readFile', path, computer.readFile(path))
+/** The workspace as a `FileSystem`, over `computer`, which looks up the session's Computer. */
+export const workspaceFileSystem = (computer: Effect.Effect<ComputerFiles>): FileSystem.FileSystem => {
+	const stat = (path: string) =>
+		run(
+			'stat',
+			path,
+			Effect.flatMap(computer, (files) => files.stat(path)),
+		).pipe(Effect.map(toInfo))
+	const readFile = (path: string) =>
+		run(
+			'readFile',
+			path,
+			Effect.flatMap(computer, (files) => files.readFile(path)),
+		)
 
 	return FileSystem.makeNoop({
 		readFile,
@@ -118,10 +130,35 @@ export const workspaceFileSystem = (computer: ComputerFiles): FileSystem.FileSys
 						}),
 				}),
 			),
-		writeFileString: (path, data) => run('writeFileString', path, computer.writeFile(path, data)),
-		makeDirectory: (path, options) => run('makeDirectory', path, computer.mkdir(path, options?.recursive ?? false)),
+		/** The workspace has no append, so appending (flag `a`) rewrites the file with `data` added. */
+		writeFileString: (path, data, options) =>
+			Effect.gen(function* () {
+				const existing = options?.flag?.startsWith('a')
+					? yield* readFile(path).pipe(
+							Effect.map((bytes) => new TextDecoder().decode(bytes)),
+							Effect.catchReason('PlatformError', 'NotFound', () => Effect.succeed('')),
+						)
+					: ''
+				yield* run(
+					'writeFileString',
+					path,
+					Effect.flatMap(computer, (files) => files.writeFile(path, existing + data)),
+				)
+			}),
+		makeDirectory: (path, options) =>
+			run(
+				'makeDirectory',
+				path,
+				Effect.flatMap(computer, (files) => files.mkdir(path, options?.recursive ?? false)),
+			),
 		remove: (path, options) =>
-			run('remove', path, computer.rm(path, options?.recursive ?? false, options?.force ?? false)),
+			run(
+				'remove',
+				path,
+				Effect.flatMap(computer, (files) =>
+					files.rm(path, options?.recursive ?? false, options?.force ?? false),
+				),
+			),
 		stat,
 		access: (path) => Effect.asVoid(stat(path)),
 		exists: (path) =>
@@ -139,6 +176,10 @@ export const workspaceFileSystem = (computer: ComputerFiles): FileSystem.FileSys
 							description: 'recursive listing is not supported',
 						}),
 					)
-				: run('readDirectory', path, computer.readdir(path)).pipe(Effect.map((names) => [...names])),
+				: run(
+						'readDirectory',
+						path,
+						Effect.flatMap(computer, (files) => files.readdir(path)),
+					).pipe(Effect.map((names) => [...names])),
 	})
 }
