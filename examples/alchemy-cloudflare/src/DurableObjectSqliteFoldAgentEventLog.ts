@@ -1,4 +1,3 @@
-/* oxlint-disable automation/no-sql-type-parameter */
 /**
  * A fold event log in a Durable Object's SQLite: one object is one session's log. Opening the log loads
  * every row, so `resumeSession` replays them; appends write through before they publish. This mirrors

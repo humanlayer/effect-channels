@@ -4,10 +4,9 @@
  */
 import type { RpcCallError } from 'alchemy'
 import * as Cloudflare from 'alchemy/Cloudflare'
-import { Clock, Context, Data, Effect, type FileSystem, Layer, Schema } from 'effect'
+import { Clock, Context, Data, Effect, FileSystem, Schema } from 'effect'
 
 import {
-	COMPUTER_WORKER_NAME,
 	type ClonedRepo,
 	type CommandInput,
 	type CommandOutput,
@@ -151,14 +150,3 @@ export class Workspace extends Context.Service<
 			}),
 		})
 }
-
-/** Bind Workspace to the Computer with the current AgentSession Durable Object's mailbox key. */
-export const WorkspaceLive = Layer.effect(
-	Workspace,
-	Effect.gen(function* () {
-		const state = yield* Cloudflare.DurableObjectState
-		const computers = yield* Computer.from(COMPUTER_WORKER_NAME)
-		const mailboxKey = yield* Schema.decodeUnknownEffect(Schema.NonEmptyString)(state.id.name)
-		return Workspace.make(computers.getByName(mailboxKey))
-	}),
-)

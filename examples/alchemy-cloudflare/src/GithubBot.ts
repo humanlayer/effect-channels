@@ -20,10 +20,13 @@ import {
 	type GitHubPrCreated,
 	type GitHubRepositoryRef,
 } from '@humanlayer/channels-github'
+import type * as Cloudflare from 'alchemy/Cloudflare'
 import type { RuntimeContext } from 'alchemy/RuntimeContext'
 import { Config, Effect, Match, Predicate } from 'effect'
 
+import { AgentSession } from './AgentSessionDO'
 import { AutoLabel, type AutoLabelError } from './AutoLabel'
+import type { RepoCloneError } from './Workspace'
 
 export const maintainerOnlyNotice =
 	'This agent can only be invoked by maintainers (users with write access or higher to this repository).'
@@ -102,6 +105,61 @@ const gitHubMentionText = (event: GitHubMentioned) =>
 		}),
 	)
 
+type GitHubDiscussion = ReturnType<typeof gitHubMentionDiscussion>
+
+export const makeOnMentioned =
+	<E, R>(send: (discussion: GitHubDiscussion, prompt: string) => Effect.Effect<string | null, E, R>) =>
+	(event: GitHubMentioned, context: DeliveryContext) => {
+		const discussion = gitHubMentionDiscussion(event)
+		return Effect.gen(function* () {
+			if (!(yield* respondToMentionAccess(event))) return
+
+			const mentionText = gitHubMentionText(event)
+			yield* Match.value(event).pipe(
+				Match.tagsExhaustive({
+					GitHubIssueMentioned: (issueEvent) =>
+						Effect.logInfo('Authorized issue mention received').pipe(
+							Effect.annotateLogs({
+								'github.issue_number': issueEvent.issue.ref.number,
+								'github.issue_event': issueEvent.trigger.eventId,
+								'github.actor': issueEvent.trigger.actor.login,
+							}),
+						),
+					GitHubPrMentioned: (prEvent) =>
+						Effect.logInfo('Authorized PR mention received').pipe(
+							Effect.annotateLogs({
+								'github.pr_number': prEvent.pullRequest.ref.number,
+								'github.pr_event': prEvent.trigger.eventId,
+								'github.actor': prEvent.trigger.actor.login,
+							}),
+						),
+				}),
+			)
+			const resultText = yield* send(discussion, mentionText)
+			if (resultText !== null) {
+				yield* discussion.postComment(GitHubContent.make({ markdown: resultText }))
+			}
+		}).pipe(
+			Effect.annotateLogs({
+				...githubRepositoryLogAnnotations(discussion.ref),
+				'github.discussion_number': discussion.ref.number,
+				'github.event_id': event.trigger.eventId,
+				'github.actor': event.trigger.actor.login,
+				'delivery.id': context.deliveryId,
+			}),
+		)
+	}
+
+const sendToAgentSession = (discussion: GitHubDiscussion, prompt: string) =>
+	Effect.gen(function* () {
+		const agentSessions = yield* AgentSession
+		const finished = yield* agentSessions.getByName(discussion.mailboxKey).send({
+			prompt,
+			githubDiscussion: discussion,
+		})
+		return finished.resultText
+	})
+
 const githubRepositoryLogAnnotations = (ref: GitHubRepositoryRef) => ({
 	'github.owner': ref.owner,
 	'github.repository': ref.repository,
@@ -113,10 +171,7 @@ const githubRepositoryLogAnnotations = (ref: GitHubRepositoryRef) => ({
  * GitHub App callbacks. Creation labels public submissions; mentions require write access or higher.
  * `GitHubApiLive`, the default, reads the App ID and private key.
  */
-export const githubHandlers: GitHubCallbackHandlers<
-	GitHubApiError | AutoLabelError | Config.ConfigError,
-	GitHubApi | AutoLabel | RuntimeContext
-> = {
+export const githubHandlers = {
 	/** Here is where you would e.g. do code review / automatic triage */
 	onIssueCreated: (event: GitHubIssueCreated, context: DeliveryContext) =>
 		Effect.gen(function* () {
@@ -153,47 +208,7 @@ export const githubHandlers: GitHubCallbackHandlers<
 			}),
 		),
 
-	onMentioned: (event: GitHubMentioned, context: DeliveryContext) => {
-		const discussion = gitHubMentionDiscussion(event)
-		return Effect.gen(function* () {
-			if (!(yield* respondToMentionAccess(event))) return
-
-			const mentionText = gitHubMentionText(event)
-			/** We handle Issue & PR mentions separately  */
-			yield* Match.value(event).pipe(
-				Match.tagsExhaustive({
-					GitHubIssueMentioned: (issueEvent) =>
-						Effect.gen(function* () {
-							yield* Effect.logInfo('Authorized issue mention received')
-						}).pipe(
-							Effect.annotateLogs({
-								'github.issue_number': issueEvent.issue.ref.number,
-								'github.issue_event': issueEvent.trigger.eventId,
-								'github.actor': issueEvent.trigger.actor.login,
-							}),
-						),
-					GitHubPrMentioned: (prEvent) =>
-						Effect.gen(function* () {
-							yield* Effect.logInfo('Authorized PR mention received')
-						}).pipe(
-							Effect.annotateLogs({
-								'github.pr_number': prEvent.pullRequest.ref.number,
-								'github.pr_event': prEvent.trigger.eventId,
-								'github.actor': prEvent.trigger.actor.login,
-							}),
-						),
-				}),
-			)
-		}).pipe(
-			Effect.annotateLogs({
-				...githubRepositoryLogAnnotations(discussion.ref),
-				'github.discussion_number': discussion.ref.number,
-				'github.event_id': event.trigger.eventId,
-				'github.actor': event.trigger.actor.login,
-				'delivery.id': context.deliveryId,
-			}),
-		)
-	},
+	onMentioned: makeOnMentioned(sendToAgentSession),
 	onSubscribedPrEvents: (event, context) =>
 		Effect.gen(function* () {
 			/** TODO if the issue(s) are failing CI checks then we shoudl like address them */
@@ -204,9 +219,15 @@ export const githubHandlers: GitHubCallbackHandlers<
 				'delivery.id': context.deliveryId,
 			}),
 		),
-}
+} satisfies GitHubCallbackHandlers<
+	GitHubApiError | AutoLabelError | Config.ConfigError | RepoCloneError,
+	GitHubApi | AutoLabel | RuntimeContext | Cloudflare.Worker | AgentSession
+>
 
-const github = GitHubBot.make({
+const github = GitHubBot.make<
+	GitHubApiError | AutoLabelError | Config.ConfigError | RepoCloneError,
+	GitHubApi | AutoLabel | RuntimeContext | Cloudflare.Worker | AgentSession
+>({
 	webhookSecret: Config.Redacted('GITHUB_WEBHOOK_SECRET'),
 	deliveryMode: DebounceDeliveryMode.make({ quietPeriodMs: 10_000, maxWaitMs: 10_000 }),
 	bot: Config.all({

@@ -5,6 +5,7 @@ import * as Cloudflare from 'alchemy/Cloudflare'
 import { Effect, Layer } from 'effect'
 import { FetchHttpClient, HttpRouter } from 'effect/http'
 
+import { AgentSessionDOLive } from './AgentSessionDO'
 import { AutoLabel } from './AutoLabel'
 import { DeliveryMailbox, DeliveryMailboxDOLive } from './DeliveryMailboxDO'
 import { bot } from './GithubBot'
@@ -22,6 +23,7 @@ const RoutesLive = Layer.merge(bot.routes, bot.deliveryApi).pipe(
 /** Everything the Worker and its mailbox Durable Objects need. */
 const WorkerLive = ChannelsDeliveryMailboxesLive.pipe(
 	Layer.provideMerge(DeliveryMailboxDOLive),
+	Layer.provideMerge(AgentSessionDOLive),
 	Layer.provideMerge(AutoLabel.layer),
 	Layer.provideMerge(GitHubApiLive),
 	Layer.provideMerge(Cloudflare.Workers.AIBinding),

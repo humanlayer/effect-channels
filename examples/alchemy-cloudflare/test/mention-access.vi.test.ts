@@ -31,7 +31,7 @@ import { ConfigProvider, Effect, Layer, Logger, Ref } from 'effect'
 
 import { makeTestDeliveryExecution } from '../../../packages/delivery/test/delivery-execution'
 import { AutoLabel } from '../src/AutoLabel'
-import { githubHandlers, maintainerOnlyNotice, respondToMentionAccess } from '../src/GithubBot'
+import { maintainerOnlyNotice, makeOnMentioned, respondToMentionAccess } from '../src/GithubBot'
 
 const repository = {
 	installationId: GitHubId.make(100),
@@ -404,7 +404,9 @@ describe('the registered GitHub onMentioned handler', () => {
 							yield* registered.onMentioned(fixture.event, execution.context)
 							if (access === 'read') yield* registered.onMentioned(fixture.event, execution.context)
 						}).pipe(
-							Effect.provide(GitHubCallbacks.layer(githubHandlers)),
+							Effect.provide(
+								GitHubCallbacks.layer({ onMentioned: makeOnMentioned(() => Effect.succeed(null)) }),
+							),
 							Effect.provide(Layer.mock(AutoLabel, {})),
 							Effect.provide(
 								Layer.mock(RuntimeContext, { Type: 'Worker', id: 'mention-access-test', env: {} }),

@@ -433,7 +433,14 @@ describe('registered GitHub creation handlers', () => {
 							execution.context,
 						)
 					}
-				}).pipe(Effect.provide(GitHubCallbacks.layer(githubHandlers).pipe(Layer.provideMerge(h.layer))))
+				}).pipe(
+					Effect.provide(
+						GitHubCallbacks.layer({
+							onIssueCreated: githubHandlers.onIssueCreated,
+							onPrCreated: githubHandlers.onPrCreated,
+						}).pipe(Layer.provideMerge(h.layer)),
+					),
+				)
 				expect(h.requests).toMatchObject([
 					{
 						payload: {
@@ -480,7 +487,12 @@ describe('registered GitHub creation handlers', () => {
 						execution.context,
 					)
 				}).pipe(
-					Effect.provide(GitHubCallbacks.layer(githubHandlers).pipe(Layer.provideMerge(h.layer))),
+					Effect.provide(
+						GitHubCallbacks.layer({
+							onIssueCreated: githubHandlers.onIssueCreated,
+							onPrCreated: githubHandlers.onPrCreated,
+						}).pipe(Layer.provideMerge(h.layer)),
+					),
 					Effect.flip,
 				)
 				expect(failure).toMatchObject({
