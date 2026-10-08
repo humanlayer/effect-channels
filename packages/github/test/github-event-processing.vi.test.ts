@@ -249,6 +249,11 @@ describe('GitHub event batch processing', () => {
 const processor = makeGitHubEventProcessor({ namespace, bot })
 const mentionAdmission = () => admission('issue_comment', issueCommentPayload(), 'mention')
 const openedAdmission = () => admission('issues', issuePayload('opened'), 'opened')
+/** A comment that does not mention the bot. */
+const commentAdmission = () => {
+	const payload = issueCommentPayload()
+	return admission('issue_comment', { ...payload, comment: { ...payload.comment, body: 'thanks' } }, 'comment')
+}
 
 /** Callbacks and the processor share one in-memory subscription store, so a callback can subscribe the issue. */
 const sharedLayer = <E, R>(handlers: GitHubCallbackHandlers<E, R>) =>
@@ -412,7 +417,7 @@ describe('GitHub delivery preparation', () => {
 			)
 		}
 
-		it.effect(`saves subscribed ${kind} creation followed by subscribed events, not mention`, ({ expect }) =>
+		it.effect(`saves subscribed ${kind} creation followed by the mention, not subscribed events`, ({ expect }) =>
 			Effect.gen(function* () {
 				const batch: readonly [DeliveryAdmission, ...Array<DeliveryAdmission>] =
 					kind === 'issue'
@@ -443,15 +448,12 @@ describe('GitHub delivery preparation', () => {
 				const saved = (yield* Ref.get(first.preparations))[0]
 				if (saved === undefined) return expect.unreachable()
 				expect(saved.callbacks.map(({ name }) => name)).toEqual(
-					kind === 'issue'
-						? ['onIssueCreated', 'onSubscribedIssueEvents']
-						: ['onPrCreated', 'onSubscribedPrEvents'],
+					kind === 'issue' ? ['onIssueCreated', 'onMentioned'] : ['onPrCreated', 'onMentioned'],
 				)
 				expect(saved.callbacks[1]).toMatchObject({
-					supportedOperations: discussionSupportedOperations,
-					reactionTargets: ['MessageTarget'],
+					supportedOperations: activatedSupportedOperations,
+					reactionTargets: ['ActivationTarget', 'MessageTarget'],
 				})
-				expect(saved.callbacks[1]?.activationTarget).toBeUndefined()
 				const replay = yield* first.retry
 				const execution = new ProviderDeliveryExecution({
 					...replay.execution,
@@ -462,15 +464,12 @@ describe('GitHub delivery preparation', () => {
 					ProviderEventHandled.make({}),
 				)
 				expect(kind === 'issue' ? onIssueCreated : onPrCreated).toHaveBeenCalledOnce()
-				expect(kind === 'issue' ? onSubscribedIssueEvents : onSubscribedPrEvents).toHaveBeenCalledOnce()
-				const events =
-					kind === 'issue'
-						? onSubscribedIssueEvents.mock.calls[0]?.[0].events
-						: onSubscribedPrEvents.mock.calls[0]?.[0].events
-				expect(events?.map(({ _tag }) => _tag)).toEqual([
+				expect(onMentioned).toHaveBeenCalledOnce()
+				expect(onMentioned.mock.calls[0]?.[0].trigger._tag).toBe(
 					kind === 'issue' ? 'GitHubIssueCommentCreated' : 'GitHubPrCommentCreated',
-				])
-				expect(onMentioned).not.toHaveBeenCalled()
+				)
+				expect(onSubscribedIssueEvents).not.toHaveBeenCalled()
+				expect(onSubscribedPrEvents).not.toHaveBeenCalled()
 				expect(yield* Ref.get(replay.preparations)).toEqual([])
 			}),
 		)
@@ -751,9 +750,13 @@ describe('GitHub delivery preparation', () => {
 			expect(yield* Ref.get(second.preparations)).toEqual([])
 			expect(calls).toEqual(['onMentioned', 'onMentioned'])
 
-			const fresh = yield* makeTestDeliveryExecution()
-			yield* processor.process([mentionAdmission()], fresh.execution)
-			expect(calls).toEqual(['onMentioned', 'onMentioned', 'onSubscribedIssueEvents'])
+			const mention = yield* makeTestDeliveryExecution()
+			yield* processor.process([mentionAdmission()], mention.execution)
+			expect(calls).toEqual(['onMentioned', 'onMentioned', 'onMentioned'])
+
+			const comment = yield* makeTestDeliveryExecution()
+			yield* processor.process([commentAdmission()], comment.execution)
+			expect(calls).toEqual(['onMentioned', 'onMentioned', 'onMentioned', 'onSubscribedIssueEvents'])
 		}).pipe(Effect.provide(sharedLayer({ onMentioned, onSubscribedIssueEvents })))
 	})
 

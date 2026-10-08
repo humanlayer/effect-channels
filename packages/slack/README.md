@@ -29,7 +29,7 @@ Enable Slack's agent features (the manifest's `agent_view`) so agent session sta
 
 | Bot event                            | Used for                                                                  |
 | ------------------------------------ | ------------------------------------------------------------------------- |
-| `app_mention`                        | A mention starts a thread and invokes `onNewMention`.                     |
+| `app_mention`                        | A mention invokes `onNewMention`, even in a subscribed thread.            |
 | `message.channels`, `message.groups` | Follow-up messages in subscribed threads.                                 |
 | `message.im`, `message.mpim`         | Direct and group direct messages, which start a thread without a mention. |
 | `reaction_added`, `reaction_removed` | Reactions in subscribed threads.                                          |

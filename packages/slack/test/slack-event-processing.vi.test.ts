@@ -220,7 +220,7 @@ describe('Slack event batch processing', () => {
 		}),
 	)
 
-	it.effect('delivers every relevant event in one subscribed callback', ({ expect }) =>
+	it.effect('runs onNewMention for a mention in a subscribed thread', ({ expect }) =>
 		Effect.gen(function* () {
 			const onNewMention = vi.fn<MentionCallback>(() => Effect.void)
 			const onSubscribedThreadEvents = vi.fn<SubscribedCallback>(() => Effect.void)
@@ -233,7 +233,26 @@ describe('Slack event batch processing', () => {
 			expect(yield* process({ onNewMention, onSubscribedThreadEvents }, batch, subscribedRuntimeLayer)).toEqual(
 				ProviderEventHandled.make({}),
 			)
-			expect(onNewMention).not.toHaveBeenCalled()
+			expect(onSubscribedThreadEvents).not.toHaveBeenCalled()
+			expect(onNewMention).toHaveBeenCalledOnce()
+			const callback = onNewMention.mock.calls[0]?.[0]
+			expect(callback?.trigger.ref.messageTs).toBe(rootTs)
+			expect(callback?.events).toHaveLength(2)
+		}),
+	)
+
+	it.effect('delivers every relevant event in one subscribed callback without onNewMention', ({ expect }) =>
+		Effect.gen(function* () {
+			const onSubscribedThreadEvents = vi.fn<SubscribedCallback>(() => Effect.void)
+			const batch = DeliveryAdmissionBatch.make([
+				admission('Ev_MENTION', mention()),
+				admission('Ev_REPLY', reply()),
+				admission('Ev_REACTION', reaction()),
+			])
+
+			expect(yield* process({ onSubscribedThreadEvents }, batch, subscribedRuntimeLayer)).toEqual(
+				ProviderEventHandled.make({}),
+			)
 			expect(onSubscribedThreadEvents).toHaveBeenCalledOnce()
 			const events = onSubscribedThreadEvents.mock.calls[0]?.[0].events
 			expect(events).toHaveLength(3)
@@ -538,6 +557,7 @@ describe('Slack event batch processing', () => {
 
 const processor = makeSlackEventProcessor({ namespace: 'mention-test' })
 const mentionBatch = () => DeliveryAdmissionBatch.make([admission('Ev_MENTION', mention())])
+const replyBatch = () => DeliveryAdmissionBatch.make([admission('Ev_REPLY', reply())])
 
 /** Callbacks and the processor share one in-memory subscription store, so a callback can subscribe the thread. */
 const sharedRuntimeLayer = <E, R>(handlers: SlackCallbackHandlers<E, R>) =>
@@ -709,9 +729,13 @@ describe('Slack delivery preparation', () => {
 			expect(yield* Ref.get(second.preparations)).toEqual([])
 			expect(calls).toEqual(['onNewMention', 'onNewMention'])
 
-			const fresh = yield* makeTestDeliveryExecution()
-			yield* processor.process(mentionBatch(), fresh.execution)
-			expect(calls).toEqual(['onNewMention', 'onNewMention', 'onSubscribedThreadEvents'])
+			const mention = yield* makeTestDeliveryExecution()
+			yield* processor.process(mentionBatch(), mention.execution)
+			expect(calls).toEqual(['onNewMention', 'onNewMention', 'onNewMention'])
+
+			const reply = yield* makeTestDeliveryExecution()
+			yield* processor.process(replyBatch(), reply.execution)
+			expect(calls).toEqual(['onNewMention', 'onNewMention', 'onNewMention', 'onSubscribedThreadEvents'])
 		}).pipe(Effect.provide(sharedRuntimeLayer({ onNewMention, onSubscribedThreadEvents })))
 	})
 

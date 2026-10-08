@@ -178,7 +178,7 @@ https://<your-worker-hostname>/integrations/slack/webhook
 
 ## Whom the example listens to
 
-The GitHub `onMentioned` handler in `src/Bot.ts` checks the mentioning user's repository access before entering either the issue or PR handler. The libraries do not enforce this application policy.
+The GitHub `onMentioned` handler in `src/GithubBot.ts` checks the mentioning user's repository access before entering either the issue or PR handler. The libraries do not enforce this application policy.
 
 Users with `write` access or higher get an `eyes` reaction on the mentioning issue, PR, or comment. Users below `write` get a thumbs-down reaction and a maintainer-only notice once per issue or PR. Further denied mentions get only thumbs down. Only a matching notice authored by the configured bot user counts as an existing notice; another user copying it cannot suppress the reply.
 
@@ -253,7 +253,7 @@ The same fake remote agent runs GitHub issue and pull request deliveries. Mentio
 
 - **Activity is `eyes`.** GitHub has no status line, so `Working` adds the bot's `eyes` reaction to what mentioned the bot: the comment, or the issue or pull request itself when the mention was in its body. `Idle` removes it, and so does the result. The text of `Working` is not shown. Adding `eyes` that is already there, or removing it when it is already gone, changes nothing.
 - **Messages are comments.** The summary is one comment on the issue or pull request, posted just before the result; the final message is one more comment. With `ask` the final comment is the question, with `- staging` and `- production` listed under it. The delivery API never exposes installation, repository, or comment IDs.
-- A later comment in a subscribed issue or pull request, without a new mention, is a subscribed batch. It has nothing that started it to react to, so its delivery does not list `SetActivity`.
+- A later comment that mentions the app runs `onMentioned` again, even in a subscribed issue or pull request. A later comment without a mention is a subscribed batch. It has nothing that started it to react to, so its delivery does not list `SetActivity`.
 - `flaky` is a Slack-only test switch; a GitHub mention ignores it.
 
 Checks, in a test repository where the app is installed (`GITHUB_BOT_MENTION_NAME` is the name after `@`):
@@ -262,7 +262,7 @@ Checks, in a test repository where the app is installed (`GITHUB_BOT_MENTION_NAM
 2. **Pull request.** On a pull request, comment `@<app-slug> handoff 20`. The same happens on the pull request's conversation: `eyes` on your comment while it works, then the summary comment and the final comment, with `eyes` gone at the end.
 3. **Mention in a body.** Open an issue whose body is `@<app-slug> handoff 20`. The `eyes` reaction shows on the issue itself, not on a comment, and is gone after the final comment.
 4. **A question ends the delivery.** Comment `@<app-slug> handoff 20 ask`. The final comment is `Which environment should I deploy to?` with `- staging` and `- production` under it, and `eyes` is gone.
-5. **Queued follow-up.** Comment `@<app-slug> handoff 30`, then right away comment `follow-up` in the same issue. The app's `eyes` reaction on `follow-up` (from the subscribed-events callback) appears only after the final comment.
+5. **Queued follow-up.** Comment `@<app-slug> handoff 30`, then right away comment `@<app-slug> handoff 10` in the same issue. The second mention waits: its `eyes` reaction appears only after the first delivery's final comment, and then it runs like the first.
 6. **`flaky` is ignored.** Comment `@<app-slug> handoff 10 flaky`. The final comment is `Fake remote agent finished after 10s.` with no extra text, and the logs show no `Example Slack API refusing a flaky post on purpose`.
 7. **Read access gets no response.** From an account with only read access to the repository (on a public repository, any account that is not a collaborator), comment `@<app-slug> handoff 20` on an issue. Nothing is posted and no reaction appears. The logs show `GitHub bot mentioned`, then `Example ignored GitHub author without write access` with that login and `access=read`, and no `GitHub mention handed off`. A plain comment from that account in a subscribed issue gets no `eyes` reaction either.
 8. **Reactions.** Comment `@<app-slug> handoff 30 react`. About a second after the `eyes` reaction, your comment also gets the app's 🚀; about 15 seconds later the 🚀 is gone and `eyes` stays. The summary comment gets ❤️. The logs show `Fake remote agent set a reaction` three times, each with `receipt_status=accepted,already_recorded`.

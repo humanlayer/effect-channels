@@ -800,8 +800,10 @@ const fromBuilt = (invocations: ReadonlyArray<GitHubInvocation>, reason: string)
 	Arr.isReadonlyArrayNonEmpty(invocations) ? CallbackSelection.Selected({ invocations }) : ignored(reason)
 
 /**
- * Freeze creation first, then the normal mention/subscription route. Subscription changes made by
- * creation cannot change this batch's continuation. Unconfigured callbacks are skipped.
+ * Freeze creation first, then the mention or subscription route. A batch that mentions the bot runs
+ * `onMentioned`, even in a subscribed discussion, so every mention gets the same access check and activity;
+ * other batches in a subscribed discussion run its subscribed-events callback. Subscription changes made
+ * by creation cannot change this batch's continuation. Unconfigured callbacks are skipped.
  */
 const selectInvocation = <R>(input: {
 	readonly callbacks: GitHubCallbackOperations<R>
@@ -817,16 +819,15 @@ const selectInvocation = <R>(input: {
 			const creation = Predicate.isNotUndefined(callbacks.onIssueCreated)
 				? Option.toArray(buildIssueCreated(events))
 				: []
-			const continuation = subscribed
-				? Predicate.isNotUndefined(callbacks.onSubscribedIssueEvents)
-					? Option.toArray(buildSubscribedIssueEvents(events))
-					: []
-				: mentioned && Predicate.isNotUndefined(callbacks.onMentioned)
+			const continuation =
+				mentioned && Predicate.isNotUndefined(callbacks.onMentioned)
 					? Option.toArray(buildIssueMention(events, creation.length > 0))
-					: []
+					: subscribed && Predicate.isNotUndefined(callbacks.onSubscribedIssueEvents)
+						? Option.toArray(buildSubscribedIssueEvents(events))
+						: []
 			return fromBuilt(
 				[...creation, ...continuation],
-				subscribed
+				subscribed && !mentioned
 					? 'no_relevant_event'
 					: !opened && !mentioned
 						? 'no_activation_event'
@@ -840,16 +841,15 @@ const selectInvocation = <R>(input: {
 			const creation = Predicate.isNotUndefined(callbacks.onPrCreated)
 				? Option.toArray(buildPrCreated(events))
 				: []
-			const continuation = subscribed
-				? Predicate.isNotUndefined(callbacks.onSubscribedPrEvents)
-					? Option.toArray(buildSubscribedPrEvents(events))
-					: []
-				: mentioned && Predicate.isNotUndefined(callbacks.onMentioned)
+			const continuation =
+				mentioned && Predicate.isNotUndefined(callbacks.onMentioned)
 					? Option.toArray(buildPrMention(events, creation.length > 0))
-					: []
+					: subscribed && Predicate.isNotUndefined(callbacks.onSubscribedPrEvents)
+						? Option.toArray(buildSubscribedPrEvents(events))
+						: []
 			return fromBuilt(
 				[...creation, ...continuation],
-				subscribed
+				subscribed && !mentioned
 					? 'no_relevant_event'
 					: !opened && !mentioned
 						? 'no_activation_event'

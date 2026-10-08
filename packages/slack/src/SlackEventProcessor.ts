@@ -519,13 +519,21 @@ type CallbackSelection = Data.TaggedEnum<{
 }>
 const CallbackSelection = Data.taggedEnum<CallbackSelection>()
 
-/** Choose the callback for a batch no attempt has prepared yet. */
+/**
+ * Choose the callback for a batch no attempt has prepared yet. A batch that mentions the bot runs
+ * `onNewMention`, even in a subscribed thread, so every mention starts the same way; other batches in a
+ * subscribed thread run `onSubscribedThreadEvents`.
+ */
 const selectInvocation = (input: {
 	readonly callbacks: typeof SlackCallbacks.Service
 	readonly thread: SlackThread
 	readonly normalized: ReadonlyArray<NormalizedEvent>
 	readonly subscribed: boolean
 }): CallbackSelection => {
+	const mention = buildNewMention(input.thread, input.normalized)
+	if (Option.isSome(mention) && Predicate.isNotUndefined(input.callbacks.onNewMention)) {
+		return CallbackSelection.Selected({ invocation: mention.value })
+	}
 	if (input.subscribed) {
 		if (Predicate.isUndefined(input.callbacks.onSubscribedThreadEvents)) {
 			return CallbackSelection.Ignored({ reason: 'callback_not_configured' })
@@ -535,12 +543,9 @@ const selectInvocation = (input: {
 			onSome: (invocation) => CallbackSelection.Selected({ invocation }),
 		})
 	}
-	const mention = buildNewMention(input.thread, input.normalized)
-	if (Option.isNone(mention)) return CallbackSelection.Ignored({ reason: 'no_activation_event' })
-	if (Predicate.isUndefined(input.callbacks.onNewMention)) {
-		return CallbackSelection.Ignored({ reason: 'callback_not_configured' })
-	}
-	return CallbackSelection.Selected({ invocation: mention.value })
+	return CallbackSelection.Ignored({
+		reason: Option.isNone(mention) ? 'no_activation_event' : 'callback_not_configured',
+	})
 }
 
 const isCallbackConfigured = (callbacks: typeof SlackCallbacks.Service, callback: SlackCallbackName) =>

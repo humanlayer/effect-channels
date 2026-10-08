@@ -289,6 +289,6 @@ A successful admission returns HTTP 200. For common failures:
 - **404 from the webhook route:** the URL path is wrong or the GitHub provider is not mounted.
 - **403 from a callback API operation:** the app lacks a required permission or the installation cannot access that repository.
 - **No delivery in GitHub:** the event is not selected, the app is not installed on the repository, or webhooks are inactive.
-- **Delivery succeeds but no callback runs:** the event action may be unsupported, or the issue/PR is not subscribed and did not trigger a configured creation or mention callback.
+- **Delivery succeeds but no callback runs:** the event action may be unsupported, the issue/PR is not subscribed and did not trigger a configured creation or mention callback, or it is subscribed and has no subscribed-events callback. A comment that mentions the bot always runs `onMentioned` when it is configured, even in a subscribed issue/PR.
 
 See `examples/alchemy-cloudflare` for a complete Worker and Durable Object configuration with both GitHub and Slack.
