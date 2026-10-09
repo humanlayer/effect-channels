@@ -272,13 +272,14 @@ describe('AutoLabel with the native Workers AI binding', () => {
 		)
 	}
 
-	it.effect('does not write when all probabilities are below the default threshold', ({ expect }) =>
+	it.effect('does not write when all probabilities are below the default threshold, and logs them', ({ expect }) =>
 		Effect.gen(function* () {
-			const h = yield* makeHarness({ response: { answers: { bug: answer(0.799) } } })
+			const h = yield* makeHarness({ response: { answers: { bug: answer(0.699) } } })
 			yield* apply().pipe(Effect.provide(h.layer))
 			expect(h.requests).toHaveLength(1)
 			expect(yield* Ref.get(h.writes)).toEqual([])
 			expect(yield* Ref.get(h.existing)).toEqual(['custom-existing'])
+			expect(h.logs.join('\n')).toContain('"label_probabilities":"bug=0.70"')
 		}),
 	)
 
@@ -322,7 +323,7 @@ describe('AutoLabel with the native Workers AI binding', () => {
 			expect(logs).toContain('GitHub auto-label failed')
 			expect(logs).toContain('inference_failed')
 			expect(logs).toContain('"github.number":42')
-			expect(logs).toContain('"ai.label_threshold":0.8')
+			expect(logs).toContain('"ai.label_threshold":0.7')
 			for (const sensitive of [secret, input.title, input.body]) expect(logs).not.toContain(sensitive)
 		}),
 	)

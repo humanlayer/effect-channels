@@ -142,7 +142,7 @@ Optional Workers AI labeling settings (the defaults are shown):
 
 ```dotenv
 GITHUB_LABEL_MODEL=@cf/cloudflare/clef
-GITHUB_LABEL_THRESHOLD=0.8
+GITHUB_LABEL_THRESHOLD=0.7
 GITHUB_LABEL_TIMEOUT="60 seconds"
 ```
 
@@ -156,11 +156,11 @@ bun run alchemy:deploy
 
 ### 7. Test with a repository
 
-After deployment, set the GitHub App's webhook URL to `https://<your-worker-hostname>/integrations/github/webhook`. Open a new issue describing a clear bug, then a new PR describing a documentation change. After the ten-second debounce and processing, Clef should add matching labels whose yes-probability meets the configured threshold. It considers only GitHub's nine default label names that already exist on this repository, can add multiple labels, and preserves existing labels. A null body is evaluated using the title. No confident matches means no label changes. Historical issues/PRs are not scanned automatically.
+After deployment, set the GitHub App's webhook URL to `https://<your-worker-hostname>/integrations/github/webhook`. Open a new issue describing a clear bug, then a new PR describing a documentation change. After the three-second debounce and processing, Clef should add matching labels whose yes-probability meets the configured threshold. It considers only GitHub's nine default label names that already exist on this repository, can add multiple labels, and preserves existing labels. A null body is evaluated using the title. No confident matches means no label changes. Historical issues/PRs are not scanned automatically.
 
 Creation labeling does not require a maintainer mention. To test mention access separately, invoke `@<app-slug>` in an issue body, PR body, issue comment, PR comment, or inline review comment. Write access or higher gets eyes; other users get thumbs down and one maintainer-only notice per discussion. Creation labeling runs before a mention in the same opening batch. A failed labeling callback is logged and retried by mailbox processing; the later mention waits until that callback succeeds or the delivery terminates.
 
-Use Cloudflare Worker logs to look for `Workers AI label inference started`, `Workers AI label inference completed`, and `GitHub labels added`. Effect log annotations include repository, discussion number/type, model, threshold, candidate/selected labels, and probabilities. Creation callbacks also annotate the webhook event ID and delivery ID. Failures log `GitHub auto-label failed` with an error tag/reason; a missing runtime `AI` binding reports `binding_missing`. Request titles, bodies, credentials, and raw model responses are not logged. The `bot.github.auto_label` Effect span carries repository, number, and model attributes. This has been verified with a substituted native binding in tests, not live inference.
+Use Cloudflare Worker logs to look for `Workers AI label inference started`, `Workers AI label inference completed`, and `GitHub labels added`. Effect log annotations include repository, discussion number/type, model, threshold, candidate/selected labels, and each label's probability as text, such as `enhancement=0.74, question=0.41`. Creation callbacks also annotate the webhook event ID and delivery ID. Failures log `GitHub auto-label failed` with an error tag/reason; a missing runtime `AI` binding reports `binding_missing`. Request titles, bodies, credentials, and raw model responses are not logged. The `bot.github.auto_label` Effect span carries repository, number, and model attributes. This has been verified with a substituted native binding in tests, not live inference.
 
 In the GitHub App settings, **Advanced → Recent Deliveries** shows each webhook request, response status, and redelivery control. A successful admission returns HTTP 200. If GitHub reports 401, check the webhook secret. If callbacks fail with 403, check the app permissions and make sure the installation includes the repository.
 

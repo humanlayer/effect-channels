@@ -284,12 +284,14 @@ const accessDenied = (repository: GitHubRepositoryRef, error: GitHubApiError) =>
 	`GitHub did not grant access to ${repository.owner}/${repository.repository} (${error.reason}).`
 
 /** A Computer method's outcome as an Effect, failing with its message. */
-const computerResult = <A, E>(
+const computerResult = <A, E extends { readonly message: string }>(
 	call: Effect.Effect<ComputerResult<A>, RpcCallError>,
 	onFailure: (message: string) => E,
 ) =>
 	call.pipe(
 		Effect.mapError((error) => onFailure(error.message)),
 		Effect.flatMap((result) => (result.ok ? Effect.succeed(result.value) : Effect.fail(onFailure(result.message)))),
-		Effect.tapError((error) => Effect.logWarning('workspace.git failed', error)),
+		Effect.tapError((error) =>
+			Effect.logWarning('workspace.git failed').pipe(Effect.annotateLogs({ reason: error.message })),
+		),
 	)

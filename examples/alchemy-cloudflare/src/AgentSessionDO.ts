@@ -123,7 +123,8 @@ const systemPrompt = (metadata: AgentSessionMetadata) =>
 		'You have no subagents here; do the work yourself.',
 		`You are working on GitHub ${discussionName(metadata.githubDiscussion)}. Someone mentioned you there, and each mention is one request. ` +
 			'Your final answer is posted there as a comment, so write it in GitHub Markdown. If you need something from them, ask in your final answer; they reply by mentioning you again.',
-		'Match your effort to the request. If it is a question, answer it as soon as you can, checking only what you need to answer it correctly, and keep the answer short. Do deeper work, such as changing code, only when asked to. For work of more than a few steps, post a plan with update_plan before you start.',
+		'Match your effort to the request. If it is a question, answer it as soon as you can, checking only what you need to answer it correctly. Do deeper work, such as changing code, only when asked to. For work of more than a few steps, post a plan with update_plan before you start.',
+		'Write clearly and without padding. Start with the answer, or the decision you need from them. Then give the reasoning and details that matter to it, as fully as the question needs: a simple question gets a short answer, a design question can get a longer, structured one. Use plain words, explain any term they may not know, and say each thing once. Leave out restating the request, step-by-step accounts of what you checked, and hedges that do not change the answer. Link to the code on GitHub instead of explaining it at length.',
 		`The repository is cloned at ${WORKSPACE_ROOT}/${metadata.repositoryName}, on branch ${metadata.branch}. Its default branch is ${metadata.defaultBranch}.`,
 		branchPolicy(metadata),
 		'git in bash cannot reach GitHub. Use git_fetch, git_pull, and git_push for that.',
@@ -302,7 +303,8 @@ const AgentConversationLive = Layer.effect(
 						before === after ? RepositoryUpdate.Unchanged() : RepositoryUpdate.Updated({ before, after }),
 					),
 					Effect.catchTag('RepoPullError', (error) =>
-						Effect.logWarning('agent_session.pull_repository failed', error).pipe(
+						Effect.logWarning('agent_session.pull_repository failed').pipe(
+							Effect.annotateLogs({ reason: error.message }),
 							Effect.as(RepositoryUpdate.Failed({ reason: error.message })),
 						),
 					),

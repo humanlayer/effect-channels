@@ -84,7 +84,7 @@ export class AutoLabel extends Context.Service<
 			const model = yield* Config.schema(LabelModel, 'GITHUB_LABEL_MODEL').pipe(
 				Config.withDefault('@cf/cloudflare/clef'),
 			)
-			const threshold = yield* Config.schema(Probability, 'GITHUB_LABEL_THRESHOLD').pipe(Config.withDefault(0.8))
+			const threshold = yield* Config.schema(Probability, 'GITHUB_LABEL_THRESHOLD').pipe(Config.withDefault(0.7))
 			const timeout = yield* Config.Duration('GITHUB_LABEL_TIMEOUT').pipe(Config.withDefault('60 seconds'))
 
 			const apply = Effect.fn('bot.github.auto_label')(
@@ -122,7 +122,7 @@ export class AutoLabel extends Context.Service<
 						body: (input.body ?? '').replace(/<!--[\s\S]*?-->/g, '').slice(0, 32_000),
 					}
 					yield* Effect.logInfo('Workers AI label inference started').pipe(
-						Effect.annotateLogs({ candidate_labels: policies.map(({ name }) => name) }),
+						Effect.annotateLogs({ candidate_labels: policies.map(({ name }) => name).join(', ') }),
 					)
 					/** Clef needs the native unknown-model overload until workers-types includes its catalog entry. */
 					const native = yield* ai.raw
@@ -150,11 +150,18 @@ export class AutoLabel extends Context.Service<
 						if (answer.noul >= threshold) selected.push(policy.name)
 					}
 					yield* Effect.logInfo('Workers AI label inference completed').pipe(
-						Effect.annotateLogs({ selected_labels: selected, label_probabilities: probabilities }),
+						Effect.annotateLogs({
+							selected_labels: selected.join(', '),
+							label_probabilities: Object.entries(probabilities)
+								.map(([name, probability]) => `${name}=${probability.toFixed(2)}`)
+								.join(', '),
+						}),
 					)
 					if (selected.length === 0) return
 					yield* input.discussion.addLabels(selected)
-					yield* Effect.logInfo('GitHub labels added').pipe(Effect.annotateLogs({ added_labels: selected }))
+					yield* Effect.logInfo('GitHub labels added').pipe(
+						Effect.annotateLogs({ added_labels: selected.join(', ') }),
+					)
 				},
 				(effect, input) =>
 					effect.pipe(
