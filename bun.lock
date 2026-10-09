@@ -201,8 +201,8 @@
     "@effect/sql-pg": "4.0.0",
     "@effect/sql-sqlite-do": "4.0.0",
     "@effect/vitest": "4.0.0",
-    "@humanlayer/fold-agent": "0.1.32",
-    "@humanlayer/fold-core": "0.1.32",
+    "@humanlayer/fold-agent": "0.1.33",
+    "@humanlayer/fold-core": "0.1.33",
     "@platformatic/vfs": "0.4.0",
     "@types/bun": "^1.3.10",
     "alchemy": "https://pkg.alchemy.run/alchemy/pr:2064:a8c9ecc",
@@ -402,23 +402,23 @@
 
     "@humanlayer/channels-sql": ["@humanlayer/channels-sql@workspace:packages/sql"],
 
-    "@humanlayer/effect-ai-anthropic": ["@humanlayer/effect-ai-anthropic@0.1.32", "", { "peerDependencies": { "effect": "4.0.0" } }, "sha512-82LGlVrVQcNHW3RjL1GdLdhvrROzJX7bIM6QIpxV5jKJ4xKfsc2PJ55N0zUi4vDgDW5NL7p4Ohg92YwfF1BQSA=="],
+    "@humanlayer/effect-ai-anthropic": ["@humanlayer/effect-ai-anthropic@0.1.33", "", { "peerDependencies": { "effect": "4.0.0" } }, "sha512-lUKo+SW7mr9/XYwtIqkbqvf9gMQG/k7NQm12Nr+IurQiyrjJ69r0bJPDXDKL2aC2zCuilr5yfCrukpw82j+J9Q=="],
 
-    "@humanlayer/effect-ai-openai": ["@humanlayer/effect-ai-openai@0.1.32", "", { "peerDependencies": { "effect": "4.0.0" } }, "sha512-EKKJUTzIYWCYlPowX0BJmrreTiUudMrMmu3cCH4q9DiYLVfK0TwVi9pJhKAI9Wjy9ukb5k2V18vRTgSG7tjH0g=="],
+    "@humanlayer/effect-ai-openai": ["@humanlayer/effect-ai-openai@0.1.33", "", { "peerDependencies": { "effect": "4.0.0" } }, "sha512-z3kDvNzC4Dp9KnygIubDRt+hn0nQhRlL1N/oJtqL7nFE3mtzr6USXAxaqHxyrmvxakJhvp9stjPgxFIR4g91/Q=="],
 
-    "@humanlayer/effect-ai-openai-compat": ["@humanlayer/effect-ai-openai-compat@0.1.32", "", { "peerDependencies": { "effect": "4.0.0" } }, "sha512-RwJU1Nb12lLrAC8cOi9pOsygVZuor3vOn3zH7vfzirRl0tOUvODAQGrMz92lDGZWRJTqv7+09S/tnFHD7QNnvg=="],
+    "@humanlayer/effect-ai-openai-compat": ["@humanlayer/effect-ai-openai-compat@0.1.33", "", { "peerDependencies": { "effect": "4.0.0" } }, "sha512-iyibDLoCPy0lVu2CYqLph2KlKBq3XEOILch9IQPq/dWy5rhIZs2uy4O/7OwtXbdcDitclY+eKdjWaYy+eo/7Tg=="],
 
-    "@humanlayer/effect-branded-id": ["@humanlayer/effect-branded-id@0.1.32", "", { "dependencies": { "@paralleldrive/cuid2": "3.3.0" }, "peerDependencies": { "effect": "4.0.0" } }, "sha512-atJO79Pfx2M00lxTA8W8U3MCn9vO5MktPeeqCPeGhef0+usHh9X3GL2JPWilL8fXpUff+odfNHo5RuHubqSEHA=="],
+    "@humanlayer/effect-branded-id": ["@humanlayer/effect-branded-id@0.1.33", "", { "dependencies": { "@paralleldrive/cuid2": "3.3.0" }, "peerDependencies": { "effect": "4.0.0" } }, "sha512-/zX4K3qD5VyKxiRhN2TGq6bLkoXfSewna5+1D/K+Rn3nrj0F7FbV/C5PRcSJeFKJYVyrYNHPWRxts9Pnd8cbtQ=="],
 
-    "@humanlayer/fold-agent": ["@humanlayer/fold-agent@0.1.32", "", { "dependencies": { "@humanlayer/fold-codex": "0.1.32", "@humanlayer/fold-core": "0.1.32", "@humanlayer/fold-opencode": "0.1.32", "@humanlayer/fold-xai": "0.1.32", "@silvia-odwyer/photon-node": "0.3.4", "turndown": "7.2.4", "yaml": "2.9.0" }, "peerDependencies": { "@effect/platform-node": "4.0.0", "effect": "4.0.0" } }, "sha512-ho9qscUsBxdUCyjIVBx6w0n5AZwAAQblQldEpPuaBRMg9oAKhlKJigfayoLKW9eJZ80hw2tMkcPO7Y5MzHt5bA=="],
+    "@humanlayer/fold-agent": ["@humanlayer/fold-agent@0.1.33", "", { "dependencies": { "@humanlayer/fold-codex": "0.1.33", "@humanlayer/fold-core": "0.1.33", "@humanlayer/fold-opencode": "0.1.33", "@humanlayer/fold-xai": "0.1.33", "@silvia-odwyer/photon-node": "0.3.4", "turndown": "7.2.4", "yaml": "2.9.0" }, "peerDependencies": { "@effect/platform-node": "4.0.0", "effect": "4.0.0" } }, "sha512-FgDI3tDhBkWzgDm9kbg24ANmWPtQeRx1BFQQRU3v38XPtNwBTIVBX/d8ctUOGwOk4bdtVlPg7uySncQrNIrLMA=="],
 
-    "@humanlayer/fold-codex": ["@humanlayer/fold-codex@0.1.32", "", { "dependencies": { "@humanlayer/effect-ai-openai": "0.1.32", "@humanlayer/fold-core": "0.1.32" }, "peerDependencies": { "@effect/platform-node": "4.0.0", "effect": "4.0.0" } }, "sha512-NXaUP+S3ua6U+NfbI/VvkMAZpJSEyKhS92Bn6AyofO64EayTRmiMl2jR1zRWSyyldSain+mA1Y229adWVd+OMQ=="],
+    "@humanlayer/fold-codex": ["@humanlayer/fold-codex@0.1.33", "", { "dependencies": { "@humanlayer/effect-ai-openai": "0.1.33", "@humanlayer/fold-core": "0.1.33" }, "peerDependencies": { "@effect/platform-node": "4.0.0", "effect": "4.0.0" } }, "sha512-ubLDwNHk3tbQVTR6IGZaRfMP6x+k7ebHj2g06GKEElYcFvGPpljixJR+160WR0Bij0rfrAwQ1L6sqDwRO/hexw=="],
 
-    "@humanlayer/fold-core": ["@humanlayer/fold-core@0.1.32", "", { "dependencies": { "@humanlayer/effect-ai-anthropic": "0.1.32", "@humanlayer/effect-ai-openai": "0.1.32", "@humanlayer/effect-branded-id": "0.1.32" }, "peerDependencies": { "effect": "4.0.0" } }, "sha512-tuUkAavAdBNAi4qc1K+YMK9W/3ZxkSbwc/YjmcsmNAtDUt2N89nyqaWrSzx4rZ654eZtI2IEEPd7X0RzhWLEMg=="],
+    "@humanlayer/fold-core": ["@humanlayer/fold-core@0.1.33", "", { "dependencies": { "@humanlayer/effect-ai-anthropic": "0.1.33", "@humanlayer/effect-ai-openai": "0.1.33", "@humanlayer/effect-branded-id": "0.1.33" }, "peerDependencies": { "effect": "4.0.0" } }, "sha512-s1Nj1DkjK5YeNsmdStO7WtUqyyXs3s6/MO6XE/Ikg0+QcU3PgLfpnW574BaVUieCxUN5GbbGgJL8igQMpkElHQ=="],
 
-    "@humanlayer/fold-opencode": ["@humanlayer/fold-opencode@0.1.32", "", { "dependencies": { "@humanlayer/effect-ai-openai": "0.1.32", "@humanlayer/effect-ai-openai-compat": "0.1.32", "@humanlayer/fold-core": "0.1.32" }, "peerDependencies": { "@effect/platform-node": "4.0.0", "effect": "4.0.0" } }, "sha512-WA+E8aZmDW223+8lzFOrfFDi2dq0qDDIKGUc3LwE5yhtmwQSm/Aaz4VBCb6QKTvn65muEo+0haX3EPN+cMhRSw=="],
+    "@humanlayer/fold-opencode": ["@humanlayer/fold-opencode@0.1.33", "", { "dependencies": { "@humanlayer/effect-ai-openai": "0.1.33", "@humanlayer/effect-ai-openai-compat": "0.1.33", "@humanlayer/fold-core": "0.1.33" }, "peerDependencies": { "@effect/platform-node": "4.0.0", "effect": "4.0.0" } }, "sha512-mgTSdklM39R+T3zHt1Cor+h0HxJ00sGGN7LlR9ehW7xIYS6ahENXMBk6/MqNb/nWIK7zUy/VfvBI5tPG3LUtBQ=="],
 
-    "@humanlayer/fold-xai": ["@humanlayer/fold-xai@0.1.32", "", { "dependencies": { "@humanlayer/effect-ai-openai-compat": "0.1.32", "@humanlayer/fold-core": "0.1.32" }, "peerDependencies": { "@effect/platform-node": "4.0.0", "effect": "4.0.0" } }, "sha512-5EMMjMQT5wUtqW7L5e6HrHPjDxYKK4Y9UDDE1B/BAVnlNAnvO8XVc6ce+YmsOXOzNbvSjmPfhLNKfrt3ZMfr/A=="],
+    "@humanlayer/fold-xai": ["@humanlayer/fold-xai@0.1.33", "", { "dependencies": { "@humanlayer/effect-ai-openai-compat": "0.1.33", "@humanlayer/fold-core": "0.1.33" }, "peerDependencies": { "@effect/platform-node": "4.0.0", "effect": "4.0.0" } }, "sha512-aUD5NdqU4Y/aqWJyPjkqjIBBk4O8FBMrBwmJh6P5DP0XdQxxUw85BEuQVVPEMz5WUgtisQQxH4Dx1pD2qg+zeA=="],
 
     "@img/colour": ["@img/colour@1.1.0", "", {}, "sha512-Td76q7j57o/tLVdgS746cYARfSyxk8iEfRxewL9h4OMzYhbW4TAcppl0mT4eyqXddh6L/jwoM75mo7ixa/pCeQ=="],
 
