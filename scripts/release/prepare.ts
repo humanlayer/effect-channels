@@ -31,9 +31,6 @@ if (JSON.stringify(directories) !== JSON.stringify([...libraries].sort()))
 		`scripts/release/manifest.ts lists ${libraries.join(', ')}, but packages/ has ${directories.join(', ')}`,
 	)
 
-/** A peer range for a catalog entry: `^version` for a version, or the entry itself for a URL or other spec. */
-const peerRange = (spec: string) => (/^\d/.test(spec) ? `^${spec}` : spec)
-
 const { catalog } = await json<{ catalog: Record<string, string> }>(join(root, 'package.json'))
 const fromCatalog = (name: string) => {
 	const range = catalog[name]
@@ -45,12 +42,23 @@ const fromCatalog = (name: string) => {
  * Our own packages are pinned to this release. Peers such as `effect` accept any compatible version,
  * so an application on a later patch can install them without a conflict.
  */
-const resolveRanges = (dependencies: DependencyMap | undefined, peer: boolean) => {
+const resolveRanges = async (dependencies: DependencyMap | undefined, peer: boolean, source: string) => {
 	if (dependencies === undefined) return
 	for (const [name, range] of Object.entries(dependencies)) {
-		if (range === 'catalog:') dependencies[name] = peer ? peerRange(fromCatalog(name)) : fromCatalog(name)
+		if (range === 'catalog:') dependencies[name] = peer ? await peerRange(name, source) : fromCatalog(name)
 		else if (range.startsWith('workspace:')) dependencies[name] = version
 	}
+}
+
+/**
+ * A peer's range: `^` and its catalog version. A catalog entry that is not a version, such as a preview
+ * build's URL, becomes `^` and the version the package was built against, which npm can match.
+ */
+const peerRange = async (name: string, source: string) => {
+	const spec = fromCatalog(name)
+	if (/^\d/.test(spec)) return `^${spec}`
+	const installed = await json<{ version: string }>(join(source, 'node_modules', name, 'package.json'))
+	return `^${installed.version}`
 }
 
 const toDist = (source: string) => source.replace(/^\.\/src\//, './dist/').replace(/\.ts$/, '.js')
@@ -74,8 +82,8 @@ for (const directory of libraries) {
 	manifest.files = ['dist', 'README.md', 'LICENSE']
 	delete manifest.devDependencies
 	delete manifest.scripts
-	resolveRanges(manifest.dependencies, false)
-	resolveRanges(manifest.peerDependencies, true)
+	await resolveRanges(manifest.dependencies, false, source)
+	await resolveRanges(manifest.peerDependencies, true, source)
 
 	const sources = Object.entries(manifest.exports).map(([key, value]) => {
 		if (typeof value !== 'string') throw new Error(`${manifest.name} export ${key} is not a source path`)
