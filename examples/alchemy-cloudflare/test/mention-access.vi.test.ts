@@ -116,18 +116,21 @@ const fixtures = (actor = person(1)) => {
 		},
 		{
 			name: 'issue comment',
+			mentionedIn: { _tag: 'Comment', id: issueComment.comment.ref.id },
 			event: GitHubIssueMentioned.make({ issue, trigger: issueComment, events: [issueComment] }),
 			discussion: issueDiscussion,
 			target: GitHubReactionTarget.cases.Comment.make({ comment: issueComment.comment.ref }),
 		},
 		{
 			name: 'PR comment',
+			mentionedIn: { _tag: 'Comment', id: prComment.comment.ref.id },
 			event: GitHubPrMentioned.make({ pullRequest, trigger: prComment, events: [prComment] }),
 			discussion: prDiscussion,
 			target: GitHubReactionTarget.cases.Comment.make({ comment: prComment.comment.ref }),
 		},
 		{
 			name: 'review comment',
+			mentionedIn: { _tag: 'ReviewComment', id: reviewComment.comment.ref.id },
 			event: GitHubPrMentioned.make({ pullRequest, trigger: reviewComment, events: [reviewComment] }),
 			discussion: prDiscussion,
 			target: GitHubReactionTarget.cases.Comment.make({ comment: reviewComment.comment.ref }),
@@ -467,6 +470,7 @@ describe('the registered GitHub onMentioned handler', () => {
 					accessToken: 'test-access-token',
 					githubDiscussion: { mailboxKey },
 				})
+				expect(sent?.message.mentionedIn).toEqual(fixture.mentionedIn)
 				expect(result.callback.handoffsBeforeSend).toEqual([0])
 				expect(result.handoffs).toEqual([undefined])
 			}),

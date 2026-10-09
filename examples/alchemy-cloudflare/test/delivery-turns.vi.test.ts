@@ -116,6 +116,7 @@ const makeHarness = (
 		readonly gate?: Deferred.Deferred<void>
 		readonly finishError?: DeliveryMutationError
 		readonly repository?: RepositoryUpdate
+		readonly discussion?: string
 	} = {},
 ) =>
 	Effect.gen(function* () {
@@ -125,6 +126,7 @@ const makeHarness = (
 		const applied = yield* Ref.make<ReadonlyArray<Applied>>([])
 		const turns = yield* Queue.unbounded<Fiber.Fiber<void>>()
 		const pulls = yield* Ref.make(0)
+		const marks = yield* Ref.make(0)
 		const promptSent = yield* Deferred.make<void>()
 
 		const session: TurnSession = {
@@ -200,6 +202,11 @@ const makeHarness = (
 						Ref.update(pulls, (count) => count + 1).pipe(
 							Effect.as(options.repository ?? RepositoryUpdate.Unchanged()),
 						),
+					readDiscussion: () =>
+						Effect.succeed({
+							text: options.discussion ?? '',
+							markSeen: Ref.update(marks, (count) => count + 1),
+						}),
 				}),
 			),
 			Layer.succeed(
@@ -228,6 +235,8 @@ const makeHarness = (
 			saved: Ref.get(saved),
 			sent: Ref.get(sent),
 			pulls: Ref.get(pulls),
+			/** How many times what the agent was shown of the discussion was marked seen. */
+			marks: Ref.get(marks),
 			applied: Ref.get(applied),
 		}
 	})
@@ -373,6 +382,20 @@ describe('DeliveryTurns: pulling before a new turn', () => {
 
 			expect(yield* harness.pulls).toBe(1)
 			expect(yield* harness.sent).toEqual(['fix the bug'])
+		}),
+	)
+
+	it.effect('puts what is new in the discussion before the prompt, and marks it seen after the turn', ({ expect }) =>
+		Effect.gen(function* () {
+			const harness = yield* makeHarness({
+				discussion: '<github-discussion>\n@bob commented:\nhi\n</github-discussion>\n\n',
+			})
+			yield* run(harness)
+
+			expect(yield* harness.sent).toEqual([
+				'<github-discussion>\n@bob commented:\nhi\n</github-discussion>\n\nfix the bug',
+			])
+			expect(yield* harness.marks).toBe(1)
 		}),
 	)
 

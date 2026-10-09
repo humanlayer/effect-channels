@@ -4,6 +4,8 @@ import {
 	GitHubIssueComments,
 	GitHubIssueInfo,
 	GitHubPullRequestInfo,
+	GitHubReviewComments,
+	GitHubReviews,
 	type GitHubApi,
 	type GitHubIssue,
 	type GitHubPullRequest,
@@ -11,9 +13,9 @@ import {
 import { defineTool, ToolResultFailure, ToolResultText, type FoldTool } from '@humanlayer/fold-core'
 import { Effect, Match, Schema } from 'effect'
 
-type GitHubDiscussion = GitHubIssue | GitHubPullRequest
+import { NoParameters } from './ToolParameters'
 
-const EmptyParameters = Schema.Struct({})
+type GitHubDiscussion = GitHubIssue | GitHubPullRequest
 
 const failure = (error: { readonly message: string }) =>
 	ToolResultFailure.make({ text: `GitHub request failed: ${error.message}` })
@@ -31,7 +33,7 @@ export const githubTools = (discussion: GitHubDiscussion): ReadonlyArray<FoldToo
 	const context = defineTool({
 		name: 'github_discussion',
 		description: 'Fetch the current GitHub issue or pull request.',
-		parameters: EmptyParameters,
+		parameters: NoParameters,
 		success: ToolResultText,
 		failure: ToolResultFailure,
 		handler: () =>
@@ -47,7 +49,7 @@ export const githubTools = (discussion: GitHubDiscussion): ReadonlyArray<FoldToo
 	const comments = defineTool({
 		name: 'github_comments',
 		description: 'List comments on the current GitHub issue or pull request.',
-		parameters: EmptyParameters,
+		parameters: NoParameters,
 		success: ToolResultText,
 		failure: ToolResultFailure,
 		handler: () =>
@@ -73,7 +75,7 @@ export const githubTools = (discussion: GitHubDiscussion): ReadonlyArray<FoldToo
 					defineTool({
 						name: 'github_pull_request_diff',
 						description: 'Fetch the diff for the current GitHub pull request.',
-						parameters: EmptyParameters,
+						parameters: NoParameters,
 						success: ToolResultText,
 						failure: ToolResultFailure,
 						handler: () =>
@@ -85,13 +87,37 @@ export const githubTools = (discussion: GitHubDiscussion): ReadonlyArray<FoldToo
 					defineTool({
 						name: 'github_pull_request_checks',
 						description: 'List check runs for the current GitHub pull request.',
-						parameters: EmptyParameters,
+						parameters: NoParameters,
 						success: ToolResultText,
 						failure: ToolResultFailure,
 						handler: () =>
 							pullRequest
 								.listCheckRuns()
 								.pipe(Effect.flatMap(jsonResult(GitHubCheckRuns)), Effect.mapError(failure)),
+					}),
+					defineTool({
+						name: 'github_pull_request_reviews',
+						description:
+							'List reviews on the current GitHub pull request: who reviewed, their verdict, and their summary.',
+						parameters: NoParameters,
+						success: ToolResultText,
+						failure: ToolResultFailure,
+						handler: () =>
+							pullRequest
+								.listReviews()
+								.pipe(Effect.flatMap(jsonResult(GitHubReviews)), Effect.mapError(failure)),
+					}),
+					defineTool({
+						name: 'github_pull_request_review_comments',
+						description:
+							'List line comments on the current GitHub pull request, with the file, line, and diff they are on.',
+						parameters: NoParameters,
+						success: ToolResultText,
+						failure: ToolResultFailure,
+						handler: () =>
+							pullRequest
+								.listReviewComments()
+								.pipe(Effect.flatMap(jsonResult(GitHubReviewComments)), Effect.mapError(failure)),
 					}),
 				] satisfies ReadonlyArray<FoldTool<GitHubApi>>,
 		),

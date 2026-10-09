@@ -35,6 +35,7 @@ import {
 } from 'effect'
 
 import { DeliveryApi } from './DeliveryApi'
+import { MentionedIn } from './DiscussionContext'
 import { RunRecovery } from './SessionRecovery'
 import type { RepoCloneError } from './Workspace'
 
@@ -49,6 +50,8 @@ const WORKING = DeliveryActivity.cases.Working.make({ message: 'Working on it' }
 export const AgentSessionMessage = Schema.Struct({
 	prompt: Schema.String,
 	githubDiscussion: Schema.Union([GitHubIssue, GitHubPullRequest]),
+	/** The comment that mentioned the bot, if a comment did. */
+	mentionedIn: Schema.optional(MentionedIn),
 	deliveryId: DeliveryId,
 	accessToken: Schema.RedactedFromValue(Schema.String),
 })
@@ -134,6 +137,13 @@ export class AgentConversation extends Context.Service<
 		) => Effect.Effect<TurnSession, RepoCloneError, Scope.Scope | RuntimeContext>
 		/** Pull commits pushed since the repository was cloned or last pulled. A failure is reported, not raised. */
 		readonly pullRepository: (message: AgentSessionMessage) => Effect.Effect<RepositoryUpdate>
+		/**
+		 * What the agent has not seen of the discussion, to put before the prompt; `markSeen` records it as seen
+		 * once the agent has it. A failure is reported in the text, not raised.
+		 */
+		readonly readDiscussion: (
+			message: AgentSessionMessage,
+		) => Effect.Effect<{ readonly text: string; readonly markSeen: Effect.Effect<void> }>
 	}
 >()('alchemy-cloudflare/AgentConversation') {}
 
@@ -281,11 +291,18 @@ export class DeliveryTurns extends Context.Service<
 					}),
 				)
 
-			/** Pull the commits pushed since the last turn, then send the delivery's prompt. */
+			/**
+			 * Pull the commits pushed since the last turn, then send the delivery's prompt after what is new in the
+			 * discussion, which counts as seen once the turn ends.
+			 */
 			const sendPrompt = (session: TurnSession, message: AgentSessionMessage) =>
-				conversation
-					.pullRepository(message)
-					.pipe(Effect.flatMap((update) => send(session, message.prompt + repositoryNote(update))))
+				Effect.gen(function* () {
+					const update = yield* conversation.pullRepository(message)
+					const discussion = yield* conversation.readDiscussion(message)
+					const finished = yield* send(session, discussion.text + message.prompt + repositoryNote(update))
+					yield* discussion.markSeen
+					return finished
+				})
 
 			/**
 			 * Run the delivery's turn from wherever Fold's log says it stands. A new delivery first saves where its

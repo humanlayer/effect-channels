@@ -1,21 +1,19 @@
-import { GitHubApi } from '@humanlayer/channels-github'
+import { GitHubApi, GitHubId } from '@humanlayer/channels-github'
 import { DEFAULT_CODING_PROMPT, layerOutputStore, OutputStore, webTools } from '@humanlayer/fold-agent'
 import { skillsFromDisk } from '@humanlayer/fold-agent/skills'
 import { fileTools, Photon } from '@humanlayer/fold-agent/tools/files'
 import {
 	type FoldEventLog,
-	customModel,
 	defineAgent,
 	eventLogSource,
-	resolveOpenAiReasoning,
+	openaiModel,
 	resumeSession,
 	skillTool,
 	startSession,
 } from '@humanlayer/fold-core'
 import * as Cloudflare from 'alchemy/Cloudflare'
 import type { RuntimeContext } from 'alchemy/RuntimeContext'
-import { Context, Effect, FileSystem, Layer, Match, Path, Predicate, Schema, Stream } from 'effect'
-import { LanguageModel } from 'effect/ai'
+import { Config, Context, Effect, FileSystem, Layer, Match, Option, Path, Predicate, Schema, Stream } from 'effect'
 import { HttpClient } from 'effect/http'
 
 import { bashTool } from './BashTool'
@@ -23,6 +21,7 @@ import { WORKSPACE_ROOT } from './computer/Contract'
 import { DeliveryApi } from './DeliveryApi'
 import { updatePlanTool } from './DeliveryPlanTool'
 import { ActiveDelivery, AgentConversation, AgentSessionMessage, DeliveryTurns, RepositoryUpdate } from './DeliveryTurn'
+import { DiscussionSeen, readDiscussionContext } from './DiscussionContext'
 import * as FoldLog from './DurableObjectSqliteFoldAgentEventLog'
 import { githubTools } from './GitHubTools'
 import { gitTools } from './GitTools'
@@ -30,7 +29,9 @@ import { SessionExpiry } from './SessionExpiry'
 import { RunRecovery } from './SessionRecovery'
 import { Workspace, repositoryDirectoryName } from './Workspace'
 
-const MODEL = '@cf/zai-org/glm-5.3'
+const MODEL = 'gpt-6.1-sol'
+/** The highest comment, review, and line comment IDs the agent has been shown. */
+const DISCUSSION_SEEN_KEY = 'discussion_seen'
 const HOME = '/root'
 const WORKSPACE_GRACE_MILLIS = 24 * 60 * 60 * 1_000
 
@@ -84,11 +85,12 @@ const systemPrompt = (metadata: AgentSessionMetadata) =>
 		'You have no subagents here; do the work yourself.',
 		`You are working on GitHub ${discussionName(metadata.githubDiscussion)}. Someone mentioned you there, and each mention is one request. ` +
 			'Your final answer is posted there as a comment, so write it in GitHub Markdown. If you need something from them, ask in your final answer; they reply by mentioning you again.',
+		'Match your effort to the request. If it is a question, answer it as soon as you can, checking only what you need to answer it correctly, and keep the answer short. Do deeper work, such as changing code, only when asked to. For work of more than a few steps, post a plan with update_plan before you start.',
 		`The repository is cloned at ${WORKSPACE_ROOT}/${metadata.repositoryName}, on branch ${metadata.branch}. Its default branch is ${metadata.defaultBranch}.`,
 		branchPolicy(metadata),
 		'git in bash cannot reach GitHub. Use git_fetch, git_pull, and git_push for that.',
-		'For a request of more than one step, keep a plan with update_plan: list every step with a stable ID, keep exactly one step InProgress while you work, and update it as steps complete or fail.',
-		'Use the GitHub tools to read the discussion. Use web_search and web_fetch to look up documentation and other information online.',
+		'When you keep a plan with update_plan, list every step with a stable ID, keep exactly one step InProgress while you work, and update it as steps complete or fail.',
+		'Each request starts with the discussion in <github-discussion>: all of it on your first request, then what is new since your last turn. Use the GitHub tools to read anything older or cut off. Use web_search and web_fetch to look up documentation and other information online.',
 		`Command output too long to show in full is saved under ${TOOL_OUTPUT_DIRECTORY}; read that file when you need more than the end of it.`,
 	].join('\n\n')
 
@@ -130,23 +132,10 @@ export class AgentSessions extends Context.Service<
 	}
 >()('alchemy-cloudflare/AgentSessions') {}
 
-/**
- * Fold's model: GLM through the Workers AI binding, at its highest reasoning level. The binding's model is
- * built when the session starts, in the session's scope: it needs the live object's runtime context.
- */
+/** Fold's model: GPT-6.1 Sol through the OpenAI API, at medium reasoning. */
 const foldModel = Effect.gen(function* () {
-	const ai = yield* Cloudflare.Workers.AI()
-	return customModel({
-		activeModel: {
-			providerId: 'cloudflare-workers-ai',
-			providerKind: 'openai-compatible',
-			modelId: MODEL,
-			role: null,
-			requestedReasoningLevel: 'max',
-			reasoning: resolveOpenAiReasoning('max'),
-		},
-		make: Layer.build(ai.model({ model: MODEL })).pipe(Effect.map(Context.get(LanguageModel.LanguageModel))),
-	})
+	const apiKey = yield* Config.Redacted('OPENAI_API_KEY').pipe(Effect.orDie)
+	return openaiModel({ apiKey, model: MODEL, reasoning: 'medium' })
 })
 
 /** The services the agent's tools take from the context its Fold session starts in. */
@@ -171,6 +160,8 @@ const AgentConversationLive = Layer.effect(
 		const workspace = yield* Workspace
 		const { storage } = (yield* Cloudflare.DurableObjectState).raw
 		const model = yield* foldModel
+		const botUserId = yield* Config.schema(GitHubId, 'GITHUB_BOT_USER_ID').pipe(Effect.orDie)
+		const github = yield* GitHubApi
 		/** Fold's tools read their services from the context the session starts in, so it starts in this object's. */
 		const foldHost = yield* Effect.context<FoldHost>()
 
@@ -215,14 +206,6 @@ const AgentConversationLive = Layer.effect(
 						commit: prepared.commit,
 					}),
 				)
-				yield* Effect.logInfo('agent_session.started').pipe(
-					Effect.annotateLogs({
-						branch: prepared.branch,
-						defaultBranch: prepared.defaultBranch,
-						createdBranch: prepared.createdBranch,
-						commit: prepared.commit,
-					}),
-				)
 				const encodedMetadata = yield* Schema.encodeEffect(AgentSessionMetadata)(metadata).pipe(Effect.orDie)
 				return yield* startSession({
 					agent: agentFor(metadata),
@@ -232,7 +215,48 @@ const AgentConversationLive = Layer.effect(
 				})
 			})
 
+		const savedSeen = Effect.promise(() => storage.get(DISCUSSION_SEEN_KEY)).pipe(
+			Effect.flatMap((value) =>
+				Predicate.isUndefined(value)
+					? Effect.succeedNone
+					: Effect.asSome(Schema.decodeUnknownEffect(DiscussionSeen)(value)),
+			),
+			Effect.catchTag('SchemaError', (error) =>
+				Effect.logWarning(
+					'agent_session: the saved discussion progress is unreadable; showing it all',
+					error,
+				).pipe(Effect.as(Option.none<DiscussionSeen>())),
+			),
+		)
+
 		return AgentConversation.of({
+			readDiscussion: (message) =>
+				Effect.gen(function* () {
+					const seen = yield* savedSeen
+					const context = yield* readDiscussionContext({
+						discussion: message.githubDiscussion,
+						seen,
+						botUserId,
+						mentionedIn: message.mentionedIn,
+					})
+					yield* Effect.logInfo('agent_session.discussion_read').pipe(
+						Effect.annotateLogs({ first: Option.isNone(seen), characters: context.text.length }),
+					)
+					return {
+						text: context.text,
+						markSeen: Effect.promise(() => storage.put(DISCUSSION_SEEN_KEY, context.seen)),
+					}
+				}).pipe(
+					Effect.provideService(GitHubApi, github),
+					Effect.catchTag('GitHubApiError', (error) =>
+						Effect.logWarning('agent_session.read_discussion failed', error).pipe(
+							Effect.as({
+								text: `<system-information>Reading the GitHub discussion failed, so it is not shown here: ${error.message}. Use the GitHub tools to read it.</system-information>\n\n`,
+								markSeen: Effect.void,
+							}),
+						),
+					),
+				),
 			pullRepository: (message) =>
 				workspace.pull({ repository: message.githubDiscussion.ref }).pipe(
 					Effect.map(({ before, after }) =>
@@ -253,9 +277,6 @@ const AgentConversationLive = Layer.effect(
 				if (Predicate.isUndefined(started)) return yield* start(message, log)
 				const metadata = yield* Schema.decodeUnknownEffect(AgentSessionMetadata)(started.meta).pipe(
 					Effect.orDie,
-				)
-				yield* Effect.logInfo('agent_session.resumed').pipe(
-					Effect.annotateLogs({ branch: metadata.branch, entries: entries.length }),
 				)
 				yield* Effect.logInfo('agent_session.resumed').pipe(
 					Effect.annotateLogs({ branch: metadata.branch, entries: entries.length }),

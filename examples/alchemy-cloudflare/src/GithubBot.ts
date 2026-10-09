@@ -32,6 +32,7 @@ import { Config, Effect, Match, Predicate, Schema } from 'effect'
 import { AgentSessions } from './AgentSessionDO'
 import { AutoLabel, type AutoLabelError } from './AutoLabel'
 import { AgentSessionMessage } from './DeliveryTurn'
+import { MentionedIn } from './DiscussionContext'
 
 export const maintainerOnlyNotice =
 	'This agent can only be invoked by maintainers (users with write access or higher to this repository).'
@@ -110,6 +111,18 @@ const gitHubMentionText = (event: GitHubMentioned) =>
 		}),
 	)
 
+/** The comment that mentioned the bot; none when the issue or pull request itself did. */
+const gitHubMentionedIn = (event: GitHubMentioned): MentionedIn | undefined =>
+	Match.value(event.trigger).pipe(
+		Match.tagsExhaustive({
+			GitHubIssueOpened: () => undefined,
+			GitHubPrOpened: () => undefined,
+			GitHubIssueCommentCreated: ({ comment }) => MentionedIn.cases.Comment.make({ id: comment.ref.id }),
+			GitHubPrCommentCreated: ({ comment }) => MentionedIn.cases.Comment.make({ id: comment.ref.id }),
+			GitHubPrReviewCommentCreated: ({ comment }) => MentionedIn.cases.ReviewComment.make({ id: comment.ref.id }),
+		}),
+	)
+
 /**
  * An authorized mention subscribes the discussion, so later comments and checks reach this mailbox, and
  * hands the delivery to the discussion's AgentSession, which finishes it when its turn ends. Until then the
@@ -175,6 +188,7 @@ export const githubHandlers = {
 				AgentSessionMessage.make({
 					prompt: gitHubMentionText(event),
 					githubDiscussion: discussion,
+					mentionedIn: gitHubMentionedIn(event),
 					deliveryId: context.deliveryId,
 					accessToken: context.accessToken,
 				}),

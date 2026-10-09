@@ -7,6 +7,7 @@ import type { GitHubRepositoryRef } from '@humanlayer/channels-github'
 import { defineTool, ToolResultFailure, ToolResultText, type FoldTool } from '@humanlayer/fold-core'
 import { Effect, Schema } from 'effect'
 
+import { NoParameters } from './ToolParameters'
 import { Workspace } from './Workspace'
 
 const failure = (error: { readonly message: string }) => ToolResultFailure.make({ text: error.message })
@@ -45,7 +46,7 @@ export const gitTools = (input: {
 		name: 'git_pull',
 		description:
 			'Fast-forward the checked-out branch to its branch on GitHub. Fails if local commits or uncommitted changes are in the way.',
-		parameters: Schema.Struct({}),
+		parameters: NoParameters,
 		success: ToolResultText,
 		failure: ToolResultFailure,
 		handler: () =>
@@ -89,7 +90,7 @@ export const gitTools = (input: {
 	const push = defineTool({
 		name: 'git_push',
 		description: `Push your commits on ${workBranch} to GitHub. ${workBranch} must be checked out. Never force-pushes.`,
-		parameters: Schema.Struct({}),
+		parameters: NoParameters,
 		success: ToolResultText,
 		failure: ToolResultFailure,
 		handler: () =>

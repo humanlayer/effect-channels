@@ -129,7 +129,10 @@ paste-the-complete-downloaded-key-here
 -----END RSA PRIVATE KEY-----"
 GITHUB_BOT_MENTION_NAME=your-app-slug
 GITHUB_BOT_USER_ID=123456789
+OPENAI_API_KEY=sk-...
 ```
+
+The agent runs on OpenAI's `gpt-6.1-sol` at medium reasoning, using `OPENAI_API_KEY`. Workers AI is still used to label new issues and pull requests.
 
 GitHub App bot identities such as `my-reviewer[bot]` are not native mentionable accounts: GitHub does not autocomplete or link `@my-reviewer[bot]`. `GITHUB_BOT_MENTION_NAME` is instead the text invocation name recognized by this provider, without the leading `@`. Use the app slug for a natural command such as `@my-reviewer`. This can still render as plain text; use `[@my-reviewer](https://github.com/apps/my-reviewer)` when a clickable link is important. If the app slug matches a real user or organization, choose a distinct invocation name to avoid notifying that account.
 
