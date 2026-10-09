@@ -227,7 +227,7 @@ const github = GitHubBot.make<
 	GitHubApi | AutoLabel | RuntimeContext | AgentSessions | MailboxSubscriptions
 >({
 	webhookSecret: Config.Redacted('GITHUB_WEBHOOK_SECRET'),
-	deliveryMode: DebounceDeliveryMode.make({ quietPeriodMs: 10_000, maxWaitMs: 10_000 }),
+	deliveryMode: DebounceDeliveryMode.make({ quietPeriodMs: 3_000, maxWaitMs: 3_000 }),
 	bot: Config.all({
 		mentionNames: Config.String('GITHUB_BOT_MENTION_NAME').pipe(Config.map((name) => [name])),
 		botUserId: Config.schema(GitHubId, 'GITHUB_BOT_USER_ID'),
