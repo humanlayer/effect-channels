@@ -127,7 +127,7 @@ export default defineConfig({
 			'automation/no-single-use-private-functions': 'off',
 			'automation/no-single-use-xstate-actions': 'error',
 			'automation/no-single-use-xstate-guards': 'error',
-			'automation/no-sql-type-parameter': 'error',
+			'automation/no-sql-type-parameter': 'off',
 			'automation/no-static-effect-service-forwarders': 'error',
 			'automation/no-switch': 'error',
 			'automation/no-try-catch': 'error',

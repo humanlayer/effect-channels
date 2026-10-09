@@ -77,7 +77,7 @@ return 1
 /**
  * Reports one due mailbox: `{ status, provider, count, firstSequence, firstArrivedAt, lastSequence, lastArrivedAt, stage }`.
  * The waiting fields are empty strings unless the mailbox is idle; `stage` is empty unless it is not,
- * and for a batch saved before stages were stored.
+ * with the active delivery's required stage otherwise.
  * Returns false when the mailbox is not due. An idle mailbox with nothing waiting leaves the ready set.
  */
 export const look = Redis.script(
@@ -141,16 +141,11 @@ return 1
  * Reads a mailbox in one step: `{ the named state fields, waiting count, retained JSON or false, waiting admissions }`.
  * The admissions are those at or below `pendingUpTo`, oldest first, and none when it is null.
  * Returns false when there is no such mailbox.
- *
- * A frozen batch saved before batches had IDs gets an ID and token here, once, and the version moves
- * so no change decided without them can be written.
  */
 export const load = Redis.script(
 	(input: {
 		readonly mailboxKey: string
 		readonly pendingUpTo: number | null
-		readonly legacySeed: string
-		readonly now: number
 		readonly fields: ReadonlyArray<string>
 	}) => [
 		mailboxStateKey(input.mailboxKey),
@@ -158,23 +153,12 @@ export const load = Redis.script(
 		mailboxRetainedKey(input.mailboxKey),
 		input.mailboxKey,
 		Predicate.isNull(input.pendingUpTo) ? '' : input.pendingUpTo,
-		input.legacySeed,
-		input.now,
 		...input.fields,
 	],
 	{
 		numberOfKeys: 3,
 		lua: `${parseEntry}
 if redis.call('EXISTS', KEYS[1]) == 0 then return false end
-local status = redis.call('HGET', KEYS[1], 'status') or 'idle'
-local batch_json = redis.call('HGET', KEYS[1], 'batch')
-if status ~= 'idle' and batch_json and
-   (not redis.call('HGET', KEYS[1], 'batch_id') or not redis.call('HGET', KEYS[1], 'access_token')) then
-  local seed = redis.sha1hex(ARGV[1] .. '|' .. ARGV[3] .. '|' .. batch_json)
-  redis.call('HSET', KEYS[1], 'batch_id', 'legacy-' .. string.sub(seed, 1, 32),
-    'access_token', redis.sha1hex(seed .. '|' .. ARGV[4]))
-  redis.call('HINCRBY', KEYS[1], 'version', 1)
-end
 local pending = {}
 if ARGV[2] ~= '' then
   local up_to = tonumber(ARGV[2])
@@ -185,7 +169,7 @@ if ARGV[2] ~= '' then
   end
 end
 return {
-  redis.call('HMGET', KEYS[1], unpack(ARGV, 5)),
+  redis.call('HMGET', KEYS[1], unpack(ARGV, 3)),
   redis.call('LLEN', KEYS[2]),
   redis.call('GET', KEYS[3]),
   pending,

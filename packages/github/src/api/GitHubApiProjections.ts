@@ -62,6 +62,13 @@ export const pullRequestInfo = (ref: GitHubPullRequestRef, value: typeof Api.Pul
 		merged: value.merged,
 		headRef: value.head.ref,
 		headSha: value.head.sha,
+		headRepository: Predicate.isNullish(value.head.repo)
+			? null
+			: {
+					repositoryId: value.head.repo.id,
+					owner: value.head.repo.owner.login,
+					repository: value.head.repo.name,
+				},
 		baseRef: value.base.ref,
 		baseSha: value.base.sha,
 	})

@@ -17,7 +17,6 @@ import {
 	DeliveryStatusError,
 	parseDeliveryId,
 } from '@humanlayer/channels-delivery'
-import { RuntimeContext } from 'alchemy/RuntimeContext'
 import { Data, Effect, Layer, Match, Redacted, Schema } from 'effect'
 
 import { DeliveryMailboxes } from './MailboxDelivery'
@@ -120,7 +119,6 @@ export const DeliveryControlAlchemyCloudflare = Layer.effect(
 			Schema.encodeEffect(DeliveryRequest)(request).pipe(
 				Effect.flatMap((encoded) => mailboxes.getByName(mailboxKey).deliveryRequest(encoded)),
 				Effect.flatMap(Schema.decodeUnknownEffect(responseSchema)),
-				Effect.provide(RuntimeContext.phantom),
 				unavailable,
 			)
 

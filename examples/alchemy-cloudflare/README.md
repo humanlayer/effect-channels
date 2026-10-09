@@ -1,6 +1,6 @@
-# Alchemy Cloudflare Slack, GitHub, and Linear mailbox example
+# Alchemy Cloudflare GitHub mailbox example
 
-This example receives Slack, GitHub, and Linear webhooks in a Cloudflare Worker, stores each event in a mailbox Durable Object, and processes mailboxes from Durable Object alarms. All providers are declared in `src/Bot.ts`; `src/Worker.ts` builds webhook ingress and `src/DurableObject.ts` builds persistent processing from that same declaration.
+This deployment receives GitHub webhooks in a Cloudflare Worker, stores each event in a mailbox Durable Object, and processes mailboxes from Durable Object alarms. `src/GithubBot.ts` declares the GitHub callbacks, `src/Worker.ts` builds ingress and the Workers AI binding, and `src/DeliveryMailboxDO.ts` builds persistent processing. New issues and PRs are labeled with Clef. A mention from a maintainer starts a coding agent on the issue or pull request; see [The GitHub agent](#the-github-agent). The older Slack, Linear, and fake-agent walkthroughs below are not part of the current deployment.
 
 ## Linear Application setup
 
@@ -72,14 +72,14 @@ OAuth callback URLs, user authorization, device flow, and post-installation setu
 
 Configure these permissions under **Repository permissions**:
 
-| Permission    | Access         | Why                                                                                         |
-| ------------- | -------------- | ------------------------------------------------------------------------------------------- |
-| Metadata      | Read-only      | Repository identity; GitHub grants this mandatory permission to installed apps.             |
-| Issues        | Read and write | Read and change issues, issue comments, and labels shared by issues and PRs.                |
-| Pull requests | Read and write | Read and change PRs, files, commits, conversation and review comments, reviews, and labels. |
-| Checks        | Read-only      | Receive completed check-run events; list check runs; read check output and annotations.     |
-| Contents      | Read and write | Merge pull requests. GitHub's merge endpoint specifically requires write access.            |
-| Actions       | Read-only      | Resolve GitHub Actions-backed checks to jobs, read job details, and download job logs.      |
+| Permission    | Access         | Why                                                                                                |
+| ------------- | -------------- | -------------------------------------------------------------------------------------------------- |
+| Metadata      | Read-only      | Repository identity; GitHub grants this mandatory permission to installed apps.                    |
+| Issues        | Read and write | Read and change issues, issue comments, and labels shared by issues and PRs.                       |
+| Pull requests | Read and write | Read, open, and change PRs, files, commits, conversation and review comments, reviews, and labels. |
+| Checks        | Read-only      | Receive completed check-run events; list check runs; read check output and annotations.            |
+| Contents      | Read and write | Clone, pull, and push branches, and merge pull requests.                                           |
+| Actions       | Read-only      | Resolve GitHub Actions-backed checks to jobs, read job details, and download job logs.             |
 
 No Administration, organization, or account permissions are required.
 
@@ -129,23 +129,82 @@ paste-the-complete-downloaded-key-here
 -----END RSA PRIVATE KEY-----"
 GITHUB_BOT_MENTION_NAME=your-app-slug
 GITHUB_BOT_USER_ID=123456789
+OPENAI_API_KEY=sk-...
 ```
+
+The agent runs on OpenAI's `gpt-6.1-sol` at medium reasoning, using `OPENAI_API_KEY`. Workers AI is still used to label new issues and pull requests.
 
 GitHub App bot identities such as `my-reviewer[bot]` are not native mentionable accounts: GitHub does not autocomplete or link `@my-reviewer[bot]`. `GITHUB_BOT_MENTION_NAME` is instead the text invocation name recognized by this provider, without the leading `@`. Use the app slug for a natural command such as `@my-reviewer`. This can still render as plain text; use `[@my-reviewer](https://github.com/apps/my-reviewer)` when a clickable link is important. If the app slug matches a real user or organization, choose a distinct invocation name to avoid notifying that account.
 
 The GitHub provider reads these values while the Worker is constructed, so Alchemy binds them as Cloudflare secrets during deployment and its Durable Objects share the same bindings. The webhook secret verifies incoming requests. The App ID and private key create short-lived installation tokens for API calls. The bot user ID prevents the app from responding to its own events. Secrets are not stored in mailbox admissions or Durable Object storage.
 
+Optional Workers AI labeling settings (the defaults are shown):
+
+```dotenv
+GITHUB_LABEL_MODEL=@cf/cloudflare/clef
+GITHUB_LABEL_THRESHOLD=0.7
+GITHUB_LABEL_TIMEOUT="60 seconds"
+```
+
+`@cf/cloudflare/clef-flash` is also supported. Alchemy attaches a native binding named `AI` to the host Worker, and the mailbox's callbacks use it through the captured labeler service. No separate model API key is needed; inference uses the Cloudflare account's Workers AI service and incurs its normal usage charges. The pinned PR preview contains the Workers AI fix; main's unpublished Iceberg dependency currently prevents installing the main preview.
+
 Restart `bun alchemy dev` after changing `.env`. For a deployed stack, deploy the updated secrets with:
 
 ```bash
-bun alchemy deploy
+bun run alchemy:deploy
 ```
 
 ### 7. Test with a repository
 
-Open an issue or pull request in an installed repository. The sample callback reads the discussion and its existing comments (and PR reviews), subscribes the discussion, posts a confirmation comment, and adds an `eyes` reaction to that comment. You can also invoke `@<app-slug>` in an issue body, PR body, issue comment, PR comment, or inline review comment. On every subscribed PR event batch, the example calls `pullRequest.listComments()` and `pullRequest.listReviewComments()`, then logs both current comment counts. Later subscribed comments and inline review comments receive an `eyes` reaction; all subscribed events are logged by the Durable Object. Completed-check callback events include both `headSha` and `checkRunId`, which can be passed to the check-run resource methods without accidentally inspecting a newer push.
+After deployment, set the GitHub App's webhook URL to `https://<your-worker-hostname>/integrations/github/webhook`. Open a new issue describing a clear bug, then a new PR describing a documentation change. After the three-second debounce and processing, Clef should add matching labels whose yes-probability meets the configured threshold. It considers only GitHub's nine default label names that already exist on this repository, can add multiple labels, and preserves existing labels. A null body is evaluated using the title. No confident matches means no label changes. Historical issues/PRs are not scanned automatically.
+
+Creation labeling does not require a maintainer mention. To test mention access separately, invoke `@<app-slug>` in an issue body, PR body, issue comment, PR comment, or inline review comment. Write access or higher gets eyes; other users get thumbs down and one maintainer-only notice per discussion. Creation labeling runs before a mention in the same opening batch. A failed labeling callback is logged and retried by mailbox processing; the later mention waits until that callback succeeds or the delivery terminates.
+
+Use Cloudflare Worker logs to look for `Workers AI label inference started`, `Workers AI label inference completed`, and `GitHub labels added`. Effect log annotations include repository, discussion number/type, model, threshold, candidate/selected labels, and each label's probability as text, such as `enhancement=0.74, question=0.41`. Creation callbacks also annotate the webhook event ID and delivery ID. Failures log `GitHub auto-label failed` with an error tag/reason; a missing runtime `AI` binding reports `binding_missing`. Request titles, bodies, credentials, and raw model responses are not logged. The `bot.github.auto_label` Effect span carries repository, number, and model attributes. This has been verified with a substituted native binding in tests, not live inference.
 
 In the GitHub App settings, **Advanced → Recent Deliveries** shows each webhook request, response status, and redelivery control. A successful admission returns HTTP 200. If GitHub reports 401, check the webhook secret. If callbacks fail with 403, check the app permissions and make sure the installation includes the repository.
+
+## The GitHub agent
+
+When someone with write access to the repository mentions the app, the mention goes to that issue's or pull request's agent session (`src/AgentSessionDO.ts`). It runs a [Fold](https://github.com/humanlayer/fold) agent on OpenAI's `gpt-6.1-sol` at medium reasoning, with the repository cloned into a Cloudflare Computer container. Each issue or pull request has one session, which keeps its conversation, workspace, and branch between mentions. A session idle for 14 days is deleted.
+
+### What happens on a mention
+
+1. The mention gets the app's `eyes` reaction, and the issue or pull request is followed so later comments reach the same session.
+2. The session pulls its branch from GitHub, then sends the agent the request. The request starts with the discussion: on the first mention, the title, description, and every comment (and, on a pull request, its reviews and line comments); later, only what was posted since the agent's last turn. The app's own comments and the mentioning comment are left out. Each comment shows its ID, so the agent can reply to it.
+3. A mention in a line comment on a pull request also tells the agent the file, line, diff around it, and the review thread to reply in.
+4. For longer work the agent keeps a checklist comment up to date with `update_plan`.
+5. When the agent finishes, its answer is posted as a comment and the `eyes` reaction is removed. If the run fails, the comment says why instead.
+
+Mentions that arrive while the agent is working wait in the mailbox and run, in order, once it finishes.
+
+### Branches
+
+- **Issue:** the agent works on `humanlayer/issue-<number>`, created from the default branch on the first mention and pushed to GitHub. When the work is ready, the agent opens a pull request with `github_create_pull_request`, which adds `Closes #<number>`, or returns the one already open from the branch.
+- **Pull request:** the agent works on the pull request's own branch, and pushing updates the pull request. A pull request from a fork, or whose branch was deleted, fails with a comment saying so: the app cannot push to forks.
+
+Commits are by `HumanLayer Agent <agent@humanlayer.dev>` (set in `src/computer/Contract.ts`). The agent never force-pushes and never commits to the default branch.
+
+### Tools
+
+| Tool                                                                                                                           | What it does                                                                                                                                           |
+| ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `read`, `write`, `edit`, `apply_patch`                                                                                         | Read and change files in the workspace.                                                                                                                |
+| `bash`                                                                                                                         | Run commands in the container. Long output is cut to its end; the full text is saved under `/workspace/.fold/tool-output`.                             |
+| `web_search`, `web_fetch`                                                                                                      | Look things up online.                                                                                                                                 |
+| `skill`                                                                                                                        | Load one of the repository's skills.                                                                                                                   |
+| `update_plan`                                                                                                                  | Show the agent's checklist as one comment, edited as it changes.                                                                                       |
+| `git_fetch`, `git_pull`, `git_merge`, `git_push`                                                                               | Git operations that reach GitHub. `git_push` pushes only the session's branch. Local git (`status`, `diff`, `add`, `commit`) runs in `bash`.           |
+| `github_discussion`, `github_comments`                                                                                         | Read the issue or pull request and its comments.                                                                                                       |
+| `github_post_comment`                                                                                                          | Post a comment, or, on a pull request with `reply_to`, reply in a review thread. The agent's final answer is posted for it; this is for anything else. |
+| `github_pull_request_diff`, `github_pull_request_checks`, `github_pull_request_reviews`, `github_pull_request_review_comments` | Pull request sessions only: the diff, check runs, reviews, and line comments with their threads.                                                       |
+| `github_create_pull_request`                                                                                                   | Issue sessions only: open the issue's pull request, or return the open one.                                                                            |
+
+Git and the GitHub API use the App's installation token, sent with each request. It never appears in tool input or output, environment variables, git remotes, or logs.
+
+### Logs
+
+Look for `agent_session.started` or `agent_session.resumed` (with the branch), `agent_turn.prompt_sent`, `agent_session.discussion_read`, `agent_session.plan_updated`, `workspace.exec` (with each `bash` command), and `agent_turn.finished` (with `fold.outcome`). A failed pull logs `agent_session.pull_repository failed` with its `reason`.
 
 ## Slack setup
 
@@ -164,10 +223,11 @@ https://<your-worker-hostname>/integrations/slack/webhook
 
 ## Whom the example listens to
 
-The example checks authors in its own callbacks (`src/AuthorAccess.ts`); the libraries do not do it for you.
+The GitHub `onMentioned` handler in `src/GithubBot.ts` checks the mentioning user's repository access before entering either the issue or PR handler. The libraries do not enforce this application policy.
 
-- **GitHub requires write access.** Anyone can comment on a public repository, so every GitHub callback looks up the author's access to the repository with `fetchUserAccess(login)` before it acts. Authors below `write` (`none`, `read`, `triage`) are ignored: no comment, no reaction, and the log line `Example ignored GitHub author without write access` with their login and access level. In a subscribed batch the example acts only on new comments and review comments, so it checks each of those on its own and looks up each author once per batch; it does not look up the authors of events it does nothing with, such as check runs, whose sender is usually an app. If GitHub answers `not_found` (the login is not a user, such as a bot account), the author counts as `none` and the event is ignored and logged. Any other failed lookup fails the callback, which is retried like any other failure; the event never gets through unchecked. The bot's own events are dropped before any callback runs.
-- **Slack ignores other workspaces.** In a Slack Connect channel, people from another workspace can mention the bot. Slack marks their messages with `user_team`, which `SlackMessage.authorTeamId` carries. A mention or thread message whose author workspace differs from the installation's is ignored, with the log line `Example ignored Slack author from another workspace`. A message without `user_team` counts as local.
+Users with `write` access or higher get an `eyes` reaction on the mentioning issue, PR, or comment. Users below `write` get a thumbs-down reaction and a maintainer-only notice once per issue or PR. Further denied mentions get only thumbs down. Only a matching notice authored by the configured bot user counts as an existing notice; another user copying it cannot suppress the reply.
+
+A permission lookup returning `not_found` counts as no access. Other lookup failures fail the callback without granting access. The bot's own events are dropped before callbacks run.
 
 ## Fake remote agent
 
@@ -188,7 +248,7 @@ The remote agent calls the delivery API at the Worker's own public URL, which Al
 ### Setup
 
 1. From `examples/alchemy-cloudflare`, run `bun alchemy deploy`, and note the URL it prints.
-2. In a second terminal, run `bun alchemy logs --filter IngressWorker --since 10m` and leave it open.
+2. In a second terminal, run `bun alchemy logs --resource IngressWorker --since 10m --no-input` and leave it open.
 
 ### Checks
 
@@ -238,7 +298,7 @@ The same fake remote agent runs GitHub issue and pull request deliveries. Mentio
 
 - **Activity is `eyes`.** GitHub has no status line, so `Working` adds the bot's `eyes` reaction to what mentioned the bot: the comment, or the issue or pull request itself when the mention was in its body. `Idle` removes it, and so does the result. The text of `Working` is not shown. Adding `eyes` that is already there, or removing it when it is already gone, changes nothing.
 - **Messages are comments.** The summary is one comment on the issue or pull request, posted just before the result; the final message is one more comment. With `ask` the final comment is the question, with `- staging` and `- production` listed under it. The delivery API never exposes installation, repository, or comment IDs.
-- A later comment in a subscribed issue or pull request, without a new mention, is a subscribed batch. It has nothing that started it to react to, so its delivery does not list `SetActivity`.
+- A later comment that mentions the app runs `onMentioned` again, even in a subscribed issue or pull request. A later comment without a mention is a subscribed batch. It has nothing that started it to react to, so its delivery does not list `SetActivity`.
 - `flaky` is a Slack-only test switch; a GitHub mention ignores it.
 
 Checks, in a test repository where the app is installed (`GITHUB_BOT_MENTION_NAME` is the name after `@`):
@@ -247,7 +307,7 @@ Checks, in a test repository where the app is installed (`GITHUB_BOT_MENTION_NAM
 2. **Pull request.** On a pull request, comment `@<app-slug> handoff 20`. The same happens on the pull request's conversation: `eyes` on your comment while it works, then the summary comment and the final comment, with `eyes` gone at the end.
 3. **Mention in a body.** Open an issue whose body is `@<app-slug> handoff 20`. The `eyes` reaction shows on the issue itself, not on a comment, and is gone after the final comment.
 4. **A question ends the delivery.** Comment `@<app-slug> handoff 20 ask`. The final comment is `Which environment should I deploy to?` with `- staging` and `- production` under it, and `eyes` is gone.
-5. **Queued follow-up.** Comment `@<app-slug> handoff 30`, then right away comment `follow-up` in the same issue. The app's `eyes` reaction on `follow-up` (from the subscribed-events callback) appears only after the final comment.
+5. **Queued follow-up.** Comment `@<app-slug> handoff 30`, then right away comment `@<app-slug> handoff 10` in the same issue. The second mention waits: its `eyes` reaction appears only after the first delivery's final comment, and then it runs like the first.
 6. **`flaky` is ignored.** Comment `@<app-slug> handoff 10 flaky`. The final comment is `Fake remote agent finished after 10s.` with no extra text, and the logs show no `Example Slack API refusing a flaky post on purpose`.
 7. **Read access gets no response.** From an account with only read access to the repository (on a public repository, any account that is not a collaborator), comment `@<app-slug> handoff 20` on an issue. Nothing is posted and no reaction appears. The logs show `GitHub bot mentioned`, then `Example ignored GitHub author without write access` with that login and `access=read`, and no `GitHub mention handed off`. A plain comment from that account in a subscribed issue gets no `eyes` reaction either.
 8. **Reactions.** Comment `@<app-slug> handoff 30 react`. About a second after the `eyes` reaction, your comment also gets the app's 🚀; about 15 seconds later the 🚀 is gone and `eyes` stays. The summary comment gets ❤️. The logs show `Fake remote agent set a reaction` three times, each with `receipt_status=accepted,already_recorded`.
@@ -268,7 +328,7 @@ Replace the sample callbacks in `src/Bot.ts` with application behavior. Delivery
 Read recent Worker and Durable Object logs with:
 
 ```bash
-bun alchemy logs --filter IngressWorker --since 10m
+bun alchemy logs --resource IngressWorker --since 10m --no-input
 ```
 
 Alchemy currently uses Effect's readable multiline logger and `bun alchemy logs` does not have a JSON output option. Effect also provides single-line JSON logging through `Logger.layer([Logger.consoleJson])`, but applying that inside this example does not replace all of Alchemy's own logs or make the command return complete JSON. A consistent JSON view requires logger and JSON-output support in Alchemy itself.

@@ -39,6 +39,9 @@ import type {
 export const GitHubIssueRequest = Schema.Struct({ issue: GitHubIssueRef })
 export interface GitHubIssueRequest extends Schema.Schema.Type<typeof GitHubIssueRequest> {}
 
+export const GitHubRepositoryRequest = Schema.Struct({ repository: GitHubRepositoryRef })
+export interface GitHubRepositoryRequest extends Schema.Schema.Type<typeof GitHubRepositoryRequest> {}
+
 export const GitHubPullRequestRequest = Schema.Struct({ pullRequest: GitHubPullRequestRef })
 export interface GitHubPullRequestRequest extends Schema.Schema.Type<typeof GitHubPullRequestRequest> {}
 
@@ -158,6 +161,23 @@ export const GitHubMergePullRequest = Schema.Struct({
 })
 export interface GitHubMergePullRequest extends Schema.Schema.Type<typeof GitHubMergePullRequest> {}
 
+/** Open pull requests whose head is `head`, a branch of `repository` itself. */
+export const GitHubListPullRequestsForBranch = Schema.Struct({
+	repository: GitHubRepositoryRef,
+	head: Schema.NonEmptyString,
+})
+export interface GitHubListPullRequestsForBranch extends Schema.Schema.Type<typeof GitHubListPullRequestsForBranch> {}
+
+/** A pull request from `head` into `base`, both branches of `repository`. */
+export const GitHubCreatePullRequest = Schema.Struct({
+	repository: GitHubRepositoryRef,
+	head: Schema.NonEmptyString,
+	base: Schema.NonEmptyString,
+	title: Schema.NonEmptyString,
+	body: Schema.String,
+})
+export interface GitHubCreatePullRequest extends Schema.Schema.Type<typeof GitHubCreatePullRequest> {}
+
 export const GitHubListCheckRunsForRef = Schema.Struct({
 	pullRequest: GitHubPullRequestRef,
 	sha: Schema.NonEmptyString,
@@ -182,6 +202,7 @@ export const GitHubApiOperation = Schema.Literals([
 	'fetch_pull_request_diff',
 	'list_pull_request_commits',
 	'list_issue_labels',
+	'list_repository_labels',
 	'list_pull_request_labels',
 	'add_issue_labels',
 	'add_pull_request_labels',
@@ -204,6 +225,8 @@ export const GitHubApiOperation = Schema.Literals([
 	'close_pull_request',
 	'reopen_pull_request',
 	'merge_pull_request',
+	'list_pull_requests_for_branch',
+	'create_pull_request',
 	'list_check_runs_for_ref',
 	'fetch_check_run',
 	'list_check_run_annotations',
@@ -211,6 +234,7 @@ export const GitHubApiOperation = Schema.Literals([
 	'fetch_actions_job',
 	'download_actions_job_log',
 	'fetch_user_access',
+	'create_git_credentials',
 ])
 export type GitHubApiOperation = typeof GitHubApiOperation.Type
 
@@ -265,6 +289,9 @@ export class GitHubApi extends Context.Service<
 			input: GitHubPullRequestRequest,
 		) => Effect.Effect<GitHubCommits, GitHubApiError>
 		readonly listIssueLabels: (input: GitHubIssueRequest) => Effect.Effect<GitHubLabelsResult, GitHubApiError>
+		readonly listRepositoryLabels: (
+			input: GitHubRepositoryRequest,
+		) => Effect.Effect<GitHubLabelsResult, GitHubApiError>
 		readonly listPullRequestLabels: (
 			input: GitHubPullRequestRequest,
 		) => Effect.Effect<GitHubLabelsResult, GitHubApiError>
@@ -307,6 +334,13 @@ export class GitHubApi extends Context.Service<
 			input: GitHubPullRequestRequest,
 		) => Effect.Effect<GitHubPullRequestInfo, GitHubApiError>
 		readonly mergePullRequest: (input: GitHubMergePullRequest) => Effect.Effect<GitHubMergeResult, GitHubApiError>
+		/** The open pull requests from a branch of the repository itself, not from forks. */
+		readonly listPullRequestsForBranch: (
+			input: GitHubListPullRequestsForBranch,
+		) => Effect.Effect<ReadonlyArray<GitHubPullRequestInfo>, GitHubApiError>
+		readonly createPullRequest: (
+			input: GitHubCreatePullRequest,
+		) => Effect.Effect<GitHubPullRequestInfo, GitHubApiError>
 		readonly listCheckRunsForRef: (
 			input: GitHubListCheckRunsForRef,
 		) => Effect.Effect<GitHubCheckRuns, GitHubApiError>

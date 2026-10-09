@@ -324,8 +324,6 @@ const presentOutcome = Effect.fn('github.output.present_outcome')(function* (
 export const makeGitHubOutputProcessor = Effect.fn('github.make_output_processor')(function* (input: {
 	readonly namespace: string
 }) {
-	const gitHubApi = yield* GitHubApi
-
 	const process = Effect.fn('github.process_delivery_output')(function* (attempt: ProviderOutputAttempt) {
 		if (attempt.prepared.presentationVersion !== gitHubPresentationVersion) {
 			return yield* failed('unsupported_presentation_version', false)
@@ -368,11 +366,8 @@ export const makeGitHubOutputProcessor = Effect.fn('github.make_output_processor
 			}),
 		)
 	}, (effect, attempt) =>
-		effect.pipe(
-			Effect.annotateLogs({ delivery_id: attempt.deliveryId, operation_id: attempt.operationId }),
-			Effect.provideService(GitHubApi, gitHubApi),
-		),
+		effect.pipe(Effect.annotateLogs({ delivery_id: attempt.deliveryId, operation_id: attempt.operationId })),
 	)
 
-	return { namespace: input.namespace, providerName: 'github', process } satisfies ProviderOutputProcessor
+	return { namespace: input.namespace, providerName: 'github', process } satisfies ProviderOutputProcessor<GitHubApi>
 })

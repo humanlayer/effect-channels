@@ -75,6 +75,7 @@ const makeOrderLog = Ref.make<ReadonlyArray<string>>([])
 const recordingExecution = (execution: ProviderDeliveryExecution, order: Ref.Ref<ReadonlyArray<string>>) =>
 	new ProviderDeliveryExecution({
 		deliveryId: execution.deliveryId,
+		callbackIndex: execution.callbackIndex,
 		idempotencyKey: execution.idempotencyKey,
 		prepared: execution.prepared,
 		context: execution.context,
@@ -88,6 +89,7 @@ const failingExecution = (
 ) =>
 	new ProviderDeliveryExecution({
 		deliveryId: execution.deliveryId,
+		callbackIndex: execution.callbackIndex,
 		idempotencyKey: execution.idempotencyKey,
 		prepared: execution.prepared,
 		context: execution.context,
@@ -129,6 +131,45 @@ const stopPromptPayload = {
 }
 
 describe('Linear delivery preparation', () => {
+	it.effect(
+		'rejects invalid callback indices and non-singleton plans before any preparation, thought, or callback',
+		({ expect }) =>
+			Effect.gen(function* () {
+				const test = yield* makeTestDeliveryExecution()
+				const admission = yield* linearAgentSessionAdmission(agentSessionPayloads[0])
+				const spec = {
+					name: 'onAgentSessionCreated',
+					presentationVersion: 1,
+					destination: null,
+					supportedOperations: [],
+				}
+				const singleton = PreparedDeliveryInvocation.make({ callbacks: [spec] })
+				const multiple = PreparedDeliveryInvocation.make({ callbacks: [spec, spec] })
+				const executions = [
+					...[-1, 1, 0.5, NaN].flatMap((callbackIndex) => [
+						new ProviderDeliveryExecution({ ...test.execution, callbackIndex }),
+						new ProviderDeliveryExecution({
+							...test.execution,
+							callbackIndex,
+							prepared: Option.some(singleton),
+						}),
+					]),
+					withPrepared(test.execution, multiple),
+				]
+				for (const execution of executions) {
+					expect(yield* processor.process([admission], execution).pipe(Effect.flip)).toEqual(
+						ProviderEventExecutionFailed.make({
+							provider: 'linear',
+							retryable: false,
+							safeCode: 'prepared_callback_invalid',
+						}),
+					)
+				}
+				expect(yield* Ref.get(test.preparations)).toEqual([])
+				expect(yield* Ref.get(test.handoffs)).toEqual([])
+			}).pipe(Effect.provide(layer({ onAgentSessionCreated: () => Effect.die('must not run') }))),
+	)
+
 	it.effect('prepares a session destination once, before the automatic thought and the callback', ({ expect }) =>
 		Effect.gen(function* () {
 			const order = yield* makeOrderLog
@@ -151,18 +192,22 @@ describe('Linear delivery preparation', () => {
 			expect(yield* Ref.get(order)).toEqual(['prepare', 'thought', 'callback'])
 			expect(yield* Ref.get(test.preparations)).toEqual([
 				{
-					callback: 'onAgentSessionCreated',
-					presentationVersion: 1,
-					destination: {
-						_tag: 'LinearAgentSessionDestination',
-						organizationId,
-						appUserId: linearAppUserId,
-						sessionId,
-						issueId,
-					},
-					activationTarget: { _tag: 'LinearIssueActivationTarget', organizationId, issueId },
-					supportedOperations: sessionOperations,
-					reactionTargets: ['ActivationTarget'],
+					callbacks: [
+						{
+							name: 'onAgentSessionCreated',
+							presentationVersion: 1,
+							destination: {
+								_tag: 'LinearAgentSessionDestination',
+								organizationId,
+								appUserId: linearAppUserId,
+								sessionId,
+								issueId,
+							},
+							activationTarget: { _tag: 'LinearIssueActivationTarget', organizationId, issueId },
+							supportedOperations: sessionOperations,
+							reactionTargets: ['ActivationTarget'],
+						},
+					],
 				},
 			])
 		}),
@@ -181,8 +226,8 @@ describe('Linear delivery preparation', () => {
 				.process([admission], test.execution)
 				.pipe(Effect.provide(layer({ onAgentSessionPrompted: () => Effect.void })))
 			const [prepared] = yield* Ref.get(test.preparations)
-			expect(prepared?.callback).toBe('onAgentSessionPrompted')
-			expect(prepared?.activationTarget).toEqual({
+			expect(prepared?.callbacks[0].name).toBe('onAgentSessionPrompted')
+			expect(prepared?.callbacks[0].activationTarget).toEqual({
 				_tag: 'LinearCommentActivationTarget',
 				organizationId,
 				issueId,
@@ -200,17 +245,21 @@ describe('Linear delivery preparation', () => {
 			expect(result).toEqual(ProviderEventHandled.make({}))
 			expect(yield* Ref.get(test.preparations)).toEqual([
 				{
-					callback: 'onMentioned',
-					presentationVersion: 1,
-					destination: { _tag: 'LinearIssueDestination', organizationId, issueId },
-					activationTarget: {
-						_tag: 'LinearCommentActivationTarget',
-						organizationId,
-						issueId,
-						commentId: 'dd45e8fb-4444-4555-8666-001122334455',
-					},
-					supportedOperations: issueOperations,
-					reactionTargets: ['ActivationTarget', 'MessageTarget'],
+					callbacks: [
+						{
+							name: 'onMentioned',
+							presentationVersion: 1,
+							destination: { _tag: 'LinearIssueDestination', organizationId, issueId },
+							activationTarget: {
+								_tag: 'LinearCommentActivationTarget',
+								organizationId,
+								issueId,
+								commentId: 'dd45e8fb-4444-4555-8666-001122334455',
+							},
+							supportedOperations: issueOperations,
+							reactionTargets: ['ActivationTarget', 'MessageTarget'],
+						},
+					],
 				},
 			])
 		}),
@@ -223,9 +272,17 @@ describe('Linear delivery preparation', () => {
 				.process([linearNotificationAdmission(appUserNotificationPayloads[2])], test.execution)
 				.pipe(Effect.provide(layer({ onAssigned: () => Effect.void })))
 			const [prepared] = yield* Ref.get(test.preparations)
-			expect(prepared?.callback).toBe('onAssigned')
-			expect(prepared?.destination).toEqual({ _tag: 'LinearIssueDestination', organizationId, issueId })
-			expect(prepared?.activationTarget).toEqual({ _tag: 'LinearIssueActivationTarget', organizationId, issueId })
+			expect(prepared?.callbacks[0].name).toBe('onAssigned')
+			expect(prepared?.callbacks[0].destination).toEqual({
+				_tag: 'LinearIssueDestination',
+				organizationId,
+				issueId,
+			})
+			expect(prepared?.callbacks[0].activationTarget).toEqual({
+				_tag: 'LinearIssueActivationTarget',
+				organizationId,
+				issueId,
+			})
 		}),
 	)
 
@@ -292,7 +349,7 @@ describe('Linear delivery preparation', () => {
 			expect(outcome.failure).toEqual(
 				ProviderEventExecutionFailed.make({ provider: 'linear', retryable: true, safeCode: 'callback_failed' }),
 			)
-			expect(Option.map(outcome.retry.execution.prepared, (prepared) => prepared.callback)).toEqual(
+			expect(Option.map(outcome.retry.execution.prepared, (prepared) => prepared.callbacks[0].name)).toEqual(
 				Option.some('onIssueCreated'),
 			)
 			expect(outcome.result).toEqual(ProviderEventHandled.make({}))
@@ -310,10 +367,14 @@ describe('Linear delivery preparation', () => {
 				withPrepared(
 					test.execution,
 					PreparedDeliveryInvocation.make({
-						callback,
-						presentationVersion: 1,
-						destination: { _tag: 'LinearIssueDestination', organizationId, issueId },
-						supportedOperations: [],
+						callbacks: [
+							{
+								name: callback,
+								presentationVersion: 1,
+								destination: { _tag: 'LinearIssueDestination', organizationId, issueId },
+								supportedOperations: [],
+							},
+						],
 					}),
 				)
 			const run = (callback: string) =>

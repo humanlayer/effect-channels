@@ -6,6 +6,7 @@ import {
 	type DeliveryCallbackResult,
 	type DeliveryContext,
 	MailboxSubscriptions,
+	type PreparedDeliveryCallback,
 	PreparedDeliveryInvocation,
 	type ProviderDeliveryExecution,
 	ProviderEventExecutionFailed,
@@ -120,9 +121,7 @@ const decodeEnvelope = (admission: DeliveryAdmission) =>
 	Schema.decodeUnknownEffect(SlackEventEnvelope)(admission.payload).pipe(
 		Effect.flatMap((envelope) =>
 			Match.value(envelope.event.type).pipe(
-				Match.when('app_mention', () =>
-					Schema.decodeUnknownEffect(SlackAppMentionEnvelope)(admission.payload),
-				),
+				Match.when('app_mention', () => Schema.decodeUnknownEffect(SlackAppMentionEnvelope)(admission.payload)),
 				Match.when('message', () =>
 					Schema.decodeUnknownEffect(SlackMessageEnvelope)(admission.payload).pipe(
 						Effect.flatMap((messageEnvelope) =>
@@ -520,13 +519,21 @@ type CallbackSelection = Data.TaggedEnum<{
 }>
 const CallbackSelection = Data.taggedEnum<CallbackSelection>()
 
-/** Choose the callback for a batch no attempt has prepared yet. */
+/**
+ * Choose the callback for a batch no attempt has prepared yet. A batch that mentions the bot runs
+ * `onNewMention`, even in a subscribed thread, so every mention starts the same way; other batches in a
+ * subscribed thread run `onSubscribedThreadEvents`.
+ */
 const selectInvocation = (input: {
 	readonly callbacks: typeof SlackCallbacks.Service
 	readonly thread: SlackThread
 	readonly normalized: ReadonlyArray<NormalizedEvent>
 	readonly subscribed: boolean
 }): CallbackSelection => {
+	const mention = buildNewMention(input.thread, input.normalized)
+	if (Option.isSome(mention) && Predicate.isNotUndefined(input.callbacks.onNewMention)) {
+		return CallbackSelection.Selected({ invocation: mention.value })
+	}
 	if (input.subscribed) {
 		if (Predicate.isUndefined(input.callbacks.onSubscribedThreadEvents)) {
 			return CallbackSelection.Ignored({ reason: 'callback_not_configured' })
@@ -536,12 +543,9 @@ const selectInvocation = (input: {
 			onSome: (invocation) => CallbackSelection.Selected({ invocation }),
 		})
 	}
-	const mention = buildNewMention(input.thread, input.normalized)
-	if (Option.isNone(mention)) return CallbackSelection.Ignored({ reason: 'no_activation_event' })
-	if (Predicate.isUndefined(input.callbacks.onNewMention)) {
-		return CallbackSelection.Ignored({ reason: 'callback_not_configured' })
-	}
-	return CallbackSelection.Selected({ invocation: mention.value })
+	return CallbackSelection.Ignored({
+		reason: Option.isNone(mention) ? 'no_activation_event' : 'callback_not_configured',
+	})
 }
 
 const isCallbackConfigured = (callbacks: typeof SlackCallbacks.Service, callback: SlackCallbackName) =>
@@ -563,12 +567,19 @@ const preparedInvocation = Effect.fn('slack.prepared_invocation')(function* (inv
 		Option.map(target, Schema.encodeEffect(SlackActivationTargetJson)),
 	)
 	return PreparedDeliveryInvocation.make({
-		callback: invocationCallbackName(invocation),
-		presentationVersion: slackPresentationVersion,
-		destination,
-		...Option.match(activationTarget, { onNone: () => ({}), onSome: (target) => ({ activationTarget: target }) }),
-		supportedOperations: slackThreadSupportedOperations,
-		reactionTargets: slackReactionTargets(target),
+		callbacks: [
+			{
+				name: invocationCallbackName(invocation),
+				presentationVersion: slackPresentationVersion,
+				destination,
+				...Option.match(activationTarget, {
+					onNone: () => ({}),
+					onSome: (target) => ({ activationTarget: target }),
+				}),
+				supportedOperations: slackThreadSupportedOperations,
+				reactionTargets: slackReactionTargets(target),
+			},
+		],
 	})
 })
 
@@ -584,7 +595,11 @@ const prepareInvocation = Effect.fn('slack.prepare_delivery')(function* (
 	yield* execution.prepare(prepared).pipe(
 		Effect.tapError((error) =>
 			Effect.logError('Slack delivery preparation failed', error).pipe(
-				Effect.annotateLogs({ deliveryId: execution.deliveryId, callback: prepared.callback }),
+				Effect.annotateLogs({
+					deliveryId: execution.deliveryId,
+					callbackIndex: execution.callbackIndex,
+					callback: prepared.callbacks[0].name,
+				}),
 			),
 		),
 		Effect.catchTags({
@@ -621,13 +636,18 @@ const runInvocation = (
 /** Run the callback an earlier attempt saved, without choosing again. */
 const runPreparedInvocation = Effect.fn('slack.run_prepared_invocation')(function* (input: {
 	readonly callbacks: typeof SlackCallbacks.Service
-	readonly prepared: PreparedDeliveryInvocation
+	readonly prepared: PreparedDeliveryCallback
 	readonly thread: SlackThread
 	readonly normalized: ReadonlyArray<NormalizedEvent>
 	readonly delivery: DeliveryContext
+	readonly callbackIndex: number
 }) {
-	const annotations = { deliveryId: input.delivery.deliveryId, callback: input.prepared.callback }
-	const callback = yield* Schema.decodeUnknownEffect(SlackCallbackName)(input.prepared.callback).pipe(
+	const annotations = {
+		deliveryId: input.delivery.deliveryId,
+		callbackIndex: input.callbackIndex,
+		callback: input.prepared.name,
+	}
+	const callback = yield* Schema.decodeUnknownEffect(SlackCallbackName)(input.prepared.name).pipe(
 		Effect.tapError((error) =>
 			Effect.logError('Prepared Slack callback is unknown', error).pipe(Effect.annotateLogs(annotations)),
 		),
@@ -652,6 +672,12 @@ const processSlackBatch = (options: SlackEventProcessorOptions) =>
 		admissions: DeliveryAdmissionBatch,
 		execution: ProviderDeliveryExecution,
 	) {
+		if (
+			execution.callbackIndex !== 0 ||
+			(Option.isSome(execution.prepared) && execution.prepared.value.callbacks.length !== 1)
+		) {
+			return yield* nonRetryableFailure('prepared_callback_invalid')
+		}
 		const callbacks = yield* SlackCallbacks
 		const first = admissions[0]
 		const envelopes = yield* Effect.forEach(admissions, decodeEnvelope)
@@ -683,12 +709,15 @@ const processSlackBatch = (options: SlackEventProcessorOptions) =>
 		const normalized = normalizedOptions.flatMap(Option.toArray)
 
 		if (Option.isSome(execution.prepared)) {
+			const spec = execution.prepared.value.callbacks[execution.callbackIndex]
+			if (Predicate.isUndefined(spec)) return yield* nonRetryableFailure('prepared_callback_invalid')
 			return yield* runPreparedInvocation({
 				callbacks,
-				prepared: execution.prepared.value,
+				prepared: spec,
 				thread,
 				normalized,
 				delivery: execution.context,
+				callbackIndex: execution.callbackIndex,
 			})
 		}
 		if (Arr.isReadonlyArrayEmpty(normalized)) return ProviderEventIgnored.make({ reason: 'no_relevant_event' })

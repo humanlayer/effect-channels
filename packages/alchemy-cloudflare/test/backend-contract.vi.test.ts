@@ -23,6 +23,7 @@ import { TestClock } from 'effect/testing'
 
 import { mailboxBackendContract, nextBatchIdentity, preparation } from '../../delivery/test/backend-contract'
 import { deliveryHandoffContract } from '../../delivery/test/delivery-handoff-contract'
+import { sequentialCallbackContract } from '../../sql/test-backends/sequential-callback-contract'
 import {
 	DeliveryControlBackendFromDurableObjectStorage,
 	MailboxProcessingBackendFromDurableObjectStorage,
@@ -54,13 +55,11 @@ const makeEmptyStore = () =>
 		MailboxDeliveryFromDurableObjectStorage,
 		MailboxProcessingBackendFromDurableObjectStorage,
 		DeliveryControlBackendFromDurableObjectStorage,
-	).pipe(
-		Layer.provideMerge(DurableObjectFake),
-		Layer.fresh,
-	)
+	).pipe(Layer.provideMerge(DurableObjectFake), Layer.fresh)
 
 mailboxBackendContract('Durable Object', makeEmptyStore, { holdsManyMailboxes: false })
 deliveryHandoffContract('Durable Object', makeEmptyStore)
+sequentialCallbackContract('Durable Object', makeEmptyStore)
 
 const leaseMs = 1_000
 
@@ -166,8 +165,18 @@ it.effect(
 					ClaimWaitingEvents.make({ mailboxKey, upToSequence: 0, leaseMs, ...nextBatchIdentity() }),
 				),
 			)
-			yield* backend.prepareDelivery({ mailboxKey, claimId: claim.claimId, prepared: preparation('onMention') })
-			yield* backend.handOffDelivery({ mailboxKey, claimId: claim.claimId, handedOffAt: Timestamp.make(0), links: [] })
+			yield* backend.prepareDelivery({
+				mailboxKey,
+				claimId: claim.claimId,
+				prepared: preparation('onMention'),
+				callbackAccessTokens: [claim.accessToken],
+			})
+			yield* backend.handOffDelivery({
+				mailboxKey,
+				claimId: claim.claimId,
+				handedOffAt: Timestamp.make(0),
+				links: [],
+			})
 			expect(yield* alarm.scheduledAt).toEqual(leaseMs)
 
 			yield* backend.recordProcessingAttemptResult({
@@ -182,9 +191,7 @@ it.effect(
 			expect(yield* alarm.scheduledAt).toEqual(null)
 
 			yield* TestClock.adjust(200)
-			const reference = Option.getOrThrow(
-				parseDeliveryId(makeDeliveryId({ mailboxKey, batchId: claim.batchId })),
-			)
+			const reference = Option.getOrThrow(parseDeliveryId(makeDeliveryId({ mailboxKey, batchId: claim.batchId })))
 			yield* control.applyDeliveryMutation({
 				reference,
 				accessToken: claim.accessToken,
@@ -192,7 +199,13 @@ it.effect(
 			})
 			expect(yield* alarm.scheduledAt).toEqual(500)
 
-			const output = Option.getOrThrow(yield* backend.claimDeliveryOutput({ mailboxKey, leaseMs, idempotencyKey: '00000000-0000-4000-8000-000000000001' }))
+			const output = Option.getOrThrow(
+				yield* backend.claimDeliveryOutput({
+					mailboxKey,
+					leaseMs,
+					idempotencyKey: '00000000-0000-4000-8000-000000000001',
+				}),
+			)
 			expect(yield* alarm.scheduledAt).toEqual(500 + leaseMs)
 			yield* TestClock.adjust(100)
 			yield* backend.settleDeliveryOutput({
@@ -226,7 +239,9 @@ it.effect('Durable Object: a new event puts back the alarm of a busy mailbox tha
 /** A processing pass that does nothing, as when the storage refuses the claim and the mailbox is skipped. */
 const processingThatSkipsEverything = Layer.succeed(
 	MailboxProcessing,
-	MailboxProcessing.of({ processReady: Effect.succeed(MailboxProcessingSummary.make({ claimed: 0, deferred: 0, output: 0 })) }),
+	MailboxProcessing.of({
+		processReady: Effect.succeed(MailboxProcessingSummary.make({ claimed: 0, deferred: 0, output: 0 })),
+	}),
 )
 
 const processingThatFails = Layer.succeed(
@@ -266,26 +281,30 @@ it.effect('Durable Object alarm: puts the alarm back when the pass fails, and do
 	}),
 )
 
-it.effect('Durable Object alarm: leaves a quiet mailbox, and a future alarm the store already set, alone', ({ expect }) =>
-	Effect.gen(function* () {
-		const { delivery, alarm, runMailboxAlarm, storage } = yield* alarmHandlerOver(processingThatSkipsEverything)
-		yield* runMailboxAlarm()
-		expect(yield* alarm.scheduledAt).toBe(null)
-		yield* TestClock.adjust(10_000)
-		yield* delivery.deliver(event('a'))
-		yield* storage.setAlarm(20_000)
-		yield* runMailboxAlarm()
-		expect(yield* alarm.scheduledAt).toBe(20_000)
-	}),
+it.effect(
+	'Durable Object alarm: leaves a quiet mailbox, and a future alarm the store already set, alone',
+	({ expect }) =>
+		Effect.gen(function* () {
+			const { delivery, alarm, runMailboxAlarm, storage } = yield* alarmHandlerOver(processingThatSkipsEverything)
+			yield* runMailboxAlarm()
+			expect(yield* alarm.scheduledAt).toBe(null)
+			yield* TestClock.adjust(10_000)
+			yield* delivery.deliver(event('a'))
+			yield* storage.setAlarm(20_000)
+			yield* runMailboxAlarm()
+			expect(yield* alarm.scheduledAt).toBe(20_000)
+		}),
 )
 
-it.effect('Durable Object alarm: moves forward an alarm the handler left at or before now, which Cloudflare would drop', ({ expect }) =>
-	Effect.gen(function* () {
-		const { delivery, alarm, runMailboxAlarm } = yield* alarmHandlerOver(processingThatSkipsEverything)
-		yield* TestClock.adjust(5_000)
-		yield* delivery.deliver(event('a'))
-		expect(yield* alarm.scheduledAt).toBe(5_000)
-		yield* runMailboxAlarm()
-		expect(yield* alarm.scheduledAt).toBe(6_000)
-	}),
+it.effect(
+	'Durable Object alarm: moves forward an alarm the handler left at or before now, which Cloudflare would drop',
+	({ expect }) =>
+		Effect.gen(function* () {
+			const { delivery, alarm, runMailboxAlarm } = yield* alarmHandlerOver(processingThatSkipsEverything)
+			yield* TestClock.adjust(5_000)
+			yield* delivery.deliver(event('a'))
+			expect(yield* alarm.scheduledAt).toBe(5_000)
+			yield* runMailboxAlarm()
+			expect(yield* alarm.scheduledAt).toBe(6_000)
+		}),
 )

@@ -57,7 +57,7 @@ export type DeliveryOperationKind = typeof DeliveryOperationKind.Type
 /**
  * What a provider saves before the callback runs. Every attempt of the batch uses it.
  *
- * @property callback - which of the provider's callbacks this batch runs
+ * @property name - which of the provider's callbacks this step runs
  * @property presentationVersion - the provider's version of `destination` and `activationTarget`
  * @property destination - where output goes, encoded by the provider and read only by it
  * @property activationTarget - the message, comment, or issue that started the delivery, when there is one
@@ -65,13 +65,18 @@ export type DeliveryOperationKind = typeof DeliveryOperationKind.Type
  * @property reactionTargets - what `SetMessageReaction` can react on here. Absent means nothing, as for
  * a delivery prepared before reactions existed.
  */
-export const PreparedDeliveryInvocation = Schema.Struct({
-	callback: Schema.NonEmptyString,
+export const PreparedDeliveryCallback = Schema.Struct({
+	name: Schema.NonEmptyString,
 	presentationVersion: Schema.Int.check(Schema.isGreaterThan(0)),
 	destination: Schema.Json,
 	activationTarget: Schema.optionalKey(Schema.Json),
 	supportedOperations: Schema.Array(DeliveryOperationKind),
 	reactionTargets: Schema.optionalKey(Schema.Array(DeliveryReactionTargetKind)),
+})
+export type PreparedDeliveryCallback = typeof PreparedDeliveryCallback.Type
+
+export const PreparedDeliveryInvocation = Schema.Struct({
+	callbacks: Schema.NonEmptyArray(PreparedDeliveryCallback),
 })
 export type PreparedDeliveryInvocation = typeof PreparedDeliveryInvocation.Type
 
@@ -149,6 +154,7 @@ export class DeliveryContext extends Data.Class<{
  */
 export class ProviderDeliveryExecution extends Data.Class<{
 	readonly deliveryId: DeliveryId
+	readonly callbackIndex: number
 	readonly idempotencyKey: string
 	readonly prepared: Option.Option<PreparedDeliveryInvocation>
 	readonly prepare: (

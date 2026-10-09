@@ -26,24 +26,36 @@ const batchId = BatchId.make('batch_1-a')
 describe('delivery reference', () => {
 	it('round-trips a delivery ID to its mailbox key and batch ID', ({ expect }) => {
 		const deliveryId = makeDeliveryId({ mailboxKey, batchId })
-		expect(deliveryId.startsWith('delivery:v1:')).toBe(true)
-		expect(parseDeliveryId(deliveryId)).toEqual(Option.some({ deliveryId, mailboxKey, batchId }))
+		expect(deliveryId.startsWith('delivery:v2:')).toBe(true)
+		expect(parseDeliveryId(deliveryId)).toEqual(Option.some({ deliveryId, mailboxKey, batchId, callbackIndex: 0 }))
 	})
 
-	it('refuses anything that is not a canonical v1 delivery ID', ({ expect }) => {
+	it('refuses anything that is not a canonical v2 delivery ID', ({ expect }) => {
 		const deliveryId = makeDeliveryId({ mailboxKey, batchId })
 		for (const candidate of [
 			'',
 			'delivery:v2:abc',
 			'delivery:v1::batch',
 			`${deliveryId}:extra`,
-			deliveryId.replace('delivery:v1:', 'delivery:v1:%%'),
+			deliveryId.replace('delivery:v2:', 'delivery:v2:%%'),
 			`delivery:v1:${'A'.repeat(2_100)}:batch`,
 			/** Base64url with padding bits set decodes, but does not re-encode to the same text. */
 			'delivery:v1:YR:batch',
+			'delivery:v2:YR:batch:0',
+			deliveryId.replace(/:0$/, ':01'),
+			deliveryId.replace(/:0$/, ':-1'),
+			deliveryId.replace(/:0$/, ':1.5'),
+			deliveryId.replace(/:0$/, ':9007199254740992'),
+			deliveryId.replace('delivery:v2:', 'delivery:v1:').replace(/:0$/, ''),
 		]) {
 			expect(parseDeliveryId(candidate)).toEqual(Option.none())
 		}
+	})
+
+	it('distinguishes callback steps within one batch', ({ expect }) => {
+		const deliveryId = makeDeliveryId({ mailboxKey, batchId, callbackIndex: 2 })
+		expect(parseDeliveryId(deliveryId)).toEqual(Option.some({ deliveryId, mailboxKey, batchId, callbackIndex: 2 }))
+		expect(deliveryId).not.toBe(makeDeliveryId({ mailboxKey, batchId }))
 	})
 
 	it('gives every delivery in a mailbox the same conversation ID', ({ expect }) => {

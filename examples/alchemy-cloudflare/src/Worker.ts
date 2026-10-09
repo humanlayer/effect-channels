@@ -1,44 +1,43 @@
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto'
-import { ChannelsCloudflare, DeliveryMailboxes } from '@humanlayer/channels-alchemy-cloudflare'
+import { DeliveryMailboxes } from '@humanlayer/channels-alchemy-cloudflare'
+import { GitHubApiLive } from '@humanlayer/channels-github'
+import { Photon } from '@humanlayer/fold-agent/tools/files'
 import * as Cloudflare from 'alchemy/Cloudflare'
-import { Effect, Layer, Schema } from 'effect'
-import { FetchHttpClient, HttpRouter, HttpServerResponse } from 'effect/http'
+import { Effect, Layer } from 'effect'
+import { FetchHttpClient, HttpRouter } from 'effect/http'
 
-import { bot } from './Bot'
-import { DeliveryMailbox, DeliveryMailboxLive } from './DeliveryMailboxDO'
-import { FakeRemoteAgent, FakeRemoteAgentLive } from './FakeRemoteAgentDO'
+import { AgentSession, AgentSessionDOLive, AgentSessions } from './AgentSessionDO'
+import { AutoLabel } from './AutoLabel'
+import { DELIVERY_API_BINDING, DeliveryApi } from './DeliveryApi'
+import { DeliveryMailbox, DeliveryMailboxDOLive } from './DeliveryMailboxDO'
+import { bot } from './GithubBot'
 
-/** The Durable Objects this Worker hosts, and the services their code needs. */
-const HostedObjectsLive = DeliveryMailboxLive.pipe(
-	Layer.provideMerge(FakeRemoteAgentLive),
-	Layer.provide(FetchHttpClient.layer),
+/** Give Channels access to this application's Durable Object mailbox namespace. */
+const ChannelsDeliveryMailboxesLive = Layer.effect(DeliveryMailboxes, DeliveryMailbox)
+
+/** Give the GitHub callbacks access to the AgentSession namespace. */
+const AgentSessionsLive = Layer.effect(AgentSessions, AgentSession)
+
+const { mailboxDelivery, deliveryControl } = bot.layers.worker
+
+/** Provider webhooks and the delivery API, with their Cloudflare adapters. */
+const RoutesLive = Layer.merge(bot.routes, bot.deliveryApi).pipe(
+	Layer.provide(Layer.merge(mailboxDelivery, deliveryControl)),
+)
+
+/** Everything the Worker and its mailbox Durable Objects need. */
+const WorkerLive = ChannelsDeliveryMailboxesLive.pipe(
+	Layer.provideMerge(DeliveryMailboxDOLive),
+	Layer.provideMerge(AgentSessionsLive),
+	Layer.provideMerge(AgentSessionDOLive),
+	Layer.provideMerge(DeliveryApi.layerSelfBinding),
+	Layer.provideMerge(AutoLabel.layer),
+	Layer.provideMerge(GitHubApiLive),
+	Layer.provideMerge(Photon.layer),
+	Layer.provideMerge(Cloudflare.Workers.AIBinding),
+	Layer.provideMerge(FetchHttpClient.layer),
 	Layer.provideMerge(NodeCrypto.layer),
-)
-
-/** The mailbox namespace the bot's routes forward to. */
-const DeliveryMailboxesLive = Layer.effect(DeliveryMailboxes, DeliveryMailbox)
-
-/**
- * A plain-text page saying how far a fake remote agent job has got. It is the run-log link a handed-off
- * Linear session shows. It never shows the job's token.
- */
-const FakeAgentRunLogLive = Layer.unwrap(
-	Effect.gen(function* () {
-		const agents = yield* FakeRemoteAgent
-		return HttpRouter.add(
-			'GET',
-			'/fake-agent/runs/:deliveryId',
-			Effect.gen(function* () {
-				const { deliveryId } = yield* HttpRouter.schemaPathParams(Schema.Struct({ deliveryId: Schema.NonEmptyString }))
-				return HttpServerResponse.text(yield* agents.getByName(deliveryId).describe())
-			}).pipe(Effect.catchTag('SchemaError', () => Effect.succeed(HttpServerResponse.empty({ status: 404 })))),
-		)
-	}),
-)
-
-/** Provider webhooks, the delivery API, and the fake agent's run log. Leave `bot.deliveryApi` out to serve webhooks only. */
-const RoutesLive = Layer.mergeAll(bot.routes, bot.deliveryApi, FakeAgentRunLogLive).pipe(
-	Layer.provide(DeliveryMailboxesLive),
+	Layer.provideMerge(Layer.succeed(HttpRouter.RouterConfig, bot.routerConfig)),
 )
 
 /**
@@ -49,9 +48,15 @@ const RoutesLive = Layer.mergeAll(bot.routes, bot.deliveryApi, FakeAgentRunLogLi
  */
 export default Cloudflare.Worker(
 	'IngressWorker',
-	{ main: import.meta.url, compatibility: { date: '2026-10-01' } },
+	{
+		main: import.meta.url,
+		compatibility: { date: '2026-10-01' },
+		name: 'humanlayer-channels-app',
+		/** AgentSession reaches this Worker's delivery API through this binding. */
+		env: { [DELIVERY_API_BINDING]: Cloudflare.Workers.Self },
+	},
 	Effect.gen(function* () {
-		const fetch = yield* ChannelsCloudflare.serve(RoutesLive)
+		const fetch = yield* HttpRouter.toHttpEffect(RoutesLive)
 		return { fetch }
-	}).pipe(Effect.provide(HostedObjectsLive)),
+	}).pipe(Effect.provide(WorkerLive)),
 )

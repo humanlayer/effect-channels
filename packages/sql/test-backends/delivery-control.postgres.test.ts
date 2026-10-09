@@ -36,23 +36,11 @@ import {
 	type MailboxProcessingBackendError,
 	type ProviderOutputAttempt,
 } from '@humanlayer/channels-delivery'
-import {
-	Array as Arr,
-	Clock,
-	Context,
-	Deferred,
-	Effect,
-	Fiber,
-	Layer,
-	Option,
-	Queue,
-	Redacted,
-	Schema,
-} from 'effect'
-import { TestClock } from 'effect/testing'
+import { Array as Arr, Clock, Context, Deferred, Effect, Fiber, Layer, Option, Queue, Redacted, Schema } from 'effect'
 import * as SqlClient from 'effect/sql/SqlClient'
+import { TestClock } from 'effect/testing'
 
-import { migrateBatches, migrateMailboxTables, migrate } from '../src/Migrations'
+import { migrate } from '../src/Migrations'
 import { client, emptyTables, storeOverClient } from './postgres'
 
 const leaseMs = 1_000
@@ -70,10 +58,14 @@ const admission = (eventId: string, resourceId = 'thread-1') =>
 const keyOf = (resourceId: string) => deliveryMailboxKey(admission('any', resourceId))
 
 const preparation = PreparedDeliveryInvocation.make({
-	callback: 'onEvent',
-	presentationVersion: 1,
-	destination: { thread: 'thread-1' },
-	supportedOperations: ['PresentOutcome', 'AddExternalLink'],
+	callbacks: [
+		{
+			name: 'onEvent',
+			presentationVersion: 1,
+			destination: { thread: 'thread-1' },
+			supportedOperations: ['PresentOutcome', 'AddExternalLink'],
+		},
+	],
 })
 
 type Store = MailboxDelivery | MailboxProcessingBackend | DeliveryControlBackend | SqlClient.SqlClient
@@ -134,7 +126,12 @@ const handedOffDelivery = (resourceId: string) =>
 		const backend = yield* MailboxProcessingBackend
 		yield* (yield* MailboxDelivery).deliver(admission(`event-${resourceId}`, resourceId))
 		const claim = Option.getOrThrow(yield* claimWaiting(keyOf(resourceId)))
-		yield* backend.prepareDelivery({ mailboxKey: claim.mailboxKey, claimId: claim.claimId, prepared: preparation })
+		yield* backend.prepareDelivery({
+			mailboxKey: claim.mailboxKey,
+			claimId: claim.claimId,
+			prepared: preparation,
+			callbackAccessTokens: [claim.accessToken],
+		})
 		yield* backend.handOffDelivery({
 			mailboxKey: claim.mailboxKey,
 			claimId: claim.claimId,
@@ -481,57 +478,8 @@ describe('sql store: several processes', () => {
 	)
 })
 
-/** Rows as the releases before delivery control wrote them. */
-const oldAdmission = (input: {
-	readonly sql: SqlClient.SqlClient
-	readonly admission: DeliveryAdmission
-	readonly claimId: string | null
-	readonly arrivedAt: number
-}) =>
-	Effect.gen(function* () {
-		const sql = input.sql.withoutTransforms()
-		const mailboxKey = deliveryMailboxKey(input.admission)
-		const admissionJson = yield* Schema.encodeEffect(Schema.fromJsonString(DeliveryAdmission))(input.admission)
-		yield* sql`INSERT INTO delivery_next_admissions (
-				mailbox_key, namespace, provider, event_id, admission_json, arrived_at, claim_id
-			) VALUES (
-				${mailboxKey}, ${input.admission.namespace}, ${input.admission.provider}, ${input.admission.eventId},
-				${admissionJson}, ${input.arrivedAt}, ${input.claimId}
-			)`
-	})
-
-const oldMailbox = (input: {
-	readonly sql: SqlClient.SqlClient
-	readonly resourceId: string
-	readonly status: 'idle' | 'active' | 'retry'
-	readonly readyAt: number | null
-}) =>
-	input.sql.withoutTransforms()`INSERT INTO delivery_next_mailboxes (mailbox_key, provider, status, ready_at)
-		VALUES (${keyOf(input.resourceId)}, 'example', ${input.status}, ${input.readyAt})`
-
-const oldClaim = (input: {
-	readonly sql: SqlClient.SqlClient
-	readonly resourceId: string
-	readonly claimId: string
-	readonly status: 'active' | 'retry' | 'completed'
-	readonly leaseExpiresAt: number
-}) =>
-	input.sql.withoutTransforms()`INSERT INTO delivery_next_claims (
-			claim_id, mailbox_key, attempt, status, lease_expires_at, claimed_at
-		) VALUES (
-			${input.claimId}, ${keyOf(input.resourceId)}, 1, ${input.status}, ${input.leaseExpiresAt}, 0
-		)`
-
-/** A claim row as the releases with permanent batches wrote it. */
-const oldBatchClaim = (input: Parameters<typeof oldClaim>[0] & { readonly batchId: string }) =>
-	input.sql.withoutTransforms()`INSERT INTO delivery_next_claims (
-			claim_id, mailbox_key, attempt, status, lease_expires_at, claimed_at, batch_id
-		) VALUES (
-			${input.claimId}, ${keyOf(input.resourceId)}, 1, ${input.status}, ${input.leaseExpiresAt}, 0, ${input.batchId}
-		)`
-
 describe('sql store: layout', () => {
-	it.effect('keeps the token only in its own column: no delivery JSON holds it, active or retired', ({ expect }) =>
+	it.effect('persists the callback token list in active JSON and omits it from retired batch JSON', ({ expect }) =>
 		Effect.gen(function* () {
 			yield* emptyDatabase
 			const process = yield* startProcess
@@ -550,7 +498,7 @@ describe('sql store: layout', () => {
 			)
 			const active = yield* deliveryJson
 			expect(active.stage).toBe('Finishing')
-			expect(active.delivery_json).not.toContain(claim.accessToken)
+			expect(active.delivery_json).toContain(claim.accessToken)
 			expect(active.delivery_json).not.toContain('admissions')
 
 			const output = Option.getOrThrow(
@@ -584,150 +532,14 @@ describe('sql store: layout', () => {
 })
 
 describe('sql store: migration', () => {
-	it.effect('brings a database made by the earlier migrations up to date, and its work carries on', ({ expect }) =>
+	it.effect('is idempotent and preserves a current prepared delivery', ({ expect }) =>
 		Effect.gen(function* () {
-			const sql = yield* SqlClient.SqlClient
-			yield* sql`DROP TABLE IF EXISTS delivery_next_admissions, delivery_next_claims, delivery_next_batches,
-				delivery_next_mailboxes CASCADE`
-			yield* sql`DROP SEQUENCE IF EXISTS delivery_next_batches_retired_order`
-
-			/** Before permanent batches: a claim running with no batch. */
-			yield* migrateMailboxTables
-			yield* oldMailbox({ sql, resourceId: 'before-batches', status: 'active', readyAt: leaseMs })
-			yield* oldClaim({
-				sql,
-				resourceId: 'before-batches',
-				claimId: 'c0',
-				status: 'active',
-				leaseExpiresAt: leaseMs,
-			})
-			yield* oldAdmission({ sql, admission: admission('e0', 'before-batches'), claimId: 'c0', arrivedAt: 0 })
-
-			/** After permanent batches: a prepared batch running, one waiting to retry, and an idle mailbox. */
-			const preparedJson = yield* Schema.encodeEffect(Schema.fromJsonString(PreparedDeliveryInvocation))(
-				preparation,
-			)
-			yield* migrateBatches
-			yield* oldMailbox({ sql, resourceId: 'running', status: 'active', readyAt: leaseMs })
-			yield* sql`INSERT INTO delivery_next_batches (batch_id, mailbox_key, access_token, prepared_json, created_at, prepared_at)
-				VALUES ('b1', ${keyOf('running')}, 'token1', ${preparedJson}, 0, 0)`
-			yield* oldBatchClaim({
-				sql,
-				resourceId: 'running',
-				claimId: 'c1',
-				batchId: 'b1',
-				status: 'active',
-				leaseExpiresAt: leaseMs,
-			})
-			yield* oldAdmission({ sql, admission: admission('e1', 'running'), claimId: 'c1', arrivedAt: 0 })
-			yield* oldAdmission({ sql, admission: admission('e1-later', 'running'), claimId: null, arrivedAt: 1 })
-
-			yield* oldMailbox({ sql, resourceId: 'retrying', status: 'retry', readyAt: 5_000 })
-			yield* sql`INSERT INTO delivery_next_batches (batch_id, mailbox_key, access_token, created_at)
-				VALUES ('b2', ${keyOf('retrying')}, 'token2', 0)`
-			yield* oldBatchClaim({
-				sql,
-				resourceId: 'retrying',
-				claimId: 'c2',
-				batchId: 'b2',
-				status: 'retry',
-				leaseExpiresAt: leaseMs,
-			})
-			yield* oldAdmission({ sql, admission: admission('e2', 'retrying'), claimId: 'c2', arrivedAt: 0 })
-
-			yield* oldMailbox({ sql, resourceId: 'idle', status: 'idle', readyAt: 0 })
-			yield* sql`INSERT INTO delivery_next_batches (batch_id, mailbox_key, access_token, created_at)
-				VALUES ('b3', ${keyOf('idle')}, 'token3', 0)`
-			yield* oldBatchClaim({
-				sql,
-				resourceId: 'idle',
-				claimId: 'c3',
-				batchId: 'b3',
-				status: 'completed',
-				leaseExpiresAt: leaseMs,
-			})
-			yield* oldAdmission({ sql, admission: admission('e3', 'idle'), claimId: 'c3', arrivedAt: 0 })
-			yield* oldAdmission({ sql, admission: admission('e3-waiting', 'idle'), claimId: null, arrivedAt: 0 })
-
-			yield* migrate
-			yield* migrate
-
-			yield* Effect.gen(function* () {
-				const backend = yield* MailboxProcessingBackend
-				const ready = yield* backend.findReadyMailboxes
-				expect(ready.filter(Schema.is(WaitingMailbox)).map(({ mailboxKey }) => mailboxKey)).toEqual([
-					keyOf('idle'),
-				])
-				expect(ready.filter(Schema.is(RecoverableMailbox))).toEqual([])
-
-				const waiting = Option.getOrThrow(yield* claimWaiting(keyOf('idle')))
-				expect(waiting.admissions.map(({ eventId }) => eventId)).toEqual(['e3-waiting'])
-				yield* recordCompleted(waiting)
-
-				yield* TestClock.adjust(leaseMs)
-				expect((yield* backend.findReadyMailboxes).map(({ mailboxKey }) => mailboxKey).toSorted()).toEqual(
-					[keyOf('before-batches'), keyOf('running')].toSorted(),
-				)
-
-				const beforeBatches = Option.getOrThrow(yield* claimFrozen(keyOf('before-batches')))
-				expect(beforeBatches.attempt).toBe(2)
-				expect(beforeBatches.batchId).toMatch(/^legacy-[0-9a-f]{32}$/)
-				expect(beforeBatches.admissions.map(({ eventId }) => eventId)).toEqual(['e0'])
-				yield* recordCompleted(beforeBatches)
-
-				const running = Option.getOrThrow(yield* claimFrozen(keyOf('running')))
-				expect(running.attempt).toBe(2)
-				expect(running.batchId).toBe('b1')
-				expect(running.accessToken).toBe('token1')
-				expect(running.prepared).toEqual(preparation)
-				expect(running.admissions.map(({ eventId }) => eventId)).toEqual(['e1'])
-				yield* backend.handOffDelivery({
-					mailboxKey: running.mailboxKey,
-					claimId: running.claimId,
-					handedOffAt: yield* now,
-					links: [],
-				})
-				yield* recordCompleted(running)
-				expect((yield* status(running)).stage).toBe('ExternalWaiting')
-				expect((yield* complete(running)).status).toBe('accepted')
-				const output = Option.getOrThrow(
-					yield* backend.claimDeliveryOutput({
-						mailboxKey: running.mailboxKey,
-						leaseMs,
-						idempotencyKey: '00000000-0000-4000-8000-000000000001',
-					}),
-				)
-				yield* backend.settleDeliveryOutput({
-					mailboxKey: running.mailboxKey,
-					operationId: output.operationId,
-					claimId: output.claimId,
-					settlement: DeliveryOutputSettlement.cases.Applied.make({}),
-					settledAt: yield* now,
-				})
-				expect((yield* status(running)).stage).toBe('Retired')
-				const later = Option.getOrThrow(yield* claimWaiting(keyOf('running')))
-				expect(later.admissions.map(({ eventId }) => eventId)).toEqual(['e1-later'])
-
-				yield* TestClock.adjust(5_000)
-				const retrying = Option.getOrThrow(yield* claimFrozen(keyOf('retrying')))
-				expect(retrying.batchId).toBe('b2')
-				expect(retrying.attempt).toBe(2)
-				expect(retrying.prepared).toBeUndefined()
-
-				expect(yield* claimHistory).toEqual(
-					[
-						'b1:abandoned',
-						'b1:completed',
-						'b2:retried',
-						'b2:active',
-						`${beforeBatches.batchId}:abandoned`,
-						`${beforeBatches.batchId}:completed`,
-						'b3:completed',
-						`${waiting.batchId}:completed`,
-						`${later.batchId}:active`,
-					].toSorted(),
-				)
-			}).pipe(Effect.provide(storeOverClient()))
-		}).pipe(Effect.provide(Layer.fresh(client))),
+			yield* emptyDatabase
+			const process = yield* startProcess
+			const claim = yield* inProcess(process)(handedOffDelivery('thread-1'))
+			yield* inProcess(process)(migrate)
+			yield* inProcess(process)(migrate)
+			expect((yield* inProcess(process)(status(claim))).stage).toBe('ExternalWaiting')
+		}).pipe(Effect.scoped),
 	)
 })

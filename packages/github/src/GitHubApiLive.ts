@@ -2,7 +2,9 @@ import { Effect, Layer } from 'effect'
 import * as FetchHttpClient from 'effect/http/FetchHttpClient'
 
 import { GitHubApiClient, GitHubApiClientLive } from './api/GitHubApiClient'
+import { GitHubAppCredentialsLive } from './api/GitHubAppCredentials'
 import { GitHubApi } from './GitHubApi'
+import { GitHubGitCredentialsLive } from './GitHubGitCredentials'
 export { GitHubAppSigner } from './api/GitHubAppSigner'
 import { GitHubAppSigner } from './api/GitHubAppSigner'
 import {
@@ -29,7 +31,10 @@ import {
 	listPullRequestLabels,
 	listPullRequestReviewComments,
 	listPullRequestReviews,
+	listRepositoryLabels,
 	mergePullRequest,
+	listPullRequestsForBranch,
+	createPullRequest,
 	postIssueComment,
 	postPullRequestComment,
 	postPullRequestReviewComment,
@@ -68,6 +73,8 @@ const GitHubApiOperationsLive = Layer.effect(
 			listPullRequestCommits: (input) =>
 				listPullRequestCommits(input).pipe(Effect.provideService(GitHubApiClient, client)),
 			listIssueLabels: (input) => listIssueLabels(input).pipe(Effect.provideService(GitHubApiClient, client)),
+			listRepositoryLabels: (input) =>
+				listRepositoryLabels(input).pipe(Effect.provideService(GitHubApiClient, client)),
 			listPullRequestLabels: (input) =>
 				listPullRequestLabels(input).pipe(Effect.provideService(GitHubApiClient, client)),
 			addIssueLabels: (input) => addIssueLabels(input).pipe(Effect.provideService(GitHubApiClient, client)),
@@ -99,6 +106,9 @@ const GitHubApiOperationsLive = Layer.effect(
 			closePullRequest: (input) => closePullRequest(input).pipe(Effect.provideService(GitHubApiClient, client)),
 			reopenPullRequest: (input) => reopenPullRequest(input).pipe(Effect.provideService(GitHubApiClient, client)),
 			mergePullRequest: (input) => mergePullRequest(input).pipe(Effect.provideService(GitHubApiClient, client)),
+			listPullRequestsForBranch: (input) =>
+				listPullRequestsForBranch(input).pipe(Effect.provideService(GitHubApiClient, client)),
+			createPullRequest: (input) => createPullRequest(input).pipe(Effect.provideService(GitHubApiClient, client)),
 			listCheckRunsForRef: (input) =>
 				listCheckRunsForRef(input).pipe(Effect.provideService(GitHubApiClient, client)),
 			fetchCheckRun: (input) => fetchCheckRun(input).pipe(Effect.provideService(GitHubApiClient, client)),
@@ -113,10 +123,16 @@ const GitHubApiOperationsLive = Layer.effect(
 	}),
 )
 
-/** Live GitHub API implementation with injectable Effect HTTP transport and signer. */
-export const GitHubApiLiveBase = GitHubApiOperationsLive.pipe(Layer.provide(GitHubApiClientLive))
+/**
+ * Live GitHub API and git credentials with injectable Effect HTTP transport and signer. Both share one
+ * cache of installation tokens.
+ */
+export const GitHubApiLiveBase = Layer.merge(
+	GitHubApiOperationsLive.pipe(Layer.provide(GitHubApiClientLive)),
+	GitHubGitCredentialsLive,
+).pipe(Layer.provide(GitHubAppCredentialsLive))
 
-/** GitHub API implementation with Web Crypto signing and the standard Fetch transport. */
+/** GitHub API and git credentials with Web Crypto signing and the standard Fetch transport. */
 export const GitHubApiLive = GitHubApiLiveBase.pipe(
 	Layer.provide(GitHubAppSigner.layerWebCrypto),
 	Layer.provide(FetchHttpClient.layer),

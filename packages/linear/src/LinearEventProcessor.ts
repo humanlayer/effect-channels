@@ -5,6 +5,7 @@ import {
 	type DeliveryCallbackResult,
 	type DeliveryContext,
 	MailboxSubscriptions,
+	type PreparedDeliveryCallback,
 	type PreparedDeliveryInvocation,
 	type ProviderDeliveryExecution,
 	ProviderEventExecutionFailed,
@@ -569,7 +570,9 @@ const callbackFailure = <A>(effect: Effect.Effect<A, LinearCallbackError>) =>
 /** A selected callback: what to save before it runs, and how to run it with its delivery context. */
 type LinearCallbackInvocation = {
 	readonly preparation: LinearDeliveryPreparation
-	readonly invoke: (execution: ProviderDeliveryExecution) => Effect.Effect<void, ProviderEventExecutionFailed, LinearApi>
+	readonly invoke: (
+		execution: ProviderDeliveryExecution,
+	) => Effect.Effect<void, ProviderEventExecutionFailed, LinearApi>
 }
 
 const issueActivationTarget = (issue: LinearIssue) =>
@@ -605,7 +608,7 @@ const prepareDelivery = Effect.fn('linear.prepare_delivery')(function* (
 			DeliveryPreparationUnavailable: () => Effect.fail(executionFailure('delivery_prepare_unavailable', true)),
 			DeliveryPreparationConflict: () => Effect.fail(executionFailure('delivery_prepare_conflict', false)),
 		}),
-		Effect.annotateLogs({ callback: preparation.callback }),
+		Effect.annotateLogs({ callback: preparation.callback, callbackIndex: execution.callbackIndex }),
 	)
 })
 
@@ -616,8 +619,8 @@ const runSelectedInvocation = (execution: ProviderDeliveryExecution, invocation:
 		Effect.as(ProviderEventHandled.make({})),
 	)
 
-const decodePreparedCallback = (prepared: PreparedDeliveryInvocation) =>
-	Schema.decodeUnknownEffect(LinearCallbackName)(prepared.callback).pipe(
+const decodePreparedCallback = (prepared: PreparedDeliveryCallback) =>
+	Schema.decodeUnknownEffect(LinearCallbackName)(prepared.name).pipe(
 		Effect.tapError((error) => Effect.logError('Prepared Linear callback is not a Linear callback', error)),
 		Effect.mapError(preparedCallbackMissing),
 	)
@@ -628,13 +631,17 @@ const runPreparedInvocation = <R>(
 	prepared: PreparedDeliveryInvocation,
 	build: (callback: LinearCallbackName) => Effect.Effect<LinearCallbackInvocation, ProviderEventExecutionFailed, R>,
 ) =>
-	decodePreparedCallback(prepared).pipe(
-		Effect.flatMap(build),
-		Effect.tapError((error) => Effect.logError('Prepared Linear callback could not run', error)),
-		Effect.flatMap((invocation) => invocation.invoke(execution)),
-		Effect.as(ProviderEventHandled.make({})),
-		Effect.annotateLogs({ callback: prepared.callback }),
-	)
+	Effect.gen(function* () {
+		const spec = prepared.callbacks[execution.callbackIndex]
+		if (Predicate.isUndefined(spec)) return yield* executionFailure('prepared_callback_invalid', false)
+		return yield* decodePreparedCallback(spec).pipe(
+			Effect.flatMap(build),
+			Effect.tapError((error) => Effect.logError('Prepared Linear callback could not run', error)),
+			Effect.flatMap((invocation) => invocation.invoke(execution)),
+			Effect.as(ProviderEventHandled.make({})),
+			Effect.annotateLogs({ callback: spec.name, callbackIndex: execution.callbackIndex }),
+		)
+	})
 
 type LinearAgentSessionBatch = {
 	readonly callbacks: LinearEventCallbacks
@@ -736,7 +743,8 @@ const agentSessionInvocation = (batch: LinearAgentSessionBatch, callback: Linear
 				})
 				return {
 					preparation: agentSessionPreparation(name, session),
-					invoke: (execution: ProviderDeliveryExecution) => callbackFailure(handler(event, execution.context)),
+					invoke: (execution: ProviderDeliveryExecution) =>
+						callbackFailure(handler(event, execution.context)),
 				}
 			}),
 		),
@@ -1166,6 +1174,12 @@ const processLinearBatch = (options: LinearEventProcessorOptions) =>
 		admissions: DeliveryAdmissionBatch,
 		execution: ProviderDeliveryExecution,
 	) {
+		if (
+			execution.callbackIndex !== 0 ||
+			(Option.isSome(execution.prepared) && execution.prepared.value.callbacks.length !== 1)
+		) {
+			return yield* executionFailure('prepared_callback_invalid', false)
+		}
 		const callbacks = yield* LinearCallbacks
 		yield* LinearApi
 		const webhooks = yield* Effect.forEach(admissions, decodeWebhook)

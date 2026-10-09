@@ -91,19 +91,24 @@ const narrowGitHubCallbackCause = (input: {
 	)
 }
 
-const wrapCallback = <A, E, R>(
-	context: Context.Context<R>,
-	callback: GitHubCallbackName,
-	handler: GitHubCallbackHandler<A, E, R> | undefined,
-) => {
+const wrapCallback = <A, E, R>(callback: GitHubCallbackName, handler: GitHubCallbackHandler<A, E, R> | undefined) => {
 	if (Predicate.isUndefined(handler)) return undefined
 	return Effect.fn(`github.callbacks.${callback}`)((event: A, delivery: DeliveryContext) =>
 		Effect.suspend(() => handler(event, delivery)).pipe(
-			Effect.provide(context),
 			Effect.catchCause((cause) => narrowGitHubCallbackCause({ callback, cause })),
 		),
 	)
 }
+
+export type GitHubCallbackOperations<R = never> = GitHubCallbackHandlers<GitHubCallbackError, R>
+
+export const makeGitHubCallbacks = <E, R>(handlers: GitHubCallbackHandlers<E, R>): GitHubCallbackOperations<R> => ({
+	onIssueCreated: wrapCallback('onIssueCreated', handlers.onIssueCreated),
+	onPrCreated: wrapCallback('onPrCreated', handlers.onPrCreated),
+	onMentioned: wrapCallback('onMentioned', handlers.onMentioned),
+	onSubscribedIssueEvents: wrapCallback('onSubscribedIssueEvents', handlers.onSubscribedIssueEvents),
+	onSubscribedPrEvents: wrapCallback('onSubscribedPrEvents', handlers.onSubscribedPrEvents),
+})
 
 export class GitHubCallbacks extends Context.Service<
 	GitHubCallbacks,
@@ -114,16 +119,22 @@ export class GitHubCallbacks extends Context.Service<
 			GitHubCallbacks,
 			Effect.gen(function* () {
 				const context = yield* Effect.context<R>()
+				const callbacks = makeGitHubCallbacks(handlers)
+				const provide = <A, Error>(
+					callback:
+						| ((event: A, delivery: DeliveryContext) => Effect.Effect<DeliveryCallbackResult, Error, R>)
+						| undefined,
+				) =>
+					Predicate.isUndefined(callback)
+						? undefined
+						: (event: A, delivery: DeliveryContext) =>
+								callback(event, delivery).pipe(Effect.provide(context))
 				return GitHubCallbacks.of({
-					onIssueCreated: wrapCallback(context, 'onIssueCreated', handlers.onIssueCreated),
-					onPrCreated: wrapCallback(context, 'onPrCreated', handlers.onPrCreated),
-					onMentioned: wrapCallback(context, 'onMentioned', handlers.onMentioned),
-					onSubscribedIssueEvents: wrapCallback(
-						context,
-						'onSubscribedIssueEvents',
-						handlers.onSubscribedIssueEvents,
-					),
-					onSubscribedPrEvents: wrapCallback(context, 'onSubscribedPrEvents', handlers.onSubscribedPrEvents),
+					onIssueCreated: provide(callbacks.onIssueCreated),
+					onPrCreated: provide(callbacks.onPrCreated),
+					onMentioned: provide(callbacks.onMentioned),
+					onSubscribedIssueEvents: provide(callbacks.onSubscribedIssueEvents),
+					onSubscribedPrEvents: provide(callbacks.onSubscribedPrEvents),
 				})
 			}),
 		)

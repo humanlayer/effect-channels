@@ -23,10 +23,10 @@ export const BatchId = Schema.NonEmptyString.check(Schema.isMaxLength(64), Schem
 )
 export type BatchId = typeof BatchId.Type
 
-/** The public identity of one delivery: `delivery:v1:<base64url mailbox key>:<batch ID>`. */
+/** The public identity of one callback step: `delivery:v2:<base64url mailbox key>:<batch ID>:<callback index>`. */
 export const DeliveryId = Schema.NonEmptyString.check(
 	Schema.isMaxLength(DELIVERY_ID_MAX_LENGTH),
-	Schema.isPattern(/^delivery:v1:[A-Za-z0-9_-]+:[A-Za-z0-9_-]+$/),
+	Schema.isPattern(/^delivery:v2:[A-Za-z0-9_-]+:[A-Za-z0-9_-]+:(0|[1-9][0-9]*)$/),
 ).pipe(Schema.brand('DeliveryId'))
 export type DeliveryId = typeof DeliveryId.Type
 
@@ -51,6 +51,7 @@ export const DeliveryReference = Schema.Struct({
 	deliveryId: DeliveryId,
 	mailboxKey: Schema.NonEmptyString,
 	batchId: BatchId,
+	callbackIndex: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
 })
 export type DeliveryReference = typeof DeliveryReference.Type
 
@@ -59,39 +60,53 @@ export const isRoutableMailboxKey = (mailboxKey: string) =>
 	Base64Url.encode(mailboxKey).length <= ENCODED_MAILBOX_KEY_MAX_LENGTH
 
 /** The delivery ID of a batch. The mailbox key must be routable; see {@link isRoutableMailboxKey}. */
-export const makeDeliveryId = (input: { readonly mailboxKey: string; readonly batchId: BatchId }) =>
-	DeliveryId.make(`delivery:v1:${Base64Url.encode(input.mailboxKey)}:${input.batchId}`)
+export const makeDeliveryId = (input: {
+	readonly mailboxKey: string
+	readonly batchId: BatchId
+	readonly callbackIndex?: number
+}) => {
+	const callbackIndex = DeliveryReference.fields.callbackIndex.make(input.callbackIndex ?? 0)
+	return DeliveryId.make(`delivery:v2:${Base64Url.encode(input.mailboxKey)}:${input.batchId}:${callbackIndex}`)
+}
 
 /** The conversation ID of a mailbox. */
 export const makeConversationId = (mailboxKey: string) =>
 	ConversationId.make(`conversation:v1:${Base64Url.encode(mailboxKey)}`)
 
 /**
- * Take a delivery ID apart. Returns none for anything that is not a canonical v1 delivery ID,
+ * Take a delivery ID apart. Returns none for anything that is not a canonical v2 delivery ID,
  * so a caller can answer "not found" without saying why.
  */
 export const parseDeliveryId = (input: string): Option.Option<DeliveryReference> => {
 	const deliveryId = Schema.decodeUnknownOption(DeliveryId)(input)
 	if (Option.isNone(deliveryId)) return Option.none()
-	const [, , encodedKey, rawBatchId] = deliveryId.value.split(':')
+	const [, , encodedKey, rawBatchId, rawIndex] = deliveryId.value.split(':')
 	const mailboxKey = Result.getOrUndefined(Base64Url.decodeString(encodedKey ?? ''))
 	const batchId = Schema.decodeUnknownOption(BatchId)(rawBatchId)
+	const callbackIndex = Schema.decodeUnknownOption(DeliveryReference.fields.callbackIndex)(Number(rawIndex))
+	if (Option.isNone(callbackIndex)) return Option.none()
 	if (mailboxKey === undefined || mailboxKey === '' || Option.isNone(batchId)) return Option.none()
-	if (makeDeliveryId({ mailboxKey, batchId: batchId.value }) !== deliveryId.value) return Option.none()
-	return Option.some(DeliveryReference.make({ deliveryId: deliveryId.value, mailboxKey, batchId: batchId.value }))
+	if (makeDeliveryId({ mailboxKey, batchId: batchId.value, callbackIndex: callbackIndex.value }) !== deliveryId.value)
+		return Option.none()
+	return Option.some(
+		DeliveryReference.make({
+			deliveryId: deliveryId.value,
+			mailboxKey,
+			batchId: batchId.value,
+			callbackIndex: callbackIndex.value,
+		}),
+	)
 }
 
 /** A new batch ID. */
-export const makeBatchId = Effect.gen(function* () {
-	const crypto = yield* Crypto.Crypto
-	return BatchId.make(Base64Url.encode(yield* crypto.randomBytes(16)))
-})
+export const makeBatchIdWith = (crypto: typeof Crypto.Crypto.Service) =>
+	Effect.map(crypto.randomBytes(16), (bytes) => BatchId.make(Base64Url.encode(bytes)))
+export const makeBatchId = Effect.flatMap(Crypto.Crypto, makeBatchIdWith)
 
 /** A new access token: 32 random bytes. */
-export const makeDeliveryAccessToken = Effect.gen(function* () {
-	const crypto = yield* Crypto.Crypto
-	return DeliveryAccessToken.make(Base64Url.encode(yield* crypto.randomBytes(32)))
-})
+export const makeDeliveryAccessTokenWith = (crypto: typeof Crypto.Crypto.Service) =>
+	Effect.map(crypto.randomBytes(32), (bytes) => DeliveryAccessToken.make(Base64Url.encode(bytes)))
+export const makeDeliveryAccessToken = Effect.flatMap(Crypto.Crypto, makeDeliveryAccessTokenWith)
 
 /** Sixteen bytes as a UUID v4 string: sets the version and variant bits, then formats them. */
 const formatUuidV4 = (bytes: Uint8Array) => {
@@ -109,11 +124,17 @@ const formatUuidV4 = (bytes: Uint8Array) => {
  * ask for one. A provider sends it with output it makes before the callback runs, so a retry cannot
  * make that output twice.
  */
-export const makeDeliveryIdempotencyKey = Effect.fn('delivery.make_idempotency_key')(function* (deliveryId: DeliveryId) {
+export const makeDeliveryIdempotencyKey = Effect.fn('delivery.make_idempotency_key')(function* (
+	deliveryId: DeliveryId,
+) {
 	const crypto = yield* Crypto.Crypto
-	const digest = yield* crypto.digest('SHA-256', new TextEncoder().encode(`delivery-idempotency:v1:${deliveryId}`))
-	return formatUuidV4(digest)
+	return yield* makeDeliveryIdempotencyKeyWith(crypto, deliveryId)
 })
+
+export const makeDeliveryIdempotencyKeyWith = (crypto: typeof Crypto.Crypto.Service, deliveryId: DeliveryId) =>
+	crypto
+		.digest('SHA-256', new TextEncoder().encode(`delivery-idempotency:v1:${deliveryId}`))
+		.pipe(Effect.map(formatUuidV4))
 
 /**
  * Compare a presented token with the saved one. Takes the same time for any presented token of the

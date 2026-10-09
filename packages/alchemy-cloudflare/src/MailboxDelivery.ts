@@ -7,7 +7,6 @@ import {
 	Timestamp,
 	requestDeliveryInterrupt,
 } from '@humanlayer/channels-delivery'
-import { RuntimeContext } from 'alchemy/RuntimeContext'
 import { Clock, Context, Effect, Layer, Predicate, Schema } from 'effect'
 
 import type { DeliveryRequest, DeliveryResponse } from './DeliveryControl'
@@ -78,13 +77,11 @@ export const makeDeliverFromDurableObjectStorage = Effect.gen(function* () {
 
 export type DeliveryMailboxNamespace = {
 	readonly getByName: (mailboxKey: string) => {
-		readonly deliver: (
-			admission: DeliveryAdmission,
-		) => Effect.Effect<{ readonly accepted: boolean }, never, RuntimeContext>
+		readonly deliver: (admission: DeliveryAdmission) => Effect.Effect<{ readonly accepted: boolean }>
 		/** Read or change a delivery this mailbox owns. See `DeliveryControlAlchemyCloudflare`. */
 		readonly deliveryRequest: (
 			request: typeof DeliveryRequest.Encoded,
-		) => Effect.Effect<typeof DeliveryResponse.Encoded, never, RuntimeContext>
+		) => Effect.Effect<typeof DeliveryResponse.Encoded>
 	}
 }
 
@@ -106,7 +103,6 @@ export const MailboxDeliveryAlchemyCloudflare = Layer.effect(
 					.deliver(admission)
 					.pipe(
 						Effect.map(({ accepted }) => DeliveryReceipt.make({ mailboxKey, accepted })),
-						Effect.provide(RuntimeContext.phantom),
 						unavailable,
 					)
 			},

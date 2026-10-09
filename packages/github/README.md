@@ -178,6 +178,10 @@ In addition to `fetchInfo()`, conversation comments, reviews, review-comment lis
 | `merge(options)`           | `mergePullRequest`                         | Attempts `"merge"`, `"squash"`, or `"rebase"`; returns `{ merged, sha, message }`.                |
 | `fetchUserAccess(login)`   | `fetchUserAccess`                          | Returns the user's access to the repository, as for issues.                                       |
 
+`fetchInfo()` includes `headRepository`, the repository the head branch lives in: a fork's for a pull request from a fork, and `null` once that repository is deleted.
+
+Two `GitHubApi` operations work on a repository rather than one pull request: `listPullRequestsForBranch({ repository, head })` returns the open pull requests from a branch of that repository (not from forks), and `createPullRequest({ repository, head, base, title, body })` opens one. Creating one needs the App's pull requests write permission.
+
 Prefer `listFiles()` when an agent only needs selected changes. GitHub's wire status `removed` is exposed as `deleted`; `copied`, `changed`, and `unchanged` remain distinct statuses rather than being collapsed into `modified`. A file's `sha`, `blobUrl`, and `rawUrl` can be `null`, including for some submodule entries. GitHub limits that endpoint to 3,000 files, may omit `patch` for binary or unusually large files, and limits `listCommits()` to 250 PR commits. `fetchDiff()` loads the complete unified diff into one string.
 
 Review-comment locations are tagged values. `Line` and `Range` line numbers must be positive integers that refer to the pull-request diff; `LEFT` means the old side and `RIGHT` the new side. Use `File` for a whole-file comment. The commit SHA and path must be non-empty.
@@ -289,6 +293,6 @@ A successful admission returns HTTP 200. For common failures:
 - **404 from the webhook route:** the URL path is wrong or the GitHub provider is not mounted.
 - **403 from a callback API operation:** the app lacks a required permission or the installation cannot access that repository.
 - **No delivery in GitHub:** the event is not selected, the app is not installed on the repository, or webhooks are inactive.
-- **Delivery succeeds but no callback runs:** the event action may be unsupported, or the issue/PR is not subscribed and did not trigger a configured creation or mention callback.
+- **Delivery succeeds but no callback runs:** the event action may be unsupported, the issue/PR is not subscribed and did not trigger a configured creation or mention callback, or it is subscribed and has no subscribed-events callback. A comment that mentions the bot always runs `onMentioned` when it is configured, even in a subscribed issue/PR.
 
 See `examples/alchemy-cloudflare` for a complete Worker and Durable Object configuration with both GitHub and Slack.

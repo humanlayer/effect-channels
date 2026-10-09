@@ -24,8 +24,9 @@ import {
 } from '@humanlayer/channels-linear'
 import { SlackApi, SlackBot } from '@humanlayer/channels-slack'
 import { Config, Context, Effect, Layer, Match, Option, Predicate, Queue, Redacted, Ref, Schema } from 'effect'
-import { HttpServerRequest, HttpServerResponse } from 'effect/http'
+import { HttpRouter, HttpServerRequest, HttpServerResponse } from 'effect/http'
 
+import { githubWebhookSecret, issueCommentPayload, signedGitHubInput } from '../../github/test/fixtures'
 import {
 	agentSessionPayloads,
 	linearAppUserId,
@@ -34,7 +35,6 @@ import {
 	linearWebhookSecret,
 	signedLinearInput,
 } from '../../linear/test/fixtures'
-import { githubWebhookSecret, issueCommentPayload, signedGitHubInput } from '../../github/test/fixtures'
 import { ChannelsCloudflare, DeliveryMailboxes } from '../src'
 import { DurableObjectFake, DurableObjectFakeAlarm } from './DurableObjectFake'
 
@@ -67,26 +67,30 @@ const makeOptions = (input: {
 		slackApi: Layer.mock(SlackApi, {}),
 		handlers: { onNewMention: () => Effect.die('no Slack events in this test') },
 	})
+	/** The fake GitHub API. The Worker supplies it to the mailbox's methods as well as to the bot. */
+	const gitHubApi = Layer.mock(GitHubApi, {
+		postIssueComment: ({ issue, content }) =>
+			Effect.gen(function* () {
+				if (content.markdown === 'Summary')
+					yield* Effect.flatten(Ref.getAndSet(input.duringSummary, Effect.void))
+				yield* Queue.offer(input.shown, `comment: ${content.markdown}`)
+				return GitHubIssueComment.make({
+					ref: { discussion: { _tag: 'Issue', ref: issue }, id: GitHubId.make(900) },
+					body: content.markdown,
+					url: 'https://github.com/alice/project/issues/42#issuecomment-900',
+					author: null,
+				})
+			}),
+		addReaction: ({ target }) =>
+			Queue.offer(input.shown, `eyes on ${reactionTargetName(target)}`).pipe(Effect.asVoid),
+		removeReaction: ({ target }) =>
+			Queue.offer(input.shown, `eyes off ${reactionTargetName(target)}`).pipe(Effect.asVoid),
+	})
 	const github = GitHubBot.make({
 		webhookSecret: Config.succeed(Redacted.make(githubWebhookSecret)),
 		deliveryMode: QueueDeliveryMode.make({}),
 		bot: { mentionNames: ['bot'], botUserId: GitHubId.make(1) },
-		gitHubApi: Layer.mock(GitHubApi, {
-			postIssueComment: ({ issue, content }) =>
-				Effect.gen(function* () {
-					if (content.markdown === 'Summary') yield* Effect.flatten(Ref.getAndSet(input.duringSummary, Effect.void))
-					yield* Queue.offer(input.shown, `comment: ${content.markdown}`)
-					return GitHubIssueComment.make({
-						ref: { discussion: { _tag: 'Issue', ref: issue }, id: GitHubId.make(900) },
-						body: content.markdown,
-						url: 'https://github.com/alice/project/issues/42#issuecomment-900',
-						author: null,
-					})
-				}),
-			addReaction: ({ target }) => Queue.offer(input.shown, `eyes on ${reactionTargetName(target)}`).pipe(Effect.asVoid),
-			removeReaction: ({ target }) =>
-				Queue.offer(input.shown, `eyes off ${reactionTargetName(target)}`).pipe(Effect.asVoid),
-		}),
+		gitHubApi,
 		handlers: {
 			onMentioned: (event, delivery) =>
 				Queue.offer(input.seen, { event, delivery }).pipe(Effect.andThen(delivery.handoff())),
@@ -102,7 +106,8 @@ const makeOptions = (input: {
 		linearApi: Layer.mock(LinearApi, {
 			createAgentActivity: (request) =>
 				Effect.gen(function* () {
-					if (request.content.body === 'Summary') yield* Effect.flatten(Ref.getAndSet(input.duringSummary, Effect.void))
+					if (request.content.body === 'Summary')
+						yield* Effect.flatten(Ref.getAndSet(input.duringSummary, Effect.void))
 					const kind = request.ephemeral ? 'thought~' : request.content._tag.toLowerCase()
 					yield* Queue.offer(input.shown, `${kind}: ${request.content.body}`)
 					return LinearAgentActivityReceipt.make({
@@ -114,29 +119,42 @@ const makeOptions = (input: {
 		handlers: {
 			onAgentSessionCreated: (event, delivery) =>
 				Queue.offer(input.seen, { event, delivery }).pipe(Effect.andThen(delivery.handoff())),
-			onAgentSessionPrompted: (event, delivery) => Queue.offer(input.seen, { event, delivery }).pipe(Effect.asVoid),
+			onAgentSessionPrompted: (event, delivery) =>
+				Queue.offer(input.seen, { event, delivery }).pipe(Effect.asVoid),
 		},
 	})
 	return {
-		namespace: 'providers-cloudflare-test',
-		basePath: '/api/channels',
-		providers: [slack, github, linear],
-		eventProcessing: { concurrency: 1, leaseMs: 30_000 },
-	} as const
+		gitHubApi,
+		options: {
+			namespace: 'providers-cloudflare-test',
+			basePath: '/api/channels',
+			providers: [slack, github, linear],
+			eventProcessing: { concurrency: 1, leaseMs: 30_000 },
+		} as const,
+	}
 }
 
 const setUp = Effect.gen(function* () {
 	const seen = yield* Queue.unbounded<Seen>()
 	const shown = yield* Queue.unbounded<string>()
 	const duringSummary = yield* Ref.make<Effect.Effect<void>>(Effect.void)
-	const options = makeOptions({ seen, shown, duringSummary })
+	const { options, gitHubApi } = makeOptions({ seen, shown, duringSummary })
 	const bot = ChannelsCloudflare.make(options)
 	const durableObject = yield* Layer.build(DurableObjectFake)
-	const mailbox = yield* ChannelsCloudflare.makeMailbox(
-		options,
-		{ rearmAfterMs: 1_000 },
-		Layer.succeedContext(durableObject),
-	).pipe(Effect.provide(NodeCrypto.layer))
+	const { processing, deliveryControl, processingBackend, subscriptions, deliveryControlBackend } = bot.layers.mailbox
+	const MailboxLive = Layer.merge(processing, deliveryControl).pipe(
+		Layer.provideMerge(Layer.mergeAll(processingBackend, subscriptions, deliveryControlBackend)),
+		Layer.provideMerge(Layer.succeedContext(durableObject)),
+	)
+	/** The mailbox object's services, which Alchemy gives its constructor. Its methods get only the Worker's. */
+	const mailboxServices = yield* Layer.build(MailboxLive.pipe(Layer.provideMerge(NodeCrypto.layer)))
+	const handlers = yield* bot
+		.mailbox({ rearmAfterMs: 1_000 })
+		.pipe(Effect.provideContext(mailboxServices), Effect.orDie)
+	const mailbox = {
+		...handlers,
+		alarm: () => handlers.alarm().pipe(Effect.provide(gitHubApi)),
+	}
 	const alarm = Context.get(durableObject, DurableObjectFakeAlarm)
 	const routedTo = yield* Ref.make<ReadonlyArray<string>>([])
 	const mailboxes = DeliveryMailboxes.of({
@@ -146,7 +164,11 @@ const setUp = Effect.gen(function* () {
 			deliveryRequest: mailbox.deliveryRequest,
 		}),
 	})
-	const fetch = yield* ChannelsCloudflare.serve(Layer.merge(bot.routes, bot.deliveryApi)).pipe(
+	const RoutesLive = Layer.merge(bot.routes, bot.deliveryApi).pipe(
+		Layer.provide(Layer.merge(bot.layers.worker.mailboxDelivery, bot.layers.worker.deliveryControl)),
+	)
+	const fetch = yield* HttpRouter.toHttpEffect(RoutesLive).pipe(
+		Effect.provideService(HttpRouter.RouterConfig, bot.routerConfig),
 		Effect.provide(Layer.merge(NodeCrypto.layer, Layer.succeed(DeliveryMailboxes, mailboxes))),
 	)
 	const request = (path: string, init: RequestInit) =>
@@ -158,7 +180,7 @@ const setUp = Effect.gen(function* () {
 			Effect.map((response) => HttpServerResponse.toWeb(response).status),
 			Effect.orDie,
 		)
-	const sendLinear = (payload: typeof agentSessionPayloads[number], deliveryId: string) => {
+	const sendLinear = (payload: (typeof agentSessionPayloads)[number], deliveryId: string) => {
 		const signed = signedLinearInput(payload, 'AgentSessionEvent', deliveryId)
 		return request('/integrations/linear/webhook', {
 			method: 'POST',
@@ -188,7 +210,18 @@ const setUp = Effect.gen(function* () {
 		if (Predicate.isNotUndefined(body)) init.body = JSON.stringify(body)
 		return request(`/deliveries/${delivery.deliveryId}${path}`, init)
 	}
-	return { seen, shown, duringSummary, mailbox, alarm, routedTo, request, sendLinear, sendGitHubMention, callDelivery }
+	return {
+		seen,
+		shown,
+		duringSummary,
+		mailbox,
+		alarm,
+		routedTo,
+		request,
+		sendLinear,
+		sendGitHubMention,
+		callDelivery,
+	}
 })
 
 it.effect(
@@ -222,7 +255,9 @@ it.effect(
 
 			const working = { activity: { _tag: 'Working', message: 'Running tests' } }
 			expect(yield* callDelivery(delivery, '/activity', 'PUT', working)).toEqual(202)
-			expect(yield* callDelivery(delivery, '/messages', 'POST', { messageId: 'summary', markdown: 'Summary' })).toEqual(202)
+			expect(
+				yield* callDelivery(delivery, '/messages', 'POST', { messageId: 'summary', markdown: 'Summary' }),
+			).toEqual(202)
 			yield* sendLinear(agentSessionPayloads[1], 'delivery-prompted')
 			const statuses = yield* Ref.make<ReadonlyArray<number>>([])
 			yield* Ref.set(
@@ -236,7 +271,11 @@ it.effect(
 			yield* alarm.clearAsCloudflareDoesBeforeTheHandler
 			yield* mailbox.alarm()
 			expect(yield* Ref.get(statuses)).toEqual([202])
-			expect(Array.from(yield* Queue.takeAll(shown))).toEqual(['thought~: Running tests', 'thought: Summary', 'response: Done.'])
+			expect(Array.from(yield* Queue.takeAll(shown))).toEqual([
+				'thought~: Running tests',
+				'thought: Summary',
+				'response: Done.',
+			])
 			const next = Option.getOrThrow(yield* Queue.poll(seen))
 			expect(next.delivery.deliveryId === delivery.deliveryId).toBe(false)
 			expect(yield* callDelivery(delivery, '', 'GET')).toEqual(200)
@@ -254,7 +293,9 @@ it.effect(
 
 			const working = { activity: { _tag: 'Working', message: 'Running tests' } }
 			expect(yield* callDelivery(delivery, '/activity', 'PUT', working)).toEqual(202)
-			expect(yield* callDelivery(delivery, '/messages', 'POST', { messageId: 'summary', markdown: 'Summary' })).toEqual(202)
+			expect(
+				yield* callDelivery(delivery, '/messages', 'POST', { messageId: 'summary', markdown: 'Summary' }),
+			).toEqual(202)
 			expect(yield* sendGitHubMention(501, 'github-mention-2')).toEqual(200)
 			const statuses = yield* Ref.make<ReadonlyArray<number>>([])
 			const record = (status: number) => Ref.update(statuses, (all) => [...all, status])

@@ -26,7 +26,7 @@ import {
 	type UpdateMessagePayload,
 } from '@humanlayer/channels-delivery'
 import { Clock, Context, Effect, Layer, Option, Predicate, Redacted, Ref, Schema } from 'effect'
-import { HttpServerRequest, HttpServerResponse } from 'effect/http'
+import { HttpRouter, HttpServerRequest, HttpServerResponse } from 'effect/http'
 
 import { ChannelsCloudflare, DeliveryMailboxes } from '../src'
 import { DurableObjectFake, DurableObjectFakeAlarm } from './DurableObjectFake'
@@ -86,16 +86,20 @@ const makeHandOffProvider = (
 				Effect.gen(function* () {
 					yield* execution.prepare(
 						PreparedDeliveryInvocation.make({
-							callback: 'onExample',
-							presentationVersion: 1,
-							destination: { thread: 'thread-1' },
-							supportedOperations: [
-								'PresentOutcome',
-								'AddExternalLink',
-								'CreateMessage',
-								'UpdateMessage',
-								'DeleteMessage',
-								'SetActivity',
+							callbacks: [
+								{
+									name: 'onExample',
+									presentationVersion: 1,
+									destination: { thread: 'thread-1' },
+									supportedOperations: [
+										'PresentOutcome',
+										'AddExternalLink',
+										'CreateMessage',
+										'UpdateMessage',
+										'DeleteMessage',
+										'SetActivity',
+									],
+								},
 							],
 						}),
 					)
@@ -134,12 +138,23 @@ const makeOptions = (
 it.effect('ChannelsCloudflare mailbox: deliver sets the alarm and the alarm runs the provider callback', ({ expect }) =>
 	Effect.gen(function* () {
 		const batchSizes = yield* Ref.make<ReadonlyArray<number>>([])
+		const bot = ChannelsCloudflare.make(makeOptions(makeExampleProvider(batchSizes)))
 		const durableObject = yield* Layer.build(DurableObjectFake)
-		const mailbox = yield* ChannelsCloudflare.makeMailbox(
-			makeOptions(makeExampleProvider(batchSizes)),
-			{ rearmAfterMs: 1_000 },
-			Layer.succeedContext(durableObject),
-		).pipe(Effect.provide(NodeCrypto.layer))
+		const { processing, deliveryControl, processingBackend, subscriptions, deliveryControlBackend } =
+			bot.layers.mailbox
+		const MailboxLive = Layer.merge(processing, deliveryControl).pipe(
+			Layer.provideMerge(Layer.mergeAll(processingBackend, subscriptions, deliveryControlBackend)),
+			Layer.provideMerge(Layer.succeedContext(durableObject)),
+		)
+		/** The mailbox object's services, which Alchemy gives its constructor. Its methods get only the Worker's. */
+		const mailboxServices = yield* Layer.build(MailboxLive.pipe(Layer.provideMerge(NodeCrypto.layer)))
+		const handlers = yield* bot
+			.mailbox({ rearmAfterMs: 1_000 })
+			.pipe(Effect.provideContext(mailboxServices), Effect.orDie)
+		const mailbox = {
+			...handlers,
+			alarm: () => handlers.alarm(),
+		}
 		const alarm = Context.get(durableObject, DurableObjectFakeAlarm)
 
 		const receipt = yield* mailbox.deliver(admission('channels-cloudflare-test'))
@@ -158,7 +173,9 @@ it.effect(
 	({ expect }) =>
 		Effect.gen(function* () {
 			const delivered = yield* Ref.make<ReadonlyArray<string>>([])
-			const bot = ChannelsCloudflare.make(makeOptions(makeExampleProvider(yield* Ref.make<ReadonlyArray<number>>([]))))
+			const bot = ChannelsCloudflare.make(
+				makeOptions(makeExampleProvider(yield* Ref.make<ReadonlyArray<number>>([]))),
+			)
 			const mailboxes = DeliveryMailboxes.of({
 				getByName: (mailboxKey) => ({
 					deliver: () =>
@@ -166,7 +183,9 @@ it.effect(
 					deliveryRequest: () => Effect.die(new Error('this test sends no delivery requests')),
 				}),
 			})
-			const fetch = yield* ChannelsCloudflare.serve(bot.routes).pipe(
+			const RoutesLive = bot.routes.pipe(Layer.provide(bot.layers.worker.mailboxDelivery))
+			const fetch = yield* HttpRouter.toHttpEffect(RoutesLive).pipe(
+				Effect.provideService(HttpRouter.RouterConfig, bot.routerConfig),
 				Effect.provide(Layer.merge(NodeCrypto.layer, Layer.succeed(DeliveryMailboxes, mailboxes))),
 			)
 
@@ -192,12 +211,23 @@ it.effect(
 			const handedOff = yield* Ref.make(Option.none<HandedOff>())
 			const sent = yield* Ref.make<ReadonlyArray<ProviderOutputOperation>>([])
 			const options = makeOptions(makeHandOffProvider(handedOff, sent))
+			const bot = ChannelsCloudflare.make(options)
 			const durableObject = yield* Layer.build(DurableObjectFake)
-			const mailbox = yield* ChannelsCloudflare.makeMailbox(
-				options,
-				{ rearmAfterMs: 1_000 },
-				Layer.succeedContext(durableObject),
-			).pipe(Effect.provide(NodeCrypto.layer))
+			const { processing, deliveryControl, processingBackend, subscriptions, deliveryControlBackend } =
+				bot.layers.mailbox
+			const MailboxLive = Layer.merge(processing, deliveryControl).pipe(
+				Layer.provideMerge(Layer.mergeAll(processingBackend, subscriptions, deliveryControlBackend)),
+				Layer.provideMerge(Layer.succeedContext(durableObject)),
+			)
+			/** The mailbox object's services, which Alchemy gives its constructor. Its methods get only the Worker's. */
+			const mailboxServices = yield* Layer.build(MailboxLive.pipe(Layer.provideMerge(NodeCrypto.layer)))
+			const handlers = yield* bot
+				.mailbox({ rearmAfterMs: 1_000 })
+				.pipe(Effect.provideContext(mailboxServices), Effect.orDie)
+			const mailbox = {
+				...handlers,
+				alarm: () => handlers.alarm(),
+			}
 			const alarm = Context.get(durableObject, DurableObjectFakeAlarm)
 
 			yield* mailbox.deliver(admission('channels-cloudflare-test'))
@@ -216,8 +246,11 @@ it.effect(
 						),
 				}),
 			})
-			const bot = ChannelsCloudflare.make(options)
-			const fetch = yield* ChannelsCloudflare.serve(Layer.merge(bot.routes, bot.deliveryApi)).pipe(
+			const RoutesLive = Layer.merge(bot.routes, bot.deliveryApi).pipe(
+				Layer.provide(Layer.merge(bot.layers.worker.mailboxDelivery, bot.layers.worker.deliveryControl)),
+			)
+			const fetch = yield* HttpRouter.toHttpEffect(RoutesLive).pipe(
+				Effect.provideService(HttpRouter.RouterConfig, bot.routerConfig),
 				Effect.provide(Layer.merge(NodeCrypto.layer, Layer.succeed(DeliveryMailboxes, mailboxes))),
 			)
 
@@ -236,12 +269,17 @@ it.effect(
 				const headers = { authorization: `Bearer ${input.token}`, 'content-type': 'application/json' }
 				const body = Predicate.isUndefined(input.payload) ? undefined : JSON.stringify(input.payload)
 				const method = input.method ?? (Predicate.isUndefined(body) ? 'GET' : 'POST')
-				const request = new Request(url, Predicate.isUndefined(body) ? { method, headers } : { method, headers, body })
+				const request = new Request(
+					url,
+					Predicate.isUndefined(body) ? { method, headers } : { method, headers, body },
+				)
 				return fetch.pipe(
 					Effect.provideService(HttpServerRequest.HttpServerRequest, HttpServerRequest.fromWeb(request)),
 					Effect.flatMap((response) => {
 						const web = HttpServerResponse.toWeb(response)
-						return Effect.promise(() => web.text()).pipe(Effect.map((text) => ({ status: web.status, text })))
+						return Effect.promise(() => web.text()).pipe(
+							Effect.map((text) => ({ status: web.status, text })),
+						)
 					}),
 				)
 			}
@@ -261,12 +299,25 @@ it.effect(
 			const activity = { activity: { _tag: 'Working', message: 'Running tests' } } as const
 			expect((yield* call({ path: '/activity', token, method: 'PUT', payload: activity })).status).toEqual(202)
 			const progress = MessageId.make('progress')
-			const created = yield* call({ path: '/messages', token, payload: { messageId: progress, markdown: 'Working' } })
+			const created = yield* call({
+				path: '/messages',
+				token,
+				payload: { messageId: progress, markdown: 'Working' },
+			})
 			expect(created.status).toEqual(202)
-			const patch = { path: '/messages/progress', token, method: 'PATCH', payload: { markdown: 'Almost' } } as const
+			const patch = {
+				path: '/messages/progress',
+				token,
+				method: 'PATCH',
+				payload: { markdown: 'Almost' },
+			} as const
 			expect((yield* call(patch)).status).toEqual(202)
 			expect((yield* call({ path: '/messages/progress', token, method: 'DELETE' })).status).toEqual(202)
-			const conflict = yield* call({ path: '/messages', token, payload: { messageId: progress, markdown: 'Other' } })
+			const conflict = yield* call({
+				path: '/messages',
+				token,
+				payload: { messageId: progress, markdown: 'Other' },
+			})
 			expect(conflict.status).toEqual(409)
 			expect(yield* decodeBody(DeliveryMessageConflict, conflict.text)).toBeInstanceOf(DeliveryMessageConflict)
 
@@ -325,10 +376,14 @@ const makeInterleavingProvider = (
 				Effect.gen(function* () {
 					yield* execution.prepare(
 						PreparedDeliveryInvocation.make({
-							callback: 'onExample',
-							presentationVersion: 1,
-							destination: { thread: 'thread-1' },
-							supportedOperations: ['PresentOutcome', 'CreateMessage', 'SetActivity'],
+							callbacks: [
+								{
+									name: 'onExample',
+									presentationVersion: 1,
+									destination: { thread: 'thread-1' },
+									supportedOperations: ['PresentOutcome', 'CreateMessage', 'SetActivity'],
+								},
+							],
 						}),
 					)
 					yield* execution.context.handoff()
@@ -345,7 +400,8 @@ const makeInterleavingProvider = (
 			providerName: 'example',
 			process: ({ operation }) =>
 				Effect.gen(function* () {
-					if (Predicate.isTagged(operation, 'CreateMessage')) yield* Effect.flatten(Ref.getAndSet(duringCreate, Effect.void))
+					if (Predicate.isTagged(operation, 'CreateMessage'))
+						yield* Effect.flatten(Ref.getAndSet(duringCreate, Effect.void))
 					yield* Ref.update(sent, (all) => [...all, operation._tag])
 					return DeliveryOutputApplied.make({ receipt: { posted: operation._tag } })
 				}),
@@ -358,21 +414,38 @@ const interleaving = (request: { readonly path: string; readonly method: 'POST' 
 		const sent = yield* Ref.make<ReadonlyArray<string>>([])
 		const duringCreate = yield* Ref.make<Effect.Effect<void>>(Effect.void)
 		const options = makeOptions(makeInterleavingProvider(handedOff, sent, duringCreate))
+		const bot = ChannelsCloudflare.make(options)
 		const durableObject = yield* Layer.build(DurableObjectFake)
-		const mailbox = yield* ChannelsCloudflare.makeMailbox(
-			options,
-			{ rearmAfterMs: 1_000 },
-			Layer.succeedContext(durableObject),
-		).pipe(Effect.provide(NodeCrypto.layer))
+		const { processing, deliveryControl, processingBackend, subscriptions, deliveryControlBackend } =
+			bot.layers.mailbox
+		const MailboxLive = Layer.merge(processing, deliveryControl).pipe(
+			Layer.provideMerge(Layer.mergeAll(processingBackend, subscriptions, deliveryControlBackend)),
+			Layer.provideMerge(Layer.succeedContext(durableObject)),
+		)
+		/** The mailbox object's services, which Alchemy gives its constructor. Its methods get only the Worker's. */
+		const mailboxServices = yield* Layer.build(MailboxLive.pipe(Layer.provideMerge(NodeCrypto.layer)))
+		const handlers = yield* bot
+			.mailbox({ rearmAfterMs: 1_000 })
+			.pipe(Effect.provideContext(mailboxServices), Effect.orDie)
+		const mailbox = {
+			...handlers,
+			alarm: () => handlers.alarm(),
+		}
 		const alarm = Context.get(durableObject, DurableObjectFakeAlarm)
 		const mailboxes = DeliveryMailboxes.of({
 			getByName: () => ({ deliver: mailbox.deliver, deliveryRequest: mailbox.deliveryRequest }),
 		})
-		const bot = ChannelsCloudflare.make(options)
-		const fetch = yield* ChannelsCloudflare.serve(Layer.merge(bot.routes, bot.deliveryApi)).pipe(
+		const RoutesLive = Layer.merge(bot.routes, bot.deliveryApi).pipe(
+			Layer.provide(Layer.merge(bot.layers.worker.mailboxDelivery, bot.layers.worker.deliveryControl)),
+		)
+		const fetch = yield* HttpRouter.toHttpEffect(RoutesLive).pipe(
+			Effect.provideService(HttpRouter.RouterConfig, bot.routerConfig),
 			Effect.provide(Layer.merge(NodeCrypto.layer, Layer.succeed(DeliveryMailboxes, mailboxes))),
 		)
-		const call = (target: HandedOff, input: { readonly path: string; readonly method: string; readonly body?: unknown }) => {
+		const call = (
+			target: HandedOff,
+			input: { readonly path: string; readonly method: string; readonly body?: unknown },
+		) => {
 			const url = `http://localhost/api/channels/deliveries/${target.deliveryId}${input.path}`
 			const headers = {
 				authorization: `Bearer ${Redacted.value(target.accessToken)}`,
@@ -382,7 +455,10 @@ const interleaving = (request: { readonly path: string; readonly method: 'POST' 
 				? { method: input.method, headers }
 				: { method: input.method, headers, body: JSON.stringify(input.body) }
 			return fetch.pipe(
-				Effect.provideService(HttpServerRequest.HttpServerRequest, HttpServerRequest.fromWeb(new Request(url, init))),
+				Effect.provideService(
+					HttpServerRequest.HttpServerRequest,
+					HttpServerRequest.fromWeb(new Request(url, init)),
+				),
 				Effect.map((response) => HttpServerResponse.toWeb(response).status),
 				Effect.orDie,
 			)

@@ -11,7 +11,7 @@ import {
 	DeliveryPlanItem,
 	DeliveryPlanItemId,
 	DeliveryPlanItemState,
-	PreparedDeliveryInvocation,
+	PreparedDeliveryCallback,
 	ProviderOutputAttempt,
 	ProviderRenderPlan,
 	RenderedDeliveryPlan,
@@ -44,7 +44,12 @@ import { makeRecordingSlackHttp, slackApiLayer, type RecordedSlackRequest } from
 
 const teamId = SlackTeamId.make('T_PLAN')
 const channelId = SlackChannelId.make('C_PLAN')
-const thread = SlackThreadRef.make({ teamId, channelId, threadTs: SlackMessageTs.make('1700000000.000001'), isDm: false })
+const thread = SlackThreadRef.make({
+	teamId,
+	channelId,
+	threadTs: SlackMessageTs.make('1700000000.000001'),
+	isDm: false,
+})
 const messageRef = (ts: string) => SlackMessageRef.make({ teamId, channelId, messageTs: SlackMessageTs.make(ts) })
 const shownMessage = messageRef('1700000001.000001')
 const postedMessage = messageRef('1700000002.000001')
@@ -70,7 +75,8 @@ const finished = DeliveryPlan.make({
 
 const presentation = (message: SlackMessageRef) =>
 	Schema.encodeSync(SlackPlanPresentationJson)(SlackPlanPresentation.make({ message }))
-const shown = (plan: DeliveryPlan) => RenderedDeliveryPlan.make({ revision: 1, plan, presentation: presentation(shownMessage) })
+const shown = (plan: DeliveryPlan) =>
+	RenderedDeliveryPlan.make({ revision: 1, plan, presentation: presentation(shownMessage) })
 
 const attempt = (operation: ProviderRenderPlan) =>
 	ProviderOutputAttempt.make({
@@ -79,8 +85,8 @@ const attempt = (operation: ProviderRenderPlan) =>
 		attempt: 1,
 		hadAmbiguousAttempt: false,
 		idempotencyKey: '00000000-0000-4000-8000-000000000001',
-		prepared: PreparedDeliveryInvocation.make({
-			callback: 'onNewMention',
+		prepared: PreparedDeliveryCallback.make({
+			name: 'onNewMention',
 			presentationVersion: slackPresentationVersion,
 			destination: Schema.encodeSync(SlackDeliveryDestinationJson)(SlackDeliveryDestination.make({ thread })),
 			supportedOperations: slackThreadSupportedOperations,
@@ -102,7 +108,8 @@ const recordingSlackApi = (calls: Ref.Ref<PlanCalls>, faults: PlanFaults) =>
 		postPlanToThread: (request) =>
 			Effect.gen(function* () {
 				yield* Ref.update(calls, (all) => ({ ...all, posts: [...all.posts, request] }))
-				if (faults.post !== undefined) return yield* SlackApiError.make({ operation: 'post_plan', message: faults.post })
+				if (faults.post !== undefined)
+					return yield* SlackApiError.make({ operation: 'post_plan', message: faults.post })
 				return postedMessage
 			}),
 		updatePlan: (request) =>
@@ -122,7 +129,8 @@ const run = (operation: ProviderRenderPlan, faults: PlanFaults = {}) =>
 		)
 		const result = yield* processor.process(attempt(operation)).pipe(Effect.result)
 		const receipt = Result.isSuccess(result)
-			? Option.getOrUndefined(Schema.decodeUnknownOption(SlackPlanPresentationJson)(result.success.receipt))?.message
+			? Option.getOrUndefined(Schema.decodeUnknownOption(SlackPlanPresentationJson)(result.success.receipt))
+					?.message
 			: undefined
 		return { result, receipt, ...(yield* Ref.get(calls)) }
 	})
@@ -133,13 +141,23 @@ describe('Slack plan block', () => {
 			SlackPlan.make({
 				title: 'Ship the fix',
 				tasks: [
-					SlackPlanTask.make({ id: 'inspect', title: 'inspect logs', status: 'in_progress', details: 'Reading the logs' }),
+					SlackPlanTask.make({
+						id: 'inspect',
+						title: 'inspect logs',
+						status: 'in_progress',
+						details: 'Reading the logs',
+					}),
 					SlackPlanTask.make({ id: 'rotate', title: 'rotate secret', status: 'pending' }),
 				],
 			}),
 		)
 		expect(slackPlan(finished).tasks).toEqual([
-			SlackPlanTask.make({ id: 'inspect', title: 'inspect logs', status: 'complete', output: 'Found expired credentials' }),
+			SlackPlanTask.make({
+				id: 'inspect',
+				title: 'inspect logs',
+				status: 'complete',
+				output: 'Found expired credentials',
+			}),
 			SlackPlanTask.make({ id: 'rotate', title: 'rotate secret', status: 'error', output: 'No access' }),
 		])
 		expect(slackPlan(DeliveryPlan.make({ items: [] })).title).toEqual('Plan')
@@ -158,7 +176,9 @@ describe('Slack plan output', () => {
 
 	it.effect('replaces the whole plan in the shown message, and makes no call for the same plan', ({ expect }) =>
 		Effect.gen(function* () {
-			const changed = yield* run(ProviderRenderPlan.make({ revision: 2, plan: finished, rendered: shown(started) }))
+			const changed = yield* run(
+				ProviderRenderPlan.make({ revision: 2, plan: finished, rendered: shown(started) }),
+			)
 			expect(changed.updates).toEqual([{ message: shownMessage, plan: slackPlan(finished) }])
 			expect(changed.posts).toEqual([])
 			expect(changed.receipt).toEqual(shownMessage)
@@ -186,10 +206,17 @@ describe('Slack plan output', () => {
 			const render = ProviderRenderPlan.make({ revision: 1, plan: started })
 			const unreachable = yield* run(render, { post: 'Could not reach Slack' })
 			const archived = yield* run(render, { post: 'is_archived' })
-			const uneditable = yield* run(ProviderRenderPlan.make({ revision: 2, plan: finished, rendered: shown(started) }), {
-				update: 'cant_update_message',
-			})
-			if (!Result.isFailure(unreachable.result) || !Result.isFailure(archived.result) || !Result.isFailure(uneditable.result)) {
+			const uneditable = yield* run(
+				ProviderRenderPlan.make({ revision: 2, plan: finished, rendered: shown(started) }),
+				{
+					update: 'cant_update_message',
+				},
+			)
+			if (
+				!Result.isFailure(unreachable.result) ||
+				!Result.isFailure(archived.result) ||
+				!Result.isFailure(uneditable.result)
+			) {
 				return expect.unreachable()
 			}
 			expect(unreachable.result.failure).toMatchObject({ retryable: true, safeCode: 'slack_plan_failed' })

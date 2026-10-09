@@ -20,16 +20,16 @@ Linear has no app manifest; configure the application by hand in Linear's API se
 
 ### Webhook categories
 
-| Category             | Webhook type          | Used for                                                                                                                  |
-| -------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| Agent session events | `AgentSessionEvent`   | `created` and `prompted` start and continue agent work.                                                                   |
-| Issues               | `Issue`               | `onIssueCreated`, plus updates and removal of subscribed issues.                                                          |
-| Comments             | `Comment`             | Comments on subscribed issues.                                                                                            |
-| Emoji reactions      | `Reaction`            | Reactions on subscribed issues and their comments.                                                                        |
-| Issue attachments    | `Attachment`          | Link and file cards on subscribed issues.                                                                                 |
-| Inbox notifications  | `AppUserNotification` | Mention and assignment notices. They are acknowledged without starting duplicate work, because Agent Sessions already do. |
-| Permission changes   | `PermissionChange`    | Team access changes; acknowledged and logged.                                                                             |
-| OAuth app events     | `OAuthApp`            | App revocation; acknowledged and logged.                                                                                  |
+| Category             | Webhook type          | Used for                                                                                                                                                                                                                    |
+| -------------------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Agent session events | `AgentSessionEvent`   | `created` and `prompted` start and continue agent work.                                                                                                                                                                     |
+| Issues               | `Issue`               | `onIssueCreated`, plus updates and removal of subscribed issues.                                                                                                                                                            |
+| Comments             | `Comment`             | Comments on subscribed issues.                                                                                                                                                                                              |
+| Emoji reactions      | `Reaction`            | Reactions on subscribed issues and their comments.                                                                                                                                                                          |
+| Issue attachments    | `Attachment`          | Link and file cards on subscribed issues.                                                                                                                                                                                   |
+| Inbox notifications  | `AppUserNotification` | Mention and assignment notices. They run `onMentioned` and `onAssigned`, even on a subscribed issue. With Agent Session callbacks they are acknowledged without starting duplicate work, because Agent Sessions already do. |
+| Permission changes   | `PermissionChange`    | Team access changes; acknowledged and logged.                                                                                                                                                                               |
+| OAuth app events     | `OAuthApp`            | App revocation; acknowledged and logged.                                                                                                                                                                                    |
 
 The app's own changes are admitted and then ignored, so they never re-enter callbacks. Other event types and actions are acknowledged and ignored.
 

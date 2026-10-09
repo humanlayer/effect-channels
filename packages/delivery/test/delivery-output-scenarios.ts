@@ -55,10 +55,14 @@ const handingOffDispatcher = (input: {
 					if (input.prepare) {
 						yield* execution.prepare(
 							PreparedDeliveryInvocation.make({
-								callback: 'onEvent',
-								presentationVersion: 1,
-								destination: { thread: 'thread-1' },
-								supportedOperations: ['PresentOutcome'],
+								callbacks: [
+									{
+										name: 'onEvent',
+										presentationVersion: 1,
+										destination: { thread: 'thread-1' },
+										supportedOperations: ['PresentOutcome'],
+									},
+								],
 							}),
 						)
 					}

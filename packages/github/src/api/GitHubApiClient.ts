@@ -1,20 +1,4 @@
-import {
-	Cache,
-	Clock,
-	Config,
-	Context,
-	Duration,
-	Effect,
-	Exit,
-	Layer,
-	Option,
-	Predicate,
-	Redacted,
-	Schema,
-	Stream,
-	type Types,
-} from 'effect'
-import { Base64Url } from 'effect/encoding'
+import { Config, Context, Effect, Layer, Option, Predicate, Schema, Stream } from 'effect'
 import * as HttpClient from 'effect/http/HttpClient'
 import * as HttpClientRequest from 'effect/http/HttpClientRequest'
 import type * as HttpClientResponse from 'effect/http/HttpClientResponse'
@@ -22,27 +6,17 @@ import type * as HttpClientResponse from 'effect/http/HttpClientResponse'
 import { type GitHubApiOperation, GitHubApiError } from '../GitHubApi'
 import { GitHubId } from '../GitHubIdentity'
 import type { GitHubRepositoryRef } from '../GitHubModels'
-import { GitHubTransportError, GitHubTransportErrorFields, narrowGitHubTransportError } from './GitHubApiErrors'
+import { GitHubTransportError, narrowGitHubTransportError } from './GitHubApiErrors'
 import { Participant } from './GitHubApiSchemas'
-import { GitHubAppSigner } from './GitHubAppSigner'
+import { GitHubAppCredentials } from './GitHubAppCredentials'
+import { type ApiMethod, gitHubRequest, inspectGitHubStatus } from './GitHubHttp'
 
 const GitHubApiConfig = Config.all({
-	appId: Config.schema(GitHubId, 'GITHUB_APP_ID'),
-	privateKey: Config.Redacted('GITHUB_PRIVATE_KEY'),
 	apiOrigin: Config.URL('GITHUB_API_ORIGIN').pipe(Config.withDefault(new URL('https://api.github.com/'))),
 	botUserId: Config.option(Config.schema(GitHubId, 'GITHUB_BOT_USER_ID')),
 })
 
-const InstallationTokenResponse = Schema.Struct({ token: Schema.NonEmptyString, expires_at: Schema.String })
 const AppResponse = Schema.Struct({ slug: Schema.NonEmptyString })
-const ErrorBody = Schema.Struct({ message: Schema.String })
-const InstallationTokenRequestBody = Schema.Struct({ repository_ids: Schema.Array(GitHubId) })
-const AppJwtHeaderJson = Schema.fromJsonString(
-	Schema.Struct({ alg: Schema.Literal('RS256'), typ: Schema.Literal('JWT') }),
-)
-const AppJwtClaimsJson = Schema.fromJsonString(Schema.Struct({ iss: Schema.String, iat: Schema.Int, exp: Schema.Int }))
-
-type ApiMethod = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'
 type RequestInput = {
 	readonly operation: GitHubApiOperation
 	readonly ref: GitHubRepositoryRef
@@ -88,89 +62,13 @@ export class GitHubApiClient extends Context.Service<
 	}
 >()('@humanlayer/channels-github/internal/GitHubApiClient') {}
 
-const secondsPattern = /^\d+$/
-const secondsToMillis = (value: string | undefined) => {
-	if (Predicate.isUndefined(value) || !secondsPattern.test(value)) return undefined
-	const milliseconds = Number(value) * 1_000
-	if (!Number.isSafeInteger(milliseconds)) return undefined
-	return milliseconds
-}
-const epochSecondsToDelayMillis = (value: string | undefined, now: number) => {
-	if (Predicate.isUndefined(value) || !secondsPattern.test(value)) return undefined
-	const resetAt = Number(value) * 1_000
-	if (!Number.isSafeInteger(resetAt)) return undefined
-	const delay = resetAt - now
-	if (!Number.isSafeInteger(delay)) return undefined
-	return Math.max(0, delay)
-}
-const cacheKey = (ref: GitHubRepositoryRef) => JSON.stringify([ref.installationId, ref.repositoryId])
-
 export const GitHubApiClientLive = Layer.effect(
 	GitHubApiClient,
 	Effect.gen(function* () {
 		const client = yield* HttpClient.HttpClient
-		const signer = yield* GitHubAppSigner
+		const credentials = yield* GitHubAppCredentials
 		const config = yield* GitHubApiConfig
 		const apiOrigin = new URL(config.apiOrigin.toString().replace(/\/?$/, '/'))
-
-		const baseRequest = (method: ApiMethod, url: string) =>
-			HttpClientRequest.make(method)(url).pipe(
-				HttpClientRequest.setHeader('accept', 'application/vnd.github+json'),
-				HttpClientRequest.setHeader('x-github-api-version', '2022-11-28'),
-				HttpClientRequest.setHeader('user-agent', 'humanlayer-channels-github'),
-			)
-
-		const appJwt = Effect.fn('github.api.app_jwt')(
-			function* () {
-				const now = yield* Clock.currentTimeMillis
-				const header = yield* Schema.encodeEffect(AppJwtHeaderJson)({ alg: 'RS256', typ: 'JWT' })
-				const claims = yield* Schema.encodeEffect(AppJwtClaimsJson)({
-					iss: String(config.appId),
-					iat: Math.floor(now / 1_000) - 60,
-					exp: Math.floor(now / 1_000) + 540,
-				})
-				const unsigned = `${Base64Url.encode(header)}.${Base64Url.encode(claims)}`
-				const signature = yield* signer.sign({ privateKey: config.privateKey, data: unsigned }).pipe(
-					Effect.tapError((error) => Effect.logError('GitHub App JWT signing failed', error)),
-					Effect.mapError(() => GitHubTransportError.make({ stage: 'signing' })),
-				)
-				return `${unsigned}.${signature}`
-			},
-			Effect.catchTag('SchemaError', () => Effect.fail(GitHubTransportError.make({ stage: 'signing' }))),
-		)
-
-		const inspectStatus = Effect.fn('github.api.inspect_status')(function* (
-			response: HttpClientResponse.HttpClientResponse,
-		) {
-			if (response.status >= 200 && response.status < 300) return response
-			if (response.status >= 300 && response.status < 400) {
-				return yield* GitHubTransportError.make({ stage: 'redirect', status: response.status })
-			}
-			const retryAfterHeaderMs = secondsToMillis(response.headers['retry-after'])
-			const body = yield* response.text.pipe(Effect.orElseSucceed(() => ''))
-			const decoded = yield* Schema.decodeEffect(Schema.fromJsonString(ErrorBody))(body).pipe(
-				Effect.map((value) => value.message.trim().slice(0, 1_024)),
-				Effect.orElseSucceed(() => undefined),
-			)
-			const rateLimited =
-				response.status === 429 ||
-				(response.status === 403 &&
-					(response.headers['x-ratelimit-remaining'] === '0' ||
-						Predicate.isNotUndefined(retryAfterHeaderMs) ||
-						(decoded?.toLowerCase().includes('rate limit') ?? false)))
-			const now = yield* Clock.currentTimeMillis
-			let retryAfterMs = retryAfterHeaderMs
-			if (Predicate.isUndefined(retryAfterMs) && rateLimited)
-				retryAfterMs = epochSecondsToDelayMillis(response.headers['x-ratelimit-reset'], now)
-			const error: Types.Mutable<typeof GitHubTransportErrorFields.Type> = {
-				stage: 'status',
-				status: response.status,
-			}
-			if (Predicate.isNotUndefined(decoded) && decoded.length > 0) error.responseMessage = decoded
-			if (rateLimited) error.rateLimited = true
-			if (Predicate.isNotUndefined(retryAfterMs)) error.retryAfterMs = retryAfterMs
-			return yield* GitHubTransportError.make(error)
-		})
 
 		const observeAndNarrow = <A>(operation: GitHubApiOperation, effect: Effect.Effect<A, GitHubTransportError>) =>
 			effect.pipe(
@@ -191,7 +89,7 @@ export const GitHubApiClientLive = Layer.effect(
 				operation,
 				client.execute(request).pipe(
 					Effect.mapError(() => GitHubTransportError.make({ stage: 'transport' })),
-					Effect.flatMap(inspectStatus),
+					Effect.flatMap(inspectGitHubStatus),
 					Effect.flatMap((response) =>
 						response.json.pipe(
 							Effect.flatMap(Schema.decodeUnknownEffect(schema)),
@@ -207,60 +105,15 @@ export const GitHubApiClientLive = Layer.effect(
 				}),
 			)
 
-		const tokenCache = yield* Cache.makeWith(
-			(key: string) =>
-				Effect.gen(function* () {
-					const [installationId, repositoryId] = yield* Schema.decodeEffect(
-						Schema.fromJsonString(Schema.Tuple([GitHubId, GitHubId])),
-					)(key).pipe(Effect.mapError(() => GitHubTransportError.make({ stage: 'decode' })))
-					const jwt = yield* appJwt()
-					const request = yield* HttpClientRequest.post(
-						new URL(`app/installations/${installationId}/access_tokens`, apiOrigin).toString(),
-					).pipe(
-						HttpClientRequest.setHeader('accept', 'application/vnd.github+json'),
-						HttpClientRequest.setHeader('x-github-api-version', '2022-11-28'),
-						HttpClientRequest.setHeader('user-agent', 'humanlayer-channels-github'),
-						HttpClientRequest.bearerToken(jwt),
-						HttpClientRequest.schemaBodyJson(InstallationTokenRequestBody)({
-							repository_ids: [repositoryId],
-						}),
-						Effect.mapError(() => GitHubTransportError.make({ stage: 'decode' })),
-					)
-					const response = yield* client.execute(request).pipe(
-						Effect.mapError(() => GitHubTransportError.make({ stage: 'transport' })),
-						Effect.flatMap(inspectStatus),
-						Effect.flatMap((value) =>
-							value.json.pipe(
-								Effect.flatMap(Schema.decodeUnknownEffect(InstallationTokenResponse)),
-								Effect.mapError(() => GitHubTransportError.make({ stage: 'decode' })),
-							),
-						),
-					)
-					const expiresAt = Date.parse(response.expires_at)
-					const receivedAt = yield* Clock.currentTimeMillis
-					if (!Number.isFinite(expiresAt) || expiresAt <= receivedAt + 60_000)
-						return yield* GitHubTransportError.make({ stage: 'token_expiry' })
-					return {
-						token: Redacted.make(response.token),
-						ttl: Math.min(expiresAt - receivedAt - 60_000, 3_540_000),
-					}
-				}).pipe(Effect.tapError((error) => Effect.logError('GitHub installation token request failed', error))),
-			{
-				capacity: 1_000,
-				timeToLive: (exit) => {
-					if (Exit.isSuccess(exit)) return Duration.millis(exit.value.ttl)
-					return Duration.zero
-				},
-			},
-		)
-
 		const authenticatedRequest = Effect.fn('github.api.authenticated_request')(function* (input: RequestInput) {
-			const token = yield* Cache.get(tokenCache, cacheKey(input.ref)).pipe(
-				Effect.catchTag('GitHubTransportError', (error) =>
-					Effect.fail(narrowGitHubTransportError(input.operation, error)),
-				),
-			)
-			return baseRequest(input.method, input.path).pipe(HttpClientRequest.bearerToken(token.token))
+			const token = yield* credentials
+				.installationToken(input.ref)
+				.pipe(
+					Effect.catchTag('GitHubTransportError', (error) =>
+						Effect.fail(narrowGitHubTransportError(input.operation, error)),
+					),
+				)
+			return gitHubRequest(input.method, input.path).pipe(HttpClientRequest.bearerToken(token))
 		})
 		const withBody = <B>(
 			operation: GitHubApiOperation,
@@ -281,11 +134,13 @@ export const GitHubApiClientLive = Layer.effect(
 			operation.pipe(
 				Effect.catchTag('GitHubApiError', (error) => {
 					if (error.reason !== 'authentication') return Effect.fail(error)
-					return Cache.invalidate(tokenCache, cacheKey(ref)).pipe(
+					return credentials.invalidateInstallationToken(ref).pipe(
 						Effect.andThen(operation),
 						Effect.tapError((retried) =>
 							retried.reason === 'authentication'
-								? Effect.logError('GitHub rejected the app credentials; check GITHUB_APP_ID and GITHUB_PRIVATE_KEY').pipe(
+								? Effect.logError(
+										'GitHub rejected the app credentials; check GITHUB_APP_ID and GITHUB_PRIVATE_KEY',
+									).pipe(
 										Effect.annotateLogs({
 											provider: 'github',
 											credential: 'app_private_key',
@@ -326,7 +181,7 @@ export const GitHubApiClientLive = Layer.effect(
 							input.operation,
 							client.execute(request).pipe(
 								Effect.mapError(() => GitHubTransportError.make({ stage: 'transport' })),
-								Effect.flatMap(inspectStatus),
+								Effect.flatMap(inspectGitHubStatus),
 								Effect.asVoid,
 							),
 						).pipe(
@@ -352,7 +207,7 @@ export const GitHubApiClientLive = Layer.effect(
 								input.operation,
 								client.execute(request).pipe(
 									Effect.mapError(() => GitHubTransportError.make({ stage: 'transport' })),
-									Effect.flatMap(inspectStatus),
+									Effect.flatMap(inspectGitHubStatus),
 									Effect.flatMap((response) =>
 										response.json.pipe(
 											Effect.flatMap(Schema.decodeUnknownEffect(input.schema)),
@@ -406,7 +261,7 @@ export const GitHubApiClientLive = Layer.effect(
 							input.operation,
 							transport.execute(request).pipe(
 								Effect.mapError(() => GitHubTransportError.make({ stage: 'transport' })),
-								Effect.flatMap(inspectStatus),
+								Effect.flatMap(inspectGitHubStatus),
 								Effect.flatMap((response) =>
 									response.text.pipe(
 										Effect.mapError(() =>
@@ -432,21 +287,21 @@ export const GitHubApiClientLive = Layer.effect(
 				onSome: Effect.succeed,
 				onNone: () =>
 					Effect.gen(function* () {
-						const jwt = yield* appJwt().pipe(
+						const jwt = yield* credentials.appJwt.pipe(
 							Effect.catchTag('GitHubTransportError', (error) =>
 								Effect.fail(narrowGitHubTransportError('remove_reaction', error)),
 							),
 						)
 						const app = yield* execute(
 							'remove_reaction',
-							baseRequest('GET', new URL('app', apiOrigin).toString()).pipe(
+							gitHubRequest('GET', new URL('app', apiOrigin).toString()).pipe(
 								HttpClientRequest.bearerToken(jwt),
 							),
 							AppResponse,
 						)
 						const bot = yield* execute(
 							'remove_reaction',
-							baseRequest(
+							gitHubRequest(
 								'GET',
 								new URL(`users/${encodeURIComponent(`${app.slug}[bot]`)}`, apiOrigin).toString(),
 							),

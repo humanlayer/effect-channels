@@ -9,7 +9,7 @@
 import { Context, Effect, Layer, Predicate, Schema } from 'effect'
 
 import { SetActivity } from './DeliveryActivity'
-import { PreparedDeliveryInvocation } from './DeliveryContext'
+import { PreparedDeliveryCallback } from './DeliveryContext'
 import { AddExternalLink } from './DeliveryLink'
 import { CreateMessage, ProviderDeleteMessage, ProviderUpdateMessage } from './DeliveryMessage'
 import { DeliveryOperationId } from './DeliveryOperation'
@@ -60,7 +60,7 @@ export const ProviderOutputAttempt = Schema.Struct({
 	attempt: Schema.Int.check(Schema.isGreaterThan(0)),
 	hadAmbiguousAttempt: Schema.Boolean,
 	idempotencyKey: Schema.NonEmptyString,
-	prepared: PreparedDeliveryInvocation,
+	prepared: PreparedDeliveryCallback,
 	operation: ProviderOutputOperation,
 })
 export type ProviderOutputAttempt = typeof ProviderOutputAttempt.Type
@@ -88,10 +88,10 @@ export class ProviderOutputProcessorNotFound extends Schema.TaggedError<Provider
 ) {}
 
 /** One provider's output half. Its API client is already supplied. */
-export type ProviderOutputProcessor = {
+export type ProviderOutputProcessor<R = never> = {
 	readonly namespace: string
 	readonly providerName: string
-	readonly process: (attempt: ProviderOutputAttempt) => Effect.Effect<DeliveryOutputApplied, DeliveryOutputFailed>
+	readonly process: (attempt: ProviderOutputAttempt) => Effect.Effect<DeliveryOutputApplied, DeliveryOutputFailed, R>
 }
 
 /** Hands one output attempt to the processor of the provider that owns the delivery. */
@@ -106,18 +106,34 @@ export class ProviderOutputDispatcher extends Context.Service<
 	}
 >()('@humanlayer/channels-delivery/ProviderOutputDispatcher') {}
 
-export const ProviderOutputDispatcherLive = (processors: ReadonlyArray<ProviderOutputProcessor>) =>
-	Layer.succeed(
+export type ProviderOutputDispatcherOperations<R = never> = {
+	readonly process: (input: {
+		readonly namespace: string
+		readonly provider: string
+		readonly attempt: ProviderOutputAttempt
+	}) => Effect.Effect<DeliveryOutputApplied, DeliveryOutputFailed | ProviderOutputProcessorNotFound, R>
+}
+
+export const makeProviderOutputDispatcher = <R>(
+	processors: ReadonlyArray<ProviderOutputProcessor<R>>,
+): ProviderOutputDispatcherOperations<R> => ({
+	process: Effect.fn('delivery.process_provider_output')(function* ({ namespace, provider, attempt }) {
+		const processor = processors.find(
+			(candidate) => candidate.namespace === namespace && candidate.providerName === provider,
+		)
+		if (Predicate.isUndefined(processor)) return yield* new ProviderOutputProcessorNotFound({ namespace, provider })
+		return yield* processor.process(attempt)
+	}),
+})
+
+export const ProviderOutputDispatcherLive = <R = never>(processors: ReadonlyArray<ProviderOutputProcessor<R>>) =>
+	Layer.effect(
 		ProviderOutputDispatcher,
-		ProviderOutputDispatcher.of({
-			process: Effect.fn('delivery.process_provider_output')(function* ({ namespace, provider, attempt }) {
-				const processor = processors.find(
-					(candidate) => candidate.namespace === namespace && candidate.providerName === provider,
-				)
-				if (Predicate.isUndefined(processor)) {
-					return yield* new ProviderOutputProcessorNotFound({ namespace, provider })
-				}
-				return yield* processor.process(attempt)
-			}),
+		Effect.gen(function* () {
+			const context = yield* Effect.context<R>()
+			const dispatcher = makeProviderOutputDispatcher(processors)
+			return ProviderOutputDispatcher.of({
+				process: (input) => dispatcher.process(input).pipe(Effect.provide(context)),
+			})
 		}),
 	)

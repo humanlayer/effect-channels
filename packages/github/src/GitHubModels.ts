@@ -102,6 +102,14 @@ export const GitHubPullRequestInfo = Schema.Struct({
 	merged: Schema.Boolean,
 	headRef: Schema.String,
 	headSha: Schema.NonEmptyString,
+	/** The repository the head branch lives in: a fork's for a pull request from a fork, none once it is deleted. */
+	headRepository: Schema.NullOr(
+		Schema.Struct({
+			repositoryId: GitHubId,
+			owner: Schema.NonEmptyString,
+			repository: Schema.NonEmptyString,
+		}),
+	),
 	baseRef: Schema.String,
 	baseSha: Schema.NonEmptyString,
 })

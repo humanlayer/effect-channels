@@ -113,10 +113,14 @@ export const eventIds = (claim: ClaimedMailboxBatch) => claim.admissions.map(({ 
 
 export const preparation = (callback: string) =>
 	PreparedDeliveryInvocation.make({
-		callback,
-		presentationVersion: 1,
-		destination: { thread: 'thread-1' },
-		supportedOperations: ['PresentOutcome', 'AddExternalLink', 'CreateMessage'],
+		callbacks: [
+			{
+				name: callback,
+				presentationVersion: 1,
+				destination: { thread: 'thread-1' },
+				supportedOperations: ['PresentOutcome', 'AddExternalLink', 'CreateMessage'],
+			},
+		],
 	})
 
 export const mailboxBackendContract = <E>(
@@ -375,7 +379,7 @@ export const mailboxBackendContract = <E>(
 			yield* deliver('a')
 			const first = yield* claimAll(yield* findWaiting)
 			expect(first.prepared).toBeUndefined()
-			const owner = { mailboxKey, claimId: first.claimId }
+			const owner = { mailboxKey, claimId: first.claimId, callbackAccessTokens: [first.accessToken] as const }
 			expect(yield* backend.prepareDelivery({ ...owner, prepared: preparation('onNewMention') })).toEqual(
 				preparation('onNewMention'),
 			)
@@ -402,7 +406,12 @@ export const mailboxBackendContract = <E>(
 			yield* TestClock.adjust(leaseMs)
 			Option.getOrThrow(yield* claimFrozen)
 			const lost = yield* backend
-				.prepareDelivery({ mailboxKey, claimId: abandoned.claimId, prepared: preparation('onNewMention') })
+				.prepareDelivery({
+					mailboxKey,
+					claimId: abandoned.claimId,
+					callbackAccessTokens: [abandoned.accessToken],
+					prepared: preparation('onNewMention'),
+				})
 				.pipe(Effect.flip)
 			expect(lost._tag).toEqual('MailboxProcessingClaimLost')
 		}),

@@ -1,0 +1,262 @@
+/**
+ * The bot: its providers, callbacks and event processing settings.
+ * The Worker and the Durable Object both build their half from this one value.
+ */
+import { ChannelsCloudflare } from '@humanlayer/channels-alchemy-cloudflare'
+import {
+	DebounceDeliveryMode,
+	type DeliveryContext,
+	type DeliveryHandoffError,
+	type MailboxSubscriptionError,
+	type MailboxSubscriptions,
+} from '@humanlayer/channels-delivery'
+import {
+	GitHubApi,
+	GitHubBot,
+	GitHubContent,
+	GitHubDiscussionRef,
+	GitHubId,
+	GitHubReaction,
+	GitHubReactionTarget,
+	hasGitHubAccess,
+	type GitHubApiError,
+	type GitHubCallbackHandlers,
+	type GitHubIssueCreated,
+	type GitHubMentioned,
+	type GitHubPrCreated,
+	type GitHubRepositoryRef,
+	type GitHubReviewComment,
+} from '@humanlayer/channels-github'
+import type { RuntimeContext } from 'alchemy/RuntimeContext'
+import { Config, Effect, Match, Predicate, Schema } from 'effect'
+
+import { AgentSessions } from './AgentSessionDO'
+import { AutoLabel, type AutoLabelError } from './AutoLabel'
+import { AgentSessionMessage } from './DeliveryTurn'
+import { MentionedIn } from './DiscussionContext'
+
+export const maintainerOnlyNotice =
+	'This agent can only be invoked by maintainers (users with write access or higher to this repository).'
+
+const gitHubMentionDiscussion = (event: GitHubMentioned) =>
+	Match.value(event).pipe(
+		Match.tagsExhaustive({
+			GitHubIssueMentioned: ({ issue }) => issue,
+			GitHubPrMentioned: ({ pullRequest }) => pullRequest,
+		}),
+	)
+
+/**
+ * check if a user has mention access. if so, send eyes when we start working.
+ * If not, send a thumbs down - AND, if not posted already in the issue/pr, a comment indicating it can only be used by maintainers
+ */
+export const respondToMentionAccess = Effect.fn('bot.github.respondToMentionAccess')(function* (
+	event: GitHubMentioned,
+) {
+	const discussion = gitHubMentionDiscussion(event)
+	const access = yield* discussion.fetchUserAccess(event.trigger.actor.login).pipe(
+		Effect.catchIf(
+			(error) => error.reason === 'not_found',
+			(error) =>
+				Effect.logInfo('GitHub could not resolve the mention author; denying access', error).pipe(
+					Effect.as('none' as const),
+				),
+		),
+	)
+	const allowed = hasGitHubAccess({ access, minimum: 'write' })
+	const target = Match.value(event.trigger).pipe(
+		Match.tagsExhaustive({
+			GitHubIssueOpened: ({ issue }) =>
+				GitHubReactionTarget.cases.Discussion.make({
+					discussion: GitHubDiscussionRef.cases.Issue.make({ ref: issue.ref }),
+				}),
+			GitHubPrOpened: ({ pullRequest }) =>
+				GitHubReactionTarget.cases.Discussion.make({
+					discussion: GitHubDiscussionRef.cases.PullRequest.make({ ref: pullRequest.ref }),
+				}),
+			GitHubIssueCommentCreated: ({ comment }) =>
+				GitHubReactionTarget.cases.Comment.make({ comment: comment.ref }),
+			GitHubPrCommentCreated: ({ comment }) => GitHubReactionTarget.cases.Comment.make({ comment: comment.ref }),
+			GitHubPrReviewCommentCreated: ({ comment }) =>
+				GitHubReactionTarget.cases.Comment.make({ comment: comment.ref }),
+		}),
+	)
+	const api = yield* GitHubApi
+	yield* api.addReaction({ target, reaction: GitHubReaction.make(allowed ? 'eyes' : '-1') })
+	if (allowed) return true
+
+	yield* Effect.logWarning('Bot mention denied: the author lacks write access').pipe(
+		Effect.annotateLogs({ actor: event.trigger.actor.login, access }),
+	)
+	const botUserId = yield* Config.schema(GitHubId, 'GITHUB_BOT_USER_ID')
+	const comments = yield* discussion.listComments()
+	const alreadyNotified = comments.some(
+		(comment) => comment.author?.id === botUserId && comment.body === maintainerOnlyNotice,
+	)
+	if (!alreadyNotified) yield* discussion.postComment(GitHubContent.make({ markdown: maintainerOnlyNotice }))
+	return false
+})
+
+/** Lines of text, without the missing ones, as one string. */
+const joinText = (lines: ReadonlyArray<string | null>) => lines.filter(Predicate.isNotNull).join('\n')
+
+/**
+ * A line comment as the agent's request: where it is in the diff, and which comment to reply to, then its text.
+ * GitHub threads replies under the thread's first comment.
+ */
+const reviewCommentRequest = (comment: GitHubReviewComment) => {
+	const line = comment.line ?? comment.startLine
+	const where = Predicate.isNullish(line) ? comment.path : `${comment.path}:${line}`
+	const thread = comment.inReplyToId ?? comment.ref.id
+	return [
+		`<system-information>This request is line comment ${comment.ref.id} on ${where}, in the review thread of line comment ${thread}. To reply in that thread, use github_post_comment with reply_to ${thread}. The diff around it:\n\`\`\`diff\n${comment.diffHunk}\n\`\`\`</system-information>`,
+		'',
+		comment.body,
+	].join('\n')
+}
+
+/** The agent's request: the comment that mentioned the bot, or the issue or pull request that was opened. */
+const gitHubMentionText = (event: GitHubMentioned) =>
+	Match.value(event.trigger).pipe(
+		Match.tagsExhaustive({
+			GitHubIssueOpened: ({ title, body }) => joinText([title, body]),
+			GitHubPrOpened: ({ title, body }) => joinText([title, body]),
+			GitHubIssueCommentCreated: ({ comment }) => comment.body,
+			GitHubPrCommentCreated: ({ comment }) => comment.body,
+			GitHubPrReviewCommentCreated: ({ comment }) => reviewCommentRequest(comment),
+		}),
+	)
+
+/** The comment that mentioned the bot; none when the issue or pull request itself did. */
+const gitHubMentionedIn = (event: GitHubMentioned): MentionedIn | undefined =>
+	Match.value(event.trigger).pipe(
+		Match.tagsExhaustive({
+			GitHubIssueOpened: () => undefined,
+			GitHubPrOpened: () => undefined,
+			GitHubIssueCommentCreated: ({ comment }) => MentionedIn.cases.Comment.make({ id: comment.ref.id }),
+			GitHubPrCommentCreated: ({ comment }) => MentionedIn.cases.Comment.make({ id: comment.ref.id }),
+			GitHubPrReviewCommentCreated: ({ comment }) => MentionedIn.cases.ReviewComment.make({ id: comment.ref.id }),
+		}),
+	)
+
+/**
+ * An authorized mention subscribes the discussion, so later comments and checks reach this mailbox, and
+ * hands the delivery to the discussion's AgentSession, which finishes it when its turn ends. Until then the
+ * mailbox holds later events back.
+ */
+
+const githubRepositoryLogAnnotations = (ref: GitHubRepositoryRef) => ({
+	'github.owner': ref.owner,
+	'github.repository': ref.repository,
+	'github.repository_id': ref.repositoryId,
+	'github.installation_id': ref.installationId,
+})
+
+/**
+ * GitHub App callbacks. Creation labels public submissions; mentions require write access or higher.
+ * `GitHubApiLive`, the default, reads the App ID and private key.
+ */
+export const githubHandlers = {
+	/** Here is where you would e.g. do code review / automatic triage */
+	onIssueCreated: (event: GitHubIssueCreated, context: DeliveryContext) =>
+		Effect.gen(function* () {
+			const labeler = yield* AutoLabel
+			yield* labeler.apply({
+				discussion: event.issue,
+				kind: 'issue',
+				title: event.trigger.title,
+				body: event.trigger.body,
+			})
+		}).pipe(
+			Effect.annotateLogs({
+				...githubRepositoryLogAnnotations(event.issue.ref),
+				'github.issue_number': event.issue.ref.number,
+				'github.event_id': event.trigger.eventId,
+				'delivery.id': context.deliveryId,
+			}),
+		),
+	onPrCreated: (event: GitHubPrCreated, context: DeliveryContext) =>
+		Effect.gen(function* () {
+			const labeler = yield* AutoLabel
+			yield* labeler.apply({
+				discussion: event.pullRequest,
+				kind: 'pull_request',
+				title: event.trigger.title,
+				body: event.trigger.body,
+			})
+		}).pipe(
+			Effect.annotateLogs({
+				...githubRepositoryLogAnnotations(event.pullRequest.ref),
+				'github.pr_number': event.pullRequest.ref.number,
+				'github.event_id': event.trigger.eventId,
+				'delivery.id': context.deliveryId,
+			}),
+		),
+
+	onMentioned: (event: GitHubMentioned, context: DeliveryContext) => {
+		const discussion = gitHubMentionDiscussion(event)
+		return Effect.gen(function* () {
+			if (!(yield* respondToMentionAccess(event))) return
+
+			yield* Effect.logInfo('Authorized mention received')
+			yield* discussion.subscribe()
+			const message = yield* Schema.encodeEffect(AgentSessionMessage)(
+				AgentSessionMessage.make({
+					prompt: gitHubMentionText(event),
+					githubDiscussion: discussion,
+					mentionedIn: gitHubMentionedIn(event),
+					deliveryId: context.deliveryId,
+					accessToken: context.accessToken,
+				}),
+			).pipe(Effect.orDie)
+			const agentSessions = yield* AgentSessions
+			yield* agentSessions.getByName(discussion.mailboxKey).send(message)
+			return yield* context.handoff()
+		}).pipe(
+			Effect.annotateLogs({
+				...githubRepositoryLogAnnotations(discussion.ref),
+				'github.discussion_kind': discussion._tag,
+				'github.discussion_number': discussion.ref.number,
+				'github.event_id': event.trigger.eventId,
+				'github.actor': event.trigger.actor.login,
+				'delivery.id': context.deliveryId,
+			}),
+		)
+	},
+	onSubscribedPrEvents: (event, context) =>
+		Effect.gen(function* () {
+			/** TODO if the issue(s) are failing CI checks then we shoudl like address them */
+		}).pipe(
+			Effect.annotateLogs({
+				...githubRepositoryLogAnnotations(event.pullRequest.ref),
+				'github.pr_number': event.pullRequest.ref.number,
+				'delivery.id': context.deliveryId,
+			}),
+		),
+} satisfies GitHubCallbackHandlers<
+	GitHubApiError | AutoLabelError | Config.ConfigError | MailboxSubscriptionError | DeliveryHandoffError,
+	GitHubApi | AutoLabel | RuntimeContext | AgentSessions | MailboxSubscriptions
+>
+
+const github = GitHubBot.make<
+	GitHubApiError | AutoLabelError | Config.ConfigError | MailboxSubscriptionError | DeliveryHandoffError,
+	GitHubApi | AutoLabel | RuntimeContext | AgentSessions | MailboxSubscriptions
+>({
+	webhookSecret: Config.Redacted('GITHUB_WEBHOOK_SECRET'),
+	deliveryMode: DebounceDeliveryMode.make({ quietPeriodMs: 3_000, maxWaitMs: 3_000 }),
+	bot: Config.all({
+		mentionNames: Config.String('GITHUB_BOT_MENTION_NAME').pipe(Config.map((name) => [name])),
+		botUserId: Config.schema(GitHubId, 'GITHUB_BOT_USER_ID'),
+	}),
+	handlers: githubHandlers,
+})
+
+export const bot = ChannelsCloudflare.make({
+	namespace: 'humanlayer-channels-app',
+	providers: [github],
+	eventProcessing: {
+		concurrency: 1,
+		leaseMs: 10_000,
+		maxAttempts: 5,
+	},
+})

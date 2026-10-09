@@ -78,7 +78,7 @@ const dispatchAgent = Effect.fn('dispatchAgent')(function* (job: {
 
 ### Slack
 
-When someone mentions the bot, read the whole thread and who is in it, and send that to the agent. When a followed thread gets new messages, mark them seen and send the agent another turn.
+When someone mentions the bot, read the whole thread and who is in it, and send that to the agent. When a followed thread gets new messages, mark them seen and send the agent another turn. A mention in a followed thread runs `onNewMention` again, not `onSubscribedThreadEvents`.
 
 ```ts
 import { DebounceDeliveryMode } from '@humanlayer/channels-delivery'
@@ -221,7 +221,7 @@ const github = GitHubBot.make({
 })
 ```
 
-The other callbacks are `onIssueCreated`, `onPrCreated`, `onSubscribedIssueEvents`, and `onSubscribedPrEvents`. Subscribed issues and pull requests get later comments, reviews, inline review comments, state changes, and completed checks. Pull requests can also list commits, reply to review comments, manage labels, merge, and read GitHub Actions job logs. Check that the author may ask anything of the bot first: on a public repository anyone can comment (`issue.fetchUserAccess(login)`; see [`AuthorAccess.ts`](./examples/alchemy-cloudflare/src/AuthorAccess.ts)). `GitHubApiLive` reads `GITHUB_APP_ID` and `GITHUB_PRIVATE_KEY`. See the [`github` README](./packages/github/) for permissions and why `mentionNames` exists.
+The other callbacks are `onIssueCreated`, `onPrCreated`, `onSubscribedIssueEvents`, and `onSubscribedPrEvents`. Subscribed issues and pull requests get later comments, reviews, inline review comments, state changes, and completed checks. A comment that mentions the bot still runs `onMentioned`, even in a subscribed issue or pull request. Pull requests can also list commits, reply to review comments, manage labels, merge, and read GitHub Actions job logs. Check that the author may ask anything of the bot first: on a public repository anyone can comment (`issue.fetchUserAccess(login)`; see [`AuthorAccess.ts`](./examples/alchemy-cloudflare/src/AuthorAccess.ts)). `GitHubApiLive` reads `GITHUB_APP_ID` and `GITHUB_PRIVATE_KEY`. See the [`github` README](./packages/github/) for permissions and why `mentionNames` exists.
 
 ### Linear
 
@@ -271,7 +271,7 @@ const linear = LinearBot.make({
 })
 ```
 
-Linear shows "Working on this…" before the callback runs, and runs each turn as soon as it arrives, so the bot always answers within Linear's ten seconds. The other callbacks are `onIssueCreated` and `onSubscribedEvent`. Issues can also list attachments, look up users, upload files, and change their fields.
+Linear shows "Working on this…" before the callback runs, and runs each turn as soon as it arrives, so the bot always answers within Linear's ten seconds. The other callbacks are `onIssueCreated` and `onSubscribedEvent`. Without Agent Session callbacks, a mention runs `onMentioned`, even in a subscribed issue. Issues can also list attachments, look up users, upload files, and change their fields.
 
 ### The delivery context
 
@@ -365,24 +365,56 @@ On Cloudflare the Worker takes webhooks and the mailbox Durable Object runs call
 // Bot.ts: one declaration for both halves.
 export const bot = ChannelsCloudflare.make({ namespace, providers: [slack, github, linear], eventProcessing })
 
-// DeliveryMailboxDO.ts: your Durable Object class, one per mailbox.
+// DeliveryMailboxDO.ts: compose the replaceable mailbox layers at the DO entrypoint.
 export class DeliveryMailbox extends Cloudflare.DurableObject<DeliveryMailbox, MailboxMethods>()('DeliveryMailbox') {}
-export const DeliveryMailboxLive = DeliveryMailbox.make(bot.mailbox({ rearmAfterMs: 1_000 }))
+const mailboxLayers = bot.layers.mailbox
+const MailboxLive = Layer.merge(mailboxLayers.processing, mailboxLayers.deliveryControl).pipe(
+	Layer.provide(
+		Layer.mergeAll(
+			mailboxLayers.processingBackend,
+			mailboxLayers.subscriptions,
+			mailboxLayers.deliveryControlBackend,
+		),
+	),
+	Layer.provideMerge(mailboxLayers.storage),
+)
+const MailboxImplementation = Effect.gen(function* () {
+	const state = yield* Cloudflare.DurableObjectState
+	const crypto = yield* Crypto.Crypto
+	// Yield any other services required by your callbacks here.
+	return { state, crypto }
+}).pipe(
+	Effect.map(({ state, crypto }) => {
+		const MailboxInstanceLive = MailboxLive.pipe(
+			Layer.provide(
+				Layer.merge(Layer.succeed(Cloudflare.DurableObjectState, state), Layer.succeed(Crypto.Crypto, crypto)),
+			),
+		)
+		return bot.mailbox({ rearmAfterMs: 1_000 }).pipe(Effect.provide(MailboxInstanceLive), Effect.orDie)
+	}),
+)
+export const DeliveryMailboxDOLive = DeliveryMailbox.make(MailboxImplementation)
 
-// Worker.ts: webhooks and the delivery API, routed to the right mailbox object.
-const Routes = Layer.mergeAll(bot.routes, bot.deliveryApi, MyRoutes).pipe(
-	Layer.provide(Layer.effect(DeliveryMailboxes, DeliveryMailbox)),
+// Worker.ts: compose routes and their replaceable Cloudflare adapters at the Worker entrypoint.
+const ChannelsDeliveryMailboxesLive = Layer.effect(DeliveryMailboxes, DeliveryMailbox)
+const RoutesLive = Layer.merge(bot.routes, bot.deliveryApi).pipe(
+	Layer.provide(Layer.merge(bot.layers.worker.mailboxDelivery, bot.layers.worker.deliveryControl)),
+)
+const WorkerLive = ChannelsDeliveryMailboxesLive.pipe(
+	Layer.provideMerge(DeliveryMailboxDOLive),
+	Layer.provideMerge(NodeCrypto.layer),
+	Layer.provideMerge(Layer.succeed(HttpRouter.RouterConfig, bot.routerConfig)),
 )
 export default Cloudflare.Worker(
 	'IngressWorker',
 	{ main: import.meta.url },
 	Effect.gen(function* () {
-		return { fetch: yield* ChannelsCloudflare.serve(Routes) }
-	}).pipe(Effect.provide(DeliveryMailboxLive.pipe(Layer.provideMerge(NodeCrypto.layer)))),
+		return { fetch: yield* HttpRouter.toHttpEffect(RoutesLive) }
+	}).pipe(Effect.provide(WorkerLive)),
 )
 ```
 
-The mailbox class may carry methods of its own, but not its own alarm: a Durable Object has one, and the mailbox uses it. See [`examples/alchemy-cloudflare/src`](./examples/alchemy-cloudflare/src/) for the full files.
+Alchemy's outer Durable Object Effect resolves the state reference and shared services. The returned inner Effect receives `RuntimeContext` from Alchemy and builds the mailbox handlers. Yield every callback service explicitly in the outer Effect rather than forwarding an arbitrary `Context`. The mailbox class may carry methods of its own, but not its own alarm: a Durable Object has one, and the mailbox uses it. See [`examples/alchemy-cloudflare/src`](./examples/alchemy-cloudflare/src/) for the full files.
 
 ## Hand off to a remote agent
 

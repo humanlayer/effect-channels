@@ -11,7 +11,7 @@
  * past `readyAt` when that output settled, and the mailbox never woke again. So the handler keeps
  * passing while a pass finds work, and when it ends it moves any alarm at or before now forward.
  */
-import { MailboxProcessing } from '@humanlayer/channels-delivery'
+import { MailboxProcessing, type MailboxProcessingOperations } from '@humanlayer/channels-delivery'
 import { Cause, Clock, Effect, Predicate, Schema } from 'effect'
 
 import { DurableMailboxState, mailboxStateKey } from './MailboxState'
@@ -26,9 +26,11 @@ export type MailboxAlarmHandlerOptions = {
 export const MAX_PASSES_PER_ALARM = 20
 
 /** Build the alarm handler over the current Durable Object's storage and its mailbox processing. */
-export const makeMailboxAlarmHandler = (options: MailboxAlarmHandlerOptions) =>
+export const makeMailboxAlarmHandlerWith = <R>(
+	options: MailboxAlarmHandlerOptions,
+	processing: MailboxProcessingOperations<R>,
+) =>
 	Effect.gen(function* () {
-		const processing = yield* MailboxProcessing
 		const storage = yield* MailboxStorage
 
 		/**
@@ -66,3 +68,6 @@ export const makeMailboxAlarmHandler = (options: MailboxAlarmHandlerOptions) =>
 			yield* rearmWhenDueWithoutLiveAlarm
 		})
 	})
+
+export const makeMailboxAlarmHandler = (options: MailboxAlarmHandlerOptions) =>
+	Effect.flatMap(MailboxProcessing, (processing) => makeMailboxAlarmHandlerWith(options, processing))

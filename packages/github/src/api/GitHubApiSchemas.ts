@@ -21,7 +21,19 @@ export const PullRequest = Schema.Struct({
 	user: Schema.NullOr(Participant),
 	draft: Schema.Boolean,
 	merged: Schema.Boolean,
-	head: Schema.Struct({ ref: Schema.String, sha: Schema.NonEmptyString }),
+	head: Schema.Struct({
+		ref: Schema.String,
+		sha: Schema.NonEmptyString,
+		repo: Schema.optionalKey(
+			Schema.NullOr(
+				Schema.Struct({
+					id: GitHubId,
+					name: Schema.NonEmptyString,
+					owner: Schema.Struct({ login: Schema.NonEmptyString }),
+				}),
+			),
+		),
+	}),
 	base: Schema.Struct({ ref: Schema.String, sha: Schema.NonEmptyString }),
 })
 export const IssueComment = Schema.Struct({
