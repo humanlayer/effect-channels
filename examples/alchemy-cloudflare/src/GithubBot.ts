@@ -21,19 +21,21 @@ import {
 	hasGitHubAccess,
 	type GitHubApiError,
 	type GitHubCallbackHandlers,
+	type GitHubIssueComment,
 	type GitHubIssueCreated,
 	type GitHubMentioned,
+	type GitHubParticipant,
 	type GitHubPrCreated,
 	type GitHubRepositoryRef,
 	type GitHubReviewComment,
 } from '@humanlayer/channels-github'
 import type { RuntimeContext } from 'alchemy/RuntimeContext'
-import { Config, Effect, Match, Predicate, Schema } from 'effect'
+import { Array as Arr, Config, Effect, Match, Predicate, Schema } from 'effect'
 
 import { AgentSessions } from './AgentSessionDO'
 import { AutoLabel, type AutoLabelError } from './AutoLabel'
 import { AgentSessionMessage } from './DeliveryTurn'
-import { MentionedIn } from './DiscussionContext'
+import { RequestComment } from './DiscussionContext'
 
 export const maintainerOnlyNotice =
 	'This agent can only be invoked by maintainers (users with write access or higher to this repository).'
@@ -100,44 +102,78 @@ export const respondToMentionAccess = Effect.fn('bot.github.respondToMentionAcce
 /** Lines of text, without the missing ones, as one string. */
 const joinText = (lines: ReadonlyArray<string | null>) => lines.filter(Predicate.isNotNull).join('\n')
 
-/**
- * A line comment as the agent's request: where it is in the diff, and which comment to reply to, then its text.
- * GitHub threads replies under the thread's first comment.
- */
-const reviewCommentRequest = (comment: GitHubReviewComment) => {
+/** One comment of the request: which comment it is, its own text, and how the agent is shown it. */
+interface RequestItem {
+	readonly comment: RequestComment
+	readonly body: string
+	readonly text: string
+}
+
+const authorOf = (author: GitHubParticipant | null) => (author === null ? 'a deleted user' : `@${author.login}`)
+
+const commentItem = (comment: GitHubIssueComment): RequestItem => ({
+	comment: RequestComment.cases.Comment.make({ id: comment.ref.id }),
+	body: comment.body,
+	text: `${authorOf(comment.author)} commented (comment ${comment.ref.id}):\n${comment.body}`,
+})
+
+/** A line comment with where it is in the diff and the thread to reply in: GitHub threads replies under the first. */
+const lineCommentItem = (comment: GitHubReviewComment): RequestItem => {
 	const line = comment.line ?? comment.startLine
 	const where = Predicate.isNullish(line) ? comment.path : `${comment.path}:${line}`
 	const thread = comment.inReplyToId ?? comment.ref.id
-	return [
-		`<system-information>This request is line comment ${comment.ref.id} on ${where}, in the review thread of line comment ${thread}. To reply in that thread, use github_post_comment with reply_to ${thread}. The diff around it:\n\`\`\`diff\n${comment.diffHunk}\n\`\`\`</system-information>`,
-		'',
-		comment.body,
-	].join('\n')
+	return {
+		comment: RequestComment.cases.ReviewComment.make({ id: comment.ref.id }),
+		body: comment.body,
+		text: `${authorOf(comment.author)} commented on ${where} (line comment ${comment.ref.id}, thread ${thread}):\n\`\`\`diff\n${comment.diffHunk}\n\`\`\`\n${comment.body}`,
+	}
 }
 
-/** The agent's request: the comment that mentioned the bot, or the issue or pull request that was opened. */
-const gitHubMentionText = (event: GitHubMentioned) =>
-	Match.value(event.trigger).pipe(
-		Match.tagsExhaustive({
-			GitHubIssueOpened: ({ title, body }) => joinText([title, body]),
-			GitHubPrOpened: ({ title, body }) => joinText([title, body]),
-			GitHubIssueCommentCreated: ({ comment }) => comment.body,
-			GitHubPrCommentCreated: ({ comment }) => comment.body,
-			GitHubPrReviewCommentCreated: ({ comment }) => reviewCommentRequest(comment),
+/**
+ * The comments a mention's batch posted, the mentioning one first, each once. Other events add nothing to
+ * the request.
+ */
+const requestItems = (event: GitHubMentioned): ReadonlyArray<RequestItem> =>
+	Arr.dedupeWith(
+		[event.trigger, ...event.events].flatMap((item): ReadonlyArray<RequestItem> => {
+			if (
+				Predicate.isTagged(item, 'GitHubIssueCommentCreated') ||
+				Predicate.isTagged(item, 'GitHubPrCommentCreated')
+			)
+				return [commentItem(item.comment)]
+			if (Predicate.isTagged(item, 'GitHubPrReviewCommentCreated')) return [lineCommentItem(item.comment)]
+			return []
 		}),
+		(a, b) => a.comment._tag === b.comment._tag && a.comment.id === b.comment.id,
 	)
 
-/** The comment that mentioned the bot; none when the issue or pull request itself did. */
-const gitHubMentionedIn = (event: GitHubMentioned): MentionedIn | undefined =>
-	Match.value(event.trigger).pipe(
-		Match.tagsExhaustive({
-			GitHubIssueOpened: () => undefined,
-			GitHubPrOpened: () => undefined,
-			GitHubIssueCommentCreated: ({ comment }) => MentionedIn.cases.Comment.make({ id: comment.ref.id }),
-			GitHubPrCommentCreated: ({ comment }) => MentionedIn.cases.Comment.make({ id: comment.ref.id }),
-			GitHubPrReviewCommentCreated: ({ comment }) => MentionedIn.cases.ReviewComment.make({ id: comment.ref.id }),
+/**
+ * The agent's request. A lone comment is its text, and an opened issue or pull request is its title and
+ * description. Otherwise, such as several comments posted together or a line comment, each comment is listed
+ * with what the agent needs to answer it, and the agent is told to answer each line comment in its own thread.
+ */
+export const gitHubRequest = (event: GitHubMentioned) => {
+	const items = requestItems(event)
+	const opened = Match.value(event.trigger).pipe(
+		Match.tags({
+			GitHubIssueOpened: ({ title, body }) => joinText([title, body]),
+			GitHubPrOpened: ({ title, body }) => joinText([title, body]),
 		}),
+		Match.orElse(() => null),
 	)
+	const [first] = items
+	if (Predicate.isNull(opened) && items.length === 1 && Predicate.isTagged(first?.comment, 'Comment'))
+		return first.body
+	if (Arr.isReadonlyArrayEmpty(items)) return opened ?? ''
+	const guide = items.some(({ comment }) => Predicate.isTagged(comment, 'ReviewComment'))
+		? 'Answer each line comment in its own review thread with github_post_comment, setting reply_to to its thread. Your final answer is posted on the pull request, so keep it to a short summary.'
+		: 'Answer them in your final answer.'
+	return joinText([
+		opened,
+		`<system-information>These comments were posted together, and they are the request. ${guide}</system-information>`,
+		items.map(({ text }) => text).join('\n\n---\n\n'),
+	])
+}
 
 /**
  * An authorized mention subscribes the discussion, so later comments and checks reach this mailbox, and
@@ -202,9 +238,9 @@ export const githubHandlers = {
 			yield* discussion.subscribe()
 			const message = yield* Schema.encodeEffect(AgentSessionMessage)(
 				AgentSessionMessage.make({
-					prompt: gitHubMentionText(event),
+					prompt: gitHubRequest(event),
 					githubDiscussion: discussion,
-					mentionedIn: gitHubMentionedIn(event),
+					requestComments: requestItems(event).map(({ comment }) => comment),
 					deliveryId: context.deliveryId,
 					accessToken: context.accessToken,
 				}),

@@ -180,7 +180,7 @@ In addition to `fetchInfo()`, conversation comments, reviews, review-comment lis
 
 `fetchInfo()` includes `headRepository`, the repository the head branch lives in: a fork's for a pull request from a fork, and `null` once that repository is deleted.
 
-Two `GitHubApi` operations work on a repository rather than one pull request: `listPullRequestsForBranch({ repository, head })` returns the open pull requests from a branch of that repository (not from forks), and `createPullRequest({ repository, head, base, title, body })` opens one. Creating one needs the App's pull requests write permission.
+Two `GitHubApi` operations work on a repository rather than one pull request: `listPullRequestsForBranch({ repository, head })` returns the open pull requests from a branch of that repository (not from forks), and `createPullRequest({ repository, head, base, title, body, draft })` opens one, as a draft when `draft` is true. Creating one needs the App's pull requests write permission.
 
 Prefer `listFiles()` when an agent only needs selected changes. GitHub's wire status `removed` is exposed as `deleted`; `copied`, `changed`, and `unchanged` remain distinct statuses rather than being collapsed into `modified`. A file's `sha`, `blobUrl`, and `rawUrl` can be `null`, including for some submodule entries. GitHub limits that endpoint to 3,000 files, may omit `patch` for binary or unusually large files, and limits `listCommits()` to 250 PR commits. `fetchDiff()` loads the complete unified diff into one string.
 

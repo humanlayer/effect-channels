@@ -21,12 +21,12 @@ const MAX_BODY_LENGTH = 4_000
 /** Most text shown at once; the oldest comments are left out past this. */
 const MAX_CONTEXT_LENGTH = 60_000
 
-/** The comment that mentioned the bot; it is the request, so it is not repeated as context. */
-export const MentionedIn = Schema.TaggedUnion({
+/** A comment the request is made of; it is shown as the request, so it is not repeated as context. */
+export const RequestComment = Schema.TaggedUnion({
 	Comment: { id: GitHubId },
 	ReviewComment: { id: GitHubId },
 })
-export type MentionedIn = typeof MentionedIn.Type
+export type RequestComment = typeof RequestComment.Type
 
 /** The highest comment, review, and line comment IDs the agent has been shown. */
 export const DiscussionSeen = Schema.Struct({
@@ -109,16 +109,16 @@ const render = (heading: string, sections: ReadonlyArray<readonly [string, Reado
 
 /**
  * Read the discussion and show the agent what it has not seen: everything when `seen` is empty, otherwise
- * what is new. The bot's own comments and the comment that mentioned it are left out of the text but count as
+ * what is new. The bot's own comments and the request's comments are left out of the text but count as
  * seen. The text is empty when nothing is new.
  */
 export const readDiscussionContext = Effect.fn('agent_session.read_discussion')(function* (input: {
 	readonly discussion: GitHubIssue | GitHubPullRequest
 	readonly seen: Option.Option<DiscussionSeen>
 	readonly botUserId: number
-	readonly mentionedIn: MentionedIn | undefined
+	readonly requestComments: ReadonlyArray<RequestComment>
 }) {
-	const { discussion, botUserId, mentionedIn } = input
+	const { discussion, botUserId, requestComments } = input
 	const seen = Option.getOrElse(input.seen, (): DiscussionSeen => ({
 		comment: 0,
 		review: 0,
@@ -126,8 +126,8 @@ export const readDiscussionContext = Effect.fn('agent_session.read_discussion')(
 	}))
 	const first = Option.isNone(input.seen)
 	const notBot = (participant: GitHubParticipant | null) => participant?.id !== botUserId
-	const isMention = (tag: MentionedIn['_tag'], id: number) =>
-		Predicate.isTagged(mentionedIn, tag) && mentionedIn.id === id
+	const isMention = (tag: RequestComment['_tag'], id: number) =>
+		requestComments.some((comment) => Predicate.isTagged(comment, tag) && comment.id === id)
 
 	const allComments = yield* discussion.listComments()
 	const comments = allComments.filter((comment) => notBot(comment.author) && !isMention('Comment', comment.ref.id))

@@ -116,14 +116,14 @@ const fixtures = (actor = person(1)) => {
 		},
 		{
 			name: 'issue comment',
-			mentionedIn: { _tag: 'Comment', id: issueComment.comment.ref.id },
+			requestComments: [{ _tag: 'Comment', id: issueComment.comment.ref.id }],
 			event: GitHubIssueMentioned.make({ issue, trigger: issueComment, events: [issueComment] }),
 			discussion: issueDiscussion,
 			target: GitHubReactionTarget.cases.Comment.make({ comment: issueComment.comment.ref }),
 		},
 		{
 			name: 'PR comment',
-			mentionedIn: { _tag: 'Comment', id: prComment.comment.ref.id },
+			requestComments: [{ _tag: 'Comment', id: prComment.comment.ref.id }],
 			event: GitHubPrMentioned.make({ pullRequest, trigger: prComment, events: [prComment] }),
 			discussion: prDiscussion,
 			target: GitHubReactionTarget.cases.Comment.make({ comment: prComment.comment.ref }),
@@ -131,14 +131,14 @@ const fixtures = (actor = person(1)) => {
 		{
 			name: 'review comment',
 			prompt: [
-				'<system-information>This request is line comment 701 on src/index.ts, in the review thread of line comment 701. To reply in that thread, use github_post_comment with reply_to 701. The diff around it:',
+				'<system-information>These comments were posted together, and they are the request. Answer each line comment in its own review thread with github_post_comment, setting reply_to to its thread. Your final answer is posted on the pull request, so keep it to a short summary.</system-information>',
+				'@user-1 commented on src/index.ts (line comment 701, thread 701):',
 				'```diff',
 				'@@ -1 +1 @@',
-				'```</system-information>',
-				'',
+				'```',
 				'@agent help',
 			].join('\n'),
-			mentionedIn: { _tag: 'ReviewComment', id: reviewComment.comment.ref.id },
+			requestComments: [{ _tag: 'ReviewComment', id: reviewComment.comment.ref.id }],
 			event: GitHubPrMentioned.make({ pullRequest, trigger: reviewComment, events: [reviewComment] }),
 			discussion: prDiscussion,
 			target: GitHubReactionTarget.cases.Comment.make({ comment: reviewComment.comment.ref }),
@@ -478,7 +478,7 @@ describe('the registered GitHub onMentioned handler', () => {
 					accessToken: 'test-access-token',
 					githubDiscussion: { mailboxKey },
 				})
-				expect(sent?.message.mentionedIn).toEqual(fixture.mentionedIn)
+				expect(sent?.message.requestComments).toEqual(fixture.requestComments ?? [])
 				expect(result.callback.handoffsBeforeSend).toEqual([0])
 				expect(result.handoffs).toEqual([undefined])
 			}),

@@ -36,7 +36,7 @@ import {
 } from 'effect'
 
 import { DeliveryApi } from './DeliveryApi'
-import { MentionedIn } from './DiscussionContext'
+import { RequestComment } from './DiscussionContext'
 import { RunRecovery } from './SessionRecovery'
 import type { RepoCloneError } from './Workspace'
 
@@ -51,8 +51,8 @@ const WORKING = DeliveryActivity.cases.Working.make({ message: 'Working on it' }
 export const AgentSessionMessage = Schema.Struct({
 	prompt: Schema.String,
 	githubDiscussion: Schema.Union([GitHubIssue, GitHubPullRequest]),
-	/** The comment that mentioned the bot, if a comment did. */
-	mentionedIn: Schema.optional(MentionedIn),
+	/** The comments the prompt is made of: the one that mentioned the bot and the others in its batch. */
+	requestComments: Schema.optional(Schema.Array(RequestComment)),
 	deliveryId: DeliveryId,
 	accessToken: Schema.RedactedFromValue(Schema.String),
 })

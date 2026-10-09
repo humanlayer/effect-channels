@@ -277,7 +277,7 @@ const AgentConversationLive = Layer.effect(
 						discussion: message.githubDiscussion,
 						seen,
 						botUserId,
-						mentionedIn: message.mentionedIn,
+						requestComments: message.requestComments ?? [],
 					})
 					yield* Effect.logInfo('agent_session.discussion_read').pipe(
 						Effect.annotateLogs({ first: Option.isNone(seen), characters: context.text.length }),

@@ -633,6 +633,7 @@ describe('GitHubApiLive agent capabilities', () => {
 					base: 'main',
 					title: 'Fix the crash',
 					body: 'Closes #42',
+					draft: true,
 				})
 				return { open, created }
 			}).pipe(Effect.provide(makeLayer(httpClient)))
@@ -653,7 +654,7 @@ describe('GitHubApiLive agent capabilities', () => {
 					method: 'POST',
 					path: '/repos/humanlayer/channels/pulls',
 					search: '',
-					body: '{"title":"Fix the crash","body":"Closes #42","head":"humanlayer/issue-42","base":"main"}',
+					body: '{"title":"Fix the crash","body":"Closes #42","head":"humanlayer/issue-42","base":"main","draft":true}',
 				},
 			])
 		}),
