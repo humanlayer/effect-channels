@@ -12,15 +12,7 @@ Channels takes webhooks from each provider, checks them, saves them, and hands t
 
 ## Try it
 
-[`examples/alchemy-cloudflare`](./examples/alchemy-cloudflare/) is a complete bot for Slack, GitHub, and Linear on a Cloudflare Worker with Durable Objects, deployed with [Alchemy](https://alchemy.run). It includes a fake remote agent, so you can watch a handoff end to end: mention the bot with `handoff 30 plan react` and see the status line, plan, reactions, summary, and final message arrive.
-
-```sh
-cd examples/alchemy-cloudflare
-cp .env.example .env   # fill in the providers you want
-bun alchemy deploy
-```
-
-Its [README](./examples/alchemy-cloudflare/README.md) walks through setting up each app and lists checks to run by hand.
+[`examples/alchemy-cloudflare`](./examples/alchemy-cloudflare/) is a coding agent for GitHub, built on Channels and running entirely on Cloudflare. Mention it on an issue or pull request and it works on the repository in its own Linux workspace, then answers in the thread. Its [README](./examples/alchemy-cloudflare/README.md) shows how the pieces fit, and [SETUP.md](./examples/alchemy-cloudflare/SETUP.md) shows how to deploy it.
 
 ## How it works
 
@@ -291,10 +283,7 @@ Every callback's second argument describes the delivery it is running:
 Pick a store, then join everything with `Channels.make`. You get webhook routes (`bot.routes`) and, if you hand off, the delivery API (`bot.deliveryApi`). Mount both next to your own routes.
 
 ```ts
-import { createServer } from 'node:http'
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto'
-import * as NodeHttpServer from '@effect/platform-node/NodeHttpServer'
-import * as NodeRuntime from '@effect/platform-node/NodeRuntime'
 import { PgClient } from '@effect/sql-pg'
 import { Channels } from '@humanlayer/channels-delivery'
 import { ChannelsSql } from '@humanlayer/channels-sql'
@@ -320,33 +309,20 @@ const bot = Channels.make({
 	storage: ChannelsSql.make({ claimLimit: 50, runMigrations: true, polling: { intervalMs: 1_000 } }),
 })
 
+// Your routes and the bot's, in one router.
 const MyRoutes = HttpRouter.add('GET', '/health', HttpServerResponse.text('ok'))
-
-const Server = HttpRouter.serve(Layer.mergeAll(MyRoutes, bot.routes, bot.deliveryApi), {
-	// Delivery IDs are longer than the router's default path parameter limit.
-	routerConfig: Channels.routerConfig,
-}).pipe(
-	Layer.provide(NodeHttpServer.layer(createServer, { port: 3000 })),
+const App = Layer.mergeAll(MyRoutes, bot.routes, bot.deliveryApi).pipe(
 	Layer.provide(NodeCrypto.layer),
 	Layer.provide(PgClient.layerConfig({ url: Config.Redacted('DATABASE_URL') })),
 )
 
-Layer.launch(Server).pipe(NodeRuntime.runMain)
+// Delivery IDs are longer than the router's default path parameter limit.
+const { handler } = HttpRouter.toWebHandler(App, { routerConfig: Channels.routerConfig })
+
+Bun.serve({ port: 3000, fetch: (request) => handler(request) })
 ```
 
-The routes bring mailbox processing with them. For other setups:
-
-```ts
-// A worker that processes mailboxes but serves no HTTP.
-Layer.launch(bot.layer.pipe(Layer.provide(services)))
-
-// Without Effect: a plain Request to Response function, for Bun.serve, Hono, Next.js, and so on.
-const started = await bot.start(services, bot.deliveryApi)
-Bun.serve({ port: 3000, fetch: started.handle })
-// later: await started.stop()
-```
-
-Nothing runs until one of these is built, and a program that uses more than one still gets one polling loop.
+The routes bring mailbox processing with them: building the handler starts it. If your server already uses `HttpRouter`, add `bot.routes` and `bot.deliveryApi` to it the same way. Without Effect, `bot.start(services, bot.deliveryApi)` gives you a plain `Request` to `Response` function and a `stop()`.
 
 | Store      | Package                                                         | Call                      |
 | ---------- | --------------------------------------------------------------- | ------------------------- |

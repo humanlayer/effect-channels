@@ -15,7 +15,7 @@ import {
 } from '@humanlayer/channels-github'
 import { Effect, Layer, Option } from 'effect'
 
-import { MentionedIn, readDiscussionContext, type DiscussionSeen } from '../src/DiscussionContext'
+import { RequestComment, readDiscussionContext, type DiscussionSeen } from '../src/DiscussionContext'
 
 const repository = {
 	installationId: GitHubId.make(100),
@@ -129,13 +129,13 @@ const api = Layer.mock(GitHubApi, {
 const read = (input: {
 	readonly discussion: GitHubIssue | GitHubPullRequest
 	readonly seen?: DiscussionSeen
-	readonly mentionedIn?: MentionedIn
+	readonly requestComments?: ReadonlyArray<RequestComment>
 }) => {
 	const context = readDiscussionContext({
 		discussion: input.discussion,
 		seen: Option.fromNullishOr(input.seen),
 		botUserId: BOT_USER_ID,
-		mentionedIn: input.mentionedIn,
+		requestComments: input.requestComments ?? [],
 	})
 	return Effect.provide(context, api)
 }
@@ -145,7 +145,7 @@ describe('readDiscussionContext', () => {
 		Effect.gen(function* () {
 			const context = yield* read({
 				discussion: issue,
-				mentionedIn: MentionedIn.cases.Comment.make({ id: GitHubId.make(13) }),
+				requestComments: [RequestComment.cases.Comment.make({ id: GitHubId.make(13) })],
 			})
 
 			expect(context.text).toBe(
@@ -206,7 +206,7 @@ describe('readDiscussionContext', () => {
 		Effect.gen(function* () {
 			const context = yield* read({
 				discussion: pullRequest,
-				mentionedIn: MentionedIn.cases.ReviewComment.make({ id: GitHubId.make(41) }),
+				requestComments: [RequestComment.cases.ReviewComment.make({ id: GitHubId.make(41) })],
 			})
 
 			expect(context.text).toBe(

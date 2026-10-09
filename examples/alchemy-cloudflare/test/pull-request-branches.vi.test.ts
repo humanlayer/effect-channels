@@ -91,10 +91,10 @@ describe('workBranchFor', () => {
 describe('openIssuePullRequest', () => {
 	const target = { issue, branch: 'humanlayer/issue-42', base: 'main' }
 
-	const open = (existing: ReadonlyArray<GitHubPullRequestInfo>, body: string) =>
+	const open = (existing: ReadonlyArray<GitHubPullRequestInfo>, body: string, draft?: boolean) =>
 		Effect.gen(function* () {
 			const created = yield* Ref.make<ReadonlyArray<GitHubCreatePullRequest>>([])
-			const result = yield* openIssuePullRequest(target, { title: 'Fix the crash', body }).pipe(
+			const result = yield* openIssuePullRequest(target, { title: 'Fix the crash', body, draft }).pipe(
 				Effect.provide(
 					Layer.mock(GitHubApi, {
 						listPullRequestsForBranch: () => Effect.succeed(existing),
@@ -111,7 +111,9 @@ describe('openIssuePullRequest', () => {
 			const { result, created } = yield* open([], 'Handles a null config.')
 
 			expect(result).toEqual(
-				ToolResultText.make({ text: 'Opened https://github.com/humanlayer/effect-channels/pull/44' }),
+				ToolResultText.make({
+					text: 'Opened a pull request: https://github.com/humanlayer/effect-channels/pull/44',
+				}),
 			)
 			expect(created).toEqual([
 				{
@@ -120,8 +122,22 @@ describe('openIssuePullRequest', () => {
 					base: 'main',
 					title: 'Fix the crash',
 					body: 'Handles a null config.\n\nCloses #42',
+					draft: false,
 				},
 			])
+		}),
+	)
+
+	it.effect('opens a draft pull request when asked to', ({ expect }) =>
+		Effect.gen(function* () {
+			const { result, created } = yield* open([], 'Handles a null config.', true)
+
+			expect(result).toEqual(
+				ToolResultText.make({
+					text: 'Opened a draft pull request: https://github.com/humanlayer/effect-channels/pull/44',
+				}),
+			)
+			expect(created.map((input) => input.draft)).toEqual([true])
 		}),
 	)
 

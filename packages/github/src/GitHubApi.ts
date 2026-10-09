@@ -168,13 +168,14 @@ export const GitHubListPullRequestsForBranch = Schema.Struct({
 })
 export interface GitHubListPullRequestsForBranch extends Schema.Schema.Type<typeof GitHubListPullRequestsForBranch> {}
 
-/** A pull request from `head` into `base`, both branches of `repository`. */
+/** A pull request from `head` into `base`, both branches of `repository`; a draft when `draft` is true. */
 export const GitHubCreatePullRequest = Schema.Struct({
 	repository: GitHubRepositoryRef,
 	head: Schema.NonEmptyString,
 	base: Schema.NonEmptyString,
 	title: Schema.NonEmptyString,
 	body: Schema.String,
+	draft: Schema.optionalKey(Schema.Boolean),
 })
 export interface GitHubCreatePullRequest extends Schema.Schema.Type<typeof GitHubCreatePullRequest> {}
 

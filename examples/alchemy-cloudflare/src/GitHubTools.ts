@@ -226,7 +226,7 @@ export interface IssuePullRequestTarget {
  */
 export const openIssuePullRequest = Effect.fn('agent_session.open_issue_pull_request')(function* (
 	target: IssuePullRequestTarget,
-	request: { readonly title: string; readonly body: string },
+	request: { readonly title: string; readonly body: string; readonly draft?: boolean | undefined },
 ) {
 	const { issue, branch, base } = target
 	const api = yield* GitHubApi
@@ -238,14 +238,16 @@ export const openIssuePullRequest = Effect.fn('agent_session.open_issue_pull_req
 	})
 	const [open] = yield* api.listPullRequestsForBranch({ repository, head: branch })
 	if (Predicate.isNotUndefined(open)) {
-		return ToolResultText.make({ text: `A pull request from ${branch} is already open: ${open.url}` })
+		const kind = open.draft ? 'A draft pull request' : 'A pull request'
+		return ToolResultText.make({ text: `${kind} from ${branch} is already open: ${open.url}` })
 	}
 	const closes = `Closes #${issue.ref.number}`
 	const body = request.body.includes(closes)
 		? request.body
 		: [request.body.trim(), closes].filter((part) => part.length > 0).join('\n\n')
-	const created = yield* api.createPullRequest({ repository, head: branch, base, title: request.title, body })
-	return ToolResultText.make({ text: `Opened ${created.url}` })
+	const draft = request.draft === true
+	const created = yield* api.createPullRequest({ repository, head: branch, base, title: request.title, body, draft })
+	return ToolResultText.make({ text: `Opened ${draft ? 'a draft pull request' : 'a pull request'}: ${created.url}` })
 })
 
 /** The tool that opens the issue's pull request, or returns the one already open. */
@@ -258,6 +260,11 @@ export const createPullRequestTool = (target: IssuePullRequestTarget): FoldTool<
 			body: Schema.String.annotate({
 				description: `The pull request description, in GitHub Markdown. "Closes #${target.issue.ref.number}" is added if it is missing.`,
 			}),
+			draft: Schema.optionalKey(
+				Schema.Boolean.annotate({
+					description: 'Open it as a draft, not yet ready for review. Defaults to false.',
+				}),
+			),
 		}),
 		success: ToolResultText,
 		failure: ToolResultFailure,
