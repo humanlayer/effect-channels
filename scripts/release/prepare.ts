@@ -31,6 +31,9 @@ if (JSON.stringify(directories) !== JSON.stringify([...libraries].sort()))
 		`scripts/release/manifest.ts lists ${libraries.join(', ')}, but packages/ has ${directories.join(', ')}`,
 	)
 
+/** A peer range for a catalog entry: `^version` for a version, or the entry itself for a URL or other spec. */
+const peerRange = (spec: string) => (/^\d/.test(spec) ? `^${spec}` : spec)
+
 const { catalog } = await json<{ catalog: Record<string, string> }>(join(root, 'package.json'))
 const fromCatalog = (name: string) => {
 	const range = catalog[name]
@@ -45,7 +48,7 @@ const fromCatalog = (name: string) => {
 const resolveRanges = (dependencies: DependencyMap | undefined, peer: boolean) => {
 	if (dependencies === undefined) return
 	for (const [name, range] of Object.entries(dependencies)) {
-		if (range === 'catalog:') dependencies[name] = peer ? `^${fromCatalog(name)}` : fromCatalog(name)
+		if (range === 'catalog:') dependencies[name] = peer ? peerRange(fromCatalog(name)) : fromCatalog(name)
 		else if (range.startsWith('workspace:')) dependencies[name] = version
 	}
 }

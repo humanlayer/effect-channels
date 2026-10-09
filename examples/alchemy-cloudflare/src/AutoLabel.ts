@@ -1,7 +1,7 @@
 import { GitHubApi, type GitHubApiError, type GitHubIssue, type GitHubPullRequest } from '@humanlayer/channels-github'
 import * as Cloudflare from 'alchemy/Cloudflare'
 import type { RuntimeContext } from 'alchemy/RuntimeContext'
-import { Config, Context, Effect, Layer, Schema } from 'effect'
+import { Array as Arr, Config, Context, Effect, Layer, Schema } from 'effect'
 
 const LabelModel = Schema.Literals(['@cf/cloudflare/clef', '@cf/cloudflare/clef-flash'])
 const Probability = Schema.Finite.check(Schema.isBetween({ minimum: 0, maximum: 1 }))
@@ -99,7 +99,7 @@ export class AutoLabel extends Context.Service<
 					const policies = labelPolicies.filter((policy) =>
 						configured.some((label) => label.name === policy.name),
 					)
-					if (policies.length === 0) {
+					if (Arr.isReadonlyArrayEmpty(policies)) {
 						yield* Effect.logInfo('GitHub auto-label skipped: no default labels configured')
 						return
 					}
@@ -157,7 +157,7 @@ export class AutoLabel extends Context.Service<
 								.join(', '),
 						}),
 					)
-					if (selected.length === 0) return
+					if (Arr.isArrayEmpty(selected)) return
 					yield* input.discussion.addLabels(selected)
 					yield* Effect.logInfo('GitHub labels added').pipe(
 						Effect.annotateLogs({ added_labels: selected.join(', ') }),

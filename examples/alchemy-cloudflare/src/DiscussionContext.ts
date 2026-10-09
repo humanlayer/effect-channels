@@ -94,7 +94,7 @@ const newestThatFit = (entries: ReadonlyArray<Entry>, budget: number) => {
  * keeps its newest entries, with a note of how many older ones were left out.
  */
 const render = (heading: string, sections: ReadonlyArray<readonly [string, ReadonlyArray<Entry>]>) => {
-	const filled = sections.filter(([, entries]) => entries.length > 0)
+	const filled = sections.filter(([, entries]) => Arr.isReadonlyArrayNonEmpty(entries))
 	const budget = MAX_CONTEXT_LENGTH / Math.max(filled.length, 1)
 	return [
 		heading,
@@ -181,7 +181,7 @@ export const readDiscussionContext = Effect.fn('agent_session.read_discussion')(
 		} satisfies DiscussionContext
 	}
 
-	if (sections.every(([, entries]) => entries.length === 0)) return { text: '', seen: nextSeen }
+	if (sections.every(([, entries]) => Arr.isReadonlyArrayEmpty(entries))) return { text: '', seen: nextSeen }
 	return {
 		text: `<github-discussion>\n${render('New since your last turn:', sections)}\n</github-discussion>\n\n`,
 		seen: nextSeen,

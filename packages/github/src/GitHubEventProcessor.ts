@@ -821,7 +821,7 @@ const selectInvocation = <R>(input: {
 				: []
 			const continuation =
 				mentioned && Predicate.isNotUndefined(callbacks.onMentioned)
-					? Option.toArray(buildIssueMention(events, creation.length > 0))
+					? Option.toArray(buildIssueMention(events, Arr.isReadonlyArrayNonEmpty(creation)))
 					: subscribed && Predicate.isNotUndefined(callbacks.onSubscribedIssueEvents)
 						? Option.toArray(buildSubscribedIssueEvents(events))
 						: []
@@ -843,7 +843,7 @@ const selectInvocation = <R>(input: {
 				: []
 			const continuation =
 				mentioned && Predicate.isNotUndefined(callbacks.onMentioned)
-					? Option.toArray(buildPrMention(events, creation.length > 0))
+					? Option.toArray(buildPrMention(events, Arr.isReadonlyArrayNonEmpty(creation)))
 					: subscribed && Predicate.isNotUndefined(callbacks.onSubscribedPrEvents)
 						? Option.toArray(buildSubscribedPrEvents(events))
 						: []

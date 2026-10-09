@@ -23,7 +23,7 @@ import { WorkerShellBackend } from '@cloudflare/computer/backends/worker-shell'
 import { createGitClient, type GitClient } from '@cloudflare/computer/git'
 import jq from '@cloudflare/computer/shell/jq'
 import { DurableObject } from 'cloudflare:workers'
-import { Data, Effect, Option, Schema } from 'effect'
+import { Array as Arr, Data, Effect, Option, Schema } from 'effect'
 
 import {
 	type Backend,
@@ -321,7 +321,7 @@ export class Computer extends withWorkspace(ComputerBase, (self) => ({
 		const dir = repoDir(input.name)
 		return await attempt(async () => {
 			const changed = (await git.status({ dir })).filter((entry) => entry.worktree !== '?')
-			if (changed.length > 0) {
+			if (Arr.isReadonlyArrayNonEmpty(changed)) {
 				throw new Error(
 					`Commit or discard the changes to ${changed.map((entry) => entry.path).join(', ')} before merging.`,
 				)

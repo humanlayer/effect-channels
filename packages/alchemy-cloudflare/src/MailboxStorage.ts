@@ -36,8 +36,15 @@ export class MailboxStorage extends Context.Service<
 const eraseAlchemyRuntimeContext = <A, E>(effect: Effect.Effect<A, E, RuntimeContext>): Effect.Effect<A, E> =>
 	effect.pipe(Effect.provide(RuntimeContext.phantom))
 
+/** A layer providing mailbox storage from the current Durable Object's state. */
+export type MailboxStorageFromDurableObjectStateLayer = Layer.Layer<
+	MailboxStorage,
+	never,
+	Cloudflare.DurableObjectState
+>
+
 /** Mailbox storage over the current Durable Object's persistent storage. */
-export const MailboxStorageFromDurableObjectState = Layer.effect(
+export const MailboxStorageFromDurableObjectState: MailboxStorageFromDurableObjectStateLayer = Layer.effect(
 	MailboxStorage,
 	Effect.gen(function* () {
 		const { storage } = yield* Cloudflare.DurableObjectState

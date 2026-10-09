@@ -20,6 +20,7 @@ import { type AgentFinishedLogEntry, type FoldSession, type UserMessageLogEntry 
 import * as Cloudflare from 'alchemy/Cloudflare'
 import type { RuntimeContext } from 'alchemy/RuntimeContext'
 import {
+	Array as Arr,
 	Cause,
 	Context,
 	Data,
@@ -333,14 +334,14 @@ export class DeliveryTurns extends Context.Service<
 						(entry) => entry.seq >= fromSeq && entry.agentId === session.rootAgentId,
 					)
 					const messages = since.filter((entry) => Predicate.isTagged(entry, 'user-message'))
-					if (messages.length === 0) {
+					if (Arr.isReadonlyArrayEmpty(messages)) {
 						yield* Effect.logInfo('agent_turn.recovered: the prompt never reached Fold; sending it')
 						return yield* sendPrompt(session, record.message)
 					}
 
 					const finished = since.findLast((entry) => Predicate.isTagged(entry, 'agent-finished'))
 					const open = messages.filter((entry) => Predicate.isUndefined(finished) || entry.seq > finished.seq)
-					if (open.length === 0 && Predicate.isNotUndefined(finished)) {
+					if (Arr.isReadonlyArrayEmpty(open) && Predicate.isNotUndefined(finished)) {
 						yield* Effect.logInfo('agent_turn.recovered: the turn had finished; reporting it')
 						return finished
 					}
