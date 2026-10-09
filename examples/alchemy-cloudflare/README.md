@@ -72,14 +72,14 @@ OAuth callback URLs, user authorization, device flow, and post-installation setu
 
 Configure these permissions under **Repository permissions**:
 
-| Permission    | Access         | Why                                                                                         |
-| ------------- | -------------- | ------------------------------------------------------------------------------------------- |
-| Metadata      | Read-only      | Repository identity; GitHub grants this mandatory permission to installed apps.             |
-| Issues        | Read and write | Read and change issues, issue comments, and labels shared by issues and PRs.                |
-| Pull requests | Read and write | Read and change PRs, files, commits, conversation and review comments, reviews, and labels. |
-| Checks        | Read-only      | Receive completed check-run events; list check runs; read check output and annotations.     |
-| Contents      | Read and write | Merge pull requests. GitHub's merge endpoint specifically requires write access.            |
-| Actions       | Read-only      | Resolve GitHub Actions-backed checks to jobs, read job details, and download job logs.      |
+| Permission    | Access         | Why                                                                                                |
+| ------------- | -------------- | -------------------------------------------------------------------------------------------------- |
+| Metadata      | Read-only      | Repository identity; GitHub grants this mandatory permission to installed apps.                    |
+| Issues        | Read and write | Read and change issues, issue comments, and labels shared by issues and PRs.                       |
+| Pull requests | Read and write | Read, open, and change PRs, files, commits, conversation and review comments, reviews, and labels. |
+| Checks        | Read-only      | Receive completed check-run events; list check runs; read check output and annotations.            |
+| Contents      | Read and write | Clone, pull, and push branches, and merge pull requests.                                           |
+| Actions       | Read-only      | Resolve GitHub Actions-backed checks to jobs, read job details, and download job logs.             |
 
 No Administration, organization, or account permissions are required.
 

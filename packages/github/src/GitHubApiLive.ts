@@ -33,6 +33,8 @@ import {
 	listPullRequestReviews,
 	listRepositoryLabels,
 	mergePullRequest,
+	listPullRequestsForBranch,
+	createPullRequest,
 	postIssueComment,
 	postPullRequestComment,
 	postPullRequestReviewComment,
@@ -104,6 +106,9 @@ const GitHubApiOperationsLive = Layer.effect(
 			closePullRequest: (input) => closePullRequest(input).pipe(Effect.provideService(GitHubApiClient, client)),
 			reopenPullRequest: (input) => reopenPullRequest(input).pipe(Effect.provideService(GitHubApiClient, client)),
 			mergePullRequest: (input) => mergePullRequest(input).pipe(Effect.provideService(GitHubApiClient, client)),
+			listPullRequestsForBranch: (input) =>
+				listPullRequestsForBranch(input).pipe(Effect.provideService(GitHubApiClient, client)),
+			createPullRequest: (input) => createPullRequest(input).pipe(Effect.provideService(GitHubApiClient, client)),
 			listCheckRunsForRef: (input) =>
 				listCheckRunsForRef(input).pipe(Effect.provideService(GitHubApiClient, client)),
 			fetchCheckRun: (input) => fetchCheckRun(input).pipe(Effect.provideService(GitHubApiClient, client)),

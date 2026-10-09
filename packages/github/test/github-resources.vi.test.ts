@@ -75,6 +75,7 @@ const pullRequestInfo = GitHubPullRequestInfo.make({
 	merged: false,
 	headRef: 'feature',
 	headSha: 'head-sha',
+	headRepository: null,
 	baseRef: 'main',
 	baseSha: 'base-sha',
 })

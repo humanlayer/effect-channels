@@ -20,10 +20,17 @@ import { bashTool } from './BashTool'
 import { WORKSPACE_ROOT } from './computer/Contract'
 import { DeliveryApi } from './DeliveryApi'
 import { updatePlanTool } from './DeliveryPlanTool'
-import { ActiveDelivery, AgentConversation, AgentSessionMessage, DeliveryTurns, RepositoryUpdate } from './DeliveryTurn'
+import {
+	ActiveDelivery,
+	AgentConversation,
+	AgentSessionMessage,
+	DeliveryTurns,
+	PullRequestBranchUnavailable,
+	RepositoryUpdate,
+} from './DeliveryTurn'
 import { DiscussionSeen, readDiscussionContext } from './DiscussionContext'
 import * as FoldLog from './DurableObjectSqliteFoldAgentEventLog'
-import { githubTools } from './GitHubTools'
+import { createPullRequestTool, githubTools } from './GitHubTools'
 import { gitTools } from './GitTools'
 import { SessionExpiry } from './SessionExpiry'
 import { RunRecovery } from './SessionRecovery'
@@ -52,26 +59,57 @@ type AgentSessionMetadata = typeof AgentSessionMetadata.Type
 
 type GitHubDiscussion = AgentSessionMessage['githubDiscussion']
 
-/** An issue's work goes on `humanlayer/issue-<number>`, the same branch on every mention. */
-const workBranchFor = (discussion: GitHubDiscussion) =>
+/**
+ * The branch the session works on, the same on every mention: `humanlayer/issue-<number>` for an issue, the
+ * pull request's own branch for a pull request. A branch in a fork, or deleted, cannot be worked on.
+ */
+export const workBranchFor = (discussion: GitHubDiscussion) =>
 	Match.value(discussion).pipe(
 		Match.tagsExhaustive({
-			GitHubIssue: (issue) => `humanlayer/issue-${issue.ref.number}`,
-			GitHubPullRequest: () => null,
+			GitHubIssue: (issue) => Effect.succeed(`humanlayer/issue-${issue.ref.number}`),
+			GitHubPullRequest: (pullRequest) =>
+				pullRequest.fetchInfo().pipe(
+					Effect.mapError((error) => new PullRequestBranchUnavailable({ reason: error.message })),
+					Effect.flatMap(({ headRef, headRepository }) =>
+						Predicate.isNull(headRepository)
+							? Effect.fail(new PullRequestBranchUnavailable({ reason: 'its branch has been deleted.' }))
+							: headRepository.repositoryId === pullRequest.ref.repositoryId
+								? Effect.succeed(headRef)
+								: Effect.fail(
+										new PullRequestBranchUnavailable({
+											reason: `its branch is in the fork ${headRepository.owner}/${headRepository.repository}, which I can't push to.`,
+										}),
+									),
+					),
+				),
 		}),
 	)
+
+/** For an issue with a branch, the tool that opens its pull request. */
+const issuePullRequestTools = ({ githubDiscussion, workBranch, defaultBranch }: AgentSessionMetadata) =>
+	Predicate.isTagged(githubDiscussion, 'GitHubIssue') && Predicate.isNotNull(workBranch)
+		? [createPullRequestTool({ issue: githubDiscussion, branch: workBranch, base: defaultBranch })]
+		: []
 
 const discussionName = (discussion: GitHubDiscussion) =>
 	`${discussion.ref.owner}/${discussion.ref.repository}#${discussion.ref.number}, ${Match.value(discussion).pipe(
 		Match.tagsExhaustive({ GitHubIssue: () => 'an issue', GitHubPullRequest: () => 'a pull request' }),
 	)}`
 
-const branchPolicy = ({ branch, defaultBranch, workBranch }: AgentSessionMetadata) =>
+const branchPolicy = ({ githubDiscussion, branch, defaultBranch, workBranch }: AgentSessionMetadata) =>
 	Predicate.isNull(workBranch)
 		? 'This session has no branch to push to, so you can inspect, run, and explain the code, but not push changes.'
 		: [
 				`Make your changes on ${workBranch}: commit them with bash (git add, git commit), then push them with git_push. ` +
-					`Never commit to ${defaultBranch}. Later requests on this discussion continue on the same branch.`,
+					`Never commit to ${defaultBranch}. Later requests on this discussion continue on the same branch, pulled from GitHub first.`,
+				Match.value(githubDiscussion).pipe(
+					Match.tagsExhaustive({
+						GitHubIssue: () =>
+							`When the work is ready for review, push it, then open a pull request with github_create_pull_request; if one is already open from ${workBranch}, it returns that one. Put the pull request's link in your answer.`,
+						GitHubPullRequest: () =>
+							`${workBranch} is this pull request's branch, so pushing updates the pull request.`,
+					}),
+				),
 				`To bring in the latest ${defaultBranch}, git_fetch it, then git_merge origin/${defaultBranch}.`,
 				branch === workBranch ? '' : `Check out ${workBranch} before you commit.`,
 			]
@@ -178,6 +216,7 @@ const AgentConversationLive = Layer.effect(
 					repoSkills(metadata.repositoryName),
 					...githubTools(metadata.githubDiscussion),
 					...gitTools({ repository: metadata.githubDiscussion.ref, workBranch: metadata.workBranch }),
+					...issuePullRequestTools(metadata),
 				],
 			})
 
@@ -188,7 +227,7 @@ const AgentConversationLive = Layer.effect(
 		const start = (message: AgentSessionMessage, log: FoldEventLog) =>
 			Effect.gen(function* () {
 				const discussion = message.githubDiscussion
-				const workBranch = workBranchFor(discussion)
+				const workBranch = yield* workBranchFor(discussion)
 				const prepared = yield* workspace.prepare({ repository: discussion.ref, branch: workBranch })
 				yield* Effect.forkScoped(workspace.startContainer)
 				const metadata = AgentSessionMetadata.make({

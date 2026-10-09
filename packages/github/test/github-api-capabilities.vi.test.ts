@@ -604,6 +604,61 @@ describe('GitHubApiLive agent capabilities', () => {
 		}),
 	)
 
+	it.effect('finds open pull requests from a branch and creates one, with its head repository', ({ expect }) =>
+		Effect.gen(function* () {
+			const calls = yield* Queue.unbounded<ObservedRequest>()
+			const headRepository = { id: 200, name: 'channels', owner: { login: 'humanlayer' } }
+			const httpClient = HttpClient.make((request) =>
+				Effect.gen(function* () {
+					const web = yield* HttpClientRequest.toWeb(request).pipe(Effect.orDie)
+					if (new URL(web.url).pathname.startsWith('/app/installations/')) {
+						return HttpClientResponse.fromWeb(request, tokenResponse())
+					}
+					const observed = yield* observeRequest(web)
+					yield* Queue.offer(calls, observed)
+					const pull = {
+						...pullRequestJson('open'),
+						head: { ref: 'humanlayer/issue-42', sha: 'head-sha', repo: headRepository },
+					}
+					return HttpClientResponse.fromWeb(request, Response.json(observed.method === 'GET' ? [pull] : pull))
+				}),
+			)
+
+			const result = yield* Effect.gen(function* () {
+				const api = yield* GitHubApi
+				const open = yield* api.listPullRequestsForBranch({ repository, head: 'humanlayer/issue-42' })
+				const created = yield* api.createPullRequest({
+					repository,
+					head: 'humanlayer/issue-42',
+					base: 'main',
+					title: 'Fix the crash',
+					body: 'Closes #42',
+				})
+				return { open, created }
+			}).pipe(Effect.provide(makeLayer(httpClient)))
+
+			expect(result.open.map((info) => [info.ref.number, info.headRef, info.headRepository])).toEqual([
+				[43, 'humanlayer/issue-42', { repositoryId: 200, owner: 'humanlayer', repository: 'channels' }],
+			])
+			expect(result.created.ref).toEqual(pullRequest)
+			const observed = Array.from(yield* Queue.takeAll(calls))
+			expect(observed.map(({ method, path, search, body }) => ({ method, path, search, body }))).toEqual([
+				{
+					method: 'GET',
+					path: '/repos/humanlayer/channels/pulls',
+					search: '?per_page=100&state=open&head=humanlayer%3Ahumanlayer%2Fissue-42',
+					body: '',
+				},
+				{
+					method: 'POST',
+					path: '/repos/humanlayer/channels/pulls',
+					search: '',
+					body: '{"title":"Fix the crash","body":"Closes #42","head":"humanlayer/issue-42","base":"main"}',
+				},
+			])
+		}),
+	)
+
 	it.effect('encodes issue and PR state changes and preserves merge payloads and results', ({ expect }) =>
 		Effect.gen(function* () {
 			const calls = yield* Queue.unbounded<ObservedRequest>()

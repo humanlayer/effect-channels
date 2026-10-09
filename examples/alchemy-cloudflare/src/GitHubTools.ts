@@ -6,12 +6,13 @@ import {
 	GitHubPullRequestInfo,
 	GitHubReviewComments,
 	GitHubReviews,
-	type GitHubApi,
+	GitHubApi,
+	GitHubRepositoryRef,
 	type GitHubIssue,
 	type GitHubPullRequest,
 } from '@humanlayer/channels-github'
 import { defineTool, ToolResultFailure, ToolResultText, type FoldTool } from '@humanlayer/fold-core'
-import { Effect, Match, Schema } from 'effect'
+import { Effect, Match, Predicate, Schema } from 'effect'
 
 import { NoParameters } from './ToolParameters'
 
@@ -126,3 +127,54 @@ export const githubTools = (discussion: GitHubDiscussion): ReadonlyArray<FoldToo
 
 	return [context, comments, postComment, ...pullRequestTools]
 }
+
+/** Where an issue's pull request goes: from the issue's branch into the default branch. */
+export interface IssuePullRequestTarget {
+	readonly issue: GitHubIssue
+	readonly branch: string
+	readonly base: string
+}
+
+/**
+ * Open a pull request from the issue's branch, linked to the issue so it closes when the pull request merges. If
+ * one is already open from the branch, return that one.
+ */
+export const openIssuePullRequest = Effect.fn('agent_session.open_issue_pull_request')(function* (
+	target: IssuePullRequestTarget,
+	request: { readonly title: string; readonly body: string },
+) {
+	const { issue, branch, base } = target
+	const api = yield* GitHubApi
+	const repository = GitHubRepositoryRef.make({
+		installationId: issue.ref.installationId,
+		repositoryId: issue.ref.repositoryId,
+		owner: issue.ref.owner,
+		repository: issue.ref.repository,
+	})
+	const [open] = yield* api.listPullRequestsForBranch({ repository, head: branch })
+	if (Predicate.isNotUndefined(open)) {
+		return ToolResultText.make({ text: `A pull request from ${branch} is already open: ${open.url}` })
+	}
+	const closes = `Closes #${issue.ref.number}`
+	const body = request.body.includes(closes)
+		? request.body
+		: [request.body.trim(), closes].filter((part) => part.length > 0).join('\n\n')
+	const created = yield* api.createPullRequest({ repository, head: branch, base, title: request.title, body })
+	return ToolResultText.make({ text: `Opened ${created.url}` })
+})
+
+/** The tool that opens the issue's pull request, or returns the one already open. */
+export const createPullRequestTool = (target: IssuePullRequestTarget): FoldTool<GitHubApi> =>
+	defineTool({
+		name: 'github_create_pull_request',
+		description: `Open a pull request from ${target.branch} into ${target.base} for this issue. Push your commits with git_push first. If a pull request is already open from ${target.branch}, returns it instead.`,
+		parameters: Schema.Struct({
+			title: Schema.NonEmptyString.annotate({ description: 'The pull request title' }),
+			body: Schema.String.annotate({
+				description: `The pull request description, in GitHub Markdown. "Closes #${target.issue.ref.number}" is added if it is missing.`,
+			}),
+		}),
+		success: ToolResultText,
+		failure: ToolResultFailure,
+		handler: (request) => openIssuePullRequest(target, request).pipe(Effect.mapError(failure)),
+	})

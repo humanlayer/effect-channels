@@ -134,7 +134,7 @@ export class AgentConversation extends Context.Service<
 		 */
 		readonly open: (
 			message: AgentSessionMessage,
-		) => Effect.Effect<TurnSession, RepoCloneError, Scope.Scope | RuntimeContext>
+		) => Effect.Effect<TurnSession, RepoCloneError | PullRequestBranchUnavailable, Scope.Scope | RuntimeContext>
 		/** Pull commits pushed since the repository was cloned or last pulled. A failure is reported, not raised. */
 		readonly pullRepository: (message: AgentSessionMessage) => Effect.Effect<RepositoryUpdate>
 		/**
@@ -146,6 +146,15 @@ export class AgentConversation extends Context.Service<
 		) => Effect.Effect<{ readonly text: string; readonly markSeen: Effect.Effect<void> }>
 	}
 >()('alchemy-cloudflare/AgentConversation') {}
+
+/** A pull request's branch cannot be checked out: GitHub could not be read, or the branch is in a fork or gone. */
+export class PullRequestBranchUnavailable extends Data.TaggedError('PullRequestBranchUnavailable')<{
+	readonly reason: string
+}> {
+	override get message() {
+		return `I can't work on this pull request's branch: ${this.reason}`
+	}
+}
 
 /** The turn restarted {@link MAX_RESTART_NUDGES} times without finishing. */
 export class TurnRestartLimit extends Data.TaggedError('TurnRestartLimit')<{}> {

@@ -77,6 +77,7 @@ const api = Layer.mock(GitHubApi, {
 				merged: false,
 				headRef: 'fix',
 				headSha: 'abc',
+				headRepository: null,
 				baseRef: 'main',
 				baseSha: 'def',
 			}),
