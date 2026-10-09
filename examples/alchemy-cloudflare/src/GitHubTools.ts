@@ -1,18 +1,19 @@
 import {
 	GitHubCheckRuns,
 	GitHubContent,
-	GitHubIssueComments,
+	GitHubId,
 	GitHubIssueInfo,
 	GitHubPullRequestInfo,
-	GitHubReviewComments,
 	GitHubReviews,
 	GitHubApi,
 	GitHubRepositoryRef,
 	type GitHubIssue,
+	type GitHubIssueComment,
 	type GitHubPullRequest,
+	type GitHubReviewComment,
 } from '@humanlayer/channels-github'
 import { defineTool, ToolResultFailure, ToolResultText, type FoldTool } from '@humanlayer/fold-core'
-import { Effect, Match, Predicate, Schema } from 'effect'
+import { Data, Effect, Match, Predicate, Schema } from 'effect'
 
 import { NoParameters } from './ToolParameters'
 
@@ -28,6 +29,64 @@ const jsonResult =
 		Schema.encodeEffect(schema)(value).pipe(
 			Effect.map((encoded) => ToolResultText.make({ text: JSON.stringify(encoded, null, 2) })),
 		)
+
+/** Text for a tool result: a list of comments as indented JSON. */
+const jsonText = (values: ReadonlyArray<object>) => ToolResultText.make({ text: JSON.stringify(values, null, 2) })
+
+const POST_COMMENT_DESCRIPTION =
+	'Post a GitHub Markdown comment. Your final answer is posted for you when you finish, so use this only for something else, such as a reply in a review thread or an update while you work.'
+
+/** A comment as the agent sees it: what it needs to read it, link to it, and answer it. */
+const commentSummary = (comment: GitHubIssueComment) => ({
+	id: comment.ref.id,
+	author: comment.author?.login ?? null,
+	url: comment.url,
+	body: comment.body,
+})
+
+/** A line comment as the agent sees it, with the thread to reply in: GitHub threads replies under the first comment. */
+const reviewCommentSummary = (comment: GitHubReviewComment) => ({
+	id: comment.ref.id,
+	thread: comment.inReplyToId ?? comment.ref.id,
+	author: comment.author?.login ?? null,
+	path: comment.path,
+	line: comment.line ?? comment.startLine ?? null,
+	diffHunk: comment.diffHunk,
+	url: comment.url,
+	body: comment.body,
+})
+
+/** No line comment on the pull request has this ID. */
+export class ReviewCommentNotFound extends Data.TaggedError('ReviewCommentNotFound')<{ readonly id: number }> {
+	override get message() {
+		return `This pull request has no line comment ${this.id}.`
+	}
+}
+
+/**
+ * Post a comment on the issue or pull request, or, given `replyTo`, reply in the review thread of that line
+ * comment. GitHub takes replies only under a thread's first comment, so a later comment's thread is looked up.
+ */
+export const postDiscussionComment = Effect.fn('agent_session.post_comment')(function* (
+	discussion: GitHubDiscussion,
+	request: { readonly markdown: string; readonly replyTo?: number | undefined },
+) {
+	const content = GitHubContent.make({ markdown: request.markdown })
+	const replyTo = request.replyTo
+	if (Predicate.isUndefined(replyTo) || !Predicate.isTagged(discussion, 'GitHubPullRequest')) {
+		const posted = yield* discussion.postComment(content)
+		return ToolResultText.make({ text: `Posted ${posted.url}` })
+	}
+	const target = (yield* discussion.listReviewComments()).find((comment) => comment.ref.id === replyTo)
+	if (Predicate.isUndefined(target)) return yield* new ReviewCommentNotFound({ id: replyTo })
+	const api = yield* GitHubApi
+	const posted = yield* api.replyToReviewComment({
+		pullRequest: discussion.ref,
+		comment: { pullRequest: discussion.ref, id: target.inReplyToId ?? target.ref.id },
+		content,
+	})
+	return ToolResultText.make({ text: `Replied in the thread: ${posted.url}` })
+})
 
 /** Tools bound to the GitHub discussion that owns this AgentSession. */
 export const githubTools = (discussion: GitHubDiscussion): ReadonlyArray<FoldTool<GitHubApi>> => {
@@ -49,25 +108,50 @@ export const githubTools = (discussion: GitHubDiscussion): ReadonlyArray<FoldToo
 	})
 	const comments = defineTool({
 		name: 'github_comments',
-		description: 'List comments on the current GitHub issue or pull request.',
+		description:
+			'List comments on the current GitHub issue or pull request, oldest first, each with its ID, author, link, and text.',
 		parameters: NoParameters,
 		success: ToolResultText,
 		failure: ToolResultFailure,
 		handler: () =>
-			discussion.listComments().pipe(Effect.flatMap(jsonResult(GitHubIssueComments)), Effect.mapError(failure)),
-	})
-	const postComment = defineTool({
-		name: 'github_post_comment',
-		description: 'Post a Markdown comment on the current GitHub issue or pull request.',
-		parameters: Schema.Struct({ markdown: Schema.String }),
-		success: ToolResultText,
-		failure: ToolResultFailure,
-		handler: ({ markdown }) =>
-			discussion.postComment(GitHubContent.make({ markdown })).pipe(
-				Effect.map(() => ToolResultText.make({ text: 'Comment posted.' })),
+			discussion.listComments().pipe(
+				Effect.map((all) => jsonText(all.map(commentSummary))),
 				Effect.mapError(failure),
 			),
 	})
+	const postComment = Match.value(discussion).pipe(
+		Match.tagsExhaustive({
+			GitHubIssue: (issue) =>
+				defineTool({
+					name: 'github_post_comment',
+					description: `${POST_COMMENT_DESCRIPTION} Posts on the issue.`,
+					parameters: Schema.Struct({ markdown: Schema.String }),
+					success: ToolResultText,
+					failure: ToolResultFailure,
+					handler: ({ markdown }) =>
+						postDiscussionComment(issue, { markdown }).pipe(Effect.mapError(failure)),
+				}),
+			GitHubPullRequest: (pullRequest) =>
+				defineTool({
+					name: 'github_post_comment',
+					description: `${POST_COMMENT_DESCRIPTION} Posts on the pull request, or, with reply_to, as a reply in that line comment's review thread.`,
+					parameters: Schema.Struct({
+						markdown: Schema.String,
+						reply_to: Schema.optionalKey(
+							GitHubId.annotate({
+								description: 'The ID of any line comment in the review thread to reply in',
+							}),
+						),
+					}),
+					success: ToolResultText,
+					failure: ToolResultFailure,
+					handler: ({ markdown, reply_to }) =>
+						postDiscussionComment(pullRequest, { markdown, replyTo: reply_to }).pipe(
+							Effect.mapError(failure),
+						),
+				}),
+		}),
+	)
 	const pullRequestTools = Match.value(discussion).pipe(
 		Match.tag(
 			'GitHubPullRequest',
@@ -116,9 +200,10 @@ export const githubTools = (discussion: GitHubDiscussion): ReadonlyArray<FoldToo
 						success: ToolResultText,
 						failure: ToolResultFailure,
 						handler: () =>
-							pullRequest
-								.listReviewComments()
-								.pipe(Effect.flatMap(jsonResult(GitHubReviewComments)), Effect.mapError(failure)),
+							pullRequest.listReviewComments().pipe(
+								Effect.map((all) => jsonText(all.map(reviewCommentSummary))),
+								Effect.mapError(failure),
+							),
 					}),
 				] satisfies ReadonlyArray<FoldTool<GitHubApi>>,
 		),

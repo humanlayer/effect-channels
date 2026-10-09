@@ -57,7 +57,7 @@ const clip = (body: string) =>
 
 const commentEntry = (comment: GitHubIssueComment): Entry => ({
 	id: comment.ref.id,
-	text: `${author(comment.author)} commented:\n${clip(comment.body)}`,
+	text: `${author(comment.author)} commented (comment ${comment.ref.id}):\n${clip(comment.body)}`,
 })
 
 const reviewEntry = (review: GitHubReview): Entry => ({
@@ -68,10 +68,10 @@ const reviewEntry = (review: GitHubReview): Entry => ({
 const reviewCommentEntry = (comment: GitHubReviewComment): Entry => {
 	const line = comment.line ?? comment.startLine
 	const where = line === null || line === undefined ? comment.path : `${comment.path}:${line}`
-	const reply = comment.inReplyToId === null || comment.inReplyToId === undefined ? '' : ', replying in a thread'
+	const thread = comment.inReplyToId ?? comment.ref.id
 	return {
 		id: comment.ref.id,
-		text: `${author(comment.author)} commented on ${where}${reply}:\n${clip(comment.body)}`,
+		text: `${author(comment.author)} commented on ${where} (line comment ${comment.ref.id}, thread ${thread}):\n${clip(comment.body)}`,
 	}
 }
 

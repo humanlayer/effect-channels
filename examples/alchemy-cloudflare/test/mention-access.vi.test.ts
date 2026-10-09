@@ -130,6 +130,14 @@ const fixtures = (actor = person(1)) => {
 		},
 		{
 			name: 'review comment',
+			prompt: [
+				'<system-information>This request is line comment 701 on src/index.ts, in the review thread of line comment 701. To reply in that thread, use github_post_comment with reply_to 701. The diff around it:',
+				'```diff',
+				'@@ -1 +1 @@',
+				'```</system-information>',
+				'',
+				'@agent help',
+			].join('\n'),
 			mentionedIn: { _tag: 'ReviewComment', id: reviewComment.comment.ref.id },
 			event: GitHubPrMentioned.make({ pullRequest, trigger: reviewComment, events: [reviewComment] }),
 			discussion: prDiscussion,

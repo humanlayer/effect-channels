@@ -1,6 +1,6 @@
 # Alchemy Cloudflare GitHub mailbox example
 
-This deployment receives GitHub webhooks in a Cloudflare Worker, stores each event in a mailbox Durable Object, and processes mailboxes from Durable Object alarms. `src/Bot.ts` declares the GitHub callbacks, `src/Worker.ts` builds ingress and the Workers AI binding, and `src/DeliveryMailboxDO.ts` builds persistent processing. New issues and PRs are labeled with Clef; authorized mentions receive an eyes reaction. Fold is not connected yet. The older Slack, Linear, and fake-agent walkthroughs below are not part of the current deployment.
+This deployment receives GitHub webhooks in a Cloudflare Worker, stores each event in a mailbox Durable Object, and processes mailboxes from Durable Object alarms. `src/GithubBot.ts` declares the GitHub callbacks, `src/Worker.ts` builds ingress and the Workers AI binding, and `src/DeliveryMailboxDO.ts` builds persistent processing. New issues and PRs are labeled with Clef. A mention from a maintainer starts a coding agent on the issue or pull request; see [The GitHub agent](#the-github-agent). The older Slack, Linear, and fake-agent walkthroughs below are not part of the current deployment.
 
 ## Linear Application setup
 
@@ -164,6 +164,48 @@ Use Cloudflare Worker logs to look for `Workers AI label inference started`, `Wo
 
 In the GitHub App settings, **Advanced → Recent Deliveries** shows each webhook request, response status, and redelivery control. A successful admission returns HTTP 200. If GitHub reports 401, check the webhook secret. If callbacks fail with 403, check the app permissions and make sure the installation includes the repository.
 
+## The GitHub agent
+
+When someone with write access to the repository mentions the app, the mention goes to that issue's or pull request's agent session (`src/AgentSessionDO.ts`). It runs a [Fold](https://github.com/humanlayer/fold) agent on OpenAI's `gpt-6.1-sol` at medium reasoning, with the repository cloned into a Cloudflare Computer container. Each issue or pull request has one session, which keeps its conversation, workspace, and branch between mentions. A session idle for 14 days is deleted.
+
+### What happens on a mention
+
+1. The mention gets the app's `eyes` reaction, and the issue or pull request is followed so later comments reach the same session.
+2. The session pulls its branch from GitHub, then sends the agent the request. The request starts with the discussion: on the first mention, the title, description, and every comment (and, on a pull request, its reviews and line comments); later, only what was posted since the agent's last turn. The app's own comments and the mentioning comment are left out. Each comment shows its ID, so the agent can reply to it.
+3. A mention in a line comment on a pull request also tells the agent the file, line, diff around it, and the review thread to reply in.
+4. For longer work the agent keeps a checklist comment up to date with `update_plan`.
+5. When the agent finishes, its answer is posted as a comment and the `eyes` reaction is removed. If the run fails, the comment says why instead.
+
+Mentions that arrive while the agent is working wait in the mailbox and run, in order, once it finishes.
+
+### Branches
+
+- **Issue:** the agent works on `humanlayer/issue-<number>`, created from the default branch on the first mention and pushed to GitHub. When the work is ready, the agent opens a pull request with `github_create_pull_request`, which adds `Closes #<number>`, or returns the one already open from the branch.
+- **Pull request:** the agent works on the pull request's own branch, and pushing updates the pull request. A pull request from a fork, or whose branch was deleted, fails with a comment saying so: the app cannot push to forks.
+
+Commits are by `HumanLayer Agent <agent@humanlayer.dev>` (set in `src/computer/Contract.ts`). The agent never force-pushes and never commits to the default branch.
+
+### Tools
+
+| Tool                                                                                                                           | What it does                                                                                                                                           |
+| ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `read`, `write`, `edit`, `apply_patch`                                                                                         | Read and change files in the workspace.                                                                                                                |
+| `bash`                                                                                                                         | Run commands in the container. Long output is cut to its end; the full text is saved under `/workspace/.fold/tool-output`.                             |
+| `web_search`, `web_fetch`                                                                                                      | Look things up online.                                                                                                                                 |
+| `skill`                                                                                                                        | Load one of the repository's skills.                                                                                                                   |
+| `update_plan`                                                                                                                  | Show the agent's checklist as one comment, edited as it changes.                                                                                       |
+| `git_fetch`, `git_pull`, `git_merge`, `git_push`                                                                               | Git operations that reach GitHub. `git_push` pushes only the session's branch. Local git (`status`, `diff`, `add`, `commit`) runs in `bash`.           |
+| `github_discussion`, `github_comments`                                                                                         | Read the issue or pull request and its comments.                                                                                                       |
+| `github_post_comment`                                                                                                          | Post a comment, or, on a pull request with `reply_to`, reply in a review thread. The agent's final answer is posted for it; this is for anything else. |
+| `github_pull_request_diff`, `github_pull_request_checks`, `github_pull_request_reviews`, `github_pull_request_review_comments` | Pull request sessions only: the diff, check runs, reviews, and line comments with their threads.                                                       |
+| `github_create_pull_request`                                                                                                   | Issue sessions only: open the issue's pull request, or return the open one.                                                                            |
+
+Git and the GitHub API use the App's installation token, sent with each request. It never appears in tool input or output, environment variables, git remotes, or logs.
+
+### Logs
+
+Look for `agent_session.started` or `agent_session.resumed` (with the branch), `agent_turn.prompt_sent`, `agent_session.discussion_read`, `agent_session.plan_updated`, `workspace.exec` (with each `bash` command), and `agent_turn.finished` (with `fold.outcome`). A failed pull logs `agent_session.pull_repository failed` with its `reason`.
+
 ## Slack setup
 
 Create the Slack app from [`slack-app-manifest.example.json`](slack-app-manifest.example.json) after replacing its name and request URL. [`packages/slack/README.md`](../../packages/slack/README.md) explains each scope and event. Install the app, invite the bot to your test channel, and copy these values into `.env`:
@@ -206,7 +248,7 @@ The remote agent calls the delivery API at the Worker's own public URL, which Al
 ### Setup
 
 1. From `examples/alchemy-cloudflare`, run `bun alchemy deploy`, and note the URL it prints.
-2. In a second terminal, run `bun alchemy logs --filter IngressWorker --since 10m` and leave it open.
+2. In a second terminal, run `bun alchemy logs --resource IngressWorker --since 10m --no-input` and leave it open.
 
 ### Checks
 
@@ -286,7 +328,7 @@ Replace the sample callbacks in `src/Bot.ts` with application behavior. Delivery
 Read recent Worker and Durable Object logs with:
 
 ```bash
-bun alchemy logs --filter IngressWorker --since 10m
+bun alchemy logs --resource IngressWorker --since 10m --no-input
 ```
 
 Alchemy currently uses Effect's readable multiline logger and `bun alchemy logs` does not have a JSON output option. Effect also provides single-line JSON logging through `Logger.layer([Logger.consoleJson])`, but applying that inside this example does not replace all of Alchemy's own logs or make the command return complete JSON. A consistent JSON view requires logger and JSON-output support in Alchemy itself.

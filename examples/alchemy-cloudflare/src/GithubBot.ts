@@ -25,6 +25,7 @@ import {
 	type GitHubMentioned,
 	type GitHubPrCreated,
 	type GitHubRepositoryRef,
+	type GitHubReviewComment,
 } from '@humanlayer/channels-github'
 import type { RuntimeContext } from 'alchemy/RuntimeContext'
 import { Config, Effect, Match, Predicate, Schema } from 'effect'
@@ -96,10 +97,25 @@ export const respondToMentionAccess = Effect.fn('bot.github.respondToMentionAcce
 	return false
 })
 
-/** Lines of text, without the missing ones, as one string to look for a handoff command in. */
+/** Lines of text, without the missing ones, as one string. */
 const joinText = (lines: ReadonlyArray<string | null>) => lines.filter(Predicate.isNotNull).join('\n')
 
-/** The text of what mentioned the bot: the comment, or the issue or pull request that was opened. */
+/**
+ * A line comment as the agent's request: where it is in the diff, and which comment to reply to, then its text.
+ * GitHub threads replies under the thread's first comment.
+ */
+const reviewCommentRequest = (comment: GitHubReviewComment) => {
+	const line = comment.line ?? comment.startLine
+	const where = Predicate.isNullish(line) ? comment.path : `${comment.path}:${line}`
+	const thread = comment.inReplyToId ?? comment.ref.id
+	return [
+		`<system-information>This request is line comment ${comment.ref.id} on ${where}, in the review thread of line comment ${thread}. To reply in that thread, use github_post_comment with reply_to ${thread}. The diff around it:\n\`\`\`diff\n${comment.diffHunk}\n\`\`\`</system-information>`,
+		'',
+		comment.body,
+	].join('\n')
+}
+
+/** The agent's request: the comment that mentioned the bot, or the issue or pull request that was opened. */
 const gitHubMentionText = (event: GitHubMentioned) =>
 	Match.value(event.trigger).pipe(
 		Match.tagsExhaustive({
@@ -107,7 +123,7 @@ const gitHubMentionText = (event: GitHubMentioned) =>
 			GitHubPrOpened: ({ title, body }) => joinText([title, body]),
 			GitHubIssueCommentCreated: ({ comment }) => comment.body,
 			GitHubPrCommentCreated: ({ comment }) => comment.body,
-			GitHubPrReviewCommentCreated: ({ comment }) => comment.body,
+			GitHubPrReviewCommentCreated: ({ comment }) => reviewCommentRequest(comment),
 		}),
 	)
 
