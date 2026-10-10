@@ -1,5 +1,4 @@
 import {
-	GitHubCheckRuns,
 	GitHubContent,
 	GitHubId,
 	GitHubIssueInfo,
@@ -168,17 +167,6 @@ export const githubTools = (discussion: GitHubDiscussion): ReadonlyArray<FoldToo
 								Effect.map((diff) => ToolResultText.make({ text: diff })),
 								Effect.mapError(failure),
 							),
-					}),
-					defineTool({
-						name: 'github_pull_request_checks',
-						description: 'List check runs for the current GitHub pull request.',
-						parameters: NoParameters,
-						success: ToolResultText,
-						failure: ToolResultFailure,
-						handler: () =>
-							pullRequest
-								.listCheckRuns()
-								.pipe(Effect.flatMap(jsonResult(GitHubCheckRuns)), Effect.mapError(failure)),
 					}),
 					defineTool({
 						name: 'github_pull_request_reviews',

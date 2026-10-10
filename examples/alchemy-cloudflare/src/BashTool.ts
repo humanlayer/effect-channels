@@ -8,19 +8,18 @@
  */
 import { OutputStore } from '@humanlayer/fold-agent'
 import {
-	CurrentToolCall,
 	defaultMaxBytes,
 	defaultMaxLines,
 	defineTool,
 	formatSize,
 	ToolResultFailure,
 	ToolResultText,
-	truncateTail,
 	type FoldTool,
 } from '@humanlayer/fold-core'
 import { Effect, Schema } from 'effect'
 
 import { type CommandOutput, WORKSPACE_ROOT } from './computer/Contract'
+import { visibleOutput } from './ToolOutput'
 import { Workspace } from './Workspace'
 
 const DEFAULT_TIMEOUT_MS = 120_000
@@ -71,33 +70,6 @@ const DESCRIPTION =
 const combinedOutput = ({ stdout, stderr }: CommandOutput) =>
 	stdout.length > 0 && stderr.length > 0 ? `${stdout.replace(/\n?$/, '\n')}${stderr}` : stdout + stderr
 
-/**
- * The output as the model sees it: its tail, and when that is not all of it, where the whole output is
- * saved. Saving is best-effort; the notice says when it failed.
- */
-const visibleOutput = (text: string) =>
-	Effect.gen(function* () {
-		const truncation = truncateTail(text)
-		if (!truncation.truncated) return text
-		const outputStore = yield* OutputStore
-		const { toolCallId } = yield* CurrentToolCall
-		const saved = yield* outputStore.append(toolCallId, text).pipe(
-			Effect.tap((ref) =>
-				Effect.logInfo('bash.output_saved').pipe(
-					Effect.annotateLogs({ path: ref.path, lines: truncation.totalLines, bytes: text.length }),
-				),
-			),
-			Effect.map((ref) => `Full output: ${ref.path}`),
-			Effect.catch((error) =>
-				Effect.logWarning('bash.output_save failed', error).pipe(
-					Effect.as('The full output could not be saved'),
-				),
-			),
-		)
-		const start = truncation.totalLines - truncation.outputLines + 1
-		return `${truncation.content}\n\n[Showing lines ${start}-${truncation.totalLines} of ${truncation.totalLines}. ${saved}]`
-	})
-
 /** The bash tool, over the session's {@link Workspace}, saving long output to the {@link OutputStore}. */
 export const bashTool: FoldTool<Workspace | OutputStore> = defineTool({
 	name: 'bash',
@@ -127,7 +99,7 @@ export const bashTool: FoldTool<Workspace | OutputStore> = defineTool({
 					timeoutMs,
 				})
 				.pipe(Effect.mapError((error) => `The shell could not run the command: ${error.message}`))
-			const text = (yield* visibleOutput(combinedOutput(output))).replace(/\n+$/, '')
+			const text = (yield* visibleOutput(combinedOutput(output), 'bash')).replace(/\n+$/, '')
 
 			if (output.status === 'cancelled') {
 				return yield* Effect.fail(`${text}\n\nCommand timed out after ${timeoutMs} milliseconds`)

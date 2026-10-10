@@ -17,6 +17,7 @@ import { Config, Context, Effect, FileSystem, Layer, Match, Option, Path, Predic
 import { HttpClient } from 'effect/http'
 
 import { bashTool } from './BashTool'
+import { checkTools } from './CheckTools'
 import { WORKSPACE_ROOT } from './computer/Contract'
 import { DeliveryApi } from './DeliveryApi'
 import { updatePlanTool } from './DeliveryPlanTool'
@@ -85,6 +86,10 @@ export const workBranchFor = (discussion: GitHubDiscussion) =>
 		}),
 	)
 
+/** For a pull request, the tools for its checks. */
+const pullRequestCheckTools = ({ githubDiscussion }: AgentSessionMetadata) =>
+	Predicate.isTagged(githubDiscussion, 'GitHubPullRequest') ? checkTools(githubDiscussion) : []
+
 /** For an issue with a branch, the tool that opens its pull request. */
 const issuePullRequestTools = ({ githubDiscussion, workBranch, defaultBranch }: AgentSessionMetadata) =>
 	Predicate.isTagged(githubDiscussion, 'GitHubIssue') && Predicate.isNotNull(workBranch)
@@ -107,7 +112,7 @@ const branchPolicy = ({ githubDiscussion, branch, defaultBranch, workBranch }: A
 						GitHubIssue: () =>
 							`When the work is ready for review, push it, then open a pull request with github_create_pull_request; if one is already open from ${workBranch}, it returns that one. Put the pull request's link in your answer.`,
 						GitHubPullRequest: () =>
-							`${workBranch} is this pull request's branch, so pushing updates the pull request.`,
+							`${workBranch} is this pull request's branch, so pushing updates the pull request. Use github_pull_request_checks and github_check_failure to see why a check failed.`,
 					}),
 				),
 				`To bring in the latest ${defaultBranch}, git_fetch it, then git_merge origin/${defaultBranch}.`,
@@ -218,6 +223,7 @@ const AgentConversationLive = Layer.effect(
 					...githubTools(metadata.githubDiscussion),
 					...gitTools({ repository: metadata.githubDiscussion.ref, workBranch: metadata.workBranch }),
 					...issuePullRequestTools(metadata),
+					...pullRequestCheckTools(metadata),
 				],
 			})
 
