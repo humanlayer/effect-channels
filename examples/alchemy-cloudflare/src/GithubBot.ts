@@ -21,11 +21,14 @@ import {
 	hasGitHubAccess,
 	type GitHubApiError,
 	type GitHubCallbackHandlers,
+	type GitHubCheckConclusion,
 	type GitHubIssueComment,
 	type GitHubIssueCreated,
 	type GitHubMentioned,
 	type GitHubParticipant,
+	type GitHubPrCheckCompleted,
 	type GitHubPrCreated,
+	type GitHubPrEvent,
 	type GitHubRepositoryRef,
 	type GitHubReviewComment,
 } from '@humanlayer/channels-github'
@@ -175,6 +178,37 @@ export const gitHubRequest = (event: GitHubMentioned) => {
 	])
 }
 
+/** Check results that need the agent: the check failed, or could not run. */
+const FAILED_CONCLUSIONS: ReadonlySet<GitHubCheckConclusion> = new Set([
+	'failure',
+	'timed_out',
+	'action_required',
+	'startup_failure',
+])
+
+const isFailedCheck = (event: GitHubPrEvent): event is GitHubPrCheckCompleted =>
+	Predicate.isTagged(event, 'GitHubPrCheckCompleted') && FAILED_CONCLUSIONS.has(event.conclusion)
+
+/** The failed checks among a batch's events that ran on `headSha`, the pull request's latest commit, each once. */
+export const failedChecksOnHead = (events: ReadonlyArray<GitHubPrEvent>, headSha: string) =>
+	Arr.dedupeWith(
+		events.filter(isFailedCheck).filter((check) => check.headSha === headSha),
+		(a, b) => a.checkRunId === b.checkRunId,
+	)
+
+/** The agent's request when checks fail on the latest commit of a pull request it follows. */
+export const checkFailurePrompt = (checks: ReadonlyArray<GitHubPrCheckCompleted>, headSha: string) =>
+	[
+		`<system-information>Checks failed on this pull request's latest commit, ${headSha.slice(0, 7)}. Nobody mentioned you; these failures are the request.</system-information>`,
+		'',
+		...checks.map(
+			(check) =>
+				`- \`${check.name}\`: ${check.conclusion.replace('_', ' ')} (check run ${check.checkRunId})${Predicate.isNull(check.detailsUrl) ? '' : `, ${check.detailsUrl}`}`,
+		),
+		'',
+		'Find out why with github_check_failure. If the cause is clear and the fix belongs in this pull request, fix it, check it as far as you can, and push. Otherwise explain the cause and what to change. Your answer is posted on the pull request.',
+	].join('\n')
+
 /**
  * An authorized mention subscribes the discussion, so later comments and checks reach this mailbox, and
  * hands the delivery to the discussion's AgentSession, which finishes it when its turn ends. Until then the
@@ -261,7 +295,28 @@ export const githubHandlers = {
 	},
 	onSubscribedPrEvents: (event, context) =>
 		Effect.gen(function* () {
-			/** TODO if the issue(s) are failing CI checks then we shoudl like address them */
+			if (!event.events.some(isFailedCheck)) return
+			const { headSha } = yield* event.pullRequest.fetchInfo()
+			const failed = failedChecksOnHead(event.events, headSha)
+			if (Arr.isReadonlyArrayEmpty(failed)) {
+				yield* Effect.logInfo('Failed checks ignored: not on the latest commit')
+				return
+			}
+			yield* Effect.logInfo('Checks failed on the latest commit').pipe(
+				Effect.annotateLogs({ checks: failed.map(({ name }) => name).join(', '), head_sha: headSha }),
+			)
+			const message = yield* Schema.encodeEffect(AgentSessionMessage)(
+				AgentSessionMessage.make({
+					prompt: checkFailurePrompt(failed, headSha),
+					githubDiscussion: event.pullRequest,
+					requestComments: [],
+					deliveryId: context.deliveryId,
+					accessToken: context.accessToken,
+				}),
+			).pipe(Effect.orDie)
+			const agentSessions = yield* AgentSessions
+			yield* agentSessions.getByName(event.pullRequest.mailboxKey).send(message)
+			return yield* context.handoff()
 		}).pipe(
 			Effect.annotateLogs({
 				...githubRepositoryLogAnnotations(event.pullRequest.ref),

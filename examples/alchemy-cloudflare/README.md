@@ -155,15 +155,41 @@ The AgentSession runs a [Fold](https://github.com/humanlayer/fold) agent on Open
 
 **Its tools.**
 
-| Kind                      | Tools                                                                                                                                                                   |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Files and shell           | `read`, `write`, `edit`, `apply_patch`, `bash`                                                                                                                          |
-| Git, with the App's token | `git_fetch`, `git_pull`, `git_merge`, `git_push` (its own branch only, never forced)                                                                                    |
-| GitHub                    | `github_discussion`, `github_comments`, `github_post_comment` (with `reply_to` for review threads), and, on pull requests, the diff, checks, reviews, and line comments |
-| Progress                  | `update_plan`, a checklist comment the agent keeps up to date                                                                                                           |
-| Web                       | `web_search`, `web_fetch`, and the repository's skills                                                                                                                  |
+| Kind                      | Tools                                                                                                                                                              |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Files and shell           | `read`, `write`, `edit`, `apply_patch`, `bash`                                                                                                                     |
+| Git, with the App's token | `git_fetch`, `git_pull`, `git_merge`, `git_push` (its own branch only, never forced)                                                                               |
+| GitHub                    | `github_discussion`, `github_comments`, `github_post_comment` (with `reply_to` for review threads), and, on pull requests, the diff, reviews, and line comments    |
+| Checks                    | `github_pull_request_checks`, and `github_check_failure` for a failed check's output, annotations, failed steps, and log (the whole log is saved in the workspace) |
+| Progress                  | `update_plan`, a checklist comment the agent keeps up to date                                                                                                      |
+| Web                       | `web_search`, `web_fetch`, and the repository's skills                                                                                                             |
 
 Its final answer is posted for it. It uses `github_post_comment` for anything else, such as answering each line comment in its own thread.
+
+## When checks fail
+
+Once the agent has been mentioned on a pull request, the app follows it. When a check fails on the pull request's latest commit, the agent looks into it without being asked.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant GH as GitHub
+  participant MB as DeliveryMailbox
+  participant AS as AgentSession
+
+  GH->>MB: check_run completed: failure
+  MB->>GH: is it on the latest commit?
+  Note over MB: older commits, passing,<br/>and skipped checks are ignored
+  MB->>AS: "these checks failed" + delivery
+  AS->>GH: github_check_failure: output,<br/>annotations, failed steps, log
+  alt the fix is clear
+    AS->>GH: commit and push to the branch
+  end
+  AS->>MB: complete(cause and fix)
+  MB->>GH: post it on the pull request
+```
+
+Checks that fail together arrive as one request. A check that fails after the agent pushes a fix starts another turn, so a fix the agent can't get right keeps coming back to it.
 
 ## Labels
 
@@ -174,7 +200,7 @@ New issues and pull requests are labeled by [Workers AI's Clef](https://develope
 ```text
 src/
 ├── Worker.ts                     Ingress Worker: webhook routes and the delivery API
-├── GithubBot.ts                  GitHub callbacks: labels, mention access, the request, handoff
+├── GithubBot.ts                  GitHub callbacks: labels, mentions, failed checks, handoff
 ├── DeliveryMailboxDO.ts          the mailbox Durable Object
 ├── AgentSessionDO.ts             the agent: model, tools, system prompt, session start and resume
 ├── DeliveryTurn.ts               one delivery's turn: send the prompt, report back, recover after restarts
@@ -182,6 +208,7 @@ src/
 ├── GitHubTools.ts, GitTools.ts   the agent's GitHub and git tools
 ├── DeliveryPlanTool.ts           update_plan
 ├── BashTool.ts                   bash on the shell or the container
+├── CheckTools.ts                 a pull request's checks, and why one failed
 ├── Workspace.ts                  the AgentSession's view of its Computer
 ├── AutoLabel.ts                  Workers AI labels
 └── computer/                     the Computer Durable Object, its Worker, and the container image
