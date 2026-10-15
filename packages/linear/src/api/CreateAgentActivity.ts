@@ -7,10 +7,7 @@
 import { Array as Arr, Effect, Match, Predicate, Schema } from 'effect'
 
 import { LinearAgentActivityId, LinearAgentSessionId } from '../LinearIdentity'
-import {
-	LinearAgentActivityReceipt,
-	type LinearCreateAgentActivityRequest,
-} from '../LinearModels'
+import { LinearAgentActivityReceipt, type LinearCreateAgentActivityRequest } from '../LinearModels'
 import { failLinearMutation } from './LinearApiErrors'
 import { linearGraphql } from './LinearGraphql'
 
@@ -72,7 +69,9 @@ const activityInput = (request: LinearCreateAgentActivityRequest): CreateAgentAc
 					...base,
 					content,
 					signal: 'select',
-					signalMetadata: { options: choices.map((option) => SelectOption.make({ label: option, value: option })) },
+					signalMetadata: {
+						options: choices.map((option) => SelectOption.make({ label: option, value: option })),
+					},
 				}
 			},
 		}),

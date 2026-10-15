@@ -4,7 +4,7 @@ import { Effect, Layer, Queue, Schema, Stream } from 'effect'
 
 import { LinearApi } from '../src/LinearApi'
 import type { LinearIssueCreated, LinearSubscribedEvents } from '../src/LinearCallbackEvents'
-import { LinearCallbacks } from '../src/LinearCallbacks'
+import type { LinearCallbackHandlers } from '../src/LinearCallbacks'
 import { makeLinearEventProcessor } from '../src/LinearEventProcessor'
 import {
 	canonicalLinearFileUrl,
@@ -88,11 +88,11 @@ describe('Linear file discovery', () => {
 			const description = `Spec ![diagram.png](${imageUrl}) and [site](https://example.com)`
 			const createdEvents = yield* Queue.unbounded<LinearIssueCreated>()
 			const subscribedEvents = yield* Queue.unbounded<LinearSubscribedEvents>()
+			const handlers: LinearCallbackHandlers<never, never> = {
+				onIssueCreated: (event) => Effect.asVoid(Queue.offer(createdEvents, event)),
+				onSubscribedEvent: (event) => Effect.asVoid(Queue.offer(subscribedEvents, event)),
+			}
 			const services = Layer.mergeAll(
-				LinearCallbacks.layer({
-					onIssueCreated: (event) => Effect.asVoid(Queue.offer(createdEvents, event)),
-					onSubscribedEvent: (event) => Effect.asVoid(Queue.offer(subscribedEvents, event)),
-				}),
 				Layer.mock(LinearApi, {}),
 				Layer.mock(MailboxSubscriptions, {
 					subscribe: () => Effect.die('not used'),
@@ -102,6 +102,7 @@ describe('Linear file discovery', () => {
 			)
 			const processor = makeLinearEventProcessor({
 				namespace,
+				handlers,
 				bot: { organizationId: linearOrganizationId, appUserId: linearAppUserId },
 			})
 			const admission = (eventId: string, payload: Schema.Json) =>

@@ -5,7 +5,6 @@
  */
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto'
 import { describe, it } from '@effect/vitest'
-import { expect } from 'vite-plus/test'
 import {
 	Channels,
 	ChannelsMemory,
@@ -18,6 +17,7 @@ import {
 } from '@humanlayer/channels-delivery'
 import { Clock, Config, Data, Effect, Layer, Predicate, Queue, Redacted, Ref, Schedule, type Schema } from 'effect'
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/http'
+import { expect } from 'vite-plus/test'
 
 import { LinearAuth, LinearBot } from '../src'
 import { LinearApi, LinearApiError } from '../src/LinearApi'
@@ -47,7 +47,9 @@ const describeActivity = (request: LinearCreateAgentActivityRequest): Shown => {
 	const { content } = request
 	const kind = Predicate.isTagged(content, 'Thought') && request.ephemeral ? 'thought~' : content._tag.toLowerCase()
 	const options =
-		Predicate.isTagged(content, 'Elicitation') && content.options !== undefined ? ` [${content.options.join('|')}]` : ''
+		Predicate.isTagged(content, 'Elicitation') && content.options !== undefined
+			? ` [${content.options.join('|')}]`
+			: ''
 	return `${kind}: ${content.body}${options}`
 }
 
@@ -95,11 +97,19 @@ const makeFakeLinear = (options: FakeLinearOptions = {}) =>
 							retryable: false,
 						})
 					}
-					if (options.during !== undefined && request.content.body === options.during.body) yield* options.during.run
+					if (options.during !== undefined && request.content.body === options.during.body)
+						yield* options.during.run
 					yield* Ref.update(activityIds, (ids) => [...ids, activityId])
 					yield* Queue.offer(shown, describeActivity(request))
-					if (request.content.body === options.loseAnswerFor && (yield* Ref.getAndUpdate(answersLost, (n) => n + 1)) === 0) {
-						return yield* LinearApiError.make({ operation: 'create_agent_activity', reason: 'unavailable', retryable: true })
+					if (
+						request.content.body === options.loseAnswerFor &&
+						(yield* Ref.getAndUpdate(answersLost, (n) => n + 1)) === 0
+					) {
+						return yield* LinearApiError.make({
+							operation: 'create_agent_activity',
+							reason: 'unavailable',
+							retryable: true,
+						})
 					}
 					return LinearAgentActivityReceipt.make({
 						activityId: LinearAgentActivityId.make(activityId),
@@ -109,10 +119,16 @@ const makeFakeLinear = (options: FakeLinearOptions = {}) =>
 			updateAgentSession: (request) =>
 				Effect.gen(function* () {
 					if (request.addedExternalUrls !== undefined) {
-						yield* Queue.offer(shown, `link: ${request.addedExternalUrls.map(({ label, url }) => `${label} ${url}`).join(', ')}`)
+						yield* Queue.offer(
+							shown,
+							`link: ${request.addedExternalUrls.map(({ label, url }) => `${label} ${url}`).join(', ')}`,
+						)
 					}
 					if (request.plan !== undefined) {
-						yield* Queue.offer(shown, `plan: ${request.plan.map(({ content, status }) => `${content} [${status}]`).join(', ')}`)
+						yield* Queue.offer(
+							shown,
+							`plan: ${request.plan.map(({ content, status }) => `${content} [${status}]`).join(', ')}`,
+						)
 					}
 				}),
 			createComment: (request) =>
@@ -160,13 +176,17 @@ const startBot = (api: Layer.Layer<LinearApi>) =>
 						clientId: Config.succeed(linearOauthClientId),
 						clientSecret: Config.succeed(Redacted.make('unused-secret')),
 					}),
-					linearApi: api,
 					handlers: {
 						onAgentSessionCreated: (_event, delivery) =>
 							Queue.offer(events, Event.SessionCreated({ delivery })).pipe(
 								Effect.andThen(
 									delivery.handoff({
-										links: [ExternalLink.make({ label: 'Run log', url: 'https://agent.example.com/runs/1' })],
+										links: [
+											ExternalLink.make({
+												label: 'Run log',
+												url: 'https://agent.example.com/runs/1',
+											}),
+										],
 									}),
 								),
 							),
@@ -175,14 +195,16 @@ const startBot = (api: Layer.Layer<LinearApi>) =>
 								Effect.asVoid,
 							),
 						onIssueCreated: (_event, delivery) =>
-							Queue.offer(events, Event.IssueCreated({ delivery })).pipe(Effect.andThen(delivery.handoff())),
+							Queue.offer(events, Event.IssueCreated({ delivery })).pipe(
+								Effect.andThen(delivery.handoff()),
+							),
 					},
 				}),
 			],
 			eventProcessing: { concurrency: 1, leaseMs: 30_000 },
 			storage: ChannelsMemory.make({ polling: { intervalMs: 10 } }),
 		})
-		const started = yield* Effect.promise(() => bot.start(NodeCrypto.layer, bot.deliveryApi))
+		const started = yield* Effect.promise(() => bot.start(Layer.merge(NodeCrypto.layer, api), bot.deliveryApi))
 		yield* Effect.addFinalizer(() => Effect.promise(started.stop))
 		/** The remote worker's HTTP client: each request goes straight to the bot's handler. */
 		const http = HttpClient.make((request) =>
@@ -259,7 +281,10 @@ describe('Linear remote delivery: Agent Session', () => {
 				yield* working('Running tests')
 				expect(yield* Queue.take(linear.shown)).toBe('thought~: Running tests')
 				const summary = MessageId.make('summary')
-				yield* client.messages.create({ ...target, message: { messageId: summary, markdown: 'Summary: all green.' } })
+				yield* client.messages.create({
+					...target,
+					message: { messageId: summary, markdown: 'Summary: all green.' },
+				})
 				expect(yield* Queue.take(linear.shown)).toBe('thought: Summary: all green.')
 				const edit = yield* client.messages
 					.update({ ...target, messageId: summary, message: { markdown: 'other' } })
@@ -285,85 +310,113 @@ describe('Linear remote delivery: Agent Session', () => {
 			}),
 	)
 
-	it.live('a response Linear made but whose answer was lost is sent again under the same ID and shown once', ({ expect }) =>
-		Effect.gen(function* () {
-			const linear = yield* makeFakeLinear({ loseAnswerFor: 'Done.' })
-			const { client, delivery, target } = yield* handOffSession(linear.api, linear.shown)
-			yield* client.complete(target)
-			expect(yield* Queue.take(linear.shown)).toBe('response: Done.')
-			const retired = yield* awaitRetired(client, delivery)
-			expect(retired.output.at(-1)).toMatchObject({ kind: 'PresentOutcome', state: 'Delivered', attempts: 2 })
-			expect(yield* Queue.size(linear.shown)).toBe(0)
-			const responses = (yield* Ref.get(linear.requests)).filter(({ content }) => Predicate.isTagged(content, 'Response'))
-			expect(responses).toHaveLength(2)
-			expect(responses[0]?.activityId).toBeDefined()
-			expect(responses[1]?.activityId).toBe(responses[0]?.activityId)
-		}),
+	it.live(
+		'a response Linear made but whose answer was lost is sent again under the same ID and shown once',
+		({ expect }) =>
+			Effect.gen(function* () {
+				const linear = yield* makeFakeLinear({ loseAnswerFor: 'Done.' })
+				const { client, delivery, target } = yield* handOffSession(linear.api, linear.shown)
+				yield* client.complete(target)
+				expect(yield* Queue.take(linear.shown)).toBe('response: Done.')
+				const retired = yield* awaitRetired(client, delivery)
+				expect(retired.output.at(-1)).toMatchObject({ kind: 'PresentOutcome', state: 'Delivered', attempts: 2 })
+				expect(yield* Queue.size(linear.shown)).toBe(0)
+				const responses = (yield* Ref.get(linear.requests)).filter(({ content }) =>
+					Predicate.isTagged(content, 'Response'),
+				)
+				expect(responses).toHaveLength(2)
+				expect(responses[0]?.activityId).toBeDefined()
+				expect(responses[1]?.activityId).toBe(responses[0]?.activityId)
+			}),
 	)
 
-	it.live('ending a turn with a question posts an elicitation with choices; the reply is a new delivery', ({ expect }) =>
-		Effect.gen(function* () {
-			const linear = yield* makeFakeLinear()
-			const { client, delivery, target, send, events } = yield* handOffSession(linear.api, linear.shown)
-			yield* client.complete({
-				...target,
-				payload: { markdown: 'Which environment?', awaitingInput: { options: ['staging', 'production'] } },
-			})
-			expect(yield* Queue.take(linear.shown)).toBe('elicitation: Which environment? [staging|production]')
-			yield* awaitRetired(client, delivery)
-			yield* send(promptPayload('73000000-0000-4000-8000-0000000000aa', null), 'AgentSessionEvent', 'delivery-reply')
-			const reply = yield* Queue.take(events)
-			expect(reply._tag).toBe('SessionPrompted')
-			expect(reply.delivery.deliveryId === delivery.deliveryId).toBe(false)
-			expect(reply.delivery.conversationId).toBe(delivery.conversationId)
-		}),
+	it.live(
+		'ending a turn with a question posts an elicitation with choices; the reply is a new delivery',
+		({ expect }) =>
+			Effect.gen(function* () {
+				const linear = yield* makeFakeLinear()
+				const { client, delivery, target, send, events } = yield* handOffSession(linear.api, linear.shown)
+				yield* client.complete({
+					...target,
+					payload: { markdown: 'Which environment?', awaitingInput: { options: ['staging', 'production'] } },
+				})
+				expect(yield* Queue.take(linear.shown)).toBe('elicitation: Which environment? [staging|production]')
+				yield* awaitRetired(client, delivery)
+				yield* send(
+					promptPayload('73000000-0000-4000-8000-0000000000aa', null),
+					'AgentSessionEvent',
+					'delivery-reply',
+				)
+				const reply = yield* Queue.take(events)
+				expect(reply._tag).toBe('SessionPrompted')
+				expect(reply.delivery.deliveryId === delivery.deliveryId).toBe(false)
+				expect(reply.delivery.conversationId).toBe(delivery.conversationId)
+			}),
 	)
 
-	it.live('Stop marks the handed-off turn; the worker fails it with one error, then the stop prompt runs', ({ expect }) =>
-		Effect.gen(function* () {
-			const linear = yield* makeFakeLinear()
-			const { client, delivery, target, send, events } = yield* handOffSession(linear.api, linear.shown)
-			yield* send(promptPayload('73000000-0000-4000-8000-0000000000bb', 'stop'), 'AgentSessionEvent', 'delivery-stop')
-			const stopped = yield* client
-				.status(target)
-				.pipe(Effect.repeat({ until: ({ interruptRequested }) => interruptRequested, schedule: Schedule.spaced('10 millis') }))
-			expect(stopped.stage).toBe('ExternalWaiting')
-			expect(yield* Queue.size(events)).toBe(0)
-			yield* client.fail({ ...target, payload: { markdown: 'Stopped as requested.' } })
-			expect(yield* Queue.take(linear.shown)).toBe('error: Stopped as requested.')
-			const stop = yield* Queue.take(events)
-			expect(stop).toMatchObject({ _tag: 'SessionPrompted', signal: 'stop' })
-			const retired = yield* awaitRetired(client, delivery)
-			expect(retired.interruptRequested).toBe(true)
-			expect(yield* Queue.size(linear.shown)).toBe(0)
-		}),
+	it.live(
+		'Stop marks the handed-off turn; the worker fails it with one error, then the stop prompt runs',
+		({ expect }) =>
+			Effect.gen(function* () {
+				const linear = yield* makeFakeLinear()
+				const { client, delivery, target, send, events } = yield* handOffSession(linear.api, linear.shown)
+				yield* send(
+					promptPayload('73000000-0000-4000-8000-0000000000bb', 'stop'),
+					'AgentSessionEvent',
+					'delivery-stop',
+				)
+				const stopped = yield* client.status(target).pipe(
+					Effect.repeat({
+						until: ({ interruptRequested }) => interruptRequested,
+						schedule: Schedule.spaced('10 millis'),
+					}),
+				)
+				expect(stopped.stage).toBe('ExternalWaiting')
+				expect(yield* Queue.size(events)).toBe(0)
+				yield* client.fail({ ...target, payload: { markdown: 'Stopped as requested.' } })
+				expect(yield* Queue.take(linear.shown)).toBe('error: Stopped as requested.')
+				const stop = yield* Queue.take(events)
+				expect(stop).toMatchObject({ _tag: 'SessionPrompted', signal: 'stop' })
+				const retired = yield* awaitRetired(client, delivery)
+				expect(retired.interruptRequested).toBe(true)
+				expect(yield* Queue.size(linear.shown)).toBe(0)
+			}),
 	)
 })
 
 describe('Linear remote delivery: output accepted while an earlier Linear output is being sent', () => {
-	it.live('a result sent while the summary thought is being posted is shown after it, and the next prompt then runs', ({ expect }) =>
-		Effect.gen(function* () {
-			const during = yield* Ref.make<Effect.Effect<void>>(Effect.void)
-			const linear = yield* makeFakeLinear({
-				during: { body: 'Summary', run: Effect.flatten(Ref.getAndSet(during, Effect.void)) },
-			})
-			const { client, delivery, target, send, events } = yield* handOffSession(linear.api, linear.shown)
-			yield* send(promptPayload('73000000-0000-4000-8000-0000000000cc', null), 'AgentSessionEvent', 'delivery')
-			const accepted = yield* Ref.make<ReadonlyArray<string>>([])
-			yield* Ref.set(
-				during,
-				client.complete({ ...target, payload: { markdown: 'Done.' } }).pipe(
-					Effect.flatMap(({ status }) => Ref.update(accepted, (all) => [...all, status])),
-					Effect.orDie,
-				),
-			)
-			yield* client.messages.create({ ...target, message: { messageId: MessageId.make('summary'), markdown: 'Summary' } })
-			expect(yield* takeShown(linear.shown, 2)).toEqual(['thought: Summary', 'response: Done.'])
-			expect(yield* Ref.get(accepted)).toEqual(['accepted'])
-			yield* awaitRetired(client, delivery)
-			const next = yield* Queue.take(events)
-			expect(next._tag).toBe('SessionPrompted')
-		}),
+	it.live(
+		'a result sent while the summary thought is being posted is shown after it, and the next prompt then runs',
+		({ expect }) =>
+			Effect.gen(function* () {
+				const during = yield* Ref.make<Effect.Effect<void>>(Effect.void)
+				const linear = yield* makeFakeLinear({
+					during: { body: 'Summary', run: Effect.flatten(Ref.getAndSet(during, Effect.void)) },
+				})
+				const { client, delivery, target, send, events } = yield* handOffSession(linear.api, linear.shown)
+				yield* send(
+					promptPayload('73000000-0000-4000-8000-0000000000cc', null),
+					'AgentSessionEvent',
+					'delivery',
+				)
+				const accepted = yield* Ref.make<ReadonlyArray<string>>([])
+				yield* Ref.set(
+					during,
+					client.complete({ ...target, payload: { markdown: 'Done.' } }).pipe(
+						Effect.flatMap(({ status }) => Ref.update(accepted, (all) => [...all, status])),
+						Effect.orDie,
+					),
+				)
+				yield* client.messages.create({
+					...target,
+					message: { messageId: MessageId.make('summary'), markdown: 'Summary' },
+				})
+				expect(yield* takeShown(linear.shown, 2)).toEqual(['thought: Summary', 'response: Done.'])
+				expect(yield* Ref.get(accepted)).toEqual(['accepted'])
+				yield* awaitRetired(client, delivery)
+				const next = yield* Queue.take(events)
+				expect(next._tag).toBe('SessionPrompted')
+			}),
 	)
 
 	it.live('activity sent while the summary thought is being posted is shown after it', ({ expect }) =>
@@ -375,11 +428,14 @@ describe('Linear remote delivery: output accepted while an earlier Linear output
 			const { client, delivery, target } = yield* handOffSession(linear.api, linear.shown)
 			yield* Ref.set(
 				during,
-				client
-					.activity.set({ ...target, activity: DeliveryActivity.cases.Working.make({ message: 'Still going' }) })
+				client.activity
+					.set({ ...target, activity: DeliveryActivity.cases.Working.make({ message: 'Still going' }) })
 					.pipe(Effect.asVoid, Effect.orDie),
 			)
-			yield* client.messages.create({ ...target, message: { messageId: MessageId.make('summary'), markdown: 'Summary' } })
+			yield* client.messages.create({
+				...target,
+				message: { messageId: MessageId.make('summary'), markdown: 'Summary' },
+			})
 			expect(yield* takeShown(linear.shown, 2)).toEqual(['thought: Summary', 'thought~: Still going'])
 			yield* client.complete(target)
 			expect(yield* Queue.take(linear.shown)).toBe('response: Done.')

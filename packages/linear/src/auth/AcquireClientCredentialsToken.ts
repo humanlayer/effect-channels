@@ -2,7 +2,7 @@ import { Clock, Effect, Predicate, Redacted, Schema } from 'effect'
 import * as HttpClient from 'effect/http/HttpClient'
 import * as HttpClientRequest from 'effect/http/HttpClientRequest'
 
-import { LinearApiError } from '../LinearApi'
+import { LinearApiError } from '../LinearApiContract'
 
 const TokenResponse = Schema.Struct({
 	access_token: Schema.NonEmptyString,

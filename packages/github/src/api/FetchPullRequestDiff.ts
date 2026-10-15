@@ -1,6 +1,6 @@
 import { Effect } from 'effect'
 
-import type { GitHubPullRequestRequest } from '../GitHubApi'
+import type { GitHubPullRequestRequest } from '../GitHubApiContract'
 import { GitHubApiClient } from './GitHubApiClient'
 import { repositoryPath } from './GitHubApiProjections'
 export const fetchPullRequestDiff = Effect.fn('github.api.fetch_pull_request_diff')(function* (

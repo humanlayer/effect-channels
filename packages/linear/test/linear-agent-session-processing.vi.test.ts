@@ -9,7 +9,7 @@ import { Effect, Layer, Ref } from 'effect'
 
 import { TEST_DELIVERY_IDEMPOTENCY_KEY, makeTestDeliveryExecution } from '../../delivery/test/delivery-execution'
 import { LinearApi, LinearApiError } from '../src/LinearApi'
-import { LinearCallbacks, type LinearCallbackHandlers } from '../src/LinearCallbacks'
+import type { LinearCallbackHandlers } from '../src/LinearCallbacks'
 import { makeLinearEventProcessor } from '../src/LinearEventProcessor'
 import { LinearAgentActivityId } from '../src/LinearIdentity'
 import { LinearActivityContent, LinearAgentActivityReceipt } from '../src/LinearModels'
@@ -26,34 +26,35 @@ import {
 } from './fixtures'
 
 const namespace = 'linear-processing-test'
-const processor = makeLinearEventProcessor({
-	namespace,
-	bot: { organizationId: linearOrganizationId, appUserId: linearAppUserId },
-	oauthClientId: linearOauthClientId,
-})
-
-const makeLayer = <E>(
+/** The processor running `handlers`, and the services it runs with. */
+const makeHarness = <E>(
 	handlers: LinearCallbackHandlers<E, never>,
 	createAgentActivity: (
 		request: LinearCreateAgentActivityRequest,
 	) => Effect.Effect<LinearAgentActivityReceipt, LinearApiError>,
-) =>
-	Layer.mergeAll(
-		LinearCallbacks.layer(handlers),
+) => ({
+	processor: makeLinearEventProcessor({
+		namespace,
+		bot: { organizationId: linearOrganizationId, appUserId: linearAppUserId },
+		oauthClientId: linearOauthClientId,
+		handlers,
+	}),
+	layer: Layer.mergeAll(
 		Layer.mock(LinearApi, { createAgentActivity }),
 		Layer.mock(MailboxSubscriptions, {
 			isSubscribed: () => Effect.succeed(false),
 			subscribe: () => Effect.die('not used'),
 			unsubscribe: () => Effect.die('not used'),
 		}),
-	)
+	),
+})
 
 describe('Linear Agent Session processing', () => {
 	it.effect('emits one ephemeral thought before the created callback', ({ expect }) =>
 		Effect.gen(function* () {
 			const order = yield* Ref.make<ReadonlyArray<string>>([])
 			const requests = yield* Ref.make<ReadonlyArray<LinearCreateAgentActivityRequest>>([])
-			const layer = makeLayer(
+			const { processor, layer } = makeHarness(
 				{
 					onAgentSessionCreated: (event) =>
 						Ref.update(order, (values) => [...values, 'callback']).pipe(
@@ -95,71 +96,79 @@ describe('Linear Agent Session processing', () => {
 		}),
 	)
 
-	it.effect('sends the automatic thought under the delivery\'s key, so a callback retry does not post it twice', ({ expect }) =>
-		Effect.gen(function* () {
-			const attempts = yield* Ref.make(0)
-			const requests = yield* Ref.make<ReadonlyArray<LinearCreateAgentActivityRequest>>([])
-			const posted = yield* Ref.make<ReadonlyArray<string>>([])
-			const layer = makeLayer(
-				{
-					onAgentSessionCreated: () =>
-						Ref.updateAndGet(attempts, (value) => value + 1).pipe(
-							Effect.flatMap((attempt) =>
-								attempt === 1 ? Effect.fail({ retryable: true }) : Effect.void,
+	it.effect(
+		"sends the automatic thought under the delivery's key, so a callback retry does not post it twice",
+		({ expect }) =>
+			Effect.gen(function* () {
+				const attempts = yield* Ref.make(0)
+				const requests = yield* Ref.make<ReadonlyArray<LinearCreateAgentActivityRequest>>([])
+				const posted = yield* Ref.make<ReadonlyArray<string>>([])
+				const { processor, layer } = makeHarness(
+					{
+						onAgentSessionCreated: () =>
+							Ref.updateAndGet(attempts, (value) => value + 1).pipe(
+								Effect.flatMap((attempt) =>
+									attempt === 1 ? Effect.fail({ retryable: true }) : Effect.void,
+								),
 							),
-						),
-				},
-				(request) =>
-					Effect.gen(function* () {
-						yield* Ref.update(requests, (values) => [...values, request])
-						const activityId = request.activityId ?? 'generated-by-provider'
-						/** Linear refuses a second activity with an ID it has seen. */
-						if ((yield* Ref.get(posted)).includes(activityId)) {
-							return yield* LinearApiError.make({
-								operation: 'create_agent_activity',
-								reason: 'already_exists',
-								retryable: false,
+					},
+					(request) =>
+						Effect.gen(function* () {
+							yield* Ref.update(requests, (values) => [...values, request])
+							const activityId = request.activityId ?? 'generated-by-provider'
+							/** Linear refuses a second activity with an ID it has seen. */
+							if ((yield* Ref.get(posted)).includes(activityId)) {
+								return yield* LinearApiError.make({
+									operation: 'create_agent_activity',
+									reason: 'already_exists',
+									retryable: false,
+								})
+							}
+							yield* Ref.update(posted, (ids) => [...ids, activityId])
+							return LinearAgentActivityReceipt.make({
+								activityId: LinearAgentActivityId.make(activityId),
+								sessionId: request.sessionId,
 							})
-						}
-						yield* Ref.update(posted, (ids) => [...ids, activityId])
-						return LinearAgentActivityReceipt.make({
-							activityId: LinearAgentActivityId.make(activityId),
-							sessionId: request.sessionId,
-						})
-					}),
-			)
-			const admission = yield* linearAgentSessionAdmission(agentSessionPayloads[0])
-			const first = yield* makeTestDeliveryExecution()
-			yield* processor.process([admission], first.execution).pipe(Effect.provide(layer), Effect.flip)
-			const retry = yield* first.retry
-			const result = yield* processor.process([admission], retry.execution).pipe(Effect.provide(layer))
-			expect(result).toEqual(ProviderEventHandled.make({}))
-			expect(yield* Ref.get(attempts)).toEqual(2)
-			const captured = yield* Ref.get(requests)
-			expect(captured.map(({ activityId }) => activityId)).toEqual([
-				TEST_DELIVERY_IDEMPOTENCY_KEY,
-				TEST_DELIVERY_IDEMPOTENCY_KEY,
-			])
-			expect(yield* Ref.get(posted)).toEqual([TEST_DELIVERY_IDEMPOTENCY_KEY])
-		}),
+						}),
+				)
+				const admission = yield* linearAgentSessionAdmission(agentSessionPayloads[0])
+				const first = yield* makeTestDeliveryExecution()
+				yield* processor.process([admission], first.execution).pipe(Effect.provide(layer), Effect.flip)
+				const retry = yield* first.retry
+				const result = yield* processor.process([admission], retry.execution).pipe(Effect.provide(layer))
+				expect(result).toEqual(ProviderEventHandled.make({}))
+				expect(yield* Ref.get(attempts)).toEqual(2)
+				const captured = yield* Ref.get(requests)
+				expect(captured.map(({ activityId }) => activityId)).toEqual([
+					TEST_DELIVERY_IDEMPOTENCY_KEY,
+					TEST_DELIVERY_IDEMPOTENCY_KEY,
+				])
+				expect(yield* Ref.get(posted)).toEqual([TEST_DELIVERY_IDEMPOTENCY_KEY])
+			}),
 	)
 
 	it.effect('fails the attempt as retryable when the automatic thought cannot reach Linear', ({ expect }) =>
 		Effect.gen(function* () {
-			const layer = makeLayer({ onAgentSessionCreated: () => Effect.die('must not run') }, () =>
-				Effect.fail(LinearApiError.make({ operation: 'create_agent_activity', reason: 'unavailable', retryable: true })),
+			const { processor, layer } = makeHarness({ onAgentSessionCreated: () => Effect.die('must not run') }, () =>
+				Effect.fail(
+					LinearApiError.make({ operation: 'create_agent_activity', reason: 'unavailable', retryable: true }),
+				),
 			)
 			const result = yield* processor
 				.process([yield* linearAgentSessionAdmission(agentSessionPayloads[0])], yield* firstAttempt())
 				.pipe(Effect.provide(layer), Effect.flip)
-			expect(result).toMatchObject({ _tag: 'ProviderEventExecutionFailed', retryable: true, safeCode: 'initial_thought_failed' })
+			expect(result).toMatchObject({
+				_tag: 'ProviderEventExecutionFailed',
+				retryable: true,
+				safeCode: 'initial_thought_failed',
+			})
 		}),
 	)
 
 	it.effect('routes prompted events without an automatic thought', ({ expect }) =>
 		Effect.gen(function* () {
 			const prompts = yield* Ref.make<ReadonlyArray<string>>([])
-			const layer = makeLayer(
+			const { processor, layer } = makeHarness(
 				{
 					onAgentSessionPrompted: (event) => Ref.update(prompts, (values) => [...values, event.prompt.body]),
 				},
@@ -175,7 +184,7 @@ describe('Linear Agent Session processing', () => {
 
 	it.effect('treats notification entry signals as supplemental when session callbacks are enabled', ({ expect }) =>
 		Effect.gen(function* () {
-			const layer = makeLayer(
+			const { processor, layer } = makeHarness(
 				{ onAgentSessionCreated: () => Effect.void, onMentioned: () => Effect.die('must not run') },
 				() => Effect.die('must not create an activity'),
 			)
@@ -190,7 +199,7 @@ describe('Linear Agent Session processing', () => {
 		Effect.gen(function* () {
 			const payload = structuredClone(agentSessionPayloads[0])
 			payload.agentSession.organizationId = 'different-organization'
-			const layer = makeLayer({ onAgentSessionCreated: () => Effect.die('must not run') }, () =>
+			const { processor, layer } = makeHarness({ onAgentSessionCreated: () => Effect.die('must not run') }, () =>
 				Effect.die('must not create an activity'),
 			)
 			const result = yield* processor

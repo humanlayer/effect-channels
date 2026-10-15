@@ -1,6 +1,6 @@
 import { Effect, Schema } from 'effect'
 
-import type { GitHubRemoveIssueLabel } from '../GitHubApi'
+import type { GitHubRemoveIssueLabel } from '../GitHubApiContract'
 import { GitHubApiClient } from './GitHubApiClient'
 import { label, repositoryPath } from './GitHubApiProjections'
 import { Label } from './GitHubApiSchemas'

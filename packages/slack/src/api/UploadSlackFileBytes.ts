@@ -3,7 +3,7 @@ import * as FetchHttpClient from 'effect/http/FetchHttpClient'
 import * as HttpClient from 'effect/http/HttpClient'
 import * as HttpClientRequest from 'effect/http/HttpClientRequest'
 
-import { SlackApiError } from '../SlackApi'
+import { SlackApiError } from '../SlackApiContract'
 import type { SlackUploadTarget } from './GetSlackFileUploadUrl'
 
 export type UploadSlackFileBytesInput = {

@@ -1,6 +1,6 @@
 import { Effect, Schema } from 'effect'
 
-import type { LinearDeleteCommentRequest } from '../LinearApi'
+import type { LinearDeleteCommentRequest } from '../LinearApiContract'
 import { LinearCommentId } from '../LinearIdentity'
 import { failLinearMutation } from './LinearApiErrors'
 import { linearGraphql } from './LinearGraphql'

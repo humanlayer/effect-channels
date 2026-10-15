@@ -4,8 +4,8 @@
  */
 import { Layer } from 'effect'
 
-import type { DeliveryControlBackend } from './DeliveryControl'
 import type { ChannelsStorage } from './ChannelsStorage'
+import type { DeliveryControlBackend } from './DeliveryControl'
 import { MailboxBackendMemory } from './MailboxBackendMemory'
 import { MailboxSubscriptionsMemory } from './MailboxSubscriptionsMemory'
 

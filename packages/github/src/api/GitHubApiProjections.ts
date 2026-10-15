@@ -1,6 +1,6 @@
 import { Match, Predicate, Schema, Struct, type Types } from 'effect'
 
-import type { GitHubPostPullRequestReviewComment } from '../GitHubApi'
+import type { GitHubPostPullRequestReviewComment } from '../GitHubApiContract'
 import {
 	GitHubAccessLevel,
 	GitHubActionsJobInfo,

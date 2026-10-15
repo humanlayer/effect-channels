@@ -17,7 +17,7 @@ import { Effect, Layer, Match, Option, Ref, type Schema } from 'effect'
 
 import { makeTestDeliveryExecution } from '../../delivery/test/delivery-execution'
 import { LinearApi } from '../src/LinearApi'
-import { LinearCallbacks, type LinearCallbackHandlers } from '../src/LinearCallbacks'
+import type { LinearCallbackHandlers } from '../src/LinearCallbacks'
 import { makeLinearEventProcessor } from '../src/LinearEventProcessor'
 import { LinearAgentActivityId } from '../src/LinearIdentity'
 import { LinearAgentActivityReceipt, type LinearCreateAgentActivityRequest } from '../src/LinearModels'
@@ -35,11 +35,13 @@ import {
 } from './fixtures'
 
 const namespace = 'linear-processing-test'
-const processor = makeLinearEventProcessor({
-	namespace,
-	bot: { organizationId: linearOrganizationId, appUserId: linearAppUserId },
-	oauthClientId: linearOauthClientId,
-})
+const processor = <E>(handlers: LinearCallbackHandlers<E, MailboxSubscriptions>) =>
+	makeLinearEventProcessor({
+		namespace,
+		bot: { organizationId: linearOrganizationId, appUserId: linearAppUserId },
+		oauthClientId: linearOauthClientId,
+		handlers,
+	})
 
 const organizationId = '6c5940f1-4f77-4f0b-8517-45b58f3c7d21'
 const issueId = 'b33fb278-fbe0-45e4-b4eb-94b0839f51b9'
@@ -99,16 +101,11 @@ const failingExecution = (
 const withPrepared = (execution: ProviderDeliveryExecution, prepared: PreparedDeliveryInvocation) =>
 	new ProviderDeliveryExecution({ ...execution, prepared: Option.some(prepared) })
 
-const layer = <E>(
-	handlers: LinearCallbackHandlers<E, MailboxSubscriptions>,
+const layer = (
 	createAgentActivity: (
 		request: LinearCreateAgentActivityRequest,
 	) => Effect.Effect<LinearAgentActivityReceipt> = () => Effect.die('no activity expected'),
-) =>
-	Layer.mergeAll(
-		LinearCallbacks.layer(handlers).pipe(Layer.provideMerge(MailboxSubscriptionsMemory)),
-		Layer.mock(LinearApi, { createAgentActivity }),
-	)
+) => Layer.mergeAll(MailboxSubscriptionsMemory, Layer.mock(LinearApi, { createAgentActivity }))
 
 const admittedEvent = (payload: Schema.Json, deliveryId: string) =>
 	Effect.gen(function* () {
@@ -156,8 +153,9 @@ describe('Linear delivery preparation', () => {
 					]),
 					withPrepared(test.execution, multiple),
 				]
+				const created = processor({ onAgentSessionCreated: () => Effect.die('must not run') })
 				for (const execution of executions) {
-					expect(yield* processor.process([admission], execution).pipe(Effect.flip)).toEqual(
+					expect(yield* created.process([admission], execution).pipe(Effect.flip)).toEqual(
 						ProviderEventExecutionFailed.make({
 							provider: 'linear',
 							retryable: false,
@@ -167,24 +165,24 @@ describe('Linear delivery preparation', () => {
 				}
 				expect(yield* Ref.get(test.preparations)).toEqual([])
 				expect(yield* Ref.get(test.handoffs)).toEqual([])
-			}).pipe(Effect.provide(layer({ onAgentSessionCreated: () => Effect.die('must not run') }))),
+			}).pipe(Effect.provide(layer())),
 	)
 
 	it.effect('prepares a session destination once, before the automatic thought and the callback', ({ expect }) =>
 		Effect.gen(function* () {
 			const order = yield* makeOrderLog
 			const test = yield* makeTestDeliveryExecution()
-			const result = yield* processor
+			const result = yield* processor({
+				onAgentSessionCreated: () => Ref.update(order, (values) => [...values, 'callback']),
+			})
 				.process(
 					[yield* linearAgentSessionAdmission(agentSessionPayloads[0])],
 					recordingExecution(test.execution, order),
 				)
 				.pipe(
 					Effect.provide(
-						layer(
-							{ onAgentSessionCreated: () => Ref.update(order, (values) => [...values, 'callback']) },
-							(request) =>
-								Ref.update(order, (values) => [...values, 'thought']).pipe(Effect.as(receipt(request))),
+						layer((request) =>
+							Ref.update(order, (values) => [...values, 'thought']).pipe(Effect.as(receipt(request))),
 						),
 					),
 				)
@@ -222,9 +220,9 @@ describe('Linear delivery preparation', () => {
 				'delivery-source-comment',
 			)
 			const test = yield* makeTestDeliveryExecution()
-			yield* processor
+			yield* processor({ onAgentSessionPrompted: () => Effect.void })
 				.process([admission], test.execution)
-				.pipe(Effect.provide(layer({ onAgentSessionPrompted: () => Effect.void })))
+				.pipe(Effect.provide(layer()))
 			const [prepared] = yield* Ref.get(test.preparations)
 			expect(prepared?.callbacks[0].name).toBe('onAgentSessionPrompted')
 			expect(prepared?.callbacks[0].activationTarget).toEqual({
@@ -239,9 +237,9 @@ describe('Linear delivery preparation', () => {
 	it.effect('prepares an issue destination for a comment mention', ({ expect }) =>
 		Effect.gen(function* () {
 			const test = yield* makeTestDeliveryExecution()
-			const result = yield* processor
+			const result = yield* processor({ onMentioned: () => Effect.void })
 				.process([linearNotificationAdmission(appUserNotificationPayloads[1])], test.execution)
-				.pipe(Effect.provide(layer({ onMentioned: () => Effect.void })))
+				.pipe(Effect.provide(layer()))
 			expect(result).toEqual(ProviderEventHandled.make({}))
 			expect(yield* Ref.get(test.preparations)).toEqual([
 				{
@@ -268,9 +266,9 @@ describe('Linear delivery preparation', () => {
 	it.effect('prepares an issue destination with the issue as activation for an assignment', ({ expect }) =>
 		Effect.gen(function* () {
 			const test = yield* makeTestDeliveryExecution()
-			yield* processor
+			yield* processor({ onAssigned: () => Effect.void })
 				.process([linearNotificationAdmission(appUserNotificationPayloads[2])], test.execution)
-				.pipe(Effect.provide(layer({ onAssigned: () => Effect.void })))
+				.pipe(Effect.provide(layer()))
 			const [prepared] = yield* Ref.get(test.preparations)
 			expect(prepared?.callbacks[0].name).toBe('onAssigned')
 			expect(prepared?.callbacks[0].destination).toEqual({
@@ -289,16 +287,12 @@ describe('Linear delivery preparation', () => {
 	it.effect('does not prepare a batch it ignores', ({ expect }) =>
 		Effect.gen(function* () {
 			const test = yield* makeTestDeliveryExecution()
-			const result = yield* processor
+			const result = yield* processor({
+				onAgentSessionCreated: () => Effect.void,
+				onMentioned: () => Effect.die('must not run'),
+			})
 				.process([linearNotificationAdmission(appUserNotificationPayloads[0])], test.execution)
-				.pipe(
-					Effect.provide(
-						layer({
-							onAgentSessionCreated: () => Effect.void,
-							onMentioned: () => Effect.die('must not run'),
-						}),
-					),
-				)
+				.pipe(Effect.provide(layer()))
 			expect(result).toEqual(ProviderEventIgnored.make({ reason: 'supplemental_signal' }))
 			expect(yield* Ref.get(test.preparations)).toEqual([])
 		}),
@@ -308,14 +302,12 @@ describe('Linear delivery preparation', () => {
 		Effect.gen(function* () {
 			const seen = yield* Ref.make(Option.none<DeliveryContext>())
 			const test = yield* makeTestDeliveryExecution()
-			yield* processor.process([linearIssueCreateAdmission(namespace)], test.execution).pipe(
-				Effect.provide(
-					layer({
-						onIssueCreated: (_event, delivery) =>
-							Ref.set(seen, Option.some(delivery)).pipe(Effect.andThen(delivery.handoff())),
-					}),
-				),
-			)
+			yield* processor({
+				onIssueCreated: (_event, delivery) =>
+					Ref.set(seen, Option.some(delivery)).pipe(Effect.andThen(delivery.handoff())),
+			})
+				.process([linearIssueCreateAdmission(namespace)], test.execution)
+				.pipe(Effect.provide(layer()))
 			const delivery = Option.getOrThrow(yield* Ref.get(seen))
 			expect(delivery.deliveryId).toBe(test.execution.deliveryId)
 			expect(yield* Ref.get(test.handoffs)).toHaveLength(1)
@@ -325,7 +317,7 @@ describe('Linear delivery preparation', () => {
 	it.effect('reruns the saved callback on retry after the first attempt subscribed the issue', ({ expect }) =>
 		Effect.gen(function* () {
 			const calls = yield* Ref.make<ReadonlyArray<string>>([])
-			const services = layer({
+			const retried = processor({
 				onIssueCreated: (event) =>
 					Effect.gen(function* () {
 						const attempt = (yield* Ref.updateAndGet(calls, (values) => [...values, 'created'])).length
@@ -338,13 +330,13 @@ describe('Linear delivery preparation', () => {
 			const first = yield* makeTestDeliveryExecution()
 
 			const outcome = yield* Effect.gen(function* () {
-				const failure = yield* processor.process([admission], first.execution).pipe(Effect.flip)
+				const failure = yield* retried.process([admission], first.execution).pipe(Effect.flip)
 				const retry = yield* first.retry
-				const result = yield* processor.process([admission], retry.execution)
+				const result = yield* retried.process([admission], retry.execution)
 				const subscriptions = yield* MailboxSubscriptions
 				const subscribed = yield* subscriptions.isSubscribed({ mailboxKey: deliveryMailboxKey(admission) })
 				return { failure, retry, result, subscribed }
-			}).pipe(Effect.provide(services))
+			}).pipe(Effect.provide(layer()))
 
 			expect(outcome.failure).toEqual(
 				ProviderEventExecutionFailed.make({ provider: 'linear', retryable: true, safeCode: 'callback_failed' }),
@@ -378,14 +370,9 @@ describe('Linear delivery preparation', () => {
 					}),
 				)
 			const run = (callback: string) =>
-				processor
+				processor({ onIssueCreated: () => Effect.die('must not run'), onMentioned: () => Effect.void })
 					.process([linearIssueCreateAdmission(namespace)], prepared(callback))
-					.pipe(
-						Effect.provide(
-							layer({ onIssueCreated: () => Effect.die('must not run'), onMentioned: () => Effect.void }),
-						),
-						Effect.flip,
-					)
+					.pipe(Effect.provide(layer()), Effect.flip)
 			const failed = (safeCode: string) =>
 				ProviderEventExecutionFailed.make({ provider: 'linear', retryable: false, safeCode })
 			expect(yield* run('onNewMention')).toEqual(failed('prepared_callback_missing'))
@@ -399,16 +386,9 @@ describe('Linear delivery preparation', () => {
 			const test = yield* makeTestDeliveryExecution()
 			const admission = yield* linearAgentSessionAdmission(agentSessionPayloads[0])
 			const run = (error: DeliveryPreparationConflict | DeliveryPreparationUnavailable) =>
-				processor
+				processor({ onAgentSessionCreated: () => Effect.die('must not run') })
 					.process([admission], failingExecution(test.execution, error))
-					.pipe(
-						Effect.provide(
-							layer({ onAgentSessionCreated: () => Effect.die('must not run') }, () =>
-								Effect.die('must not create a thought'),
-							),
-						),
-						Effect.flip,
-					)
+					.pipe(Effect.provide(layer(() => Effect.die('must not create a thought'))), Effect.flip)
 			expect(yield* run(DeliveryPreparationUnavailable.make({ reason: 'store offline' }))).toEqual(
 				ProviderEventExecutionFailed.make({
 					provider: 'linear',
@@ -436,12 +416,12 @@ describe('Linear stop prompts', () => {
 			expect(normal).not.toHaveProperty('interrupt')
 
 			const signals = yield* Ref.make<ReadonlyArray<string | null>>([])
-			const services = layer({
+			const prompted = processor({
 				onAgentSessionPrompted: (event) => Ref.update(signals, (values) => [...values, event.prompt.signal]),
 			})
 			for (const admission of [stop, normal]) {
 				const test = yield* makeTestDeliveryExecution()
-				yield* processor.process([admission], test.execution).pipe(Effect.provide(services))
+				yield* prompted.process([admission], test.execution).pipe(Effect.provide(layer()))
 			}
 			expect(yield* Ref.get(signals)).toEqual(['stop', null])
 		}),

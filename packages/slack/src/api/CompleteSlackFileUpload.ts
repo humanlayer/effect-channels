@@ -1,6 +1,6 @@
 import { Effect, Predicate, Schema } from 'effect'
 
-import { SlackApiError } from '../SlackApi'
+import { SlackApiError } from '../SlackApiContract'
 import type { SlackMessageTs } from '../SlackIdentity'
 import type { SlackChannelRef, SlackUploadFileInput } from '../SlackModels'
 import { SlackFileMetadata } from '../SlackWebhookEventSchemas'

@@ -1,17 +1,11 @@
-import {
-	type ChannelsProvider,
-	type DeliveryAdmissionBatch,
-	type ProviderDeliveryExecution,
-	SerialDeliveryMode,
-} from '@humanlayer/channels-delivery'
-import { Config, Effect, Layer, Match, Option, Predicate, Redacted, Schema } from 'effect'
-import type { Context, Scope } from 'effect'
+import { type ChannelsProvider, SerialDeliveryMode } from '@humanlayer/channels-delivery'
+import { Effect, Match, Option, Schema } from 'effect'
+import type { Config, Redacted } from 'effect'
 
-import { LinearApi } from './LinearApi'
-import { LinearApiLiveOptions, makeLinearApiLive } from './LinearApiLive'
+import type { LinearApi } from './LinearApi'
 import type { AuthenticationInput } from './LinearAuth'
 import * as LinearAuth from './LinearAuth'
-import { LinearCallbacks, type LinearCallbackHandlers } from './LinearCallbacks'
+import type { LinearCallbackHandlers } from './LinearCallbacks'
 import { makeLinearOutputProcessor } from './LinearDeliveryOutput'
 import { makeLinearEventProcessor } from './LinearEventProcessor'
 import { LinearOrganizationId, LinearUserId } from './LinearIdentity'
@@ -23,28 +17,35 @@ export const LinearBotConfiguration = Schema.Struct({
 })
 export type LinearBotConfiguration = typeof LinearBotConfiguration.Type
 
-export type MakeOptions<E, R, ApiError, ApiRequirements> = {
+/**
+ * @property webhookSecret - read when the bot is built, so the bot itself can be declared at the top of a module
+ * @property bot - the workspace and app user this bot answers for; webhooks for any other are refused
+ * @property auth - the app's credentials. The bot reads only the OAuth client ID from them, to check that
+ * webhooks name this app; it does not build its own `LinearApi`
+ * @property handlers - the callbacks. The application provides `LinearApi` and anything else they need, and
+ * the storage supplies `MailboxSubscriptions`. Usually `LinearApi` is
+ * `makeLinearApiLive(LinearApiLiveOptions.make({ auth, organizationId, appUserId }))` with the same `auth` and
+ * `bot`, or `LinearApiLive`, read from the environment. Sent output goes through the same `LinearApi`.
+ */
+export type MakeOptions<E, R> = {
 	readonly webhookSecret: Config.Config<Redacted.Redacted<string>>
 	readonly bot: LinearBotConfiguration | Config.Config<LinearBotConfiguration>
 	readonly auth: AuthenticationInput
 	readonly handlers: LinearCallbackHandlers<E, R>
-	readonly linearApi?: Layer.Layer<LinearApi, ApiError, ApiRequirements>
 	readonly maxBodyBytes?: number
 	readonly maxTimestampAgeMs?: number
 }
 
-export const make = <E, R, ApiError = never, ApiRequirements = never>(
-	options: MakeOptions<E, R, ApiError, ApiRequirements>,
+export const make = <E, R>(
+	options: MakeOptions<E, R>,
 ): ChannelsProvider<{
-	readonly build: ApiRequirements
-	readonly process: Exclude<R, LinearApi>
-	readonly error: Config.ConfigError | ApiError
+	readonly build: never
+	readonly process: R | LinearApi
+	readonly error: Config.ConfigError
 }> => {
-	const callbacks = LinearCallbacks.layer(options.handlers)
 	const readBotConfiguration = Schema.is(LinearBotConfiguration)(options.bot)
 		? Effect.succeed(options.bot)
 		: options.bot
-	const botConfig = Schema.is(LinearBotConfiguration)(options.bot) ? Config.succeed(options.bot) : options.bot
 	const readOauthClientId = LinearAuth.resolve(options.auth).pipe(
 		Effect.flatMap((auth) =>
 			Match.value(auth).pipe(
@@ -55,22 +56,6 @@ export const make = <E, R, ApiError = never, ApiRequirements = never>(
 			),
 		),
 	)
-	const defaultApi = makeLinearApiLive(
-		LinearApiLiveOptions.make({
-			auth: options.auth,
-			organizationId: botConfig.pipe(Config.map((bot) => bot.organizationId)),
-			appUserId: botConfig.pipe(Config.map((bot) => bot.appUserId)),
-		}),
-	)
-	const buildLinearApi: Effect.Effect<
-		Context.Context<LinearApi>,
-		Config.ConfigError | ApiError,
-		ApiRequirements | Scope.Scope
-	> = Predicate.isUndefined(options.linearApi)
-		? Layer.build(defaultApi)
-		: Layer.build(options.linearApi)
-	/** Builds the API layer so the host discovers its configuration; the live layer makes no requests until an operation runs. */
-	const discoverLinearApiConfiguration = Effect.asVoid(buildLinearApi)
 
 	return {
 		providerName: 'linear',
@@ -80,7 +65,6 @@ export const make = <E, R, ApiError = never, ApiRequirements = never>(
 			const webhookSecret = yield* options.webhookSecret
 			const bot = yield* readBotConfiguration
 			const oauthClientId = yield* readOauthClientId
-			yield* discoverLinearApiConfiguration
 			return makeLinearWebhookProvider({
 				namespace,
 				webhookSecret,
@@ -94,24 +78,17 @@ export const make = <E, R, ApiError = never, ApiRequirements = never>(
 		eventProcessor: Effect.fn('linear.bot.build_event_processor')(function* ({ namespace }) {
 			const bot = yield* readBotConfiguration
 			const oauthClientId = yield* readOauthClientId
-			const linearApi = yield* buildLinearApi
-			const processor = makeLinearEventProcessor({
+			return makeLinearEventProcessor({
 				namespace,
 				bot,
 				oauthClientId: Option.getOrUndefined(oauthClientId),
+				handlers: options.handlers,
 			})
-			return {
-				namespace: processor.namespace,
-				providerName: processor.providerName,
-				process: (admissions: DeliveryAdmissionBatch, execution: ProviderDeliveryExecution) =>
-					processor.process(admissions, execution).pipe(Effect.provide(callbacks), Effect.provide(linearApi)),
-			}
 		}),
 		/** Sends a handed-off delivery's output: Agent Activities for a session, comments for an issue. */
 		outputProcessor: Effect.fn('linear.bot.build_output_processor')(function* ({ namespace }) {
 			const bot = yield* readBotConfiguration
-			const linearApi = yield* buildLinearApi
-			return yield* makeLinearOutputProcessor({ namespace, bot }).pipe(Effect.provide(linearApi))
+			return yield* makeLinearOutputProcessor({ namespace, bot })
 		}),
 	}
 }

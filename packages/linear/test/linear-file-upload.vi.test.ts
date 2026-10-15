@@ -3,7 +3,7 @@ import { Effect, Layer, Match, Queue, Redacted, Schema } from 'effect'
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/http'
 
 import { narrowLinearProviderErrors } from '../src/api/LinearApiErrors'
-import { LinearHttpClient, makeFixedCredentialLinearHttpClient } from '../src/api/LinearHttpClient'
+import { LinearHttpClient } from '../src/api/LinearHttpClient'
 import { requestLinearFileUpload } from '../src/api/RequestLinearFileUpload'
 import { LinearApi } from '../src/LinearApi'
 import { LinearFile } from '../src/LinearFiles'
@@ -109,10 +109,10 @@ describe('Linear file upload', () => {
 	it.effect('owns the fileUpload document, variables, and signed-target decoding', ({ expect }) =>
 		Effect.gen(function* () {
 			const requests = yield* Queue.unbounded<RecordedRequest>()
-			const layer = Layer.succeed(
-				LinearHttpClient,
-				makeFixedCredentialLinearHttpClient(makeHttp(requests), issue.organizationId, Redacted.make('t')),
-			)
+			const layer = LinearHttpClient.layerFixedCredential({
+				organizationId: issue.organizationId,
+				accessToken: Redacted.make('t'),
+			}).pipe(Layer.provide(Layer.succeed(HttpClient.HttpClient, makeHttp(requests))))
 			const target = yield* requestLinearFileUpload({ issue, input }).pipe(Effect.provide(layer))
 			const [request] = Array.from(yield* Queue.takeAll(requests))
 			expect(request?.operation).toBe('LinearFileUpload')
@@ -260,14 +260,17 @@ describe('Linear file upload', () => {
 	it.effect('narrows a failed fileUpload GraphQL response through the shared provider errors', ({ expect }) =>
 		Effect.gen(function* () {
 			const requests = yield* Queue.unbounded<RecordedRequest>()
-			const layer = Layer.succeed(
-				LinearHttpClient,
-				makeFixedCredentialLinearHttpClient(
-					makeHttp(requests, {
-						fileUpload: { errors: [{ message: 'too large', extensions: { code: 'BAD_USER_INPUT' } }] },
-					}),
-					issue.organizationId,
-					Redacted.make('t'),
+			const layer = LinearHttpClient.layerFixedCredential({
+				organizationId: issue.organizationId,
+				accessToken: Redacted.make('t'),
+			}).pipe(
+				Layer.provide(
+					Layer.succeed(
+						HttpClient.HttpClient,
+						makeHttp(requests, {
+							fileUpload: { errors: [{ message: 'too large', extensions: { code: 'BAD_USER_INPUT' } }] },
+						}),
+					),
 				),
 			)
 			const error = yield* requestLinearFileUpload({ issue, input }).pipe(

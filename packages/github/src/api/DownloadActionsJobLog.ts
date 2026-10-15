@@ -1,7 +1,7 @@
 import { Effect } from 'effect'
 import * as FetchHttpClient from 'effect/http/FetchHttpClient'
 
-import type { GitHubActionsJobRequest } from '../GitHubApi'
+import type { GitHubActionsJobRequest } from '../GitHubApiContract'
 import { GitHubApiClient } from './GitHubApiClient'
 import { repositoryPath } from './GitHubApiProjections'
 export const downloadActionsJobLog = Effect.fn('github.api.download_actions_job_log')(function* (

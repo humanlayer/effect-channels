@@ -64,10 +64,9 @@ const makeOptions = (input: {
 	const slack = SlackBot.make({
 		signingSecret: Config.succeed(Redacted.make('slack-secret')),
 		deliveryMode: QueueDeliveryMode.make({}),
-		slackApi: Layer.mock(SlackApi, {}),
 		handlers: { onNewMention: () => Effect.die('no Slack events in this test') },
 	})
-	/** The fake GitHub API. The Worker supplies it to the mailbox's methods as well as to the bot. */
+	/** The fake GitHub API. */
 	const gitHubApi = Layer.mock(GitHubApi, {
 		postIssueComment: ({ issue, content }) =>
 			Effect.gen(function* () {
@@ -90,11 +89,24 @@ const makeOptions = (input: {
 		webhookSecret: Config.succeed(Redacted.make(githubWebhookSecret)),
 		deliveryMode: QueueDeliveryMode.make({}),
 		bot: { mentionNames: ['bot'], botUserId: GitHubId.make(1) },
-		gitHubApi,
 		handlers: {
 			onMentioned: (event, delivery) =>
 				Queue.offer(input.seen, { event, delivery }).pipe(Effect.andThen(delivery.handoff())),
 		},
+	})
+	/** The fake Linear API. */
+	const linearApi = Layer.mock(LinearApi, {
+		createAgentActivity: (request) =>
+			Effect.gen(function* () {
+				if (request.content.body === 'Summary')
+					yield* Effect.flatten(Ref.getAndSet(input.duringSummary, Effect.void))
+				const kind = request.ephemeral ? 'thought~' : request.content._tag.toLowerCase()
+				yield* Queue.offer(input.shown, `${kind}: ${request.content.body}`)
+				return LinearAgentActivityReceipt.make({
+					activityId: request.activityId ?? LinearAgentActivityId.make('assigned'),
+					sessionId: request.sessionId,
+				})
+			}),
 	})
 	const linear = LinearBot.make({
 		webhookSecret: Config.succeed(Redacted.make(linearWebhookSecret)),
@@ -102,19 +114,6 @@ const makeOptions = (input: {
 		auth: LinearAuth.clientCredentials({
 			clientId: Config.succeed(linearOauthClientId),
 			clientSecret: Config.succeed(Redacted.make('unused-secret')),
-		}),
-		linearApi: Layer.mock(LinearApi, {
-			createAgentActivity: (request) =>
-				Effect.gen(function* () {
-					if (request.content.body === 'Summary')
-						yield* Effect.flatten(Ref.getAndSet(input.duringSummary, Effect.void))
-					const kind = request.ephemeral ? 'thought~' : request.content._tag.toLowerCase()
-					yield* Queue.offer(input.shown, `${kind}: ${request.content.body}`)
-					return LinearAgentActivityReceipt.make({
-						activityId: request.activityId ?? LinearAgentActivityId.make('assigned'),
-						sessionId: request.sessionId,
-					})
-				}),
 		}),
 		handlers: {
 			onAgentSessionCreated: (event, delivery) =>
@@ -124,7 +123,8 @@ const makeOptions = (input: {
 		},
 	})
 	return {
-		gitHubApi,
+		/** The providers' fake APIs. The Worker supplies them to its routes and to the mailbox's methods. */
+		apis: Layer.mergeAll(Layer.mock(SlackApi, {}), gitHubApi, linearApi),
 		options: {
 			namespace: 'providers-cloudflare-test',
 			basePath: '/api/channels',
@@ -138,22 +138,28 @@ const setUp = Effect.gen(function* () {
 	const seen = yield* Queue.unbounded<Seen>()
 	const shown = yield* Queue.unbounded<string>()
 	const duringSummary = yield* Ref.make<Effect.Effect<void>>(Effect.void)
-	const { options, gitHubApi } = makeOptions({ seen, shown, duringSummary })
+	const { options, apis } = makeOptions({ seen, shown, duringSummary })
 	const bot = ChannelsCloudflare.make(options)
 	const durableObject = yield* Layer.build(DurableObjectFake)
-	const { processing, deliveryControl, processingBackend, subscriptions, deliveryControlBackend } = bot.layers.mailbox
-	const MailboxLive = Layer.merge(processing, deliveryControl).pipe(
+	/** As in a split Durable Object, which builds its processing in `mailbox()`, not from `layers.mailbox.processing`. */
+	const { deliveryControl, processingBackend, subscriptions, deliveryControlBackend } = bot.layers.mailbox
+	const MailboxLive = deliveryControl.pipe(
 		Layer.provideMerge(Layer.mergeAll(processingBackend, subscriptions, deliveryControlBackend)),
 		Layer.provideMerge(Layer.succeedContext(durableObject)),
 	)
-	/** The mailbox object's services, which Alchemy gives its constructor. Its methods get only the Worker's. */
-	const mailboxServices = yield* Layer.build(MailboxLive.pipe(Layer.provideMerge(NodeCrypto.layer)))
+	/**
+	 * The mailbox object's services, which Alchemy gives its constructor with the Worker's (here the fake
+	 * APIs; Slack's webhook half reads `SlackApi` while it is built). Its methods get only the Worker's.
+	 */
+	const mailboxServices = yield* Layer.build(
+		MailboxLive.pipe(Layer.provideMerge(Layer.merge(NodeCrypto.layer, apis))),
+	)
 	const handlers = yield* bot
 		.mailbox({ rearmAfterMs: 1_000 })
 		.pipe(Effect.provideContext(mailboxServices), Effect.orDie)
 	const mailbox = {
 		...handlers,
-		alarm: () => handlers.alarm().pipe(Effect.provide(gitHubApi)),
+		alarm: () => handlers.alarm().pipe(Effect.provide(apis)),
 	}
 	const alarm = Context.get(durableObject, DurableObjectFakeAlarm)
 	const routedTo = yield* Ref.make<ReadonlyArray<string>>([])
@@ -169,7 +175,7 @@ const setUp = Effect.gen(function* () {
 	)
 	const fetch = yield* HttpRouter.toHttpEffect(RoutesLive).pipe(
 		Effect.provideService(HttpRouter.RouterConfig, bot.routerConfig),
-		Effect.provide(Layer.merge(NodeCrypto.layer, Layer.succeed(DeliveryMailboxes, mailboxes))),
+		Effect.provide(Layer.mergeAll(NodeCrypto.layer, apis, Layer.succeed(DeliveryMailboxes, mailboxes))),
 	)
 	const request = (path: string, init: RequestInit) =>
 		fetch.pipe(

@@ -1,6 +1,6 @@
 import { Effect, Schema } from 'effect'
 
-import { type GitHubCloseIssue, GitHubIssueCloseReason } from '../GitHubApi'
+import { type GitHubCloseIssue, GitHubIssueCloseReason } from '../GitHubApiContract'
 import { GitHubApiClient } from './GitHubApiClient'
 import { issueInfo, repositoryPath } from './GitHubApiProjections'
 import { Issue } from './GitHubApiSchemas'

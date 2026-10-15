@@ -14,7 +14,6 @@ import {
 	type RawWebhookInput,
 } from '@humanlayer/channels-delivery'
 import { Context, Effect, Layer, Match, Predicate, Queue, Redacted, Schema } from 'effect'
-import { NetAddress } from 'effect/net'
 import {
 	FetchHttpClient,
 	Headers,
@@ -26,6 +25,7 @@ import {
 	HttpRouter,
 	HttpServer,
 } from 'effect/http'
+import { NetAddress } from 'effect/net'
 
 import { makeTestDeliveryExecution } from '../../delivery/test/delivery-execution'
 import { AddIssueLabelsBody } from '../src/api/AddIssueLabels'

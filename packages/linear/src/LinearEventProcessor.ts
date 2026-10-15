@@ -48,7 +48,13 @@ import {
 	LinearSubscribedEvents,
 	type LinearSubscribedIssueEvent,
 } from './LinearCallbackEvents'
-import { type LinearCallbackError, LinearCallbackName, LinearCallbacks } from './LinearCallbacks'
+import {
+	type LinearCallbackError,
+	type LinearCallbackHandlers,
+	LinearCallbackName,
+	type LinearCallbackOperations,
+	makeLinearCallbacks,
+} from './LinearCallbacks'
 import {
 	type LinearActivationTarget,
 	LinearAgentSessionDestination,
@@ -545,7 +551,7 @@ const normalizeResourceWebhook = (
 }
 
 type LinearIssueBatchWebhook = LinearResourceWebhookEvent | LinearAppUserNotificationWebhook
-type LinearEventCallbacks = LinearCallbacks['Service']
+type LinearEventCallbacks<R> = LinearCallbackOperations<R>
 
 const executionFailure = (safeCode: string, retryable: boolean) =>
 	ProviderEventExecutionFailed.make({ provider: 'linear', retryable, safeCode })
@@ -561,18 +567,18 @@ const requireHandler = <Handler>(handler: Handler | undefined) =>
 const requireCallbackInput = <A>(value: A | undefined) =>
 	Predicate.isUndefined(value) ? Effect.fail(preparedCallbackUnbuildable()) : Effect.succeed(value)
 
-const callbackFailure = <A>(effect: Effect.Effect<A, LinearCallbackError>) =>
+const callbackFailure = <A, R>(effect: Effect.Effect<A, LinearCallbackError, R>) =>
 	effect.pipe(
 		Effect.mapError((error) => executionFailure('callback_failed', error.retryable)),
 		Effect.asVoid,
 	)
 
 /** A selected callback: what to save before it runs, and how to run it with its delivery context. */
-type LinearCallbackInvocation = {
+type LinearCallbackInvocation<R> = {
 	readonly preparation: LinearDeliveryPreparation
 	readonly invoke: (
 		execution: ProviderDeliveryExecution,
-	) => Effect.Effect<void, ProviderEventExecutionFailed, LinearApi>
+	) => Effect.Effect<void, ProviderEventExecutionFailed, LinearApi | R>
 }
 
 const issueActivationTarget = (issue: LinearIssue) =>
@@ -613,7 +619,7 @@ const prepareDelivery = Effect.fn('linear.prepare_delivery')(function* (
 })
 
 /** First attempt: save the selection before any provider side effect or application code runs. */
-const runSelectedInvocation = (execution: ProviderDeliveryExecution, invocation: LinearCallbackInvocation) =>
+const runSelectedInvocation = <R>(execution: ProviderDeliveryExecution, invocation: LinearCallbackInvocation<R>) =>
 	prepareDelivery(execution, invocation.preparation).pipe(
 		Effect.andThen(invocation.invoke(execution)),
 		Effect.as(ProviderEventHandled.make({})),
@@ -626,10 +632,12 @@ const decodePreparedCallback = (prepared: PreparedDeliveryCallback) =>
 	)
 
 /** Later attempt: run the saved callback without selecting again. */
-const runPreparedInvocation = <R>(
+const runPreparedInvocation = <R, RBuild>(
 	execution: ProviderDeliveryExecution,
 	prepared: PreparedDeliveryInvocation,
-	build: (callback: LinearCallbackName) => Effect.Effect<LinearCallbackInvocation, ProviderEventExecutionFailed, R>,
+	build: (
+		callback: LinearCallbackName,
+	) => Effect.Effect<LinearCallbackInvocation<R>, ProviderEventExecutionFailed, RBuild>,
 ) =>
 	Effect.gen(function* () {
 		const spec = prepared.callbacks[execution.callbackIndex]
@@ -643,8 +651,8 @@ const runPreparedInvocation = <R>(
 		)
 	})
 
-type LinearAgentSessionBatch = {
-	readonly callbacks: LinearEventCallbacks
+type LinearAgentSessionBatch<R> = {
+	readonly callbacks: LinearEventCallbacks<R>
 	readonly normalized: LinearNormalizedAgentSessionWebhook
 	readonly session: LinearAgentSession
 	readonly issue: LinearIssue
@@ -698,10 +706,10 @@ const postInitialThought = (session: LinearAgentSession, execution: ProviderDeli
 	)
 
 /** Builds a session callback. `onAgentSessionCreated` posts Linear's automatic thought before the callback. */
-const agentSessionInvocation = (batch: LinearAgentSessionBatch, callback: LinearCallbackName) => {
+const agentSessionInvocation = <R>(batch: LinearAgentSessionBatch<R>, callback: LinearCallbackName) => {
 	const { callbacks, normalized, session, issue, deliveryId } = batch
 	return Match.value(callback).pipe(
-		Match.withReturnType<Effect.Effect<LinearCallbackInvocation, ProviderEventExecutionFailed>>(),
+		Match.withReturnType<Effect.Effect<LinearCallbackInvocation<R>, ProviderEventExecutionFailed>>(),
 		Match.when('onAgentSessionCreated', (name) =>
 			Effect.gen(function* () {
 				const handler = yield* requireHandler(callbacks.onAgentSessionCreated)
@@ -760,14 +768,14 @@ const selectAgentSessionCallback = (normalized: LinearNormalizedAgentSessionWebh
 		}),
 	)
 
-const processAgentSessionBatch = (
+const processAgentSessionBatch = <R>(
 	options: LinearEventProcessorOptions,
+	callbacks: LinearEventCallbacks<R>,
 	admissions: DeliveryAdmissionBatch,
 	storedWebhooks: ReadonlyArray<LinearStoredWebhook>,
 	execution: ProviderDeliveryExecution,
 ) =>
 	Effect.gen(function* () {
-		const callbacks = yield* LinearCallbacks
 		const firstAdmission = admissions[0]
 		const firstStoredWebhook = storedWebhooks[0]
 		if (
@@ -794,7 +802,7 @@ const processAgentSessionBatch = (
 			(Predicate.isNotUndefined(options.oauthClientId) && firstWebhook.oauthClientId !== options.oauthClientId)
 		)
 			return yield* identityMismatch()
-		const batch: LinearAgentSessionBatch = {
+		const batch: LinearAgentSessionBatch<R> = {
 			callbacks,
 			normalized: normalizedWebhook,
 			issue: issueFromAgentSession(
@@ -932,15 +940,17 @@ const isEntrySignal = (event: LinearIssueActivity) =>
 	Schema.is(LinearCommentMention)(event) ||
 	Schema.is(LinearAssignmentNotification)(event)
 
-const isDirectedTrigger = (callbacks: LinearEventCallbacks) => (event: LinearIssueActivity) =>
-	((Schema.is(LinearIssueMention)(event) || Schema.is(LinearCommentMention)(event)) &&
-		!Predicate.isUndefined(callbacks.onMentioned)) ||
-	(Schema.is(LinearAssignmentNotification)(event) && !Predicate.isUndefined(callbacks.onAssigned))
+const isDirectedTrigger =
+	<R>(callbacks: LinearEventCallbacks<R>) =>
+	(event: LinearIssueActivity) =>
+		((Schema.is(LinearIssueMention)(event) || Schema.is(LinearCommentMention)(event)) &&
+			!Predicate.isUndefined(callbacks.onMentioned)) ||
+		(Schema.is(LinearAssignmentNotification)(event) && !Predicate.isUndefined(callbacks.onAssigned))
 
 const isMention = Schema.is(Schema.Union([LinearIssueMention, LinearCommentMention]))
 
-type LinearIssueBatch = {
-	readonly callbacks: LinearEventCallbacks
+type LinearIssueBatch<R> = {
+	readonly callbacks: LinearEventCallbacks<R>
 	readonly webhooks: ReadonlyArray<LinearIssueBatchWebhook>
 	readonly activationEvents: ReadonlyArray<LinearIssueActivity>
 	readonly callbackEvents: ReadonlyArray<LinearIssueCallbackEvent>
@@ -949,12 +959,12 @@ type LinearIssueBatch = {
 	readonly mailboxKey: string
 }
 
-const issueCallbackInvocation = (
+const issueCallbackInvocation = <R>(
 	callback: LinearCallbackName,
 	issue: LinearIssue,
 	activationTarget: LinearActivationTarget | undefined,
-	run: (delivery: DeliveryContext) => Effect.Effect<DeliveryCallbackResult, LinearCallbackError>,
-): LinearCallbackInvocation => ({
+	run: (delivery: DeliveryContext) => Effect.Effect<DeliveryCallbackResult, LinearCallbackError, R>,
+): LinearCallbackInvocation<R> => ({
 	preparation: linearPreparation(
 		callback,
 		LinearIssueDestination.make({ organizationId: issue.ref.organizationId, issueId: issue.ref.issueId }),
@@ -964,7 +974,7 @@ const issueCallbackInvocation = (
 })
 
 /** The issue snapshot and events for `onSubscribedEvent`, when the batch has any. */
-const subscribedCallbackInput = (batch: LinearIssueBatch) => {
+const subscribedCallbackInput = <R>(batch: LinearIssueBatch<R>) => {
 	const resourceWebhooks = batch.webhooks.filter(
 		(webhook): webhook is LinearResourceWebhookEvent => webhook.type !== 'AppUserNotification',
 	)
@@ -976,10 +986,10 @@ const subscribedCallbackInput = (batch: LinearIssueBatch) => {
 	}
 }
 
-const issueInvocation = (batch: LinearIssueBatch, callback: LinearCallbackName) => {
+const issueInvocation = <R>(batch: LinearIssueBatch<R>, callback: LinearCallbackName) => {
 	const { callbacks, activationEvents, callbackEvents } = batch
 	return Match.value(callback).pipe(
-		Match.withReturnType<Effect.Effect<LinearCallbackInvocation, ProviderEventExecutionFailed>>(),
+		Match.withReturnType<Effect.Effect<LinearCallbackInvocation<R>, ProviderEventExecutionFailed>>(),
 		Match.when('onMentioned', (name) =>
 			Effect.gen(function* () {
 				const handler = yield* requireHandler(callbacks.onMentioned)
@@ -1049,7 +1059,10 @@ const issueInvocation = (batch: LinearIssueBatch, callback: LinearCallbackName) 
 }
 
 /** At most one entry callback: a directed mention or assignment first, then issue creation. */
-const selectEntryCallback = (batch: LinearIssueBatch, supplementalSignal: boolean): LinearCallbackName | undefined => {
+const selectEntryCallback = <R>(
+	batch: LinearIssueBatch<R>,
+	supplementalSignal: boolean,
+): LinearCallbackName | undefined => {
 	const directed = supplementalSignal ? undefined : batch.activationEvents.find(isDirectedTrigger(batch.callbacks))
 	if (Predicate.isNotUndefined(directed))
 		return Schema.is(LinearAssignmentNotification)(directed) ? 'onAssigned' : 'onMentioned'
@@ -1087,7 +1100,11 @@ const unsubscribedIssueDisposition = (
 }
 
 /** First attempt at an issue batch: select from the events and subscription state, save the choice, then run it. */
-const processSelectedIssueBatch = (execution: ProviderDeliveryExecution, batch: LinearIssueBatch, removed: boolean) =>
+const processSelectedIssueBatch = <R>(
+	execution: ProviderDeliveryExecution,
+	batch: LinearIssueBatch<R>,
+	removed: boolean,
+) =>
 	Effect.gen(function* () {
 		const { callbacks, activationEvents, mailboxKey } = batch
 		const hasAgentSessionCallbacks =
@@ -1123,9 +1140,9 @@ const processSelectedIssueBatch = (execution: ProviderDeliveryExecution, batch: 
 		})
 	})
 
-const processIssueBatch = (
+const processIssueBatch = <R>(
 	options: LinearEventProcessorOptions,
-	callbacks: LinearEventCallbacks,
+	callbacks: LinearEventCallbacks<R>,
 	admissions: DeliveryAdmissionBatch,
 	webhooks: ReadonlyArray<LinearStoredWebhook>,
 	execution: ProviderDeliveryExecution,
@@ -1148,7 +1165,7 @@ const processIssueBatch = (
 			const admission = admissions[index]
 			return Predicate.isUndefined(admission) ? undefined : normalizeResourceWebhook(webhook, admission, issueId)
 		})
-		const batch: LinearIssueBatch = {
+		const batch: LinearIssueBatch<R> = {
 			callbacks,
 			webhooks: issueWebhooks,
 			activationEvents: normalized.filter(Predicate.isNotUndefined),
@@ -1169,7 +1186,7 @@ const processIssueBatch = (
 		return result
 	})
 
-const processLinearBatch = (options: LinearEventProcessorOptions) =>
+const processLinearBatch = <R>(options: LinearEventProcessorOptions, callbacks: LinearEventCallbacks<R>) =>
 	Effect.fn('linear.process_event_batch')(function* (
 		admissions: DeliveryAdmissionBatch,
 		execution: ProviderDeliveryExecution,
@@ -1180,21 +1197,24 @@ const processLinearBatch = (options: LinearEventProcessorOptions) =>
 		) {
 			return yield* executionFailure('prepared_callback_invalid', false)
 		}
-		const callbacks = yield* LinearCallbacks
 		yield* LinearApi
 		const webhooks = yield* Effect.forEach(admissions, decodeWebhook)
 		if (Predicate.isNotUndefined(webhooks[0]) && Schema.is(LinearStoredAgentSessionWebhook)(webhooks[0]))
-			return yield* processAgentSessionBatch(options, admissions, webhooks, execution)
+			return yield* processAgentSessionBatch(options, callbacks, admissions, webhooks, execution)
 		const lifecycleWebhooks = webhooks.map(lifecycleWebhook)
 		if (lifecycleWebhooks.every(Predicate.isNotUndefined))
 			return yield* processLifecycleBatch(options, admissions, lifecycleWebhooks)
 		return yield* processIssueBatch(options, callbacks, admissions, webhooks, execution)
 	})
 
-export const makeLinearEventProcessor = (
-	options: LinearEventProcessorOptions,
-): ProviderEventProcessor<LinearCallbacks | LinearApi | MailboxSubscriptions> => ({
+/**
+ * Linear's callback half: runs the application's handlers for each batch. What the handlers need, with
+ * `LinearApi` and `MailboxSubscriptions`, stays in its requirements, for the host to supply.
+ */
+export const makeLinearEventProcessor = <E = never, R = never>(
+	options: LinearEventProcessorOptions & { readonly handlers: LinearCallbackHandlers<E, R> },
+): ProviderEventProcessor<LinearApi | MailboxSubscriptions | R> => ({
 	namespace: options.namespace,
 	providerName: 'linear',
-	process: processLinearBatch(options),
+	process: processLinearBatch(options, makeLinearCallbacks(options.handlers)),
 })

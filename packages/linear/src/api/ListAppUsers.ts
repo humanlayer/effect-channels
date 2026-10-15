@@ -1,6 +1,6 @@
 import { Effect, Schema, Struct } from 'effect'
 
-import { type LinearListAppUsersRequest, LinearUserPageOptions } from '../LinearApi'
+import { type LinearListAppUsersRequest, LinearUserPageOptions } from '../LinearApiContract'
 import { LinearIssueId, LinearTeamId } from '../LinearIdentity'
 import { LinearAppUser, LinearAppUserPage, LinearPageInfo } from '../LinearModels'
 import { LinearValidationError, linearProviderErrorDetails } from './LinearApiErrors'

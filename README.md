@@ -131,7 +131,7 @@ const slack = SlackBot.make({
 })
 ```
 
-A subscribed batch can also hold edits (`SlackMessageUpdated`), deletions, reactions added and removed, and the user stopping the agent (`SlackConversationStopped`); match on their `_tag` the same way. A thread can also post, stream a reply, upload files, read its channel and the messages before it, and unsubscribe. Messages carry their files, which the bot can download. `SlackApiLive`, the default, reads `SLACK_BOT_TOKEN`.
+A subscribed batch can also hold edits (`SlackMessageUpdated`), deletions, reactions added and removed, and the user stopping the agent (`SlackConversationStopped`); match on their `_tag` the same way. A thread can also post, stream a reply, upload files, read its channel and the messages before it, and unsubscribe. Messages carry their files, which the bot can download. The bot reaches Slack through `SlackApiLive`, which you provide when you mount it (below); it reads `SLACK_BOT_TOKEN`.
 
 ### GitHub
 
@@ -263,7 +263,7 @@ const linear = LinearBot.make({
 })
 ```
 
-Linear shows "Working on this…" before the callback runs, and runs each turn as soon as it arrives, so the bot always answers within Linear's ten seconds. The other callbacks are `onIssueCreated` and `onSubscribedEvent`. Without Agent Session callbacks, a mention runs `onMentioned`, even in a subscribed issue. Issues can also list attachments, look up users, upload files, and change their fields.
+Linear shows "Working on this…" before the callback runs, and runs each turn as soon as it arrives, so the bot always answers within Linear's ten seconds. The other callbacks are `onIssueCreated` and `onSubscribedEvent`. Without Agent Session callbacks, a mention runs `onMentioned`, even in a subscribed issue. Issues can also list attachments, look up users, upload files, and change their fields. The bot reaches Linear through `LinearApiLive`, which you provide when you mount it; it reads the same `LINEAR_*` settings. For other settings, provide `makeLinearApiLive(...)` instead.
 
 ### The delivery context
 
@@ -286,6 +286,9 @@ Pick a store, then join everything with `Channels.make`. You get webhook routes 
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto'
 import { PgClient } from '@effect/sql-pg'
 import { Channels } from '@humanlayer/channels-delivery'
+import { GitHubApiLive } from '@humanlayer/channels-github'
+import { LinearApiLive } from '@humanlayer/channels-linear'
+import { SlackApiLive } from '@humanlayer/channels-slack'
 import { ChannelsSql } from '@humanlayer/channels-sql'
 import { Config, Layer } from 'effect'
 import { HttpRouter, HttpServerResponse } from 'effect/http'
@@ -312,6 +315,8 @@ const bot = Channels.make({
 // Your routes and the bot's, in one router.
 const MyRoutes = HttpRouter.add('GET', '/health', HttpServerResponse.text('ok'))
 const App = Layer.mergeAll(MyRoutes, bot.routes, bot.deliveryApi).pipe(
+	// Each provider's API client, built once and shared by its webhooks, callbacks, and sent output.
+	Layer.provide(Layer.mergeAll(SlackApiLive, GitHubApiLive, LinearApiLive)),
 	Layer.provide(NodeCrypto.layer),
 	Layer.provide(PgClient.layerConfig({ url: Config.Redacted('DATABASE_URL') })),
 )
@@ -322,7 +327,7 @@ const { handler } = HttpRouter.toWebHandler(App, { routerConfig: Channels.router
 Bun.serve({ port: 3000, fetch: (request) => handler(request) })
 ```
 
-The routes bring mailbox processing with them: building the handler starts it. If your server already uses `HttpRouter`, add `bot.routes` and `bot.deliveryApi` to it the same way. Without Effect, `bot.start(services, bot.deliveryApi)` gives you a plain `Request` to `Response` function and a `stop()`.
+The routes bring mailbox processing with them: building the handler starts it. The bots build no API clients of their own, so provide each provider's API layer once, as above. If your server already uses `HttpRouter`, add `bot.routes` and `bot.deliveryApi` to it the same way. Without Effect, `bot.start(services, bot.deliveryApi)` gives you a plain `Request` to `Response` function and a `stop()`.
 
 | Store      | Package                                                         | Call                      |
 | ---------- | --------------------------------------------------------------- | ------------------------- |
@@ -344,7 +349,7 @@ export const bot = ChannelsCloudflare.make({ namespace, providers: [slack, githu
 // DeliveryMailboxDO.ts: compose the replaceable mailbox layers at the DO entrypoint.
 export class DeliveryMailbox extends Cloudflare.DurableObject<DeliveryMailbox, MailboxMethods>()('DeliveryMailbox') {}
 const mailboxLayers = bot.layers.mailbox
-const MailboxLive = Layer.merge(mailboxLayers.processing, mailboxLayers.deliveryControl).pipe(
+const MailboxLive = mailboxLayers.deliveryControl.pipe(
 	Layer.provide(
 		Layer.mergeAll(
 			mailboxLayers.processingBackend,
@@ -378,6 +383,8 @@ const RoutesLive = Layer.merge(bot.routes, bot.deliveryApi).pipe(
 )
 const WorkerLive = ChannelsDeliveryMailboxesLive.pipe(
 	Layer.provideMerge(DeliveryMailboxDOLive),
+	// The routes, the mailbox objects, and every callback share these API clients.
+	Layer.provideMerge(Layer.mergeAll(SlackApiLive, GitHubApiLive, LinearApiLive)),
 	Layer.provideMerge(NodeCrypto.layer),
 	Layer.provideMerge(Layer.succeed(HttpRouter.RouterConfig, bot.routerConfig)),
 )
@@ -390,7 +397,7 @@ export default Cloudflare.Worker(
 )
 ```
 
-Alchemy's outer Durable Object Effect resolves the state reference and shared services. The returned inner Effect receives `RuntimeContext` from Alchemy and builds the mailbox handlers. Yield every callback service explicitly in the outer Effect rather than forwarding an arbitrary `Context`. The mailbox class may carry methods of its own, but not its own alarm: a Durable Object has one, and the mailbox uses it. See [`examples/alchemy-cloudflare/src`](./examples/alchemy-cloudflare/src/) for the full files.
+Alchemy's outer Durable Object Effect resolves the state reference and shared services. The returned inner Effect receives `RuntimeContext` from Alchemy and builds the mailbox handlers. The mailbox builds its own processing in `bot.mailbox()`, and its alarm takes the provider API clients and your callbacks' services from the Worker's services, which Alchemy supplies to each call. Yield the services the mailbox itself needs, such as its state, explicitly in the outer Effect rather than forwarding an arbitrary `Context`. The mailbox class may carry methods of its own, but not its own alarm: a Durable Object has one, and the mailbox uses it. See [`examples/alchemy-cloudflare/src`](./examples/alchemy-cloudflare/src/) for the full files.
 
 ## Hand off to a remote agent
 

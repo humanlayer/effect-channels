@@ -1,20 +1,16 @@
-import { Clock, Context, Effect, Layer, Option, Redacted, Ref, Schema, Semaphore } from 'effect'
+import { Clock, Effect, Layer, Option, Ref, Semaphore } from 'effect'
+import type { Redacted } from 'effect'
 import * as HttpClient from 'effect/http/HttpClient'
 
 import { getViewerIdentity } from './api/GetViewerIdentity'
 import { narrowLinearProviderErrors } from './api/LinearApiErrors'
-import { LinearHttpClient, makeFixedCredentialLinearHttpClient } from './api/LinearHttpClient'
+import { LinearHttpClient } from './api/LinearHttpClient'
 import { acquireClientCredentialsToken } from './auth/AcquireClientCredentialsToken'
-import { LinearApiError } from './LinearApi'
-import { LinearOrganizationId, LinearUserId } from './LinearIdentity'
+import { LinearApiError } from './LinearApiContract'
+import { LinearCredentialResolver, LinearVerifiedCredential } from './LinearCredential'
+import type { LinearOrganizationId, LinearUserId } from './LinearIdentity'
 
-export const LinearVerifiedCredential = Schema.Struct({
-	accessToken: Schema.Redacted(Schema.NonEmptyString, { disallowJsonEncode: true }),
-	expiresAt: Schema.Finite,
-	organizationId: LinearOrganizationId,
-	appUserId: LinearUserId,
-})
-export type LinearVerifiedCredential = typeof LinearVerifiedCredential.Type
+export { LinearCredentialResolver, LinearVerifiedCredential } from './LinearCredential'
 
 export type LinearCredentialResolverOptions = {
 	readonly clientId: string
@@ -28,16 +24,6 @@ export type LinearDeveloperTokenResolverOptions = {
 	readonly organizationId: LinearOrganizationId
 	readonly appUserId: LinearUserId
 }
-
-export class LinearCredentialResolver extends Context.Service<
-	LinearCredentialResolver,
-	{
-		readonly organizationId: LinearOrganizationId
-		readonly canRefresh: boolean
-		readonly resolve: Effect.Effect<LinearVerifiedCredential, LinearApiError>
-		readonly invalidate: Effect.Effect<void>
-	}
->()('@humanlayer/channels-linear/LinearCredentialResolver') {}
 
 type AcquiredLinearCredential = {
 	readonly accessToken: Redacted.Redacted<string>
@@ -56,11 +42,12 @@ const makeResolver = Effect.fn('linear.credentials.make')(function* (options: {
 
 	const acquire = Effect.gen(function* () {
 		const token = yield* options.acquire.pipe(Effect.provideService(HttpClient.HttpClient, client))
+		const http = yield* LinearHttpClient.makeFixedCredential({
+			organizationId: options.organizationId,
+			accessToken: token.accessToken,
+		}).pipe(Effect.provideService(HttpClient.HttpClient, client))
 		const identity = yield* getViewerIdentity.pipe(
-			Effect.provideService(
-				LinearHttpClient,
-				makeFixedCredentialLinearHttpClient(client, options.organizationId, token.accessToken),
-			),
+			Effect.provideService(LinearHttpClient, http),
 			narrowLinearProviderErrors,
 		)
 		if (identity.viewer.id !== options.appUserId || identity.viewer.organization.id !== options.organizationId)

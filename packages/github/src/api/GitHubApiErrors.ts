@@ -1,6 +1,6 @@
 import { Match, Predicate, Schema, Struct } from 'effect'
 
-import { GitHubApiError, type GitHubApiErrorReason, type GitHubApiOperation } from '../GitHubApi'
+import { GitHubApiError, type GitHubApiErrorReason, type GitHubApiOperation } from '../GitHubApiContract'
 
 export const GitHubTransportErrorFields = Schema.Struct({
 	stage: Schema.Literals(['transport', 'status', 'decode', 'signing', 'token_expiry', 'pagination', 'redirect']),

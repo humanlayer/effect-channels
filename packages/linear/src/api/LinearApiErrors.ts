@@ -1,6 +1,6 @@
 import { Effect, Schema, Stream } from 'effect'
 
-import { LinearApiError, LinearApiOperation } from '../LinearApi'
+import { LinearApiError, LinearApiOperation } from '../LinearApiContract'
 
 const RetryAfterMilliseconds = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
 const LinearProviderErrorFields = {

@@ -8,8 +8,9 @@ import { DeliveryPlan } from '@humanlayer/channels-delivery'
 import { defineTool, ToolResultFailure, ToolResultText, type FoldTool } from '@humanlayer/fold-core'
 import { Data, Effect, Option } from 'effect'
 
+import { ActiveDelivery } from './ActiveDelivery'
+import { targetOf } from './AgentSessionMessage'
 import { DeliveryApi } from './DeliveryApi'
-import { ActiveDelivery, targetOf } from './DeliveryTurn'
 
 /** No delivery is being worked on, so there is nowhere to show the plan. */
 export class NoActiveDelivery extends Data.TaggedError('NoActiveDelivery')<{}> {}

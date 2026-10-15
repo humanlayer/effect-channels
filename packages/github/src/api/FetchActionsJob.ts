@@ -1,6 +1,6 @@
 import { Effect } from 'effect'
 
-import { GitHubApiError, type GitHubActionsJobRequest } from '../GitHubApi'
+import { GitHubApiError, type GitHubActionsJobRequest } from '../GitHubApiContract'
 import { GitHubApiClient } from './GitHubApiClient'
 import { actionsJobInfo, repositoryPath } from './GitHubApiProjections'
 import { ActionsJob } from './GitHubApiSchemas'

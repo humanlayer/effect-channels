@@ -124,10 +124,10 @@ const recordingSlackApi = (calls: Ref.Ref<PlanCalls>, faults: PlanFaults) =>
 const run = (operation: ProviderRenderPlan, faults: PlanFaults = {}) =>
 	Effect.gen(function* () {
 		const calls = yield* Ref.make<PlanCalls>({ posts: [], updates: [] })
-		const processor = yield* makeSlackOutputProcessor({ namespace: 'slack-plan-test' }).pipe(
-			Effect.provide(recordingSlackApi(calls, faults)),
-		)
-		const result = yield* processor.process(attempt(operation)).pipe(Effect.result)
+		const processor = yield* makeSlackOutputProcessor({ namespace: 'slack-plan-test' })
+		const result = yield* processor
+			.process(attempt(operation))
+			.pipe(Effect.provide(recordingSlackApi(calls, faults)), Effect.result)
 		const receipt = Result.isSuccess(result)
 			? Option.getOrUndefined(Schema.decodeUnknownOption(SlackPlanPresentationJson)(result.success.receipt))
 					?.message

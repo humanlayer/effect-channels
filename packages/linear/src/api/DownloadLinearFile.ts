@@ -2,7 +2,7 @@ import { Duration, Effect, Stream } from 'effect'
 import * as HttpClientRequest from 'effect/http/HttpClientRequest'
 import type { HttpClientResponse } from 'effect/http/HttpClientResponse'
 
-import type { LinearApiError } from '../LinearApi'
+import type { LinearApiError } from '../LinearApiContract'
 import {
 	canonicalLinearFileUrl,
 	isLinearFileOrigin,

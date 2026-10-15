@@ -1,6 +1,6 @@
 import { Effect, Schema, Struct } from 'effect'
 
-import type { LinearCreateCommentRequest } from '../LinearApi'
+import type { LinearCreateCommentRequest } from '../LinearApiContract'
 import { LinearCommentId, LinearIssueId } from '../LinearIdentity'
 import { failLinearMutation } from './LinearApiErrors'
 import { projectLinearComment } from './LinearApiProjections'

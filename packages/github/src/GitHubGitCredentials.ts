@@ -7,7 +7,7 @@ import { Base64 } from 'effect/encoding'
 
 import { narrowGitHubTransportError } from './api/GitHubApiErrors'
 import { GitHubAppCredentials } from './api/GitHubAppCredentials'
-import type { GitHubApiError } from './GitHubApi'
+import type { GitHubApiError } from './GitHubApiContract'
 import type { GitHubRepositoryRef } from './GitHubModels'
 
 export class GitHubGitCredentials extends Context.Service<
@@ -21,17 +21,10 @@ export class GitHubGitCredentials extends Context.Service<
 			readonly repository: GitHubRepositoryRef
 		}) => Effect.Effect<Redacted.Redacted<string>, GitHubApiError>
 	}
->()('@humanlayer/channels-github/GitHubGitCredentials') {}
-
-/** Git authenticates an installation token as the password of the user `x-access-token`. */
-const basicAuthorization = (token: Redacted.Redacted<string>) =>
-	Redacted.make(`Basic ${Base64.encode(`x-access-token:${Redacted.value(token)}`)}`)
-
-export const GitHubGitCredentialsLive = Layer.effect(
-	GitHubGitCredentials,
-	Effect.gen(function* () {
+>()('@humanlayer/channels-github/GitHubGitCredentials', {
+	make: Effect.gen(function* () {
 		const credentials = yield* GitHubAppCredentials
-		return GitHubGitCredentials.of({
+		return {
 			authorization: ({ repository }) =>
 				credentials.installationToken(repository).pipe(
 					Effect.map(basicAuthorization),
@@ -40,6 +33,12 @@ export const GitHubGitCredentialsLive = Layer.effect(
 					),
 					Effect.withSpan('github.git_credentials.authorization'),
 				),
-		})
+		}
 	}),
-)
+}) {
+	static readonly layer = Layer.effect(this, this.make)
+}
+
+/** Git authenticates an installation token as the password of the user `x-access-token`. */
+const basicAuthorization = (token: Redacted.Redacted<string>) =>
+	Redacted.make(`Basic ${Base64.encode(`x-access-token:${Redacted.value(token)}`)}`)

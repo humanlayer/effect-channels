@@ -1,6 +1,6 @@
 import { Effect, Schema } from 'effect'
 
-import type { GitHubPullRequestRequest } from '../GitHubApi'
+import type { GitHubPullRequestRequest } from '../GitHubApiContract'
 import { GitHubApiClient } from './GitHubApiClient'
 import { pullRequestInfo, repositoryPath } from './GitHubApiProjections'
 import { PullRequest } from './GitHubApiSchemas'

@@ -8,7 +8,7 @@ import { Effect, Layer, Predicate } from 'effect'
 import { vi } from 'vite-plus/test'
 
 import { LinearApi } from '../src/LinearApi'
-import { type LinearCallbackHandler, LinearCallbacks } from '../src/LinearCallbacks'
+import type { LinearCallbackHandler } from '../src/LinearCallbacks'
 import { makeLinearEventProcessor } from '../src/LinearEventProcessor'
 import { firstAttempt, appUserNotificationPayloads, linearNotificationAdmission } from './fixtures'
 
@@ -42,12 +42,8 @@ describe('Linear issue context', () => {
 				isSubscribed: () => Effect.succeed(subscribed),
 				unsubscribe,
 			})
-			const services = Layer.mergeAll(
-				LinearCallbacks.layer({ onMentioned }).pipe(Layer.provide(subscriptions)),
-				Layer.mock(LinearApi, {}),
-				subscriptions,
-			)
-			yield* makeLinearEventProcessor({ namespace: 'linear-processing-test' })
+			const services = Layer.mergeAll(Layer.mock(LinearApi, {}), subscriptions)
+			yield* makeLinearEventProcessor({ namespace: 'linear-processing-test', handlers: { onMentioned } })
 				.process([linearNotificationAdmission(appUserNotificationPayloads[1])], yield* firstAttempt())
 				.pipe(Effect.provide(services))
 			expect(subscribe).toHaveBeenCalledOnce()

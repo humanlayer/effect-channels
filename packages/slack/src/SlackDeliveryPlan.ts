@@ -26,15 +26,21 @@ export const slackPlanTask = (item: DeliveryPlanItem) => {
 			Pending: () => SlackPlanTask.make({ ...task, status: 'pending' }),
 			InProgress: ({ details }) =>
 				SlackPlanTask.make(
-					Predicate.isUndefined(details) ? { ...task, status: 'in_progress' } : { ...task, status: 'in_progress', details },
+					Predicate.isUndefined(details)
+						? { ...task, status: 'in_progress' }
+						: { ...task, status: 'in_progress', details },
 				),
 			Completed: ({ result }) =>
 				SlackPlanTask.make(
-					Predicate.isUndefined(result) ? { ...task, status: 'complete' } : { ...task, status: 'complete', output: result },
+					Predicate.isUndefined(result)
+						? { ...task, status: 'complete' }
+						: { ...task, status: 'complete', output: result },
 				),
 			Failed: ({ reason }) =>
 				SlackPlanTask.make(
-					Predicate.isUndefined(reason) ? { ...task, status: 'error' } : { ...task, status: 'error', output: reason },
+					Predicate.isUndefined(reason)
+						? { ...task, status: 'error' }
+						: { ...task, status: 'error', output: reason },
 				),
 		}),
 	)

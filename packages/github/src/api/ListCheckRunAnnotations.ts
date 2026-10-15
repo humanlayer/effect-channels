@@ -1,6 +1,6 @@
 import { Effect } from 'effect'
 
-import type { GitHubCheckRunRequest } from '../GitHubApi'
+import type { GitHubCheckRunRequest } from '../GitHubApiContract'
 import { GitHubApiClient } from './GitHubApiClient'
 import { checkAnnotation, repositoryPath } from './GitHubApiProjections'
 import { CheckAnnotation } from './GitHubApiSchemas'

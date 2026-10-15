@@ -2,7 +2,7 @@ import { describe, it } from '@effect/vitest'
 import {
 	GitHubApi,
 	GitHubApiError,
-	GitHubCallbacks,
+	makeGitHubCallbacks,
 	GitHubEventId,
 	GitHubId,
 	GitHubIssue,
@@ -397,14 +397,17 @@ describe('AutoLabel with the native Workers AI binding', () => {
 
 describe('registered GitHub creation handlers', () => {
 	for (const kind of ['issue', 'pull_request'] as const) {
-		it.effect(`${kind} creation invokes the real AutoLabel through GitHubCallbacks`, ({ expect }) =>
+		it.effect(`${kind} creation invokes the real AutoLabel through its registered handler`, ({ expect }) =>
 			Effect.gen(function* () {
 				const h = yield* makeHarness()
 				const actor = GitHubParticipant.make({ id: GitHubId.make(1), login: 'author', type: 'User' })
 				const eventId = GitHubEventId.make('created')
 				const { execution } = yield* makeTestDeliveryExecution()
 				yield* Effect.gen(function* () {
-					const callbacks = yield* GitHubCallbacks
+					const callbacks = makeGitHubCallbacks({
+						onIssueCreated: githubHandlers.onIssueCreated,
+						onPrCreated: githubHandlers.onPrCreated,
+					})
 					if (kind === 'issue') {
 						if (callbacks.onIssueCreated === undefined)
 							return yield* Effect.die('onIssueCreated is not registered')
@@ -434,14 +437,7 @@ describe('registered GitHub creation handlers', () => {
 							execution.context,
 						)
 					}
-				}).pipe(
-					Effect.provide(
-						GitHubCallbacks.layer({
-							onIssueCreated: githubHandlers.onIssueCreated,
-							onPrCreated: githubHandlers.onPrCreated,
-						}).pipe(Layer.provideMerge(h.layer)),
-					),
-				)
+				}).pipe(Effect.provide(h.layer))
 				expect(h.requests).toMatchObject([
 					{
 						payload: {
@@ -461,7 +457,7 @@ describe('registered GitHub creation handlers', () => {
 			}),
 		)
 
-		it.effect(`${kind} creation maps native inference failure through GitHubCallbacks`, ({ expect }) =>
+		it.effect(`${kind} creation maps native inference failure through its registered handler`, ({ expect }) =>
 			Effect.gen(function* () {
 				const title = 'Submission title'
 				const body = 'Submission body'
@@ -471,7 +467,10 @@ describe('registered GitHub creation handlers', () => {
 				const eventId = GitHubEventId.make('failed-creation')
 				const { execution } = yield* makeTestDeliveryExecution()
 				const failure = yield* Effect.gen(function* () {
-					const callbacks = yield* GitHubCallbacks
+					const callbacks = makeGitHubCallbacks({
+						onIssueCreated: githubHandlers.onIssueCreated,
+						onPrCreated: githubHandlers.onPrCreated,
+					})
 					if (kind === 'issue') {
 						if (callbacks.onIssueCreated === undefined)
 							return yield* Effect.die('onIssueCreated is not registered')
@@ -487,15 +486,7 @@ describe('registered GitHub creation handlers', () => {
 						GitHubPrCreated.make({ pullRequest, trigger, events: [] }),
 						execution.context,
 					)
-				}).pipe(
-					Effect.provide(
-						GitHubCallbacks.layer({
-							onIssueCreated: githubHandlers.onIssueCreated,
-							onPrCreated: githubHandlers.onPrCreated,
-						}).pipe(Layer.provideMerge(h.layer)),
-					),
-					Effect.flip,
-				)
+				}).pipe(Effect.provide(h.layer), Effect.flip)
 				expect(failure).toMatchObject({
 					_tag: 'GitHubCallbackError',
 					callback: kind === 'issue' ? 'onIssueCreated' : 'onPrCreated',

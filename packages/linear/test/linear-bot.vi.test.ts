@@ -1,10 +1,8 @@
 import { describe, it } from '@effect/vitest'
 import { SerialDeliveryMode } from '@humanlayer/channels-delivery'
-import { Config, ConfigProvider, Effect, Layer, Redacted, Schema } from 'effect'
+import { Config, ConfigProvider, Effect, Predicate, Redacted, Schema } from 'effect'
 
 import { LinearAuth, LinearBot, LinearOrganizationId, LinearUserId } from '../src'
-import { LinearApi } from '../src/LinearApi'
-import { unusedLinearApi } from './api-test-fixtures'
 import { linearWebhookSecret } from './fixtures'
 
 const providerOptions = () => ({
@@ -61,7 +59,6 @@ describe('LinearBot.make', () => {
 					clientId: Config.succeed('test-client'),
 					clientSecret: Config.succeed(Redacted.make('test-secret')),
 				}),
-				linearApi: Layer.mock(LinearApi, {}),
 				handlers: {},
 			})
 			const error = yield* provider
@@ -71,7 +68,7 @@ describe('LinearBot.make', () => {
 		}),
 	)
 
-	it.effect('discovers default API configuration while keeping construction network-free', ({ expect }) =>
+	it.effect('builds webhook ingress without the API credentials the application provides', ({ expect }) =>
 		Effect.gen(function* () {
 			const provider = LinearBot.make({
 				webhookSecret: Config.succeed(Redacted.make(linearWebhookSecret)),
@@ -85,10 +82,10 @@ describe('LinearBot.make', () => {
 				}),
 				handlers: {},
 			})
-			const error = yield* provider
+			const ingress = yield* provider
 				.webhookProvider({ namespace: 'linear-bot-test' })
-				.pipe(Effect.scoped, Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({}))), Effect.flip)
-			expect(error).toBeInstanceOf(Config.ConfigError)
+				.pipe(Effect.scoped, Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({}))))
+			expect(ingress.providerName).toBe('linear')
 
 			const configured = yield* LinearBot.make({
 				...providerOptions(),
@@ -101,23 +98,15 @@ describe('LinearBot.make', () => {
 		}),
 	)
 
-	it.effect('discovers custom API layer configuration in webhook ingress', ({ expect }) =>
+	it.effect('builds both processing halves without a LinearApi, leaving it to the host', ({ expect }) =>
 		Effect.gen(function* () {
-			const provider = LinearBot.make({
-				...providerOptions(),
-				linearApi: Layer.effect(
-					LinearApi,
-					Effect.gen(function* () {
-						yield* Config.String('CUSTOM_LINEAR_API_CONFIGURATION')
-						return LinearApi.of(unusedLinearApi)
-					}),
-				),
-				handlers: {},
-			})
-			const error = yield* provider
-				.webhookProvider({ namespace: 'linear-bot-test' })
-				.pipe(Effect.scoped, Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({}))), Effect.flip)
-			expect(error).toBeInstanceOf(Config.ConfigError)
+			const provider = LinearBot.make({ ...providerOptions(), handlers: {} })
+			const events = yield* provider.eventProcessor({ namespace: 'linear-bot-test' }).pipe(Effect.scoped)
+			const outputs = Predicate.isUndefined(provider.outputProcessor)
+				? undefined
+				: yield* provider.outputProcessor({ namespace: 'linear-bot-test' }).pipe(Effect.scoped)
+			expect([events.providerName, events.namespace]).toEqual(['linear', 'linear-bot-test'])
+			expect([outputs?.providerName, outputs?.namespace]).toEqual(['linear', 'linear-bot-test'])
 		}),
 	)
 })

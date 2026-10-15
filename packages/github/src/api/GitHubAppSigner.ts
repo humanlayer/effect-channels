@@ -3,7 +3,7 @@ import { Base64, Base64Url } from 'effect/encoding'
 
 export class GitHubSigningError extends Schema.TaggedError<GitHubSigningError>()('GitHubSigningError', {}) {}
 
-/** Package-private signing seam. Production uses Web Crypto; tests replace it with a Layer. */
+/** Package-private signing seam. `layer` signs with Web Crypto; tests replace it with their own Layer. */
 export class GitHubAppSigner extends Context.Service<
 	GitHubAppSigner,
 	{
@@ -12,10 +12,10 @@ export class GitHubAppSigner extends Context.Service<
 			readonly data: string
 		}) => Effect.Effect<string, GitHubSigningError>
 	}
->()('@humanlayer/channels-github/internal/GitHubAppSigner') {
-	static readonly layerWebCrypto = Layer.sync(GitHubAppSigner, () => {
+>()('@humanlayer/channels-github/internal/GitHubAppSigner', {
+	make: Effect.sync(() => {
 		const encoder = new TextEncoder()
-		return GitHubAppSigner.of({
+		return {
 			sign: Effect.fn('github.app_signer.sign')(function* ({ privateKey, data }) {
 				const bytes = yield* privateKeyBytes(Redacted.value(privateKey))
 				const key = yield* Effect.tryPromise({
@@ -35,8 +35,10 @@ export class GitHubAppSigner extends Context.Service<
 				})
 				return Base64Url.encode(new Uint8Array(signature))
 			}),
-		})
-	})
+		}
+	}),
+}) {
+	static readonly layer = Layer.effect(this, this.make)
 }
 
 const pemWhitespace = /\s/g

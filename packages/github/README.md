@@ -128,7 +128,7 @@ Add `github` to the providers passed to `Channels.make` or the host-specific wra
 
 ## Resource API
 
-Callbacks provide `GitHubIssue` and `GitHubPullRequest` resources. Their methods require `GitHubApi`, which `GitHubBot.make` provides with `GitHubApiLive` by default. List methods follow GitHub pagination automatically with 100 items per request.
+Callbacks provide `GitHubIssue` and `GitHubPullRequest` resources. Their methods require `GitHubApi`, which the application provides, usually with `GitHubApiLive`; the bot builds no GitHub client of its own. List methods follow GitHub pagination automatically with 100 items per request.
 
 ### Issues
 

@@ -255,7 +255,9 @@ const alarmHandlerOver = (processing: Layer.Layer<MailboxProcessing>) =>
 	Effect.gen(function* () {
 		const delivery = yield* MailboxDelivery
 		const alarm = yield* DurableObjectFakeAlarm
-		const runMailboxAlarm = yield* makeMailboxAlarmHandler({ rearmAfterMs: 1_000 })
+		const runAlarm = yield* makeMailboxAlarmHandler({ rearmAfterMs: 1_000 })
+		const services = yield* Effect.context<MailboxProcessing>()
+		const runMailboxAlarm = () => runAlarm().pipe(Effect.provideContext(services))
 		const storage = yield* MailboxStorage
 		return { delivery, alarm, runMailboxAlarm, storage }
 	}).pipe(Effect.provide(Layer.merge(processing, makeEmptyStore())))

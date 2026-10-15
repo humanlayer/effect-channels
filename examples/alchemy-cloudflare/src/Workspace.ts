@@ -120,155 +120,149 @@ export class Workspace extends Context.Service<
 		/** Delete the workspace now. A failure is logged, not raised: the workspace's own deadline still holds. */
 		readonly destroy: Effect.Effect<void>
 	}
->()('alchemy-cloudflare/Workspace') {
+>()('alchemy-cloudflare/Workspace', {
+	make: Effect.gen(function* () {
+		const computers = yield* Computer.from(COMPUTER_WORKER_NAME)
+		const state = yield* Cloudflare.DurableObjectState
+		const credentials = yield* GitHubGitCredentials
+
+		/** The session's Computer, looked up by this object's name when used. */
+		const computer = Effect.suspend(() => Schema.decodeUnknownEffect(Schema.NonEmptyString)(state.id.name)).pipe(
+			Effect.orDie,
+			Effect.map((name) => computers.getByName(name)),
+		)
+
+		/**
+		 * The request headers that let git reach the repository as the GitHub App. They go to the Computer
+		 * with each network operation and nowhere else.
+		 */
+		const gitHeaders = (repository: GitHubRepositoryRef) =>
+			credentials.authorization({ repository }).pipe(
+				Effect.map((authorization): GitHeaders => ({ Authorization: Redacted.value(authorization) })),
+				Effect.tapError((error) => Effect.logError('workspace.git_credentials failed', error)),
+			)
+
+		return {
+			prepare: Effect.fn('alchemy_cloudflare.workspace.prepare')(function* ({ repository, branch }) {
+				const toError = (message: string) => new RepoCloneError({ message })
+				const headers = yield* gitHeaders(repository).pipe(
+					Effect.mapError((error) => toError(accessDenied(repository, error))),
+				)
+				const prepared = yield* Effect.flatMap(computer, (client) =>
+					client.prepare({
+						name: repositoryDirectoryName(repository),
+						url: repositoryUrl(repository),
+						branch,
+						headers,
+					}),
+				).pipe(
+					Effect.mapError((error) => toError(error.message)),
+					Effect.tapError((error) => Effect.logError('workspace.prepare failed', error)),
+				)
+				yield* Effect.logInfo('workspace.prepare').pipe(Effect.annotateLogs({ prepared }))
+				return prepared
+			}),
+			pull: Effect.fn('alchemy_cloudflare.workspace.pull')(function* ({ repository }) {
+				const toError = (message: string) => new RepoPullError({ message })
+				const headers = yield* gitHeaders(repository).pipe(
+					Effect.mapError((error) => toError(accessDenied(repository, error))),
+				)
+				const name = repositoryDirectoryName(repository)
+				const pulled = yield* computerResult(
+					Effect.flatMap(computer, (client) => client.pull({ name, headers })),
+					toError,
+				)
+				yield* Effect.logInfo('workspace.pull').pipe(Effect.annotateLogs({ repo: name, pulled }))
+				return pulled
+			}),
+			fetchBranch: Effect.fn('alchemy_cloudflare.workspace.fetch_branch')(function* ({ repository, branch }) {
+				const toError = (message: string) => new GitRemoteError({ message })
+				const headers = yield* gitHeaders(repository).pipe(
+					Effect.mapError((error) => toError(accessDenied(repository, error))),
+				)
+				const name = repositoryDirectoryName(repository)
+				const fetched = yield* computerResult(
+					Effect.flatMap(computer, (client) => client.fetchBranch({ name, branch, headers })),
+					toError,
+				)
+				yield* Effect.logInfo('workspace.fetch_branch').pipe(Effect.annotateLogs({ repo: name, fetched }))
+				return fetched
+			}),
+			pushBranch: Effect.fn('alchemy_cloudflare.workspace.push_branch')(function* ({ repository, branch }) {
+				const toError = (message: string) => new GitRemoteError({ message })
+				const headers = yield* gitHeaders(repository).pipe(
+					Effect.mapError((error) => toError(accessDenied(repository, error))),
+				)
+				const name = repositoryDirectoryName(repository)
+				const pushed = yield* computerResult(
+					Effect.flatMap(computer, (client) => client.pushBranch({ name, branch, headers })),
+					toError,
+				)
+				yield* Effect.logInfo('workspace.push_branch').pipe(Effect.annotateLogs({ repo: name, pushed }))
+				return pushed
+			}),
+			mergeRef: Effect.fn('alchemy_cloudflare.workspace.merge_ref')(function* ({ repository, ref }) {
+				const name = repositoryDirectoryName(repository)
+				const merged = yield* computerResult(
+					Effect.flatMap(computer, (client) => client.mergeRef({ name, ref })),
+					(message) => new GitMergeError({ message }),
+				)
+				yield* Effect.logInfo('workspace.merge_ref').pipe(Effect.annotateLogs({ repo: name, ref, merged }))
+				return merged
+			}),
+			fileSystem: workspaceFileSystem(computer),
+			expireAt: (deleteAt) =>
+				Effect.flatMap(computer, (client) => client.expireAt(deleteAt)).pipe(
+					Effect.catch((error) =>
+						Effect.logWarning('workspace.expireAt failed').pipe(
+							Effect.annotateLogs({ error: error.message }),
+						),
+					),
+				),
+			destroy: Effect.flatMap(computer, (client) => client.destroy()).pipe(
+				Effect.tap(() => Effect.logInfo('workspace.destroyed')),
+				Effect.catch((error) =>
+					Effect.logWarning('workspace.destroy failed').pipe(Effect.annotateLogs({ error: error.message })),
+				),
+			),
+			startContainer: Effect.gen(function* () {
+				const started = yield* Clock.currentTimeMillis
+				const result = yield* Effect.flatMap(computer, (client) => client.startContainer()).pipe(
+					Effect.catch((error) =>
+						Effect.succeed({ ok: false as const, code: 'RPC', message: error.message }),
+					),
+				)
+				const details = { millis: (yield* Clock.currentTimeMillis) - started }
+				yield* result.ok
+					? Effect.logInfo('workspace.container.started').pipe(Effect.annotateLogs(details))
+					: Effect.logWarning('workspace.container.start failed').pipe(
+							Effect.annotateLogs({ ...details, error: result.message }),
+						)
+			}).pipe(Effect.withSpan('alchemy_cloudflare.workspace.startContainer')),
+			exec: Effect.fn('alchemy_cloudflare.workspace.exec')(function* (input) {
+				const result = yield* Effect.flatMap(computer, (client) => client.exec(input)).pipe(
+					Effect.mapError((error) => new ShellError({ message: error.message })),
+				)
+				yield* Effect.logInfo('workspace.exec').pipe(
+					Effect.annotateLogs({
+						backend: input.backend,
+						command: input.command,
+						cwd: input.cwd,
+						outcome: result.ok ? { status: result.value.status, exitCode: result.value.exitCode } : result,
+					}),
+				)
+				return result.ok ? result.value : yield* new ShellError({ message: result.message })
+			}),
+		}
+	}),
+}) {
 	/**
 	 * The workspace of this AgentSession object: the Computer with the object's name. Alchemy also runs the
 	 * object's setup at deploy time, with no real object and so no name, so each call looks the Computer up.
 	 * Git reaches GitHub as the GitHub App.
 	 */
-	static readonly layer = Layer.effect(
-		Workspace,
-		Effect.gen(function* () {
-			const computers = yield* Computer.from(COMPUTER_WORKER_NAME)
-			const state = yield* Cloudflare.DurableObjectState
-			const credentials = yield* GitHubGitCredentials
 
-			/** The session's Computer, looked up by this object's name when used. */
-			const computer = Effect.suspend(() =>
-				Schema.decodeUnknownEffect(Schema.NonEmptyString)(state.id.name),
-			).pipe(
-				Effect.orDie,
-				Effect.map((name) => computers.getByName(name)),
-			)
-
-			/**
-			 * The request headers that let git reach the repository as the GitHub App. They go to the Computer
-			 * with each network operation and nowhere else.
-			 */
-			const gitHeaders = (repository: GitHubRepositoryRef) =>
-				credentials.authorization({ repository }).pipe(
-					Effect.map((authorization): GitHeaders => ({ Authorization: Redacted.value(authorization) })),
-					Effect.tapError((error) => Effect.logError('workspace.git_credentials failed', error)),
-				)
-
-			return Workspace.of({
-				prepare: Effect.fn('alchemy_cloudflare.workspace.prepare')(function* ({ repository, branch }) {
-					const toError = (message: string) => new RepoCloneError({ message })
-					const headers = yield* gitHeaders(repository).pipe(
-						Effect.mapError((error) => toError(accessDenied(repository, error))),
-					)
-					const prepared = yield* Effect.flatMap(computer, (client) =>
-						client.prepare({
-							name: repositoryDirectoryName(repository),
-							url: repositoryUrl(repository),
-							branch,
-							headers,
-						}),
-					).pipe(
-						Effect.mapError((error) => toError(error.message)),
-						Effect.tapError((error) => Effect.logError('workspace.prepare failed', error)),
-					)
-					yield* Effect.logInfo('workspace.prepare').pipe(Effect.annotateLogs({ prepared }))
-					return prepared
-				}),
-				pull: Effect.fn('alchemy_cloudflare.workspace.pull')(function* ({ repository }) {
-					const toError = (message: string) => new RepoPullError({ message })
-					const headers = yield* gitHeaders(repository).pipe(
-						Effect.mapError((error) => toError(accessDenied(repository, error))),
-					)
-					const name = repositoryDirectoryName(repository)
-					const pulled = yield* computerResult(
-						Effect.flatMap(computer, (client) => client.pull({ name, headers })),
-						toError,
-					)
-					yield* Effect.logInfo('workspace.pull').pipe(Effect.annotateLogs({ repo: name, pulled }))
-					return pulled
-				}),
-				fetchBranch: Effect.fn('alchemy_cloudflare.workspace.fetch_branch')(function* ({ repository, branch }) {
-					const toError = (message: string) => new GitRemoteError({ message })
-					const headers = yield* gitHeaders(repository).pipe(
-						Effect.mapError((error) => toError(accessDenied(repository, error))),
-					)
-					const name = repositoryDirectoryName(repository)
-					const fetched = yield* computerResult(
-						Effect.flatMap(computer, (client) => client.fetchBranch({ name, branch, headers })),
-						toError,
-					)
-					yield* Effect.logInfo('workspace.fetch_branch').pipe(Effect.annotateLogs({ repo: name, fetched }))
-					return fetched
-				}),
-				pushBranch: Effect.fn('alchemy_cloudflare.workspace.push_branch')(function* ({ repository, branch }) {
-					const toError = (message: string) => new GitRemoteError({ message })
-					const headers = yield* gitHeaders(repository).pipe(
-						Effect.mapError((error) => toError(accessDenied(repository, error))),
-					)
-					const name = repositoryDirectoryName(repository)
-					const pushed = yield* computerResult(
-						Effect.flatMap(computer, (client) => client.pushBranch({ name, branch, headers })),
-						toError,
-					)
-					yield* Effect.logInfo('workspace.push_branch').pipe(Effect.annotateLogs({ repo: name, pushed }))
-					return pushed
-				}),
-				mergeRef: Effect.fn('alchemy_cloudflare.workspace.merge_ref')(function* ({ repository, ref }) {
-					const name = repositoryDirectoryName(repository)
-					const merged = yield* computerResult(
-						Effect.flatMap(computer, (client) => client.mergeRef({ name, ref })),
-						(message) => new GitMergeError({ message }),
-					)
-					yield* Effect.logInfo('workspace.merge_ref').pipe(Effect.annotateLogs({ repo: name, ref, merged }))
-					return merged
-				}),
-				fileSystem: workspaceFileSystem(computer),
-				expireAt: (deleteAt) =>
-					Effect.flatMap(computer, (client) => client.expireAt(deleteAt)).pipe(
-						Effect.catch((error) =>
-							Effect.logWarning('workspace.expireAt failed').pipe(
-								Effect.annotateLogs({ error: error.message }),
-							),
-						),
-					),
-				destroy: Effect.flatMap(computer, (client) => client.destroy()).pipe(
-					Effect.tap(() => Effect.logInfo('workspace.destroyed')),
-					Effect.catch((error) =>
-						Effect.logWarning('workspace.destroy failed').pipe(
-							Effect.annotateLogs({ error: error.message }),
-						),
-					),
-				),
-				startContainer: Effect.gen(function* () {
-					const started = yield* Clock.currentTimeMillis
-					const result = yield* Effect.flatMap(computer, (client) => client.startContainer()).pipe(
-						Effect.catch((error) =>
-							Effect.succeed({ ok: false as const, code: 'RPC', message: error.message }),
-						),
-					)
-					const details = { millis: (yield* Clock.currentTimeMillis) - started }
-					yield* result.ok
-						? Effect.logInfo('workspace.container.started').pipe(Effect.annotateLogs(details))
-						: Effect.logWarning('workspace.container.start failed').pipe(
-								Effect.annotateLogs({ ...details, error: result.message }),
-							)
-				}).pipe(Effect.withSpan('alchemy_cloudflare.workspace.startContainer')),
-				exec: Effect.fn('alchemy_cloudflare.workspace.exec')(function* (input) {
-					const result = yield* Effect.flatMap(computer, (client) => client.exec(input)).pipe(
-						Effect.mapError((error) => new ShellError({ message: error.message })),
-					)
-					yield* Effect.logInfo('workspace.exec').pipe(
-						Effect.annotateLogs({
-							backend: input.backend,
-							command: input.command,
-							cwd: input.cwd,
-							outcome: result.ok
-								? { status: result.value.status, exitCode: result.value.exitCode }
-								: result,
-						}),
-					)
-					return result.ok ? result.value : yield* new ShellError({ message: result.message })
-				}),
-			})
-		}),
-	)
+	static readonly layer = Layer.effect(this, this.make)
 
 	/** The workspace's files as this object's `FileSystem`, for fold's file tools and skill loader. */
 	static readonly fileSystemLayer = Layer.effect(

@@ -152,7 +152,8 @@ const failed = (safeCode: string, retryable: boolean, retryAfterMs?: number) =>
 	)
 
 /** An item's text with its note, if it has one. */
-const withNote = (title: string, note: string | undefined) => (Predicate.isUndefined(note) ? title : `${title}: ${note}`)
+const withNote = (title: string, note: string | undefined) =>
+	Predicate.isUndefined(note) ? title : `${title}: ${note}`
 
 /** The plan as Agent Plan steps. Linear has no failed status, so a failed item is `canceled` and says why. */
 export const linearAgentPlanSteps = (plan: DeliveryPlan) =>
@@ -160,10 +161,15 @@ export const linearAgentPlanSteps = (plan: DeliveryPlan) =>
 		Match.value(item.state).pipe(
 			Match.tagsExhaustive({
 				Pending: () => LinearAgentPlanStep.make({ content: item.title, status: 'pending' }),
-				InProgress: ({ details }) => LinearAgentPlanStep.make({ content: withNote(item.title, details), status: 'inProgress' }),
-				Completed: ({ result }) => LinearAgentPlanStep.make({ content: withNote(item.title, result), status: 'completed' }),
+				InProgress: ({ details }) =>
+					LinearAgentPlanStep.make({ content: withNote(item.title, details), status: 'inProgress' }),
+				Completed: ({ result }) =>
+					LinearAgentPlanStep.make({ content: withNote(item.title, result), status: 'completed' }),
 				Failed: ({ reason }) =>
-					LinearAgentPlanStep.make({ content: `${item.title} (failed${Predicate.isUndefined(reason) ? '' : `: ${reason}`})`, status: 'canceled' }),
+					LinearAgentPlanStep.make({
+						content: `${item.title} (failed${Predicate.isUndefined(reason) ? '' : `: ${reason}`})`,
+						status: 'canceled',
+					}),
 			}),
 		),
 	)
@@ -204,14 +210,13 @@ const sessionOutcomeContent = (outcome: DeliveryOutcome, markdown: string | unde
 		}),
 	)
 
-/** Build Linear's output half. Its `LinearApi` is the bot's own. */
-export const makeLinearOutputProcessor = Effect.fn('linear.make_output_processor')(function* (input: {
+/** Build Linear's output half. It sends through the `LinearApi` the host supplies while it runs. */
+export const makeLinearOutputProcessor = (input: {
 	readonly namespace: string
 	readonly bot: LinearBotConfiguration
-}) {
-	const linearApi = yield* LinearApi
-
+}): Effect.Effect<ProviderOutputProcessor<LinearApi>> => {
 	const process = Effect.fn('linear.process_delivery_output')(function* (attempt: ProviderOutputAttempt) {
+		const linearApi = yield* LinearApi
 		const annotations = { delivery_id: attempt.deliveryId, operation_id: attempt.operationId }
 		if (attempt.prepared.presentationVersion !== LinearDeliveryPresentationVersion) {
 			return yield* failed('unsupported_presentation_version', false)
@@ -225,7 +230,9 @@ export const makeLinearOutputProcessor = Effect.fn('linear.make_output_processor
 			(message: string, safeCode: string) =>
 			<A>(effect: Effect.Effect<A, LinearApiError>) =>
 				effect.pipe(
-					Effect.tapError((error) => Effect.logWarning(message, error).pipe(Effect.annotateLogs(annotations))),
+					Effect.tapError((error) =>
+						Effect.logWarning(message, error).pipe(Effect.annotateLogs(annotations)),
+					),
 					Effect.mapError((error) => failed(safeCode, error.retryable, error.retryAfterMs)),
 				)
 
@@ -243,7 +250,9 @@ export const makeLinearOutputProcessor = Effect.fn('linear.make_output_processor
 			(message: string, safeCode: string) =>
 			<A, E>(effect: Effect.Effect<A, E>) =>
 				effect.pipe(
-					Effect.tapError((error) => Effect.logWarning(message, error).pipe(Effect.annotateLogs(annotations))),
+					Effect.tapError((error) =>
+						Effect.logWarning(message, error).pipe(Effect.annotateLogs(annotations)),
+					),
 					Effect.mapError(() => failed(safeCode, false)),
 				)
 
@@ -308,7 +317,11 @@ export const makeLinearOutputProcessor = Effect.fn('linear.make_output_processor
 				Match.tagsExhaustive({
 					Issue: ({ issue: reacted }) => reacted,
 					Comment: ({ comment }) =>
-						LinearIssueRef.make({ organizationId: comment.organizationId, teamId: null, issueId: comment.issueId }),
+						LinearIssueRef.make({
+							organizationId: comment.organizationId,
+							teamId: null,
+							issueId: comment.issueId,
+						}),
 				}),
 			)
 			return linearApi.createReaction({ target, emoji: linearPortableReactions[reaction], reactionId }).pipe(
@@ -442,10 +455,10 @@ export const makeLinearOutputProcessor = Effect.fn('linear.make_output_processor
 					? Effect.succeed(undefined)
 					: Schema.decodeEffect(LinearOutputReceiptJson)(presentation).pipe(
 							Effect.catchTag('SchemaError', (error) =>
-								Effect.logWarning('Linear plan presentation could not be read; sending the Agent Plan', error).pipe(
-									Effect.annotateLogs(annotations),
-									Effect.as(undefined),
-								),
+								Effect.logWarning(
+									'Linear plan presentation could not be read; sending the Agent Plan',
+									error,
+								).pipe(Effect.annotateLogs(annotations), Effect.as(undefined)),
 							),
 						)
 
@@ -472,19 +485,26 @@ export const makeLinearOutputProcessor = Effect.fn('linear.make_output_processor
 							Effect.catchIf(
 								(error) => error.reason === 'validation' || error.reason === 'rejected',
 								(error) =>
-									Effect.logWarning('Linear refused the Agent Plan; showing the item in progress as a thought', error).pipe(
-										Effect.annotateLogs(annotations),
-										Effect.as(false),
-									),
+									Effect.logWarning(
+										'Linear refused the Agent Plan; showing the item in progress as a thought',
+										error,
+									).pipe(Effect.annotateLogs(annotations), Effect.as(false)),
 							),
 							reportLinearFailure('Linear Agent Plan update failed', 'linear_plan_failed'),
 						)
-					return replaced ? yield* encodeReceipt(LinearAgentPlanReceipt.make({})) : yield* planThought(plan, undefined)
-				}).pipe(Effect.withSpan('linear.output.render_session_plan', { attributes: { item_count: plan.items.length } }))
+					return replaced
+						? yield* encodeReceipt(LinearAgentPlanReceipt.make({}))
+						: yield* planThought(plan, undefined)
+				}).pipe(
+					Effect.withSpan('linear.output.render_session_plan', {
+						attributes: { item_count: plan.items.length },
+					}),
+				)
 
 			return Match.value(attempt.operation).pipe(
 				Match.tagsExhaustive({
-					PresentOutcome: ({ outcome, markdown }) => postActivity(sessionOutcomeContent(outcome, markdown), false),
+					PresentOutcome: ({ outcome, markdown }) =>
+						postActivity(sessionOutcomeContent(outcome, markdown), false),
 					SetActivity: ({ activity }) =>
 						Match.value(activity).pipe(
 							Match.tagsExhaustive({
@@ -509,11 +529,16 @@ export const makeLinearOutputProcessor = Effect.fn('linear.make_output_processor
 								LinearUpdateAgentSessionRequest.make({
 									organizationId: session.organizationId,
 									sessionId: session.sessionId,
-									addedExternalUrls: [LinearAgentSessionExternalUrl.make({ label: link.label, url: link.url })],
+									addedExternalUrls: [
+										LinearAgentSessionExternalUrl.make({ label: link.label, url: link.url }),
+									],
 								}),
 							)
 							.pipe(
-								reportLinearFailure('Linear session link update failed', 'linear_session_update_failed'),
+								reportLinearFailure(
+									'Linear session link update failed',
+									'linear_session_update_failed',
+								),
 								Effect.as(applied),
 							),
 				}),
@@ -524,7 +549,11 @@ export const makeLinearOutputProcessor = Effect.fn('linear.make_output_processor
 			if (target.organizationId !== input.bot.organizationId) {
 				return Effect.fail(failed('destination_identity_mismatch', false))
 			}
-			const issue = LinearIssueRef.make({ organizationId: target.organizationId, teamId: null, issueId: target.issueId })
+			const issue = LinearIssueRef.make({
+				organizationId: target.organizationId,
+				teamId: null,
+				issueId: target.issueId,
+			})
 
 			/** Comment on the issue; the receipt is the comment. */
 			const comment = (markdown: string) =>
@@ -541,8 +570,10 @@ export const makeLinearOutputProcessor = Effect.fn('linear.make_output_processor
 				Effect.gen(function* () {
 					const markdown = deliveryPlanMarkdown(plan)
 					const presentation = rendered?.presentation
-					if (Predicate.isUndefined(rendered) || Predicate.isUndefined(presentation)) return yield* comment(markdown)
-					if (sameDeliveryPlan(rendered.plan, plan)) return DeliveryOutputApplied.make({ receipt: presentation })
+					if (Predicate.isUndefined(rendered) || Predicate.isUndefined(presentation))
+						return yield* comment(markdown)
+					if (sameDeliveryPlan(rendered.plan, plan))
+						return DeliveryOutputApplied.make({ receipt: presentation })
 					const posted = yield* postedComment(presentation)
 					const edited = yield* linearApi
 						.updateComment({ comment: posted, content: LinearContent.make({ markdown }) })
@@ -551,10 +582,10 @@ export const makeLinearOutputProcessor = Effect.fn('linear.make_output_processor
 							Effect.catchIf(
 								(error) => error.reason === 'not_found',
 								(error) =>
-									Effect.logInfo('Linear plan comment is gone; commenting the plan again', error).pipe(
-										Effect.annotateLogs(annotations),
-										Effect.as(false),
-									),
+									Effect.logInfo(
+										'Linear plan comment is gone; commenting the plan again',
+										error,
+									).pipe(Effect.annotateLogs(annotations), Effect.as(false)),
 							),
 							reportLinearFailure('Linear plan comment update failed', 'linear_comment_update_failed'),
 						)
@@ -575,7 +606,12 @@ export const makeLinearOutputProcessor = Effect.fn('linear.make_output_processor
 							Effect.flatMap((posted) =>
 								linearApi
 									.updateComment({ comment: posted, content: LinearContent.make({ markdown }) })
-									.pipe(reportLinearFailure('Linear issue comment update failed', 'linear_comment_update_failed')),
+									.pipe(
+										reportLinearFailure(
+											'Linear issue comment update failed',
+											'linear_comment_update_failed',
+										),
+									),
 							),
 							Effect.as(applied),
 						),
@@ -587,7 +623,10 @@ export const makeLinearOutputProcessor = Effect.fn('linear.make_output_processor
 										(error) => error.reason === 'not_found',
 										() => Effect.logInfo('Linear comment was already gone; counting it as deleted'),
 									),
-									reportLinearFailure('Linear issue comment delete failed', 'linear_comment_delete_failed'),
+									reportLinearFailure(
+										'Linear issue comment delete failed',
+										'linear_comment_delete_failed',
+									),
 								),
 							),
 							Effect.as(applied),
@@ -611,5 +650,5 @@ export const makeLinearOutputProcessor = Effect.fn('linear.make_output_processor
 		)
 	})
 
-	return { namespace: input.namespace, providerName: 'linear', process } satisfies ProviderOutputProcessor
-})
+	return Effect.succeed({ namespace: input.namespace, providerName: 'linear', process })
+}

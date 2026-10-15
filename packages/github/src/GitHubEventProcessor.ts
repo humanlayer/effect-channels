@@ -70,8 +70,9 @@ import {
 import {
 	type GitHubCallbackError,
 	GitHubCallbackName,
+	type GitHubCallbackHandlers,
 	type GitHubCallbackOperations,
-	GitHubCallbacks,
+	makeGitHubCallbacks,
 } from './GitHubCallbacks'
 import {
 	GitHubActivationTarget,
@@ -1071,25 +1072,14 @@ const processGitHubBatch = <R>(options: GitHubEventProcessorOptions, callbacks: 
 		})
 	})
 
-export function makeGitHubEventProcessor(
-	options: GitHubEventProcessorOptions,
-): ProviderEventProcessor<GitHubCallbacks | GitHubApi | MailboxSubscriptions>
-export function makeGitHubEventProcessor<R>(
-	options: GitHubEventProcessorOptions,
-	callbacks: GitHubCallbackOperations<R>,
-): ProviderEventProcessor<GitHubApi | MailboxSubscriptions | R>
-export function makeGitHubEventProcessor<R>(
-	options: GitHubEventProcessorOptions,
-	callbacks?: GitHubCallbackOperations<R>,
-) {
-	return {
-		namespace: options.namespace,
-		providerName: 'github',
-		process: Predicate.isUndefined(callbacks)
-			? (admissions: DeliveryAdmissionBatch, execution: ProviderDeliveryExecution) =>
-					Effect.flatMap(GitHubCallbacks, (service) =>
-						processGitHubBatch(options, service)(admissions, execution),
-					)
-			: processGitHubBatch(options, callbacks),
-	}
-}
+/**
+ * GitHub's callback half: runs the application's handlers for each batch. What the handlers need, with
+ * `GitHubApi` and `MailboxSubscriptions`, stays in its requirements, for the host to supply.
+ */
+export const makeGitHubEventProcessor = <E, R>(
+	options: GitHubEventProcessorOptions & { readonly handlers: GitHubCallbackHandlers<E, R> },
+): ProviderEventProcessor<GitHubApi | MailboxSubscriptions | R> => ({
+	namespace: options.namespace,
+	providerName: 'github',
+	process: processGitHubBatch(options, makeGitHubCallbacks(options.handlers)),
+})

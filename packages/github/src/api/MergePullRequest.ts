@@ -1,6 +1,6 @@
 import { Effect, Schema, Struct } from 'effect'
 
-import type { GitHubMergePullRequest } from '../GitHubApi'
+import type { GitHubMergePullRequest } from '../GitHubApiContract'
 import { GitHubMergeMethod, GitHubMergeResult } from '../GitHubModels'
 import { GitHubApiClient } from './GitHubApiClient'
 import { repositoryPath } from './GitHubApiProjections'

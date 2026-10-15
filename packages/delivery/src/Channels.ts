@@ -10,21 +10,15 @@ import { HttpEffect, HttpRouter } from 'effect/http'
 
 import type { ChannelsProvider, ChannelsProviderRequirements } from './ChannelsProvider'
 import type { ChannelsStorage } from './ChannelsStorage'
-import { DeliveryControlLive, type DeliveryControlBackend } from './DeliveryControl'
+import { DeliveryControl, type DeliveryControlBackend } from './DeliveryControl'
 import { deliveryApiRoutes } from './DeliveryHttpServer'
 import { DELIVERY_ID_MAX_LENGTH } from './DeliveryReference'
 import { MailboxDelivery } from './MailboxDelivery'
 import { QueueDeliveryMode } from './MailboxPolicy'
 import type { DeliveryMode } from './MailboxPolicy'
-import {
-	MailboxProcessingLive,
-	makeMailboxProcessingWith,
-	makeProviderEventDispatcher,
-	ProviderEventDispatcherLive,
-} from './MailboxProcessing'
-import type { MailboxProcessingOptions } from './MailboxProcessing'
+import { MailboxProcessing } from './MailboxProcessing'
+import type { MailboxProcessingOptions, MailboxProcessors } from './MailboxProcessing'
 import type { MailboxSubscriptions } from './MailboxSubscriptions'
-import { makeProviderOutputDispatcher, ProviderOutputDispatcherLive } from './ProviderOutput'
 import { webhookRoutes } from './ProviderWebhooks'
 import type { WebhookRoutesOptions } from './ProviderWebhooks'
 
@@ -79,67 +73,60 @@ const deliveryModeForProviders =
 		return Predicate.isUndefined(provider) ? QueueDeliveryMode.make({}) : provider.deliveryMode
 	}
 
-/** Mailbox processing for a bot: claims batches, runs each provider's callbacks, and sends saved output. */
-export const processingLayer = <const Requirements extends ReadonlyArray<ChannelsProviderRequirements>>(
+/** The processing options for a bot's mailboxes. */
+export const processingOptions = <const Requirements extends ReadonlyArray<ChannelsProviderRequirements>>(
 	options: Options<Requirements>,
 	polling: MailboxProcessingOptions['polling'],
-) => {
-	const providers: ReadonlyArray<ChannelsProvider<Requirements[number]>> = options.providers
-	return MailboxProcessingLive({
-		...options.eventProcessing,
-		polling,
-		deliveryModeFor: deliveryModeForProviders(providers),
-	}).pipe(
-		Layer.provide(
-			Layer.unwrap(
-				Effect.gen(function* () {
-					const eventProcessors = yield* Effect.forEach(providers, (provider) =>
-						provider.eventProcessor({ namespace: options.namespace }),
-					)
-					const outputProcessors = yield* Effect.forEach(providers, (provider) =>
-						Predicate.isUndefined(provider.outputProcessor)
-							? Effect.succeed([])
-							: Effect.map(provider.outputProcessor({ namespace: options.namespace }), (processor) => [
-									processor,
-								]),
-					)
-					return Layer.merge(
-						ProviderEventDispatcherLive(eventProcessors),
-						ProviderOutputDispatcherLive(outputProcessors.flat()),
-					)
-				}),
-			),
-		),
-	)
-}
+): MailboxProcessingOptions => ({
+	...options.eventProcessing,
+	polling,
+	deliveryModeFor: deliveryModeForProviders(options.providers),
+})
 
-/** Construct one mailbox processor while preserving provider runtime requirements. */
-export const makeProcessing = <const Requirements extends ReadonlyArray<ChannelsProviderRequirements>>(
+/** Build each provider's event processor, and its output processor when it has one. */
+export const makeProcessors = <const Requirements extends ReadonlyArray<ChannelsProviderRequirements>>(
 	options: Options<Requirements>,
 ) => {
 	const providers: ReadonlyArray<ChannelsProvider<Requirements[number]>> = options.providers
 	return Effect.gen(function* () {
-		const eventProcessors = yield* Effect.forEach(providers, (provider) => {
-			const build = provider.runtimeEventProcessor ?? provider.eventProcessor
-			return build({ namespace: options.namespace })
-		})
-		const outputProcessors = yield* Effect.forEach(providers, (provider) => {
-			const build = provider.runtimeOutputProcessor ?? provider.outputProcessor
-			return Predicate.isUndefined(build)
-				? Effect.succeed([])
-				: Effect.map(build({ namespace: options.namespace }), (processor) => [processor])
-		})
-		return yield* makeMailboxProcessingWith(
-			{
-				...options.eventProcessing,
-				polling: 'disabled',
-				deliveryModeFor: deliveryModeForProviders(providers),
-			},
-			makeProviderEventDispatcher(eventProcessors),
-			makeProviderOutputDispatcher(outputProcessors.flat()),
+		const events = yield* Effect.forEach(providers, (provider) =>
+			provider.eventProcessor({ namespace: options.namespace }),
 		)
+		const outputs = yield* Effect.forEach(providers, (provider) =>
+			Predicate.isUndefined(provider.outputProcessor)
+				? Effect.succeed([])
+				: Effect.map(provider.outputProcessor({ namespace: options.namespace }), (processor) => [processor]),
+		)
+		const processors: MailboxProcessors<Requirements[number]['process'] | MailboxSubscriptions> = {
+			events,
+			outputs: outputs.flat(),
+		}
+		return processors
 	})
 }
+
+/** Mailbox processing for a bot: claims batches, runs each provider's callbacks, and sends saved output. */
+export const processingLayer = <const Requirements extends ReadonlyArray<ChannelsProviderRequirements>>(
+	options: Options<Requirements>,
+	polling: MailboxProcessingOptions['polling'],
+) =>
+	Layer.unwrap(
+		Effect.map(makeProcessors(options), (processors) =>
+			MailboxProcessing.layer(processingOptions(options, polling), processors),
+		),
+	)
+
+/**
+ * Mailbox processing for a bot that leaves what the providers need in `processReady`'s requirements,
+ * for hosts that supply it only while each pass runs, such as a Durable Object alarm. It never polls.
+ */
+export const makeProcessing = <const Requirements extends ReadonlyArray<ChannelsProviderRequirements>>(
+	options: Options<Requirements>,
+) =>
+	Effect.gen(function* () {
+		const processors = yield* makeProcessors(options)
+		return yield* MailboxProcessing.make(processingOptions(options, 'disabled'), processors)
+	})
 
 export type MakeOptions<
 	Requirements extends ReadonlyArray<ChannelsProviderRequirements>,
@@ -186,7 +173,7 @@ export const make = <
 	 * The delivery API. Mount it beside `routes` to let remote workers finish handed-off deliveries.
 	 * It needs a store that provides `DeliveryControlBackend`; with any other store it does not compile.
 	 */
-	const deliveryApi = deliveryApiRoutes(options).pipe(Layer.provide(DeliveryControlLive), Layer.provide(layer))
+	const deliveryApi = deliveryApiRoutes(options).pipe(Layer.provide(DeliveryControl.layer), Layer.provide(layer))
 
 	/**
 	 * Serve `routes`, and any `extraRoutes` such as `bot.deliveryApi`, outside an Effect program.

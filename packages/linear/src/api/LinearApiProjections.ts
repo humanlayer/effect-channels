@@ -1,4 +1,4 @@
-import type { LinearIssueRequest } from '../LinearApi'
+import type { LinearIssueRequest } from '../LinearApiContract'
 import { discoverLinearFiles, LinearFile, LinearFileRef } from '../LinearFiles'
 import {
 	LinearCommentRef,

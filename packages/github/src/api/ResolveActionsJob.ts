@@ -1,6 +1,6 @@
 import { Effect, Predicate } from 'effect'
 
-import type { GitHubCheckRunRequest } from '../GitHubApi'
+import type { GitHubCheckRunRequest } from '../GitHubApiContract'
 import { fetchCheckRun } from './FetchCheckRun'
 import { GitHubApiClient } from './GitHubApiClient'
 import { actionsJob, repositoryPath, sameUrl } from './GitHubApiProjections'

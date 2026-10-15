@@ -1,6 +1,6 @@
 import { Effect } from 'effect'
 
-import type { GitHubRepositoryRequest } from '../GitHubApi'
+import type { GitHubRepositoryRequest } from '../GitHubApiContract'
 import { GitHubApiClient } from './GitHubApiClient'
 import { label, repositoryPath } from './GitHubApiProjections'
 import { Label } from './GitHubApiSchemas'

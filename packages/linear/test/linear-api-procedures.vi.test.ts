@@ -11,7 +11,7 @@ import { DeleteReactionVariables } from '../src/api/DeleteReaction'
 import { getIssue, GetIssueVariables } from '../src/api/GetIssue'
 import { GetUserVariables } from '../src/api/GetUser'
 import { narrowLinearProviderErrors } from '../src/api/LinearApiErrors'
-import { LinearHttpClient, makeFixedCredentialLinearHttpClient } from '../src/api/LinearHttpClient'
+import { LinearHttpClient } from '../src/api/LinearHttpClient'
 import { ListIssueAttachmentsVariables } from '../src/api/ListIssueAttachments'
 import { ListIssueCommentsVariables } from '../src/api/ListIssueComments'
 import {
@@ -57,10 +57,10 @@ const decodeProcedureRequest = decodeGraphqlRequest(
 )
 
 const procedureLayer = (http: HttpClient.HttpClient) =>
-	Layer.succeed(
-		LinearHttpClient,
-		makeFixedCredentialLinearHttpClient(http, issue.organizationId, Redacted.make('test-token')),
-	)
+	LinearHttpClient.layerFixedCredential({
+		organizationId: issue.organizationId,
+		accessToken: Redacted.make('test-token'),
+	}).pipe(Layer.provide(Layer.succeed(HttpClient.HttpClient, http)))
 
 describe('Linear GraphQL procedures', () => {
 	it.effect('owns its document, variables, decoding, and domain projection', ({ expect }) =>

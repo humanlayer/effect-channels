@@ -1,6 +1,6 @@
 import { Effect, Schema } from 'effect'
 
-import type { LinearDeleteReactionRequest } from '../LinearApi'
+import type { LinearDeleteReactionRequest } from '../LinearApiContract'
 import { LinearReactionId } from '../LinearIdentity'
 import { failLinearMutation } from './LinearApiErrors'
 import { linearGraphql } from './LinearGraphql'

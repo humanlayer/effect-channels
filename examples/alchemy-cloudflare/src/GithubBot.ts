@@ -36,8 +36,8 @@ import type { RuntimeContext } from 'alchemy/RuntimeContext'
 import { Array as Arr, Config, Effect, Match, Predicate, Schema } from 'effect'
 
 import { AgentSessions } from './AgentSessionDO'
+import { AgentSessionMessage } from './AgentSessionMessage'
 import { AutoLabel, type AutoLabelError } from './AutoLabel'
-import { AgentSessionMessage } from './DeliveryTurn'
 import { RequestComment } from './DiscussionContext'
 
 export const maintainerOnlyNotice =
@@ -224,7 +224,8 @@ const githubRepositoryLogAnnotations = (ref: GitHubRepositoryRef) => ({
 
 /**
  * GitHub App callbacks. Creation labels public submissions; mentions require write access or higher.
- * `GitHubApiLive`, the default, reads the App ID and private key.
+ * The bot builds no GitHub client: the Worker provides `GitHubApiLive`, which reads the App ID and private
+ * key, to the routes, the mailbox objects and every callback.
  */
 export const githubHandlers = {
 	/** Here is where you would e.g. do code review / automatic triage */

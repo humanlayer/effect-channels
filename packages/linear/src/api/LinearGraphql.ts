@@ -1,7 +1,7 @@
 import { Effect, Match, Schema } from 'effect'
 import * as HttpClientRequest from 'effect/http/HttpClientRequest'
 
-import type { LinearApiError, LinearApiOperation } from '../LinearApi'
+import type { LinearApiError, LinearApiOperation } from '../LinearApiContract'
 import {
 	LinearAlreadyExistsError,
 	LinearAuthenticationError,

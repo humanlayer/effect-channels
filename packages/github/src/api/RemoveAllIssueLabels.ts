@@ -1,6 +1,6 @@
 import { Effect } from 'effect'
 
-import type { GitHubIssueRequest } from '../GitHubApi'
+import type { GitHubIssueRequest } from '../GitHubApiContract'
 import { GitHubApiClient } from './GitHubApiClient'
 import { repositoryPath } from './GitHubApiProjections'
 export const removeAllIssueLabels = Effect.fn('github.api.remove_all_issue_labels')(function* (

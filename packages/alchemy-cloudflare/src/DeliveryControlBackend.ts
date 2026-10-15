@@ -46,22 +46,25 @@ export const makeDeliveryControlBackendFromDurableObjectStorage = Effect.gen(fun
 	const storage = yield* MailboxStorage
 
 	return DeliveryControlBackend.of({
-		readDeliveryStatus: Effect.fn('delivery.cloudflare.read_delivery_status')(function* (input: ReadDeliveryStatus) {
+		readDeliveryStatus: Effect.fn('delivery.cloudflare.read_delivery_status')(function* (
+			input: ReadDeliveryStatus,
+		) {
 			const now = yield* Clock.currentTimeMillis
-			const stored = yield* storage
-				.get(mailboxStateKey)
-				.pipe(
-					Effect.flatMap((value) =>
-						Predicate.isUndefined(value)
-							? Effect.succeedNone
-							: Effect.asSome(
-									decodeMailboxState(value).pipe(
-										Effect.catchTag('SchemaError', undecodable('Cloudflare delivery status read failed')),
+			const stored = yield* storage.get(mailboxStateKey).pipe(
+				Effect.flatMap((value) =>
+					Predicate.isUndefined(value)
+						? Effect.succeedNone
+						: Effect.asSome(
+								decodeMailboxState(value).pipe(
+									Effect.catchTag(
+										'SchemaError',
+										undecodable('Cloudflare delivery status read failed'),
 									),
 								),
-					),
-					narrowStorageDefect('Cloudflare delivery status read failed'),
-				)
+							),
+				),
+				narrowStorageDefect('Cloudflare delivery status read failed'),
+			)
 			const mailbox = Option.filter(stored, ({ mailboxKey }) => mailboxKey === input.reference.mailboxKey)
 			if (Option.isNone(mailbox)) return yield* new DeliveryNotFound()
 			return yield* readDeliverySlotStatus(mailbox.value.deliveries, { ...input, now })

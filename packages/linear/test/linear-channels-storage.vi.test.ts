@@ -2,8 +2,8 @@ import { NodeCrypto } from '@effect/platform-node'
 import { describe, it } from '@effect/vitest'
 import { Channels, ChannelsMemory } from '@humanlayer/channels-delivery'
 import { Config, Deferred, Effect, Layer, Redacted } from 'effect'
-import { TestClock } from 'effect/testing'
 import { HttpRouter, HttpServerRequest } from 'effect/http'
+import { TestClock } from 'effect/testing'
 
 import { LinearAuth, LinearBot } from '../src/index'
 import { LinearApi } from '../src/LinearApi'
@@ -26,7 +26,6 @@ describe('Linear Channels storage composition', () => {
 							clientId: Config.succeed('test-client'),
 							clientSecret: Config.succeed(Redacted.make('test-secret')),
 						}),
-						linearApi: Layer.mock(LinearApi, {}),
 						handlers: {
 							onIssueCreated: (event) =>
 								Effect.gen(function* () {
@@ -42,7 +41,9 @@ describe('Linear Channels storage composition', () => {
 				eventProcessing: { concurrency: 1, leaseMs: 30_000 },
 				storage: ChannelsMemory.make({ polling: { intervalMs: 1_000 } }),
 			})
-			const fetch = yield* HttpRouter.toHttpEffect(channels.routes).pipe(Effect.provide(NodeCrypto.layer))
+			const fetch = yield* HttpRouter.toHttpEffect(channels.routes).pipe(
+				Effect.provide(Layer.merge(NodeCrypto.layer, Layer.mock(LinearApi, {}))),
+			)
 			const signed = signedLinearInput()
 			const response = yield* fetch.pipe(
 				Effect.provideService(

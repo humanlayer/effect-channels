@@ -46,13 +46,37 @@ LINEAR_CLIENT_SECRET=...
 ```
 
 - `LINEAR_WEBHOOK_SECRET` verifies webhooks. Pass it to `LinearBot.make` as `webhookSecret`.
-- `LINEAR_ORGANIZATION_ID` and `LINEAR_APP_USER_ID` are the one workspace and app user this bot serves. Before its first API call, the bot checks that its token belongs to both.
+- `LINEAR_ORGANIZATION_ID` and `LINEAR_APP_USER_ID` are the one workspace and app user this bot serves. Before its first API call, `LinearApiLive` checks that its token belongs to both.
 - `LINEAR_DEVELOPER_TOKEN` is the application's developer token. It takes precedence when set. Replace it yourself if it is revoked.
-- `LINEAR_CLIENT_ID` and `LINEAR_CLIENT_SECRET` are used only when no developer token is set. The bot then fetches and renews short-lived tokens itself.
+- `LINEAR_CLIENT_ID` and `LINEAR_CLIENT_SECRET` are used only when no developer token is set. `LinearApiLive` then fetches and renews short-lived tokens itself.
 
 `LinearAuth.fromEnvironment` reads these variables. Credentials are never stored in webhook admissions or mailboxes.
 
 Unknown authenticated event types/actions are acknowledged and ignored. API credentials are resolved lazily; the first operation verifies `viewer.id` and `viewer.organization.id` before its requested query or mutation runs.
+
+## Configure a provider
+
+`LinearBot.make` takes the webhook secret, the bot's workspace and app user, its `auth`, and the callbacks. It does not build a `LinearApi`: the callbacks' resources and the output a remote worker sends both need one, and the application provides it once, beside whatever else its callbacks need.
+
+```ts
+const auth = LinearAuth.fromEnvironment
+const bot = {
+	organizationId: Config.schema(LinearOrganizationId, 'LINEAR_ORGANIZATION_ID'),
+	appUserId: Config.schema(LinearUserId, 'LINEAR_APP_USER_ID'),
+}
+
+const linear = LinearBot.make({
+	webhookSecret: Config.Redacted('LINEAR_WEBHOOK_SECRET'),
+	bot: Config.all(bot),
+	auth,
+	handlers: { onAgentSessionCreated: (event, delivery) => ... },
+})
+
+/** Provide this, or `LinearApiLive`, which reads the same variables. */
+const linearApi = makeLinearApiLive(LinearApiLiveOptions.make({ auth, ...bot }))
+```
+
+`auth` stays on the bot because webhooks carry the app's OAuth client ID, which the bot checks. `makeLinearApiLiveBase` and `LinearApiLiveBase` leave `HttpClient` for the application to provide.
 
 ## Files
 

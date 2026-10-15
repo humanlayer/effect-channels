@@ -1,6 +1,6 @@
 import { Effect } from 'effect'
 
-import { GitHubApiError, type GitHubCheckRunRequest } from '../GitHubApi'
+import { GitHubApiError, type GitHubCheckRunRequest } from '../GitHubApiContract'
 import { GitHubApiClient } from './GitHubApiClient'
 import { checkRunInfo, repositoryPath } from './GitHubApiProjections'
 import { CheckRun } from './GitHubApiSchemas'

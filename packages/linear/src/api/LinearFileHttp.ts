@@ -1,7 +1,7 @@
 import { Effect } from 'effect'
 import type { HttpClientResponse } from 'effect/http/HttpClientResponse'
 
-import type { LinearApiOperation } from '../LinearApi'
+import type { LinearApiOperation } from '../LinearApiContract'
 import {
 	LinearAuthenticationError,
 	LinearFileTransferRejectedError,

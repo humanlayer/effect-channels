@@ -3,7 +3,15 @@ import { defineConfig } from './tools/typed/src/config'
 export default defineConfig({
 	projects: ['tsconfig.json'],
 	projectExcludes: ['**/node_modules/**', '**/dist/**', '**/build/**', '**/coverage/**'],
-	sourceExcludes: ['**/*.d.ts', '**/node_modules/**', '**/dist/**', '**/build/**', '**/coverage/**', 'tools/**', 'scripts/**'],
+	sourceExcludes: [
+		'**/*.d.ts',
+		'**/node_modules/**',
+		'**/dist/**',
+		'**/build/**',
+		'**/coverage/**',
+		'tools/**',
+		'scripts/**',
+	],
 	rules: {
 		'no-svg-files': [
 			'error',

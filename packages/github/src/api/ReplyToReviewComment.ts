@@ -1,6 +1,6 @@
 import { Effect, Schema } from 'effect'
 
-import type { GitHubReplyToReviewComment } from '../GitHubApi'
+import type { GitHubReplyToReviewComment } from '../GitHubApiContract'
 import { GitHubApiClient } from './GitHubApiClient'
 import { repositoryPath, reviewComment } from './GitHubApiProjections'
 import { ReviewComment } from './GitHubApiSchemas'

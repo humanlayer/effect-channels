@@ -1,6 +1,6 @@
 import { Effect } from 'effect'
 
-import type { GitHubListPullRequestsForBranch } from '../GitHubApi'
+import type { GitHubListPullRequestsForBranch } from '../GitHubApiContract'
 import { GitHubApiClient } from './GitHubApiClient'
 import { pullRequestInfo, repositoryPath } from './GitHubApiProjections'
 import { PullRequest } from './GitHubApiSchemas'

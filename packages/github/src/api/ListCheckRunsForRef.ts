@@ -1,6 +1,6 @@
 import { Effect } from 'effect'
 
-import type { GitHubListCheckRunsForRef } from '../GitHubApi'
+import type { GitHubListCheckRunsForRef } from '../GitHubApiContract'
 import { GitHubApiClient } from './GitHubApiClient'
 import { checkRun, repositoryPath } from './GitHubApiProjections'
 import { CheckRunsPage } from './GitHubApiSchemas'

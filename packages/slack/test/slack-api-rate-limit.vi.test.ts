@@ -1,7 +1,7 @@
 import { describe, it } from '@effect/vitest'
 import { ConfigProvider, Effect, Fiber, Layer, Logger, Ref } from 'effect'
-import { TestClock } from 'effect/testing'
 import { HttpClient, HttpClientResponse } from 'effect/http'
+import { TestClock } from 'effect/testing'
 
 import { SlackApi } from '../src/SlackApi'
 import { SlackApiLiveBase } from '../src/SlackApiLive'
@@ -116,9 +116,13 @@ describe('SlackApi rejected token', () => {
 	it.effect('logs a refused bot token as a configuration error that names the setting', ({ expect }) =>
 		Effect.gen(function* () {
 			const logs: Array<string> = []
-			const logger = Logger.layer([Logger.make((entry) => logs.push(JSON.stringify(Logger.formatStructured.log(entry))))])
+			const logger = Logger.layer([
+				Logger.make((entry) => logs.push(JSON.stringify(Logger.formatStructured.log(entry)))),
+			])
 			const httpClient = HttpClient.make((request) =>
-				Effect.succeed(HttpClientResponse.fromWeb(request, Response.json({ ok: false, error: 'invalid_auth' }))),
+				Effect.succeed(
+					HttpClientResponse.fromWeb(request, Response.json({ ok: false, error: 'invalid_auth' })),
+				),
 			)
 			const layer = SlackApiLiveBase.pipe(
 				Layer.provide(Layer.merge(Layer.succeed(HttpClient.HttpClient, httpClient), configLayer)),

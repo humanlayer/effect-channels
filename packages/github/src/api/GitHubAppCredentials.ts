@@ -45,11 +45,8 @@ export class GitHubAppCredentials extends Context.Service<
 		/** Forget the repository's cached token, after GitHub refused it. */
 		readonly invalidateInstallationToken: (repository: GitHubRepositoryRef) => Effect.Effect<void>
 	}
->()('@humanlayer/channels-github/internal/GitHubAppCredentials') {}
-
-export const GitHubAppCredentialsLive = Layer.effect(
-	GitHubAppCredentials,
-	Effect.gen(function* () {
+>()('@humanlayer/channels-github/internal/GitHubAppCredentials', {
+	make: Effect.gen(function* () {
 		const client = yield* HttpClient.HttpClient
 		const signer = yield* GitHubAppSigner
 		const config = yield* GitHubAppCredentialsConfig
@@ -116,7 +113,7 @@ export const GitHubAppCredentialsLive = Layer.effect(
 			},
 		)
 
-		return GitHubAppCredentials.of({
+		return {
 			appJwt,
 			installationToken: (repository) =>
 				Cache.get(tokenCache, cacheKey(repository)).pipe(
@@ -124,6 +121,8 @@ export const GitHubAppCredentialsLive = Layer.effect(
 					Effect.withSpan('github.api.installation_token'),
 				),
 			invalidateInstallationToken: (repository) => Cache.invalidate(tokenCache, cacheKey(repository)),
-		})
+		}
 	}),
-)
+}) {
+	static readonly layer = Layer.effect(this, this.make)
+}

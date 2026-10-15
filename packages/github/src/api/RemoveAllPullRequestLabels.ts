@@ -1,6 +1,6 @@
 import { Effect } from 'effect'
 
-import type { GitHubPullRequestRequest } from '../GitHubApi'
+import type { GitHubPullRequestRequest } from '../GitHubApiContract'
 import { GitHubApiClient } from './GitHubApiClient'
 import { repositoryPath } from './GitHubApiProjections'
 export const removeAllPullRequestLabels = Effect.fn('github.api.remove_all_pull_request_labels')(function* (

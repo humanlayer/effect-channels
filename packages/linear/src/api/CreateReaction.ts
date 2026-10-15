@@ -1,6 +1,6 @@
 import { Effect, Match, Schema } from 'effect'
 
-import { LinearCreateReactionRequest } from '../LinearApi'
+import { LinearCreateReactionRequest } from '../LinearApiContract'
 import { LinearCommentId, LinearIssueId, LinearReactionId } from '../LinearIdentity'
 import { LinearReaction } from '../LinearResources'
 import { failLinearMutation } from './LinearApiErrors'

@@ -1,8 +1,8 @@
 import * as NodeCrypto from '@effect/platform-node/NodeCrypto'
 import { describe, it } from '@effect/vitest'
 import { Context, Deferred, Effect, Layer, Queue, Ref } from 'effect'
-import { TestClock } from 'effect/testing'
 import { HttpRouter } from 'effect/http'
+import { TestClock } from 'effect/testing'
 
 import {
 	Channels,

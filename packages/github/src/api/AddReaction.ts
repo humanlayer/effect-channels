@@ -1,6 +1,6 @@
 import { Effect, Schema } from 'effect'
 
-import type { GitHubReactionRequest } from '../GitHubApi'
+import type { GitHubReactionRequest } from '../GitHubApiContract'
 import { GitHubReaction } from '../GitHubModels'
 import { GitHubApiClient } from './GitHubApiClient'
 import { reactionsLocation } from './GitHubApiProjections'

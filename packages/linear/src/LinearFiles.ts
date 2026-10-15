@@ -4,7 +4,9 @@ import { fromMarkdown } from 'mdast-util-from-markdown'
 import { gfmFromMarkdown } from 'mdast-util-gfm'
 import { gfm } from 'micromark-extension-gfm'
 
-import { LinearApi, LinearApiError } from './LinearApi'
+import type { LinearApi } from './LinearApi'
+import { LinearApiError } from './LinearApiContract'
+import { LinearApiHandle } from './LinearApiHandle'
 import { LinearIssueId, LinearOrganizationId } from './LinearIdentity'
 import { LinearIssueRef } from './LinearModels'
 
@@ -209,14 +211,14 @@ export class LinearFile extends Schema.TaggedClass<LinearFile>()('LinearFile', {
 }) {
 	/** Streams the file with the workspace credential. The stream is not buffered. */
 	download(): Effect.Effect<Stream.Stream<Uint8Array, LinearApiError>, LinearApiError, LinearApi> {
-		return Effect.flatMap(LinearApi, (api) =>
+		return Effect.flatMap(LinearApiHandle, (api) =>
 			api.downloadFile(LinearDownloadFileRequest.make({ file: this.ref, url: this.url, size: this.size })),
 		).pipe(Effect.withSpan('linear.file.download', { attributes: { 'linear.issue_id': this.ref.issueId } }))
 	}
 
 	/** Buffers the file, failing before `maxBytes` is exceeded. */
 	downloadBytes(options: LinearDownloadBytesOptions): Effect.Effect<Uint8Array, LinearFileError, LinearApi> {
-		return Effect.flatMap(LinearApi, (api) =>
+		return Effect.flatMap(LinearApiHandle, (api) =>
 			api.downloadFileBytes(
 				LinearDownloadFileBytesRequest.make({
 					file: this.ref,

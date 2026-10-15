@@ -18,15 +18,12 @@ import {
 	MailboxDelivery,
 	MailboxProcessing,
 	type MailboxProcessingBackend,
-	MailboxProcessingLive,
 	PreparedDeliveryInvocation,
-	ProviderEventDispatcher,
 	ProviderEventHandled,
-	ProviderOutputDispatcher,
-	ProviderOutputDispatcherLive,
 	QueueDeliveryMode,
 	parseDeliveryId,
 	type DeliveryId,
+	type ProviderEventProcessor,
 	type ProviderOutputAttempt,
 	type ProviderOutputProcessor,
 } from '../src'
@@ -41,45 +38,43 @@ const admission = DeliveryAdmission.make({
 })
 
 /** Every batch prepares, unless told not to, then hands itself off and reports its delivery. */
-const handingOffDispatcher = (input: {
+const handingOffProcessor = (input: {
 	readonly deliveries: Queue.Queue<{ readonly deliveryId: DeliveryId; readonly accessToken: string }>
 	readonly callbacks: Ref.Ref<number>
 	readonly prepare: boolean
-}) =>
-	Layer.succeed(
-		ProviderEventDispatcher,
-		ProviderEventDispatcher.of({
-			process: (_admissions, execution) =>
-				Effect.gen(function* () {
-					yield* Ref.update(input.callbacks, (count) => count + 1)
-					if (input.prepare) {
-						yield* execution.prepare(
-							PreparedDeliveryInvocation.make({
-								callbacks: [
-									{
-										name: 'onEvent',
-										presentationVersion: 1,
-										destination: { thread: 'thread-1' },
-										supportedOperations: ['PresentOutcome'],
-									},
-								],
-							}),
-						)
-					}
-					/** An unprepared delivery hands off with a link, the one output it can still owe. */
-					yield* execution.context.handoff(
-						input.prepare
-							? undefined
-							: { links: [ExternalLink.make({ label: 'Run', url: 'https://example.com/run/1' })] },
-					)
-					yield* Queue.offer(input.deliveries, {
-						deliveryId: execution.deliveryId,
-						accessToken: Redacted.value(execution.context.accessToken),
-					})
-					return ProviderEventHandled.make({})
-				}).pipe(Effect.orDie),
-		}),
-	)
+}): ProviderEventProcessor => ({
+	namespace: 'test',
+	providerName: 'example',
+	process: (_admissions, execution) =>
+		Effect.gen(function* () {
+			yield* Ref.update(input.callbacks, (count) => count + 1)
+			if (input.prepare) {
+				yield* execution.prepare(
+					PreparedDeliveryInvocation.make({
+						callbacks: [
+							{
+								name: 'onEvent',
+								presentationVersion: 1,
+								destination: { thread: 'thread-1' },
+								supportedOperations: ['PresentOutcome'],
+							},
+						],
+					}),
+				)
+			}
+			/** An unprepared delivery hands off with a link, the one output it can still owe. */
+			yield* execution.context.handoff(
+				input.prepare
+					? undefined
+					: { links: [ExternalLink.make({ label: 'Run', url: 'https://example.com/run/1' })] },
+			)
+			yield* Queue.offer(input.deliveries, {
+				deliveryId: execution.deliveryId,
+				accessToken: Redacted.value(execution.context.accessToken),
+			})
+			return ProviderEventHandled.make({})
+		}).pipe(Effect.orDie),
+})
 
 /** An output processor that records attempts and answers each with the next scripted result. */
 const scriptedProcessor = (
@@ -106,25 +101,26 @@ type OutputStore = MailboxDelivery | MailboxProcessingBackend | DeliveryControlB
 const setup = <E>(options: {
 	readonly store: Layer.Layer<OutputStore, E>
 	readonly prepare?: boolean
-	readonly output: (attempts: Queue.Queue<ProviderOutputAttempt>) => Layer.Layer<ProviderOutputDispatcher>
+	readonly output: (attempts: Queue.Queue<ProviderOutputAttempt>) => ReadonlyArray<ProviderOutputProcessor>
 	readonly script?: ReadonlyArray<'applied' | 'retryable' | 'permanent'>
 }) =>
 	Effect.gen(function* () {
 		const deliveries = yield* Queue.unbounded<{ readonly deliveryId: DeliveryId; readonly accessToken: string }>()
 		const attempts = yield* Queue.unbounded<ProviderOutputAttempt>()
 		const callbacks = yield* Ref.make(0)
-		const layer = MailboxProcessingLive({
-			concurrency: 1,
-			leaseMs: 30_000,
-			outputMaxAttempts: 3,
-			deliveryModeFor: () => QueueDeliveryMode.make({}),
-			polling: 'disabled',
-		}).pipe(
-			Layer.provide(handingOffDispatcher({ deliveries, callbacks, prepare: options.prepare ?? true })),
-			Layer.provide(options.output(attempts)),
-			Layer.provide(NodeCrypto.layer),
-			Layer.provideMerge(options.store),
-		)
+		const layer = MailboxProcessing.layer(
+			{
+				concurrency: 1,
+				leaseMs: 30_000,
+				outputMaxAttempts: 3,
+				deliveryModeFor: () => QueueDeliveryMode.make({}),
+				polling: 'disabled',
+			},
+			{
+				events: [handingOffProcessor({ deliveries, callbacks, prepare: options.prepare ?? true })],
+				outputs: options.output(attempts),
+			},
+		).pipe(Layer.provide(NodeCrypto.layer), Layer.provideMerge(options.store))
 		return { deliveries, attempts, callbacks, layer }
 	})
 
@@ -163,7 +159,7 @@ export const deliveryOutputScenarios = <E>(storeName: string, makeEmptyStore: ()
 				])
 				const { deliveries, attempts, callbacks, layer } = yield* setup({
 					store: makeEmptyStore(),
-					output: (attempts) => ProviderOutputDispatcherLive([scriptedProcessor(attempts, script)]),
+					output: (attempts) => [scriptedProcessor(attempts, script)],
 				})
 				yield* Effect.gen(function* () {
 					const { status } = yield* handOffAndComplete(deliveries)
@@ -200,7 +196,7 @@ export const deliveryOutputScenarios = <E>(storeName: string, makeEmptyStore: ()
 			const script = yield* Ref.make<ReadonlyArray<'applied' | 'retryable' | 'permanent'>>(['permanent'])
 			const { deliveries, attempts, layer } = yield* setup({
 				store: makeEmptyStore(),
-				output: (attempts) => ProviderOutputDispatcherLive([scriptedProcessor(attempts, script)]),
+				output: (attempts) => [scriptedProcessor(attempts, script)],
 			})
 			yield* Effect.gen(function* () {
 				const { status } = yield* handOffAndComplete(deliveries)
@@ -218,7 +214,7 @@ export const deliveryOutputScenarios = <E>(storeName: string, makeEmptyStore: ()
 			Effect.gen(function* () {
 				const { deliveries, layer } = yield* setup({
 					store: makeEmptyStore(),
-					output: () => ProviderOutputDispatcherLive([]),
+					output: () => [],
 				})
 				yield* Effect.gen(function* () {
 					const { status } = yield* handOffAndComplete(deliveries)
@@ -237,7 +233,7 @@ export const deliveryOutputScenarios = <E>(storeName: string, makeEmptyStore: ()
 				const { deliveries, attempts, layer } = yield* setup({
 					store: makeEmptyStore(),
 					prepare: false,
-					output: (attempts) => ProviderOutputDispatcherLive([scriptedProcessor(attempts, script)]),
+					output: (attempts) => [scriptedProcessor(attempts, script)],
 				})
 				yield* Effect.gen(function* () {
 					yield* (yield* MailboxDelivery).deliver(admission)

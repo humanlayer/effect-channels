@@ -5,7 +5,7 @@ import { vi } from 'vite-plus/test'
 
 import { LinearApi } from '../src/LinearApi'
 import { LinearIssueOpened } from '../src/LinearCallbackEvents'
-import { type LinearCallbackHandler, LinearCallbacks, type LinearCallbackHandlers } from '../src/LinearCallbacks'
+import type { LinearCallbackHandler, LinearCallbackHandlers } from '../src/LinearCallbacks'
 import { makeLinearEventProcessor } from '../src/LinearEventProcessor'
 import {
 	appUserNotificationPayloads,
@@ -15,9 +15,8 @@ import {
 } from './fixtures'
 
 const namespace = 'linear-processing-test'
-const layer = (handlers: LinearCallbackHandlers<never, never>, subscribed = false) =>
+const layer = (subscribed = false) =>
 	Layer.mergeAll(
-		LinearCallbacks.layer(handlers),
 		Layer.mock(LinearApi, {}),
 		Layer.mock(MailboxSubscriptions, {
 			isSubscribed: () => Effect.succeed(subscribed),
@@ -32,8 +31,8 @@ const process = (
 	subscribed = false,
 ) =>
 	firstAttempt().pipe(
-		Effect.flatMap((execution) => makeLinearEventProcessor({ namespace }).process(admissions, execution)),
-		Effect.provide(layer(handlers, subscribed)),
+		Effect.flatMap((execution) => makeLinearEventProcessor({ namespace, handlers }).process(admissions, execution)),
+		Effect.provide(layer(subscribed)),
 	)
 
 describe('Linear directed entry points', () => {

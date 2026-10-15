@@ -31,8 +31,11 @@ const UpdateAgentSessionResponse = Schema.Struct({
 })
 
 /** The changes a request asks for: links to add, the whole plan, or both. */
-const sessionChanges = ({ organizationId: _organizationId, sessionId: _sessionId, ...changes }: LinearUpdateAgentSessionRequest) =>
-	changes
+const sessionChanges = ({
+	organizationId: _organizationId,
+	sessionId: _sessionId,
+	...changes
+}: LinearUpdateAgentSessionRequest) => changes
 
 export const updateAgentSession = Effect.fn('linear.api.update_agent_session')(
 	(request: LinearUpdateAgentSessionRequest) =>

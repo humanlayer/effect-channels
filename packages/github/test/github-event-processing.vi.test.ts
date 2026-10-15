@@ -1,6 +1,7 @@
 import { describe, it } from '@effect/vitest'
 import {
 	DeliveryAdmission,
+	type DeliveryAdmissionBatch,
 	deliveryMailboxKey,
 	type DeliveryOperationKind,
 	DeliveryPreparationConflict,
@@ -15,13 +16,13 @@ import {
 	ProviderEventIgnored,
 	ProviderEventInvalid,
 } from '@humanlayer/channels-delivery'
-import { Cause, Effect, Exit, Layer, Match, Option, Ref } from 'effect'
+import { Cause, Context, Effect, Exit, Layer, Match, Option, Ref } from 'effect'
 import { vi } from 'vite-plus/test'
 
 import { makeTestDeliveryExecution } from '../../delivery/test/delivery-execution'
 import { GitHubApi } from '../src/GitHubApi'
 import type { GitHubMentioned } from '../src/GitHubCallbackEvents'
-import { GitHubCallbacks, type GitHubCallbackHandler, type GitHubCallbackHandlers } from '../src/GitHubCallbacks'
+import type { GitHubCallbackHandler, GitHubCallbackHandlers } from '../src/GitHubCallbacks'
 import { GitHubBotConfiguration, makeGitHubEventProcessor } from '../src/GitHubEventProcessor'
 import { GitHubId } from '../src/GitHubIdentity'
 import {
@@ -71,20 +72,25 @@ const pullRequestAdmission = (
 		payload: { event, payload },
 	})
 
-const layer = <E, R>(handlers: GitHubCallbackHandlers<E, R>, subscribed: boolean) =>
+/** The handlers one test runs. `layer` and `sharedLayer` supply them; `processor` reads them for each batch. */
+class TestHandlers extends Context.Service<TestHandlers, GitHubCallbackHandlers<unknown, MailboxSubscriptions>>()(
+	'test/GitHubTestHandlers',
+) {}
+
+const layer = <E>(handlers: GitHubCallbackHandlers<E, MailboxSubscriptions>, subscribed: boolean) =>
 	Layer.mergeAll(
-		GitHubCallbacks.layer(handlers),
+		Layer.succeed(TestHandlers, handlers),
 		Layer.mock(GitHubApi, {}),
 		Layer.mock(MailboxSubscriptions, { isSubscribed: () => Effect.succeed(subscribed) }),
 	)
 
-const process = <E, R>(
-	handlers: GitHubCallbackHandlers<E, R>,
+const process = <E>(
+	handlers: GitHubCallbackHandlers<E, MailboxSubscriptions>,
 	admissions: readonly [DeliveryAdmission, ...Array<DeliveryAdmission>],
 	subscribed = false,
 ) =>
 	Effect.flatMap(makeTestDeliveryExecution(), ({ execution }) =>
-		makeGitHubEventProcessor({ namespace, bot }).process(admissions, execution),
+		makeGitHubEventProcessor({ namespace, bot, handlers }).process(admissions, execution),
 	).pipe(Effect.provide(layer(handlers, subscribed)))
 
 describe('GitHub event batch processing', () => {
@@ -214,7 +220,7 @@ describe('GitHub event batch processing', () => {
 				...admission('issues', payload, 'opened'),
 				resourceId: 'github:v1:201:issue:42',
 			})
-			const error = yield* Effect.flip(process<never, never>({}, [mismatched]))
+			const error = yield* Effect.flip(process<never>({}, [mismatched]))
 			expect(error).toEqual(ProviderEventInvalid.make({ provider: 'github', reason: 'identity_mismatch' }))
 		}),
 	)
@@ -246,7 +252,12 @@ describe('GitHub event batch processing', () => {
 	)
 })
 
-const processor = makeGitHubEventProcessor({ namespace, bot })
+const processor = {
+	process: (admissions: DeliveryAdmissionBatch, execution: ProviderDeliveryExecution) =>
+		Effect.flatMap(TestHandlers, (handlers) =>
+			makeGitHubEventProcessor({ namespace, bot, handlers }).process(admissions, execution),
+		),
+}
 const mentionAdmission = () => admission('issue_comment', issueCommentPayload(), 'mention')
 const openedAdmission = () => admission('issues', issuePayload('opened'), 'opened')
 /** A comment that does not mention the bot. */
@@ -256,11 +267,8 @@ const commentAdmission = () => {
 }
 
 /** Callbacks and the processor share one in-memory subscription store, so a callback can subscribe the issue. */
-const sharedLayer = <E, R>(handlers: GitHubCallbackHandlers<E, R>) =>
-	Layer.merge(
-		Layer.provideMerge(GitHubCallbacks.layer(handlers), MailboxSubscriptionsMemory),
-		Layer.mock(GitHubApi, {}),
-	)
+const sharedLayer = <E>(handlers: GitHubCallbackHandlers<E, MailboxSubscriptions>) =>
+	Layer.mergeAll(Layer.succeed(TestHandlers, handlers), MailboxSubscriptionsMemory, Layer.mock(GitHubApi, {}))
 
 const pullRequestFrom = (action: string) => ({
 	...pullRequestPayload(action),

@@ -9,7 +9,6 @@ import {
 import { Effect, Layer, Schema } from 'effect'
 
 import { LinearApi } from '../src/LinearApi'
-import { LinearCallbacks } from '../src/LinearCallbacks'
 import { makeLinearEventProcessor } from '../src/LinearEventProcessor'
 import {
 	firstAttempt,
@@ -105,12 +104,12 @@ describe('Linear installation events', () => {
 				namespace: 'linear-lifecycle-test',
 				bot: { organizationId: linearOrganizationId, appUserId: linearAppUserId },
 				oauthClientId: linearOauthClientId,
+				handlers: {},
 			})
 				.process([admission], yield* firstAttempt())
 				.pipe(
 					Effect.provide(
 						Layer.mergeAll(
-							LinearCallbacks.layer<never, never>({}),
 							Layer.mock(LinearApi, {}),
 							Layer.mock(MailboxSubscriptions, {
 								subscribe: () => Effect.die('not used'),

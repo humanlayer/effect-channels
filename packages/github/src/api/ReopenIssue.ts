@@ -1,6 +1,6 @@
 import { Effect, Schema } from 'effect'
 
-import type { GitHubIssueRequest } from '../GitHubApi'
+import type { GitHubIssueRequest } from '../GitHubApiContract'
 import { GitHubApiClient } from './GitHubApiClient'
 import { issueInfo, repositoryPath } from './GitHubApiProjections'
 import { Issue } from './GitHubApiSchemas'
