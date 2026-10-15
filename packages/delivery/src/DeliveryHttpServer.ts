@@ -79,7 +79,11 @@ const handlers = (api: ReturnType<typeof prefixedDeliveryHttpApi>) =>
 					apply(
 						request,
 						params.deliveryId,
-						SetDeliveryReaction.make({ reaction: params.reaction, target: payload.target, active: payload.active }),
+						SetDeliveryReaction.make({
+							reaction: params.reaction,
+							target: payload.target,
+							active: payload.active,
+						}),
 						'delivery.api.set_reaction',
 					),
 				)

@@ -383,15 +383,15 @@ export class GitHubIssueComment extends Schema.TaggedClass<GitHubIssueComment>()
 	}
 
 	addReaction(reaction: GitHubReaction): Effect.Effect<void, GitHubApiError, GitHubApi> {
-		return Effect.flatMap(GitHubApi, (api) => api.addReaction({ target: GitHubReactionTarget.cases.Comment.make({ comment: this.ref }), reaction })).pipe(
-			Effect.withSpan('github.comment.add_reaction'),
-		)
+		return Effect.flatMap(GitHubApi, (api) =>
+			api.addReaction({ target: GitHubReactionTarget.cases.Comment.make({ comment: this.ref }), reaction }),
+		).pipe(Effect.withSpan('github.comment.add_reaction'))
 	}
 
 	removeReaction(reaction: GitHubReaction): Effect.Effect<void, GitHubApiError, GitHubApi> {
-		return Effect.flatMap(GitHubApi, (api) => api.removeReaction({ target: GitHubReactionTarget.cases.Comment.make({ comment: this.ref }), reaction })).pipe(
-			Effect.withSpan('github.comment.remove_reaction'),
-		)
+		return Effect.flatMap(GitHubApi, (api) =>
+			api.removeReaction({ target: GitHubReactionTarget.cases.Comment.make({ comment: this.ref }), reaction }),
+		).pipe(Effect.withSpan('github.comment.remove_reaction'))
 	}
 }
 
@@ -430,15 +430,15 @@ export class GitHubReviewComment extends Schema.TaggedClass<GitHubReviewComment>
 	}
 
 	addReaction(reaction: GitHubReaction): Effect.Effect<void, GitHubApiError, GitHubApi> {
-		return Effect.flatMap(GitHubApi, (api) => api.addReaction({ target: GitHubReactionTarget.cases.Comment.make({ comment: this.ref }), reaction })).pipe(
-			Effect.withSpan('github.review_comment.add_reaction'),
-		)
+		return Effect.flatMap(GitHubApi, (api) =>
+			api.addReaction({ target: GitHubReactionTarget.cases.Comment.make({ comment: this.ref }), reaction }),
+		).pipe(Effect.withSpan('github.review_comment.add_reaction'))
 	}
 
 	removeReaction(reaction: GitHubReaction): Effect.Effect<void, GitHubApiError, GitHubApi> {
-		return Effect.flatMap(GitHubApi, (api) => api.removeReaction({ target: GitHubReactionTarget.cases.Comment.make({ comment: this.ref }), reaction })).pipe(
-			Effect.withSpan('github.review_comment.remove_reaction'),
-		)
+		return Effect.flatMap(GitHubApi, (api) =>
+			api.removeReaction({ target: GitHubReactionTarget.cases.Comment.make({ comment: this.ref }), reaction }),
+		).pipe(Effect.withSpan('github.review_comment.remove_reaction'))
 	}
 }
 

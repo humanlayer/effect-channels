@@ -235,20 +235,22 @@ describe('GitHub delivery output', () => {
 				GitHubOutputReceipt.make({ comment: mentionComment }),
 			)
 			const processor = yield* makeGitHubOutputProcessor({ namespace: 'github-output-test' })
-			const applied = yield* processor.process(
-				attempt(
-					ProviderRenderPlan.make({
-						revision: 2,
-						plan,
-						rendered: RenderedDeliveryPlan.make({
-							revision: 1,
-							plan: DeliveryPlan.make({ items: [] }),
-							presentation: deleted,
+			const applied = yield* processor
+				.process(
+					attempt(
+						ProviderRenderPlan.make({
+							revision: 2,
+							plan,
+							rendered: RenderedDeliveryPlan.make({
+								revision: 1,
+								plan: DeliveryPlan.make({ items: [] }),
+								presentation: deleted,
+							}),
 						}),
-					}),
-					prepared({}),
-				),
-			).pipe(Effect.provide(api))
+						prepared({}),
+					),
+				)
+				.pipe(Effect.provide(api))
 			expect(yield* Ref.get(calls)).toEqual(['edit 500', 'post'])
 			const receipt = yield* Schema.decodeUnknownEffect(GitHubOutputReceiptJson)(applied.receipt)
 			expect(receipt.comment.id).toEqual(GitHubId.make(901))

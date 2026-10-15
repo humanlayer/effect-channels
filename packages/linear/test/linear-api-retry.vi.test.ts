@@ -1,7 +1,7 @@
 import { describe, it } from '@effect/vitest'
 import { Effect, Fiber, Ref, Schema } from 'effect'
-import { TestClock } from 'effect/testing'
 import { HttpClient, HttpClientResponse } from 'effect/http'
+import { TestClock } from 'effect/testing'
 
 import { GetIssueVariables } from '../src/api/GetIssue'
 import { GetViewerIdentityVariables } from '../src/api/GetViewerIdentity'

@@ -1,16 +1,15 @@
                          COMMON PROVIDER CODE
 
 Slack HTTP request
-    ↓
+↓
 Slack ingress
-    ├── verify
-    ├── parse
-    ├── classify
-    ├── select Slack callback
-    └── derive mailbox key
-          ↓
+├── verify
+├── parse
+├── classify
+├── select Slack callback
+└── derive mailbox key
+↓
 Delivery admission
-
 
                  SERVER                         CLOUDFLARE
 

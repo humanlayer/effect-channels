@@ -11,9 +11,13 @@ export const removeReaction = Effect.fn('github.api.remove_reaction')(function* 
 	const { ref, path } = reactionsLocation(input.target)
 	const ownUserId = yield* api.botUserId
 	const reactions = yield* api.list({ operation: 'remove_reaction', ref, path, schema: Reaction })
-	const own = Arr.findFirst(reactions, (reaction) => reaction.content === input.reaction && reaction.user?.id === ownUserId)
+	const own = Arr.findFirst(
+		reactions,
+		(reaction) => reaction.content === input.reaction && reaction.user?.id === ownUserId,
+	)
 	yield* Option.match(own, {
 		onNone: () => Effect.void,
-		onSome: ({ id }) => api.callVoid({ operation: 'remove_reaction', ref, method: 'DELETE', path: `${path}/${id}` }),
+		onSome: ({ id }) =>
+			api.callVoid({ operation: 'remove_reaction', ref, method: 'DELETE', path: `${path}/${id}` }),
 	})
 })

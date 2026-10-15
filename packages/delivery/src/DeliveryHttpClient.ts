@@ -63,14 +63,20 @@ export const makeDeliveryClient = Effect.fn('delivery.client.make')(function* (o
 		complete: (target: DeliveryClientTarget & { readonly payload?: CompleteDeliveryPayload }) =>
 			forDelivery(target).pipe(
 				Effect.flatMap((client) =>
-					client.deliveries.complete({ params: { deliveryId: target.deliveryId }, payload: target.payload ?? {} }),
+					client.deliveries.complete({
+						params: { deliveryId: target.deliveryId },
+						payload: target.payload ?? {},
+					}),
 				),
 				Effect.withSpan('delivery.client.complete'),
 			),
 		fail: (target: DeliveryClientTarget & { readonly payload?: FailDeliveryPayload }) =>
 			forDelivery(target).pipe(
 				Effect.flatMap((client) =>
-					client.deliveries.fail({ params: { deliveryId: target.deliveryId }, payload: target.payload ?? {} }),
+					client.deliveries.fail({
+						params: { deliveryId: target.deliveryId },
+						payload: target.payload ?? {},
+					}),
 				),
 				Effect.withSpan('delivery.client.fail'),
 			),
@@ -157,7 +163,10 @@ export const makeDeliveryClient = Effect.fn('delivery.client.make')(function* (o
 				),
 			/** Replace a message's text. It may be called before the provider has posted the message. */
 			update: (
-				target: DeliveryClientTarget & { readonly messageId: MessageId; readonly message: UpdateMessagePayload },
+				target: DeliveryClientTarget & {
+					readonly messageId: MessageId
+					readonly message: UpdateMessagePayload
+				},
 			) =>
 				forDelivery(target).pipe(
 					Effect.flatMap((client) =>

@@ -156,12 +156,10 @@ export const makeGitHubWebhookProvider = (options: GitHubWebhookProviderOptions)
 			if (!actionsByEvent[event].includes(action.action)) {
 				return ProviderWebhookIgnored.make({})
 			}
-			const decoded = yield* Schema.decodeUnknownEffect(GitHubSupportedWebhook)(
-				{
-					event,
-					payload: unknownPayload,
-				},
-			).pipe(Effect.mapError(() => WebhookPayloadInvalidError.make({ reason: `invalid_${event}` })))
+			const decoded = yield* Schema.decodeUnknownEffect(GitHubSupportedWebhook)({
+				event,
+				payload: unknownPayload,
+			}).pipe(Effect.mapError(() => WebhookPayloadInvalidError.make({ reason: `invalid_${event}` })))
 			if (decoded.event === 'check_run' && Arr.isReadonlyArrayEmpty(decoded.payload.check_run.pull_requests)) {
 				yield* Effect.logInfo('GitHub check run has no pull request association').pipe(
 					Effect.annotateLogs({

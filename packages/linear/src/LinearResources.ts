@@ -275,7 +275,12 @@ export class LinearAgentSession extends Schema.TaggedClass<LinearAgentSession>()
 		body: string,
 		options: LinearAgentThoughtOptions = {},
 	): Effect.Effect<LinearAgentActivityReceipt, LinearApiError, LinearApi> {
-		return this.createActivity('thought', LinearActivityContent.cases.Thought.make({ body }), true, options.activityId)
+		return this.createActivity(
+			'thought',
+			LinearActivityContent.cases.Thought.make({ body }),
+			true,
+			options.activityId,
+		)
 	}
 
 	/** The final answer: the session becomes `complete`. */

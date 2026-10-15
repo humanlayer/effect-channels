@@ -229,80 +229,103 @@ describe('Linear Agent Activity API', () => {
 		},
 	}
 
-	it.effect('sends a caller-chosen ID, error and elicitation content, and choices as the select signal', ({ expect }) =>
-		Effect.gen(function* () {
-			const { sent, layer } = yield* fakeLinear(created)
-			yield* Effect.gen(function* () {
-				const api = yield* LinearApi
-				yield* api.createAgentActivity(
-					LinearCreateAgentActivityRequest.make({
-						organizationId: linearOrganizationId,
-						sessionId,
-						content: LinearActivityContent.cases.Error.make({ body: 'Stopped.' }),
-						ephemeral: false,
-						activityId,
-					}),
-				)
-				yield* api.createAgentActivity(
-					LinearCreateAgentActivityRequest.make({
-						organizationId: linearOrganizationId,
-						sessionId,
-						content: LinearActivityContent.cases.Elicitation.make({ body: 'Where?', options: ['staging', 'production'] }),
-						ephemeral: false,
-					}),
-				)
-				yield* api.createAgentActivity(
-					LinearCreateAgentActivityRequest.make({
-						organizationId: linearOrganizationId,
-						sessionId,
-						content: LinearActivityContent.cases.Elicitation.make({ body: 'Anything else?' }),
-						ephemeral: false,
-					}),
-				)
-			}).pipe(Effect.provide(layer))
-			expect(yield* Ref.get(sent)).toEqual([
-				{ input: { id: activityId, agentSessionId: sessionId, content: { type: 'error', body: 'Stopped.' }, ephemeral: false } },
-				{
-					input: {
-						agentSessionId: sessionId,
-						content: { type: 'elicitation', body: 'Where?' },
-						ephemeral: false,
-						signal: 'select',
-						signalMetadata: {
-							options: [
-								{ label: 'staging', value: 'staging' },
-								{ label: 'production', value: 'production' },
-							],
+	it.effect(
+		'sends a caller-chosen ID, error and elicitation content, and choices as the select signal',
+		({ expect }) =>
+			Effect.gen(function* () {
+				const { sent, layer } = yield* fakeLinear(created)
+				yield* Effect.gen(function* () {
+					const api = yield* LinearApi
+					yield* api.createAgentActivity(
+						LinearCreateAgentActivityRequest.make({
+							organizationId: linearOrganizationId,
+							sessionId,
+							content: LinearActivityContent.cases.Error.make({ body: 'Stopped.' }),
+							ephemeral: false,
+							activityId,
+						}),
+					)
+					yield* api.createAgentActivity(
+						LinearCreateAgentActivityRequest.make({
+							organizationId: linearOrganizationId,
+							sessionId,
+							content: LinearActivityContent.cases.Elicitation.make({
+								body: 'Where?',
+								options: ['staging', 'production'],
+							}),
+							ephemeral: false,
+						}),
+					)
+					yield* api.createAgentActivity(
+						LinearCreateAgentActivityRequest.make({
+							organizationId: linearOrganizationId,
+							sessionId,
+							content: LinearActivityContent.cases.Elicitation.make({ body: 'Anything else?' }),
+							ephemeral: false,
+						}),
+					)
+				}).pipe(Effect.provide(layer))
+				expect(yield* Ref.get(sent)).toEqual([
+					{
+						input: {
+							id: activityId,
+							agentSessionId: sessionId,
+							content: { type: 'error', body: 'Stopped.' },
+							ephemeral: false,
 						},
 					},
-				},
-				{ input: { agentSessionId: sessionId, content: { type: 'elicitation', body: 'Anything else?' }, ephemeral: false } },
-			])
-		}),
+					{
+						input: {
+							agentSessionId: sessionId,
+							content: { type: 'elicitation', body: 'Where?' },
+							ephemeral: false,
+							signal: 'select',
+							signalMetadata: {
+								options: [
+									{ label: 'staging', value: 'staging' },
+									{ label: 'production', value: 'production' },
+								],
+							},
+						},
+					},
+					{
+						input: {
+							agentSessionId: sessionId,
+							content: { type: 'elicitation', body: 'Anything else?' },
+							ephemeral: false,
+						},
+					},
+				])
+			}),
 	)
 
-	it.effect('reports a repeated activity ID as already_exists, and other input errors as final rejections', ({ expect }) =>
-		Effect.gen(function* () {
-			const refusal = (message: string, userPresentableMessage: string) => ({
-				errors: [{ message, extensions: { code: 'INPUT_ERROR', userPresentableMessage } }],
-			})
-			const repeated = yield* fakeLinear(
-				refusal('conflict on insert of AgentActivity', `Entity AgentActivity with id ${activityId} already exists.`),
-			)
-			const withId = LinearCreateAgentActivityRequest.make({ ...request, activityId })
-			const exists = yield* Effect.flatMap(LinearApi, (api) => api.createAgentActivity(withId)).pipe(
-				Effect.provide(repeated.layer),
-				Effect.flip,
-			)
-			expect(exists).toMatchObject({ reason: 'already_exists', retryable: false })
+	it.effect(
+		'reports a repeated activity ID as already_exists, and other input errors as final rejections',
+		({ expect }) =>
+			Effect.gen(function* () {
+				const refusal = (message: string, userPresentableMessage: string) => ({
+					errors: [{ message, extensions: { code: 'INPUT_ERROR', userPresentableMessage } }],
+				})
+				const repeated = yield* fakeLinear(
+					refusal(
+						'conflict on insert of AgentActivity',
+						`Entity AgentActivity with id ${activityId} already exists.`,
+					),
+				)
+				const withId = LinearCreateAgentActivityRequest.make({ ...request, activityId })
+				const exists = yield* Effect.flatMap(LinearApi, (api) => api.createAgentActivity(withId)).pipe(
+					Effect.provide(repeated.layer),
+					Effect.flip,
+				)
+				expect(exists).toMatchObject({ reason: 'already_exists', retryable: false })
 
-			const notUuid = yield* fakeLinear(refusal('id must be a UUID', 'id must be a UUID'))
-			const invalid = yield* Effect.flatMap(LinearApi, (api) => api.createAgentActivity(withId)).pipe(
-				Effect.provide(notUuid.layer),
-				Effect.flip,
-			)
-			expect(invalid).toMatchObject({ reason: 'rejected', retryable: false })
-		}),
+				const notUuid = yield* fakeLinear(refusal('id must be a UUID', 'id must be a UUID'))
+				const invalid = yield* Effect.flatMap(LinearApi, (api) => api.createAgentActivity(withId)).pipe(
+					Effect.provide(notUuid.layer),
+					Effect.flip,
+				)
+				expect(invalid).toMatchObject({ reason: 'rejected', retryable: false })
+			}),
 	)
 
 	it.effect('sends a caller-chosen reaction ID, and reports a repeated one as already_exists', ({ expect }) =>
@@ -319,7 +342,9 @@ describe('Linear Agent Activity API', () => {
 			const { sent, layer } = yield* fakeLinear({
 				data: { reactionCreate: { success: true, reaction: { id: reactionId, emoji: 'eyes', user: null } } },
 			})
-			const made = yield* Effect.flatMap(LinearApi, (api) => api.createReaction(reaction)).pipe(Effect.provide(layer))
+			const made = yield* Effect.flatMap(LinearApi, (api) => api.createReaction(reaction)).pipe(
+				Effect.provide(layer),
+			)
 			expect(made.ref.reactionId).toBe(reactionId)
 			expect(yield* Ref.get(sent)).toEqual([{ input: { id: reactionId, emoji: 'eyes', issueId } }])
 
@@ -353,7 +378,10 @@ describe('Linear Agent Activity API', () => {
 				issueId: LinearIssueId.make('b33fb278-fbe0-45e4-b4eb-94b0839f51b9'),
 			}
 			const deleted = yield* Effect.flatMap(LinearApi, (api) =>
-				api.deleteReaction({ issue, reactionId: LinearReactionId.make('75000000-0000-4000-8000-000000000001') }),
+				api.deleteReaction({
+					issue,
+					reactionId: LinearReactionId.make('75000000-0000-4000-8000-000000000001'),
+				}),
 			).pipe(Effect.provide(gone.layer), Effect.flip)
 			expect(deleted).toMatchObject({ reason: 'not_found', retryable: false })
 		}),
@@ -374,7 +402,10 @@ describe('Linear Agent Activity API', () => {
 				),
 			).pipe(Effect.provide(layer))
 			expect(yield* Ref.get(sent)).toEqual([
-				{ id: sessionId, input: { addedExternalUrls: [{ label: 'Run log', url: 'https://example.com/run/1' }] } },
+				{
+					id: sessionId,
+					input: { addedExternalUrls: [{ label: 'Run log', url: 'https://example.com/run/1' }] },
+				},
 			])
 		}),
 	)
