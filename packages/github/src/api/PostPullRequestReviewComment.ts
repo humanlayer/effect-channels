@@ -1,6 +1,6 @@
 import { Effect, Schema } from 'effect'
 
-import type { GitHubPostPullRequestReviewComment } from '../GitHubApi'
+import type { GitHubPostPullRequestReviewComment } from '../GitHubApiContract'
 import { GitHubDiffSide } from '../GitHubModels'
 import { GitHubApiClient } from './GitHubApiClient'
 import { repositoryPath, reviewComment, reviewCommentLocationBody } from './GitHubApiProjections'

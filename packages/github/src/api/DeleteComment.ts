@@ -1,6 +1,6 @@
 import { Effect } from 'effect'
 
-import type { GitHubDeleteComment } from '../GitHubApi'
+import type { GitHubDeleteComment } from '../GitHubApiContract'
 import { GitHubApiClient } from './GitHubApiClient'
 import { commentPath, commentRepository } from './GitHubApiProjections'
 export const deleteComment = Effect.fn('github.api.delete_comment')(function* (input: GitHubDeleteComment) {

@@ -6,7 +6,7 @@ import {
 	type SlackDownloadFileRequest,
 	SlackFileAuthorizationError,
 	SlackFileSizeLimitExceeded,
-} from '../SlackApi'
+} from '../SlackApiContract'
 import { isSlackFileUrl, SlackHttpClient } from './SlackHttpClient'
 
 /** An opened file response. The byte stream has not been read. */

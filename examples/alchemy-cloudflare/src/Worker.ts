@@ -6,7 +6,7 @@ import * as Cloudflare from 'alchemy/Cloudflare'
 import { Effect, Layer } from 'effect'
 import { FetchHttpClient, HttpRouter } from 'effect/http'
 
-import { AgentSession, AgentSessionDOLive, AgentSessions } from './AgentSessionDO'
+import { AgentSessionDOLive, AgentSessions } from './AgentSessionDO'
 import { AutoLabel } from './AutoLabel'
 import { DELIVERY_API_BINDING, DeliveryApi } from './DeliveryApi'
 import { DeliveryMailbox, DeliveryMailboxDOLive } from './DeliveryMailboxDO'
@@ -14,9 +14,6 @@ import { bot } from './GithubBot'
 
 /** Give Channels access to this application's Durable Object mailbox namespace. */
 const ChannelsDeliveryMailboxesLive = Layer.effect(DeliveryMailboxes, DeliveryMailbox)
-
-/** Give the GitHub callbacks access to the AgentSession namespace. */
-const AgentSessionsLive = Layer.effect(AgentSessions, AgentSession)
 
 const { mailboxDelivery, deliveryControl } = bot.layers.worker
 
@@ -28,7 +25,7 @@ const RoutesLive = Layer.merge(bot.routes, bot.deliveryApi).pipe(
 /** Everything the Worker and its mailbox Durable Objects need. */
 const WorkerLive = ChannelsDeliveryMailboxesLive.pipe(
 	Layer.provideMerge(DeliveryMailboxDOLive),
-	Layer.provideMerge(AgentSessionsLive),
+	Layer.provideMerge(AgentSessions.layer),
 	Layer.provideMerge(AgentSessionDOLive),
 	Layer.provideMerge(DeliveryApi.layerSelfBinding),
 	Layer.provideMerge(AutoLabel.layer),

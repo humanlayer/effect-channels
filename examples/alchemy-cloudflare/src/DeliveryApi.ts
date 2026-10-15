@@ -29,9 +29,11 @@ const selfBindingHttpClient = Layer.effect(
 	}),
 )
 
-export class DeliveryApi extends Context.Service<DeliveryApi, DeliveryClient>()('alchemy-cloudflare/DeliveryApi') {
+export class DeliveryApi extends Context.Service<DeliveryApi, DeliveryClient>()('alchemy-cloudflare/DeliveryApi', {
 	/** The client over whichever `HttpClient` its environment supplies. */
-	static readonly layer = Layer.effect(DeliveryApi, makeDeliveryClient({ baseUrl: BINDING_BASE_URL }))
+	make: makeDeliveryClient({ baseUrl: BINDING_BASE_URL }),
+}) {
+	static readonly layer = Layer.effect(this, this.make)
 
 	/** The client over the Ingress Worker's self service binding. */
 	static readonly layerSelfBinding = DeliveryApi.layer.pipe(Layer.provide(selfBindingHttpClient))

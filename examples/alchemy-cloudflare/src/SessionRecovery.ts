@@ -24,28 +24,27 @@ export class RunRecovery extends Context.Service<
 		 */
 		readonly alarm: Effect.Effect<boolean>
 	}
->()('alchemy-cloudflare/RunRecovery') {
-	static readonly layer = Layer.effect(
-		RunRecovery,
-		Effect.gen(function* () {
-			const state = yield* Cloudflare.DurableObjectState
-			const active = yield* Ref.make(0)
-			const scheduleRecoveryWake = Effect.flatMap(Clock.currentTimeMillis, (now) =>
-				Effect.promise(() => state.raw.storage.setAlarm(now + RECOVERY_WAKE_MILLIS)),
-			)
+>()('alchemy-cloudflare/RunRecovery', {
+	make: Effect.gen(function* () {
+		const state = yield* Cloudflare.DurableObjectState
+		const active = yield* Ref.make(0)
+		const scheduleRecoveryWake = Effect.flatMap(Clock.currentTimeMillis, (now) =>
+			Effect.promise(() => state.raw.storage.setAlarm(now + RECOVERY_WAKE_MILLIS)),
+		)
 
-			return RunRecovery.of({
-				fork: (effect) =>
-					Ref.updateAndGet(active, (count) => count + 1).pipe(
-						Effect.tap((count) => (count === 1 ? scheduleRecoveryWake : Effect.void)),
-						Effect.andThen(
-							state.waitUntil(effect.pipe(Effect.ensuring(Ref.update(active, (count) => count - 1)))),
-						),
+		return {
+			fork: (effect) =>
+				Ref.updateAndGet(active, (count) => count + 1).pipe(
+					Effect.tap((count) => (count === 1 ? scheduleRecoveryWake : Effect.void)),
+					Effect.andThen(
+						state.waitUntil(effect.pipe(Effect.ensuring(Ref.update(active, (count) => count - 1)))),
 					),
-				alarm: Effect.flatMap(Ref.get(active), (count) =>
-					count > 0 ? Effect.as(scheduleRecoveryWake, true) : Effect.succeed(false),
 				),
-			})
-		}),
-	)
+			alarm: Effect.flatMap(Ref.get(active), (count) =>
+				count > 0 ? Effect.as(scheduleRecoveryWake, true) : Effect.succeed(false),
+			),
+		}
+	}),
+}) {
+	static readonly layer = Layer.effect(this, this.make)
 }

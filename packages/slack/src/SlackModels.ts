@@ -1,7 +1,9 @@
 import { Effect, Schema, type Stream } from 'effect'
 
-import type { SlackApiError, SlackFileDownloadError } from './SlackApi'
-import { SlackApi, SlackDownloadFileBytesRequest, SlackDownloadFileRequest } from './SlackApi'
+import type { SlackApi } from './SlackApi'
+import type { SlackApiError, SlackFileDownloadError } from './SlackApiContract'
+import { SlackDownloadFileBytesRequest, SlackDownloadFileRequest } from './SlackApiContract'
+import { SlackApiHandle } from './SlackApiHandle'
 import { SlackChannelId, SlackMessageTs, SlackTeamId } from './SlackIdentity'
 import type { SlackFileMetadata } from './SlackWebhookEventSchemas'
 
@@ -124,7 +126,7 @@ export class SlackFile extends Schema.TaggedClass<SlackFile>()('SlackFile', {
 }) {
 	/** Streams the file with the bot token. The stream is not buffered. */
 	download(): Effect.Effect<Stream.Stream<Uint8Array, SlackApiError>, SlackFileDownloadError, SlackApi> {
-		return Effect.flatMap(SlackApi, (api) =>
+		return Effect.flatMap(SlackApiHandle, (api) =>
 			api.downloadFile(
 				SlackDownloadFileRequest.make({
 					file: this.ref,
@@ -142,7 +144,7 @@ export class SlackFile extends Schema.TaggedClass<SlackFile>()('SlackFile', {
 
 	/** Buffers the file, failing before `maxBytes` is exceeded. */
 	downloadBytes(options: SlackDownloadBytesOptions): Effect.Effect<Uint8Array, SlackFileDownloadError, SlackApi> {
-		return Effect.flatMap(SlackApi, (api) =>
+		return Effect.flatMap(SlackApiHandle, (api) =>
 			api.downloadFileBytes(
 				SlackDownloadFileBytesRequest.make({
 					file: this.ref,
@@ -193,7 +195,7 @@ export class SlackMessage extends Schema.TaggedClass<SlackMessage>()('SlackMessa
 	metadata: SlackMetadata,
 }) {
 	addReaction(reaction: SlackReaction): Effect.Effect<void, SlackApiError, SlackApi> {
-		return Effect.flatMap(SlackApi, (api) => api.addReaction({ message: this.ref, reaction })).pipe(
+		return Effect.flatMap(SlackApiHandle, (api) => api.addReaction({ message: this.ref, reaction })).pipe(
 			Effect.withSpan('slack.message.add_reaction', {
 				attributes: {
 					'slack.team_id': this.ref.teamId,
@@ -205,7 +207,7 @@ export class SlackMessage extends Schema.TaggedClass<SlackMessage>()('SlackMessa
 	}
 
 	removeReaction(reaction: SlackReaction): Effect.Effect<void, SlackApiError, SlackApi> {
-		return Effect.flatMap(SlackApi, (api) => api.removeReaction({ message: this.ref, reaction })).pipe(
+		return Effect.flatMap(SlackApiHandle, (api) => api.removeReaction({ message: this.ref, reaction })).pipe(
 			Effect.withSpan('slack.message.remove_reaction', {
 				attributes: {
 					'slack.team_id': this.ref.teamId,

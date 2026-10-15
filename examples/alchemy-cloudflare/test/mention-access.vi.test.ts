@@ -31,8 +31,8 @@ import { ConfigProvider, Effect, Layer, Ref } from 'effect'
 
 import { makeTestDeliveryExecution } from '../../../packages/delivery/test/delivery-execution'
 import { AgentSessions } from '../src/AgentSessionDO'
+import { AgentSessionMessage } from '../src/AgentSessionMessage'
 import { AutoLabel } from '../src/AutoLabel'
-import { AgentSessionMessage } from '../src/DeliveryTurn'
 import { githubHandlers, maintainerOnlyNotice, respondToMentionAccess } from '../src/GithubBot'
 
 const repository = {

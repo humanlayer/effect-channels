@@ -1,6 +1,6 @@
 import { Effect, Schema } from 'effect'
 
-import type { LinearGetUserRequest } from '../LinearApi'
+import type { LinearGetUserRequest } from '../LinearApiContract'
 import { LinearTeamId, LinearUserId } from '../LinearIdentity'
 import { LinearValidationError, linearProviderErrorDetails } from './LinearApiErrors'
 import { projectLinearUser } from './LinearApiProjections'

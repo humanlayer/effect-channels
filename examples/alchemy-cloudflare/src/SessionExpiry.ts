@@ -17,18 +17,6 @@ const DEADLINE_KEY = 'session_deadline'
 /** How long after deleting the session the object restarts. */
 const RESTART_DELAY_MILLIS = 1_000
 
-/** What SessionExpiry needs from the Durable Object: its key-value storage, alarm, and a restart. */
-export type ExpiryStorage = {
-	readonly get: (key: string) => Effect.Effect<number | undefined>
-	readonly put: (key: string, value: number) => Effect.Effect<void>
-	readonly getAlarm: Effect.Effect<number | null>
-	readonly setAlarm: (at: number) => Effect.Effect<void>
-	/** Delete the alarm and every stored value. */
-	readonly deleteAll: Effect.Effect<void>
-	/** Throw away the object's in-memory state, so the next call starts from its (empty) storage. */
-	readonly restart: Effect.Effect<void>
-}
-
 export class SessionExpiry extends Context.Service<
 	SessionExpiry,
 	{
@@ -45,70 +33,53 @@ export class SessionExpiry extends Context.Service<
 		 */
 		readonly alarm: (deleteWorkspace: Effect.Effect<void>) => Effect.Effect<void>
 	}
->()('alchemy-cloudflare/SessionExpiry') {
-	static readonly make = (storage: ExpiryStorage, idleTime: Duration.Duration) => {
-		const touch = Effect.gen(function* () {
-			const deadline = (yield* Clock.currentTimeMillis) + Duration.toMillis(idleTime)
-			yield* storage.put(DEADLINE_KEY, deadline)
-			return deadline
-		})
+>()('alchemy-cloudflare/SessionExpiry', {
+	/** Over the Durable Object's storage, with {@link IDLE_TIME}. */
+	make: Effect.gen(function* () {
+		const { raw } = yield* Cloudflare.DurableObjectState
+		const readDeadline = Effect.promise(() => raw.storage.get(DEADLINE_KEY)).pipe(
+			Effect.map((value) => Option.getOrUndefined(Schema.decodeUnknownOption(Schema.Finite)(value))),
+		)
+		const setAlarm = (at: number) => Effect.promise(() => raw.storage.setAlarm(at))
+		/** Throw away the object's in-memory state, so the next call starts from its (empty) storage. */
+		const restart = Effect.sleep(Duration.millis(RESTART_DELAY_MILLIS)).pipe(
+			Effect.andThen(Effect.try(() => raw.abort('session expired'))),
+			Effect.ignore,
+			Effect.forkDetach(),
+			Effect.asVoid,
+		)
 
-		return SessionExpiry.of({
-			touch,
+		return {
+			touch: Effect.gen(function* () {
+				const deadline = (yield* Clock.currentTimeMillis) + Duration.toMillis(IDLE_TIME)
+				yield* Effect.promise(() => raw.storage.put(DEADLINE_KEY, deadline))
+				return deadline
+			}),
 			expired: Effect.gen(function* () {
-				const deadline = yield* storage.get(DEADLINE_KEY)
+				const deadline = yield* readDeadline
 				return deadline !== undefined && (yield* Clock.currentTimeMillis) >= deadline
 			}),
 			ensureScheduled: Effect.gen(function* () {
-				if ((yield* storage.getAlarm) !== null) return
-				const deadline = yield* storage.get(DEADLINE_KEY)
-				if (deadline !== undefined) yield* storage.setAlarm(deadline)
+				if ((yield* Effect.promise(() => raw.storage.getAlarm())) !== null) return
+				const deadline = yield* readDeadline
+				if (deadline !== undefined) yield* setAlarm(deadline)
 			}),
 			alarm: (deleteWorkspace) =>
 				Effect.gen(function* () {
-					const deadline = yield* storage.get(DEADLINE_KEY)
+					const deadline = yield* readDeadline
 					if (deadline === undefined) return
-					if ((yield* Clock.currentTimeMillis) < deadline) return yield* storage.setAlarm(deadline)
+					if ((yield* Clock.currentTimeMillis) < deadline) return yield* setAlarm(deadline)
 
 					yield* deleteWorkspace
-					yield* storage.deleteAll
-					yield* Effect.logInfo('session.expired')
-					yield* storage.restart
-				}),
-		})
-	}
-
-	/** Over the Durable Object's storage, with {@link IDLE_TIME}. */
-	static readonly layer = Layer.effect(
-		SessionExpiry,
-		Effect.gen(function* () {
-			const { raw } = yield* Cloudflare.DurableObjectState
-
-			return SessionExpiry.make(
-				{
-					get: (key) =>
-						Effect.promise(() => raw.storage.get(key)).pipe(
-							Effect.map((value) =>
-								Option.getOrUndefined(Schema.decodeUnknownOption(Schema.Finite)(value)),
-							),
-						),
-					put: (key, value) => Effect.promise(() => raw.storage.put(key, value)),
-					getAlarm: Effect.promise(() => raw.storage.getAlarm()),
-					setAlarm: (at) => Effect.promise(() => raw.storage.setAlarm(at)),
-					deleteAll: Effect.promise(async () => {
+					yield* Effect.promise(async () => {
 						await raw.storage.deleteAlarm()
 						await raw.storage.deleteAll()
-					}),
-
-					restart: Effect.sleep(Duration.millis(RESTART_DELAY_MILLIS)).pipe(
-						Effect.andThen(Effect.try(() => raw.abort('session expired'))),
-						Effect.ignore,
-						Effect.forkDetach(),
-						Effect.asVoid,
-					),
-				},
-				IDLE_TIME,
-			)
-		}),
-	)
+					})
+					yield* Effect.logInfo('session.expired')
+					yield* restart
+				}),
+		}
+	}),
+}) {
+	static readonly layer = Layer.effect(this, this.make)
 }

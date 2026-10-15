@@ -1,6 +1,6 @@
 import { Effect, Schema } from 'effect'
 
-import { LinearIssueUpdate, type LinearUpdateIssueRequest } from '../LinearApi'
+import { LinearIssueUpdate, type LinearUpdateIssueRequest } from '../LinearApiContract'
 import { LinearIssueId } from '../LinearIdentity'
 import { failLinearMutation } from './LinearApiErrors'
 import { projectLinearIssue } from './LinearApiProjections'

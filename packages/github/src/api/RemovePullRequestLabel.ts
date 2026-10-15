@@ -1,6 +1,6 @@
 import { Effect, Schema } from 'effect'
 
-import type { GitHubRemovePullRequestLabel } from '../GitHubApi'
+import type { GitHubRemovePullRequestLabel } from '../GitHubApiContract'
 import { GitHubApiClient } from './GitHubApiClient'
 import { label, repositoryPath } from './GitHubApiProjections'
 import { Label } from './GitHubApiSchemas'

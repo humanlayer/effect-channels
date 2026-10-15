@@ -21,7 +21,7 @@ import { DeliveryControlBackendFromDurableObjectStorage } from './DeliveryContro
 import { makeMailboxAlarmHandler, type MailboxAlarmHandlerOptions } from './MailboxAlarm'
 import { MailboxDeliveryAlchemyCloudflare, makeDeliverFromDurableObjectStorage } from './MailboxDelivery'
 import { MailboxProcessingBackendFromDurableObjectStorage } from './MailboxProcessingBackend'
-import { MailboxStorageFromDurableObjectState } from './MailboxStorage'
+import { MailboxStorage } from './MailboxStorage'
 import { MailboxSubscriptionsFromDurableObjectStorage } from './MailboxSubscriptions'
 
 /** Build a mailbox's RPC and alarm handlers from the services supplied by its program entrypoint. */
@@ -89,7 +89,7 @@ export const make = <const Requirements extends ReadonlyArray<ChannelsProviderRe
 				processingBackend: MailboxProcessingBackendFromDurableObjectStorage,
 				subscriptions: MailboxSubscriptionsFromDurableObjectStorage,
 				deliveryControlBackend: DeliveryControlBackendFromDurableObjectStorage,
-				storage: MailboxStorageFromDurableObjectState,
+				storage: MailboxStorage.layer,
 			},
 		},
 	}

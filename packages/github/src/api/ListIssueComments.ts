@@ -1,6 +1,6 @@
 import { Effect } from 'effect'
 
-import type { GitHubIssueRequest } from '../GitHubApi'
+import type { GitHubIssueRequest } from '../GitHubApiContract'
 import { GitHubDiscussionRef } from '../GitHubModels'
 import { GitHubApiClient } from './GitHubApiClient'
 import { issueComment, repositoryPath } from './GitHubApiProjections'

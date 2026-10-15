@@ -1,6 +1,6 @@
 import { Effect, Schema } from 'effect'
 
-import type { LinearIssueRequest } from '../LinearApi'
+import type { LinearIssueRequest } from '../LinearApiContract'
 import { LinearIssueId } from '../LinearIdentity'
 import { projectLinearIssue } from './LinearApiProjections'
 import { LinearApiIssue, linearApiIssueFields } from './LinearApiSchemas'

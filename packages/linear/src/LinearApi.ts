@@ -1,220 +1,230 @@
-import { Context, Effect, Schema, type Stream } from 'effect'
+import { Context, Duration, Effect, Layer, Match, Schedule } from 'effect'
+import * as HttpClient from 'effect/http/HttpClient'
 
-import type {
-	LinearDownloadFileBytesRequest,
-	LinearDownloadFileRequest,
-	LinearFile,
-	LinearFileError,
-	LinearUploadAttachmentRequest,
-	LinearUploadFileRequest,
+import { createAgentActivity } from './api/CreateAgentActivity'
+import {
+	type LinearProviderError,
+	narrowLinearProviderErrors,
+	narrowLinearProviderStreamErrors,
+} from './api/LinearApiErrors'
+import { projectLinearUploadedFile } from './api/LinearApiProjections'
+import { LinearHttpClient } from './api/LinearHttpClient'
+import {
+	createAttachment,
+	createComment,
+	createReaction,
+	deleteAttachment,
+	deleteComment,
+	deleteReaction,
+	downloadLinearFile,
+	getIssue,
+	getUser,
+	listAppUsers,
+	listAssignableUsers,
+	listIssueAttachments,
+	listIssueComments,
+	readBoundedLinearFileBytes,
+	requestLinearFileUpload,
+	updateAgentSession,
+	updateAttachment,
+	updateComment,
+	updateIssue,
+	uploadLinearFileBytes,
+} from './api/Operations'
+import { LinearApiError, type LinearApiOperations } from './LinearApiContract'
+import { linearApiKey } from './LinearApiHandle'
+import {
+	defaultLinearFileTransferPolicy,
+	type LinearDownloadFileRequest,
+	LinearFileSizeLimitExceeded,
+	type LinearFileTransferPolicy,
+	type LinearUploadFileRequest,
 } from './LinearFiles'
-import {
-	LinearAttachmentId,
-	LinearCommentId,
-	LinearIssueLabelId,
-	LinearReactionId,
-	LinearUserId,
-	LinearWorkflowStateId,
-} from './LinearIdentity'
-import {
-	LinearAgentActivityReceipt,
-	LinearAppUserPage,
-	LinearCommentRef,
-	LinearContent,
-	LinearCreateAgentActivityRequest,
-	LinearIssueInfo,
-	LinearUpdateAgentSessionRequest,
-	LinearIssueRef,
-	LinearUser,
-	LinearUserPage,
-} from './LinearModels'
-import type { LinearComment, LinearIssueAttachment, LinearReaction } from './LinearResources'
+import type { LinearOrganizationId } from './LinearIdentity'
 
-export const LinearIssueRequest = Schema.Struct({ issue: LinearIssueRef })
-export type LinearIssueRequest = typeof LinearIssueRequest.Type
+export * from './LinearApiContract'
 
-export const LinearIssueUpdate = Schema.Struct({
-	title: Schema.optionalKey(Schema.String),
-	description: Schema.optionalKey(Schema.NullOr(Schema.String)),
-	priority: Schema.optionalKey(Schema.Int),
-	stateId: Schema.optionalKey(LinearWorkflowStateId),
-	addLabelIds: Schema.optionalKey(Schema.Array(LinearIssueLabelId)),
-	removeLabelIds: Schema.optionalKey(Schema.Array(LinearIssueLabelId)),
-	assigneeId: Schema.optionalKey(Schema.NullOr(LinearUserId)),
-	delegateId: Schema.optionalKey(Schema.NullOr(LinearUserId)),
-})
-export type LinearIssueUpdate = typeof LinearIssueUpdate.Type
+const readRetryPolicy = Schedule.exponential('50 millis').pipe(
+	Schedule.setInputType<LinearApiError>(),
+	Schedule.jittered,
+	Schedule.upTo({ times: 2 }),
+	Schedule.passthrough,
+	Schedule.while(({ input }) => input.retryable),
+	Schedule.modifyDelay(({ input, duration }) => {
+		if (input.retryAfterMs === undefined) return Effect.succeed(duration)
+		return Effect.succeed(Duration.max(duration, Duration.millis(input.retryAfterMs)))
+	}),
+)
 
-export const LinearUpdateIssueRequest = Schema.Struct({ issue: LinearIssueRef, update: LinearIssueUpdate })
-export type LinearUpdateIssueRequest = typeof LinearUpdateIssueRequest.Type
-
-export const LinearUserPageOptions = Schema.Struct({
-	first: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(100))),
-	after: Schema.optionalKey(Schema.String),
-	query: Schema.optionalKey(Schema.String),
-})
-export type LinearUserPageOptions = typeof LinearUserPageOptions.Type
-
-export const LinearListUsersRequest = Schema.Struct({ issue: LinearIssueRef, ...LinearUserPageOptions.fields })
-export type LinearListUsersRequest = typeof LinearListUsersRequest.Type
-export const LinearListAssignableUsersRequest = Schema.Struct({
-	issue: LinearIssueRef,
-	...LinearUserPageOptions.fields,
-})
-export type LinearListAssignableUsersRequest = typeof LinearListAssignableUsersRequest.Type
-export const LinearListAppUsersRequest = Schema.Struct({ issue: LinearIssueRef, ...LinearUserPageOptions.fields })
-export type LinearListAppUsersRequest = typeof LinearListAppUsersRequest.Type
-export const LinearGetUserRequest = Schema.Struct({ issue: LinearIssueRef, userId: LinearUserId })
-export type LinearGetUserRequest = typeof LinearGetUserRequest.Type
-export const LinearCreateCommentRequest = Schema.Struct({
-	issue: LinearIssueRef,
-	content: LinearContent,
-	parentId: Schema.optionalKey(LinearCommentId),
-})
-export type LinearCreateCommentRequest = typeof LinearCreateCommentRequest.Type
-export const LinearUpdateCommentRequest = Schema.Struct({ comment: LinearCommentRef, content: LinearContent })
-export type LinearUpdateCommentRequest = typeof LinearUpdateCommentRequest.Type
-export const LinearDeleteCommentRequest = Schema.Struct({ comment: LinearCommentRef })
-export type LinearDeleteCommentRequest = typeof LinearDeleteCommentRequest.Type
-export const LinearReactionTarget = Schema.TaggedUnion({
-	Issue: { issue: LinearIssueRef },
-	Comment: { comment: LinearCommentRef },
-})
-export type LinearReactionTarget = typeof LinearReactionTarget.Type
-/**
- * @property reactionId - the reaction's ID, chosen by the caller. Linear answers a repeat with the
- * reaction it already has, so a retry never reacts twice.
- */
-export const LinearCreateReactionRequest = Schema.Struct({
-	target: LinearReactionTarget,
-	emoji: Schema.NonEmptyString,
-	reactionId: Schema.optionalKey(LinearReactionId),
-})
-export type LinearCreateReactionRequest = typeof LinearCreateReactionRequest.Type
-export const LinearDeleteReactionRequest = Schema.Struct({ issue: LinearIssueRef, reactionId: LinearReactionId })
-export type LinearDeleteReactionRequest = typeof LinearDeleteReactionRequest.Type
-export const LinearCreateAttachmentInput = Schema.Struct({
-	url: Schema.String,
-	title: Schema.String,
-	subtitle: Schema.optionalKey(Schema.String),
-	metadata: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json)),
-})
-export type LinearCreateAttachmentInput = typeof LinearCreateAttachmentInput.Type
-export const LinearCreateAttachmentRequest = Schema.Struct({
-	issue: LinearIssueRef,
-	input: LinearCreateAttachmentInput,
-})
-export type LinearCreateAttachmentRequest = typeof LinearCreateAttachmentRequest.Type
-export const LinearAttachmentRef = Schema.Struct({ issue: LinearIssueRef, attachmentId: LinearAttachmentId })
-export type LinearAttachmentRef = typeof LinearAttachmentRef.Type
-export const LinearUpdateAttachmentInput = Schema.Struct({
-	title: Schema.String,
-	subtitle: Schema.optionalKey(Schema.NullOr(Schema.String)),
-	metadata: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json)),
-})
-export type LinearUpdateAttachmentInput = typeof LinearUpdateAttachmentInput.Type
-export const LinearUpdateAttachmentRequest = Schema.Struct({
-	attachment: LinearAttachmentRef,
-	input: LinearUpdateAttachmentInput,
-})
-export type LinearUpdateAttachmentRequest = typeof LinearUpdateAttachmentRequest.Type
-export const LinearDeleteAttachmentRequest = Schema.Struct({ attachment: LinearAttachmentRef })
-export type LinearDeleteAttachmentRequest = typeof LinearDeleteAttachmentRequest.Type
-
-export const LinearApiOperation = Schema.Literals([
-	'acquire_client_credentials_token',
-	'viewer_identity',
-	'create_agent_activity',
-	'update_agent_session',
-	'get_issue',
-	'update_issue',
-	'list_assignable_users',
-	'list_app_users',
-	'get_user',
-	'list_issue_comments',
-	'list_issue_attachments',
-	'create_comment',
-	'update_comment',
-	'delete_comment',
-	'create_reaction',
-	'delete_reaction',
-	'create_attachment',
-	'update_attachment',
-	'delete_attachment',
-	'request_file_upload',
-	'upload_file_bytes',
-	'download_file',
-])
-export type LinearApiOperation = typeof LinearApiOperation.Type
+const uploadedAttachmentSubtitle = (size: number) => `${(size / 1024).toFixed(1)} KB`
 
 /**
- * A Linear API call failed.
- *
- * `already_exists` means Linear refused to create something because an entity with the caller's
- * chosen ID exists, as when an Agent Activity is retried with the same ID. The first attempt created it.
+ * Provider-native Linear operations used by behavior-bearing Linear resources. The layer sends through the
+ * `LinearHttpClient` and `HttpClient` in context.
  */
-export class LinearApiError extends Schema.TaggedError<LinearApiError>()('LinearApiError', {
-	operation: LinearApiOperation,
-	reason: Schema.Literals([
-		'unavailable',
-		'unauthorized',
-		'forbidden',
-		'invalid_response',
-		'identity_mismatch',
-		'rejected',
-		'not_found',
-		'validation',
-		'rate_limited',
-		'already_exists',
-	]),
-	retryable: Schema.Boolean,
-	status: Schema.optionalKey(Schema.Int),
-	message: Schema.optionalKey(Schema.String),
-	retryAfterMs: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
-}) {}
+export class LinearApi extends Context.Service<LinearApi, LinearApiOperations>()(linearApiKey, {
+	make: Effect.fnUntraced(function* (filePolicy: LinearFileTransferPolicy = defaultLinearFileTransferPolicy) {
+		const client = yield* LinearHttpClient
+		const http = yield* HttpClient.HttpClient
+		const executeAuthenticated = <A>(
+			organizationId: LinearOrganizationId,
+			procedure: Effect.Effect<A, LinearProviderError | LinearApiError, LinearHttpClient>,
+		): Effect.Effect<A, LinearApiError> => {
+			if (organizationId !== client.organizationId) {
+				return Effect.fail(
+					LinearApiError.make({
+						operation: 'viewer_identity',
+						reason: 'identity_mismatch',
+						retryable: false,
+					}),
+				)
+			}
+			return procedure.pipe(Effect.provideService(LinearHttpClient, client), narrowLinearProviderErrors)
+		}
 
-/** Provider-native Linear operations used by behavior-bearing Linear resources. */
-export class LinearApi extends Context.Service<
-	LinearApi,
-	{
-		readonly createAgentActivity: (
-			request: LinearCreateAgentActivityRequest,
-		) => Effect.Effect<LinearAgentActivityReceipt, LinearApiError>
-		readonly updateAgentSession: (request: LinearUpdateAgentSessionRequest) => Effect.Effect<void, LinearApiError>
-		readonly getIssue: (request: LinearIssueRequest) => Effect.Effect<LinearIssueInfo, LinearApiError>
-		readonly updateIssue: (request: LinearUpdateIssueRequest) => Effect.Effect<LinearIssueInfo, LinearApiError>
-		readonly listAssignableUsers: (
-			request: LinearListAssignableUsersRequest,
-		) => Effect.Effect<LinearUserPage, LinearApiError>
-		readonly listAppUsers: (request: LinearListAppUsersRequest) => Effect.Effect<LinearAppUserPage, LinearApiError>
-		readonly getUser: (request: LinearGetUserRequest) => Effect.Effect<LinearUser, LinearApiError>
-		readonly listIssueComments: (
-			request: LinearIssueRequest,
-		) => Effect.Effect<ReadonlyArray<LinearComment>, LinearApiError>
-		readonly listIssueAttachments: (
-			request: LinearIssueRequest,
-		) => Effect.Effect<ReadonlyArray<LinearIssueAttachment>, LinearApiError>
-		readonly createComment: (request: LinearCreateCommentRequest) => Effect.Effect<LinearComment, LinearApiError>
-		readonly updateComment: (request: LinearUpdateCommentRequest) => Effect.Effect<LinearComment, LinearApiError>
-		readonly deleteComment: (request: LinearDeleteCommentRequest) => Effect.Effect<void, LinearApiError>
-		readonly createReaction: (request: LinearCreateReactionRequest) => Effect.Effect<LinearReaction, LinearApiError>
-		readonly deleteReaction: (request: LinearDeleteReactionRequest) => Effect.Effect<void, LinearApiError>
-		readonly createAttachment: (
-			request: LinearCreateAttachmentRequest,
-		) => Effect.Effect<LinearIssueAttachment, LinearApiError>
-		readonly updateAttachment: (
-			request: LinearUpdateAttachmentRequest,
-		) => Effect.Effect<LinearIssueAttachment, LinearApiError>
-		readonly deleteAttachment: (request: LinearDeleteAttachmentRequest) => Effect.Effect<void, LinearApiError>
-		readonly uploadFile: (request: LinearUploadFileRequest) => Effect.Effect<LinearFile, LinearApiError>
-		readonly uploadAttachment: (
-			request: LinearUploadAttachmentRequest,
-		) => Effect.Effect<LinearIssueAttachment, LinearApiError>
-		readonly downloadFile: (
-			request: LinearDownloadFileRequest,
-		) => Effect.Effect<Stream.Stream<Uint8Array, LinearApiError>, LinearApiError>
-		readonly downloadFileBytes: (
-			request: LinearDownloadFileBytesRequest,
-		) => Effect.Effect<Uint8Array, LinearFileError>
-	}
->()('@humanlayer/channels-linear/LinearApi') {}
+		/**
+		 * Log a credential Linear refused as a configuration error that names it. A developer token cannot be
+		 * renewed; client credentials were already renewed once.
+		 */
+		const reportRejectedCredential = (error: LinearApiError) =>
+			error.reason === 'unauthorized'
+				? Effect.logError(
+						client.canRefresh
+							? 'Linear rejected the app client credentials; check LINEAR_CLIENT_ID and LINEAR_CLIENT_SECRET'
+							: 'Linear rejected the developer token; check LINEAR_DEVELOPER_TOKEN, or remove it to use the app client credentials',
+					).pipe(
+						Effect.annotateLogs({
+							provider: 'linear',
+							credential: client.canRefresh ? 'client_credentials' : 'developer_token',
+							operation: error.operation,
+						}),
+					)
+				: Effect.void
+
+		const refreshAuthentication = <A>(
+			organizationId: LinearOrganizationId,
+			procedure: Effect.Effect<A, LinearProviderError | LinearApiError, LinearHttpClient>,
+		) =>
+			executeAuthenticated(organizationId, procedure).pipe(
+				Effect.catchTag('LinearApiError', (error) => {
+					if (error.reason !== 'unauthorized' || !client.canRefresh) return Effect.fail(error)
+					return client.invalidateCredential.pipe(
+						Effect.andThen(executeAuthenticated(organizationId, procedure)),
+					)
+				}),
+				Effect.tapError(reportRejectedCredential),
+			)
+
+		const executeRead = <A>(
+			organizationId: LinearOrganizationId,
+			procedure: Effect.Effect<A, LinearProviderError | LinearApiError, LinearHttpClient>,
+		) => refreshAuthentication(organizationId, procedure).pipe(Effect.retry(readRetryPolicy))
+
+		const executeMutation = refreshAuthentication
+
+		const uploadFile = Effect.fn('linear.api_live.upload_file')(function* (request: LinearUploadFileRequest) {
+			const target = yield* executeMutation(request.issue.organizationId, requestLinearFileUpload(request))
+			yield* uploadLinearFileBytes({
+				target,
+				contentType: request.input.contentType,
+				bytes: request.input.bytes,
+			}).pipe(Effect.provideService(HttpClient.HttpClient, http), narrowLinearProviderErrors)
+			const file = projectLinearUploadedFile(request.issue, request.input.filename, target)
+			yield* Effect.logInfo('Linear file uploaded').pipe(
+				Effect.annotateLogs({ issue_id: request.issue.issueId, bytes: request.input.bytes.byteLength }),
+			)
+			return file
+		})
+
+		const openDownload = (request: LinearDownloadFileRequest) =>
+			executeRead(request.file.organizationId, downloadLinearFile({ request, policy: filePolicy })).pipe(
+				Effect.map((download) => ({
+					contentLength: download.contentLength,
+					stream: narrowLinearProviderStreamErrors(download.stream),
+				})),
+			)
+
+		const operations: LinearApiOperations = {
+			createAgentActivity: (request) => executeMutation(request.organizationId, createAgentActivity(request)),
+			updateAgentSession: (request) => executeMutation(request.organizationId, updateAgentSession(request)),
+			getIssue: (request) => executeRead(request.issue.organizationId, getIssue(request)),
+			updateIssue: (request) => executeMutation(request.issue.organizationId, updateIssue(request)),
+			listAssignableUsers: (request) => executeRead(request.issue.organizationId, listAssignableUsers(request)),
+			listAppUsers: (request) =>
+				executeRead(
+					request.issue.organizationId,
+					getIssue({ issue: request.issue }).pipe(
+						Effect.flatMap((resolved) => listAppUsers({ ...request, issue: resolved.ref })),
+					),
+				),
+			getUser: (request) =>
+				executeRead(
+					request.issue.organizationId,
+					getIssue({ issue: request.issue }).pipe(
+						Effect.flatMap((resolved) => getUser({ ...request, issue: resolved.ref })),
+					),
+				),
+			listIssueComments: (request) => executeRead(request.issue.organizationId, listIssueComments(request)),
+			listIssueAttachments: (request) => executeRead(request.issue.organizationId, listIssueAttachments(request)),
+			createComment: (request) => executeMutation(request.issue.organizationId, createComment(request)),
+			updateComment: (request) => executeMutation(request.comment.organizationId, updateComment(request)),
+			deleteComment: (request) => executeMutation(request.comment.organizationId, deleteComment(request)),
+			createReaction: (request) => {
+				const organizationId = Match.value(request.target).pipe(
+					Match.tagsExhaustive({
+						Issue: ({ issue }) => issue.organizationId,
+						Comment: ({ comment }) => comment.organizationId,
+					}),
+				)
+				return executeMutation(organizationId, createReaction(request))
+			},
+			deleteReaction: (request) => executeMutation(request.issue.organizationId, deleteReaction(request)),
+			createAttachment: (request) => executeMutation(request.issue.organizationId, createAttachment(request)),
+			updateAttachment: (request) =>
+				executeMutation(request.attachment.issue.organizationId, updateAttachment(request)),
+			deleteAttachment: (request) =>
+				executeMutation(request.attachment.issue.organizationId, deleteAttachment(request)),
+			uploadFile,
+			uploadAttachment: (request) =>
+				uploadFile({ issue: request.issue, input: request.input }).pipe(
+					Effect.flatMap((file) => {
+						const size = request.input.bytes.byteLength
+						return executeMutation(
+							request.issue.organizationId,
+							createAttachment({
+								issue: request.issue,
+								input: {
+									url: file.url,
+									title: request.input.title ?? request.input.filename,
+									subtitle: request.input.subtitle ?? uploadedAttachmentSubtitle(size),
+									metadata: {
+										contentType: request.input.contentType,
+										size,
+										...request.input.metadata,
+									},
+								},
+							}),
+						)
+					}),
+				),
+			downloadFile: (request) => openDownload(request).pipe(Effect.map((download) => download.stream)),
+			downloadFileBytes: (request) => {
+				if (request.size !== null && request.size > request.maxBytes)
+					return Effect.fail(
+						LinearFileSizeLimitExceeded.make({
+							maxBytes: request.maxBytes,
+							observedBytes: request.size,
+							source: 'declared_size',
+						}),
+					)
+				return openDownload(request).pipe(
+					Effect.flatMap((download) => readBoundedLinearFileBytes(download, request.maxBytes)),
+				)
+			},
+		}
+		return operations
+	}),
+}) {
+	static readonly layer = (filePolicy: LinearFileTransferPolicy = defaultLinearFileTransferPolicy) =>
+		Layer.effect(this, this.make(filePolicy))
+}

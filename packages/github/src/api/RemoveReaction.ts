@@ -1,6 +1,6 @@
 import { Array as Arr, Effect, Option } from 'effect'
 
-import type { GitHubReactionRequest } from '../GitHubApi'
+import type { GitHubReactionRequest } from '../GitHubApiContract'
 import { GitHubApiClient } from './GitHubApiClient'
 import { reactionsLocation } from './GitHubApiProjections'
 import { Reaction } from './GitHubApiSchemas'

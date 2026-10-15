@@ -1,6 +1,6 @@
 import { Effect } from 'effect'
 
-import type { GitHubUserAccessRequest } from '../GitHubApi'
+import type { GitHubUserAccessRequest } from '../GitHubApiContract'
 import { GitHubApiClient } from './GitHubApiClient'
 import { accessLevel, repositoryPath } from './GitHubApiProjections'
 import { CollaboratorPermission } from './GitHubApiSchemas'

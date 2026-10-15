@@ -5,7 +5,7 @@
 import { Context, Schema } from 'effect'
 import type { Effect } from 'effect'
 
-import type { LinearApiError } from './LinearApi'
+import type { LinearApiError } from './LinearApiContract'
 import { LinearOrganizationId, LinearUserId } from './LinearIdentity'
 
 export const LinearVerifiedCredential = Schema.Struct({

@@ -36,8 +36,8 @@ import type { RuntimeContext } from 'alchemy/RuntimeContext'
 import { Array as Arr, Config, Effect, Match, Predicate, Schema } from 'effect'
 
 import { AgentSessions } from './AgentSessionDO'
+import { AgentSessionMessage } from './AgentSessionMessage'
 import { AutoLabel, type AutoLabelError } from './AutoLabel'
-import { AgentSessionMessage } from './DeliveryTurn'
 import { RequestComment } from './DiscussionContext'
 
 export const maintainerOnlyNotice =

@@ -1,6 +1,6 @@
 import { Effect, Schema } from 'effect'
 
-import { LinearCreateAttachmentInput, type LinearCreateAttachmentRequest } from '../LinearApi'
+import { LinearCreateAttachmentInput, type LinearCreateAttachmentRequest } from '../LinearApiContract'
 import { LinearIssueId } from '../LinearIdentity'
 import { failLinearMutation } from './LinearApiErrors'
 import { projectLinearAttachment } from './LinearApiProjections'

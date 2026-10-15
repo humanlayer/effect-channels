@@ -1,11 +1,11 @@
-import { Config, Context, Duration, Effect, Layer, Predicate, type Redacted, Schedule, Schema } from 'effect'
+import { Config, Context, Duration, Effect, Layer, Predicate, Schedule, Schema } from 'effect'
 import * as FetchHttpClient from 'effect/http/FetchHttpClient'
 import * as HttpClient from 'effect/http/HttpClient'
 import * as HttpClientRequest from 'effect/http/HttpClientRequest'
 import type { HttpClientResponse } from 'effect/http/HttpClientResponse'
 import type * as UrlParams from 'effect/http/UrlParams'
 
-import { SlackApiError, SlackApiOperation } from '../SlackApi'
+import { SlackApiError, SlackApiOperation } from '../SlackApiContract'
 
 /** The only origins that receive the bot token for file downloads. */
 export const slackFileOrigins: ReadonlySet<string> = new Set(['https://files.slack.com', 'https://files.slack-gov.com'])
@@ -55,23 +55,6 @@ type SlackHttpClientOperations = {
 	readonly executeFile: (input: SlackFileHttpRequest) => Effect.Effect<HttpClientResponse, SlackApiError>
 }
 
-/** One bot-token-authenticated transport for Slack Web API methods and private file downloads. */
-export class SlackHttpClient extends Context.Service<SlackHttpClient, SlackHttpClientOperations>()(
-	'@humanlayer/channels-slack/SlackHttpClient',
-	{
-		/** Reads `SLACK_BOT_TOKEN` and the optional `SLACK_API_ORIGIN`. Construction performs no I/O. */
-		make: Effect.gen(function* () {
-			const botToken = yield* Config.Redacted('SLACK_BOT_TOKEN')
-			const apiOrigin = yield* Config.URL('SLACK_API_ORIGIN').pipe(
-				Config.withDefault(new URL('https://slack.com/api/')),
-			)
-			return yield* makeSlackHttpClient(botToken, apiOrigin)
-		}),
-	},
-) {
-	static readonly layer = Layer.effect(this, this.make)
-}
-
 const rateLimitRetryPolicy = Schedule.exponential('200 millis').pipe(
 	Schedule.setInputType<SlackRateLimitedError | SlackWebApiError>(),
 	Schedule.jittered,
@@ -100,108 +83,127 @@ const rejected = (operation: SlackApiOperation, status: typeof SlackResponseStat
 	return Effect.fail(SlackApiError.make({ operation, message: status.error ?? 'Slack rejected the request' }))
 }
 
-const makeSlackHttpClient = (botToken: Redacted.Redacted<string>, apiOrigin: URL) =>
-	Effect.gen(function* () {
-		const client = yield* HttpClient.HttpClient
-		const execute = <A>(
-			operation: SlackApiOperation,
-			method: string,
-			request: Effect.Effect<HttpClientRequest.HttpClientRequest, SlackApiError>,
-			schema: Schema.Codec<A, unknown>,
-		): Effect.Effect<A, SlackWebApiError> =>
-			Effect.gen(function* () {
-				const slackRequest = yield* request
-				const response = yield* client
-					.execute(slackRequest)
-					.pipe(Effect.mapError(() => SlackApiError.make({ operation, message: 'Could not reach Slack' })))
-				if (response.status === 429) {
-					const retryAfterSeconds = Number(response.headers['retry-after'])
-					return yield* Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0
-						? SlackRateLimitedError.make({ operation, retryAfterMs: retryAfterSeconds * 1_000 })
-						: SlackRateLimitedError.make({ operation })
-				}
-				if (response.status < 200 || response.status >= 300) {
-					return yield* SlackApiError.make({ operation, message: `Slack returned HTTP ${response.status}` })
-				}
-				const invalidResponse = () =>
-					SlackApiError.make({ operation, message: 'Slack returned an invalid response' })
-				const json = yield* response.json.pipe(Effect.mapError(invalidResponse))
-				const status = yield* Schema.decodeUnknownEffect(SlackResponseStatus)(json).pipe(
-					Effect.mapError(invalidResponse),
-				)
-				if (!status.ok) return yield* rejected(operation, status)
-				return yield* Schema.decodeEffect(schema)(json).pipe(Effect.mapError(invalidResponse))
-			}).pipe(
-				Effect.retry(rateLimitRetryPolicy),
-				Effect.catchTag('SlackRateLimitedError', () =>
-					Effect.fail(SlackApiError.make({ operation, message: 'Slack rate limit persisted after retries' })),
-				),
-				Effect.withSpan('slack.api.request', {
-					attributes: { 'slack.operation': operation, 'slack.method': method },
-				}),
+/** One bot-token-authenticated transport for Slack Web API methods and private file downloads. */
+export class SlackHttpClient extends Context.Service<SlackHttpClient, SlackHttpClientOperations>()(
+	'@humanlayer/channels-slack/SlackHttpClient',
+	{
+		/** Reads `SLACK_BOT_TOKEN` and the optional `SLACK_API_ORIGIN`. Construction performs no I/O. */
+		make: Effect.gen(function* () {
+			const botToken = yield* Config.Redacted('SLACK_BOT_TOKEN')
+			const apiOrigin = yield* Config.URL('SLACK_API_ORIGIN').pipe(
+				Config.withDefault(new URL('https://slack.com/api/')),
 			)
-
-		const methodUrl = (method: string) => new URL(method, apiOrigin).toString()
-
-		const sendFile = (input: SlackFileHttpRequest) =>
-			client.execute(HttpClientRequest.get(input.url).pipe(HttpClientRequest.bearerToken(botToken))).pipe(
-				Effect.mapError(() =>
-					SlackApiError.make({ operation: input.operation, message: 'Could not reach Slack' }),
-				),
-				Effect.provideService(FetchHttpClient.RequestInit, { redirect: 'manual' }),
-				Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
-				Effect.withSpan('slack.file_request', { attributes: { 'slack.operation': input.operation } }),
-			)
-
-		const service: SlackHttpClientOperations = {
-			postJson: (call) =>
-				execute(
-					call.operation,
-					call.method,
-					HttpClientRequest.post(methodUrl(call.method)).pipe(
-						HttpClientRequest.bearerToken(botToken),
-						HttpClientRequest.schemaBodyJson(Schema.Json)(call.params),
-						Effect.mapError(() =>
-							SlackApiError.make({
-								operation: call.operation,
-								message: 'Could not encode Slack request',
-							}),
+			const client = yield* HttpClient.HttpClient
+			const execute = <A>(
+				operation: SlackApiOperation,
+				method: string,
+				request: Effect.Effect<HttpClientRequest.HttpClientRequest, SlackApiError>,
+				schema: Schema.Codec<A, unknown>,
+			): Effect.Effect<A, SlackWebApiError> =>
+				Effect.gen(function* () {
+					const slackRequest = yield* request
+					const response = yield* client
+						.execute(slackRequest)
+						.pipe(
+							Effect.mapError(() => SlackApiError.make({ operation, message: 'Could not reach Slack' })),
+						)
+					if (response.status === 429) {
+						const retryAfterSeconds = Number(response.headers['retry-after'])
+						return yield* Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0
+							? SlackRateLimitedError.make({ operation, retryAfterMs: retryAfterSeconds * 1_000 })
+							: SlackRateLimitedError.make({ operation })
+					}
+					if (response.status < 200 || response.status >= 300) {
+						return yield* SlackApiError.make({
+							operation,
+							message: `Slack returned HTTP ${response.status}`,
+						})
+					}
+					const invalidResponse = () =>
+						SlackApiError.make({ operation, message: 'Slack returned an invalid response' })
+					const json = yield* response.json.pipe(Effect.mapError(invalidResponse))
+					const status = yield* Schema.decodeUnknownEffect(SlackResponseStatus)(json).pipe(
+						Effect.mapError(invalidResponse),
+					)
+					if (!status.ok) return yield* rejected(operation, status)
+					return yield* Schema.decodeEffect(schema)(json).pipe(Effect.mapError(invalidResponse))
+				}).pipe(
+					Effect.retry(rateLimitRetryPolicy),
+					Effect.catchTag('SlackRateLimitedError', () =>
+						Effect.fail(
+							SlackApiError.make({ operation, message: 'Slack rate limit persisted after retries' }),
 						),
 					),
-					call.response,
-				),
-			postForm: (call) =>
-				execute(
-					call.operation,
-					call.method,
-					Effect.succeed(
+					Effect.withSpan('slack.api.request', {
+						attributes: { 'slack.operation': operation, 'slack.method': method },
+					}),
+				)
+
+			const methodUrl = (method: string) => new URL(method, apiOrigin).toString()
+
+			const sendFile = (input: SlackFileHttpRequest) =>
+				client.execute(HttpClientRequest.get(input.url).pipe(HttpClientRequest.bearerToken(botToken))).pipe(
+					Effect.mapError(() =>
+						SlackApiError.make({ operation: input.operation, message: 'Could not reach Slack' }),
+					),
+					Effect.provideService(FetchHttpClient.RequestInit, { redirect: 'manual' }),
+					Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
+					Effect.withSpan('slack.file_request', { attributes: { 'slack.operation': input.operation } }),
+				)
+
+			const service: SlackHttpClientOperations = {
+				postJson: (call) =>
+					execute(
+						call.operation,
+						call.method,
 						HttpClientRequest.post(methodUrl(call.method)).pipe(
 							HttpClientRequest.bearerToken(botToken),
-							HttpClientRequest.bodyUrlParams(call.params),
+							HttpClientRequest.schemaBodyJson(Schema.Json)(call.params),
+							Effect.mapError(() =>
+								SlackApiError.make({
+									operation: call.operation,
+									message: 'Could not encode Slack request',
+								}),
+							),
 						),
+						call.response,
 					),
-					call.response,
-				),
-			get: (call) =>
-				execute(
-					call.operation,
-					call.method,
-					Effect.succeed(
-						HttpClientRequest.get(methodUrl(call.method), { urlParams: call.params }).pipe(
-							HttpClientRequest.bearerToken(botToken),
+				postForm: (call) =>
+					execute(
+						call.operation,
+						call.method,
+						Effect.succeed(
+							HttpClientRequest.post(methodUrl(call.method)).pipe(
+								HttpClientRequest.bearerToken(botToken),
+								HttpClientRequest.bodyUrlParams(call.params),
+							),
 						),
+						call.response,
 					),
-					call.response,
-				),
-			executeFile: (input) =>
-				isSlackFileUrl(input.url)
-					? sendFile(input)
-					: Effect.fail(
-							SlackApiError.make({
-								operation: input.operation,
-								message: 'Slack file URL is not on an approved Slack file origin',
-							}),
+				get: (call) =>
+					execute(
+						call.operation,
+						call.method,
+						Effect.succeed(
+							HttpClientRequest.get(methodUrl(call.method), { urlParams: call.params }).pipe(
+								HttpClientRequest.bearerToken(botToken),
+							),
 						),
-		}
-		return service
-	})
+						call.response,
+					),
+				executeFile: (input) =>
+					isSlackFileUrl(input.url)
+						? sendFile(input)
+						: Effect.fail(
+								SlackApiError.make({
+									operation: input.operation,
+									message: 'Slack file URL is not on an approved Slack file origin',
+								}),
+							),
+			}
+			return service
+		}),
+	},
+) {
+	static readonly layer = Layer.effect(this, this.make)
+}

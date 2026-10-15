@@ -3,7 +3,7 @@ import { Effect, Queue, Redacted, Stream } from 'effect'
 import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/http'
 
 import { narrowLinearProviderErrors } from '../src/api/LinearApiErrors'
-import { LinearHttpClient, makeFixedCredentialLinearHttpClient } from '../src/api/LinearHttpClient'
+import { LinearHttpClient } from '../src/api/LinearHttpClient'
 import { LinearApi } from '../src/LinearApi'
 import { LinearFile, LinearFileRef, LinearFileSizeLimitExceeded, LinearFileUrl } from '../src/LinearFiles'
 import { LinearOrganizationId } from '../src/LinearIdentity'
@@ -199,7 +199,7 @@ describe('Linear file download', () => {
 	it.effect('attaches the credential only to HTTPS requests on the Linear upload origin', ({ expect }) =>
 		Effect.gen(function* () {
 			const requests = yield* Queue.unbounded<RecordedRequest>()
-			const client = yield* makeFixedCredentialLinearHttpClient({
+			const client = yield* LinearHttpClient.makeFixedCredential({
 				organizationId: issue.organizationId,
 				accessToken: Redacted.make('secret-token'),
 			}).pipe(

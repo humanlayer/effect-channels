@@ -1,6 +1,6 @@
 import { Effect, Schema } from 'effect'
 
-import type { LinearApiError, LinearIssueRequest } from '../LinearApi'
+import type { LinearApiError, LinearIssueRequest } from '../LinearApiContract'
 import { LinearIssueId } from '../LinearIdentity'
 import type { LinearComment } from '../LinearResources'
 import { type LinearProviderError, LinearResponseDecodeError, linearProviderErrorDetails } from './LinearApiErrors'

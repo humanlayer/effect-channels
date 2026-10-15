@@ -1,6 +1,6 @@
 import { Effect, Schema, Struct } from 'effect'
 
-import { type LinearListAssignableUsersRequest, LinearUserPageOptions } from '../LinearApi'
+import { type LinearListAssignableUsersRequest, LinearUserPageOptions } from '../LinearApiContract'
 import { LinearIssueId } from '../LinearIdentity'
 import { LinearPageInfo, LinearUserPage } from '../LinearModels'
 import { projectLinearUser } from './LinearApiProjections'

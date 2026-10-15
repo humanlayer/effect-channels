@@ -12,7 +12,7 @@ import {
 import { ToolResultText } from '@humanlayer/fold-core'
 import { Effect, Layer, Ref, Result } from 'effect'
 
-import { workBranchFor } from '../src/AgentSessionDO'
+import { workBranchFor } from '../src/AgentConversation'
 import { openIssuePullRequest } from '../src/GitHubTools'
 
 const repository = {

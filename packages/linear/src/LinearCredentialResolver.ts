@@ -4,9 +4,9 @@ import * as HttpClient from 'effect/http/HttpClient'
 
 import { getViewerIdentity } from './api/GetViewerIdentity'
 import { narrowLinearProviderErrors } from './api/LinearApiErrors'
-import { LinearHttpClient, makeFixedCredentialLinearHttpClient } from './api/LinearHttpClient'
+import { LinearHttpClient } from './api/LinearHttpClient'
 import { acquireClientCredentialsToken } from './auth/AcquireClientCredentialsToken'
-import { LinearApiError } from './LinearApi'
+import { LinearApiError } from './LinearApiContract'
 import { LinearCredentialResolver, LinearVerifiedCredential } from './LinearCredential'
 import type { LinearOrganizationId, LinearUserId } from './LinearIdentity'
 
@@ -42,7 +42,7 @@ const makeResolver = Effect.fn('linear.credentials.make')(function* (options: {
 
 	const acquire = Effect.gen(function* () {
 		const token = yield* options.acquire.pipe(Effect.provideService(HttpClient.HttpClient, client))
-		const http = yield* makeFixedCredentialLinearHttpClient({
+		const http = yield* LinearHttpClient.makeFixedCredential({
 			organizationId: options.organizationId,
 			accessToken: token.accessToken,
 		}).pipe(Effect.provideService(HttpClient.HttpClient, client))

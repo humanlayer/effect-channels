@@ -1,6 +1,6 @@
 import { Effect, Schema } from 'effect'
 
-import { GitHubLabels, type GitHubIssueLabelsRequest } from '../GitHubApi'
+import { GitHubLabels, type GitHubIssueLabelsRequest } from '../GitHubApiContract'
 import { GitHubApiClient } from './GitHubApiClient'
 import { label, repositoryPath } from './GitHubApiProjections'
 import { Label } from './GitHubApiSchemas'

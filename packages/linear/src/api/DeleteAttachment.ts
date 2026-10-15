@@ -1,6 +1,6 @@
 import { Effect, Schema } from 'effect'
 
-import type { LinearDeleteAttachmentRequest } from '../LinearApi'
+import type { LinearDeleteAttachmentRequest } from '../LinearApiContract'
 import { LinearAttachmentId } from '../LinearIdentity'
 import { failLinearMutation } from './LinearApiErrors'
 import { linearGraphql } from './LinearGraphql'

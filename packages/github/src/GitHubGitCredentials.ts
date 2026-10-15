@@ -7,7 +7,7 @@ import { Base64 } from 'effect/encoding'
 
 import { narrowGitHubTransportError } from './api/GitHubApiErrors'
 import { GitHubAppCredentials } from './api/GitHubAppCredentials'
-import type { GitHubApiError } from './GitHubApi'
+import type { GitHubApiError } from './GitHubApiContract'
 import type { GitHubRepositoryRef } from './GitHubModels'
 
 export class GitHubGitCredentials extends Context.Service<

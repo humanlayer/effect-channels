@@ -23,9 +23,9 @@ import { Effect, Layer, Ref } from 'effect'
 
 import { makeTestDeliveryExecution } from '../../../packages/delivery/test/delivery-execution'
 import { AgentSessions } from '../src/AgentSessionDO'
+import type { AgentSessionMessage } from '../src/AgentSessionMessage'
 import { AutoLabel } from '../src/AutoLabel'
 import { describeCheckFailure, listPullRequestChecks } from '../src/CheckTools'
-import type { AgentSessionMessage } from '../src/DeliveryTurn'
 import { checkFailurePrompt, failedChecksOnHead, githubHandlers } from '../src/GithubBot'
 
 const repository = {

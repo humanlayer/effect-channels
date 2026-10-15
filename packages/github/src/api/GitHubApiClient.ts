@@ -3,7 +3,7 @@ import * as HttpClient from 'effect/http/HttpClient'
 import * as HttpClientRequest from 'effect/http/HttpClientRequest'
 import type * as HttpClientResponse from 'effect/http/HttpClientResponse'
 
-import { type GitHubApiOperation, GitHubApiError } from '../GitHubApi'
+import { type GitHubApiOperation, GitHubApiError } from '../GitHubApiContract'
 import { GitHubId } from '../GitHubIdentity'
 import type { GitHubRepositoryRef } from '../GitHubModels'
 import { GitHubTransportError, narrowGitHubTransportError } from './GitHubApiErrors'
