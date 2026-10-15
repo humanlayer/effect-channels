@@ -31,6 +31,12 @@ type MailboxStorageOperations = MailboxStorageTransaction & {
 const eraseAlchemyRuntimeContext = <A, E>(effect: Effect.Effect<A, E, RuntimeContext>): Effect.Effect<A, E> =>
 	effect.pipe(Effect.provide(RuntimeContext.phantom))
 
+/**
+ * The type of {@link MailboxStorage.layer}, named so declaration files refer to it rather than to the
+ * Durable Object state's path inside Alchemy.
+ */
+export type MailboxStorageLayer = Layer.Layer<MailboxStorage, never, Cloudflare.DurableObjectState>
+
 export class MailboxStorage extends Context.Service<MailboxStorage, MailboxStorageOperations>()(
 	'@humanlayer/channels-alchemy-cloudflare/MailboxStorage',
 	{
@@ -62,5 +68,5 @@ export class MailboxStorage extends Context.Service<MailboxStorage, MailboxStora
 		}),
 	},
 ) {
-	static readonly layer = Layer.effect(this, this.make)
+	static readonly layer: MailboxStorageLayer = Layer.effect(this, this.make)
 }
