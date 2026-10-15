@@ -122,215 +122,238 @@ const outcomeMarkdown = (outcome: DeliveryOutcome, markdown: string) =>
 		Match.orElse(() => markdown),
 	)
 
-/** Build Slack's output half. Its `SlackApi` is the bot's own. */
-export const makeSlackOutputProcessor = Effect.fn('slack.make_output_processor')(function* (input: {
-	readonly namespace: string
-}) {
-	const slackApi = yield* SlackApi
+/** Build Slack's output half. Each attempt reads `SlackApi` from its caller, so the host supplies it. */
+export const makeSlackOutputProcessor = (input: { readonly namespace: string }) =>
+	Effect.sync(() => {
+		const process = Effect.fn('slack.process_delivery_output')(function* (attempt: ProviderOutputAttempt) {
+			const slackApi = yield* SlackApi
+			if (attempt.prepared.presentationVersion !== slackPresentationVersion) {
+				return yield* failed('unsupported_presentation_version', false)
+			}
+			const destination = yield* Schema.decodeUnknownEffect(SlackDeliveryDestinationJson)(
+				attempt.prepared.destination,
+			).pipe(Effect.mapError(() => failed('destination_invalid', false)))
+			if (attempt.hadAmbiguousAttempt) {
+				yield* Effect.logWarning('Slack output retried after an attempt that may have posted').pipe(
+					Effect.annotateLogs({ delivery_id: attempt.deliveryId, operation_id: attempt.operationId }),
+				)
+			}
 
-	const process = Effect.fn('slack.process_delivery_output')(function* (attempt: ProviderOutputAttempt) {
-		if (attempt.prepared.presentationVersion !== slackPresentationVersion) {
-			return yield* failed('unsupported_presentation_version', false)
-		}
-		const destination = yield* Schema.decodeUnknownEffect(SlackDeliveryDestinationJson)(
-			attempt.prepared.destination,
-		).pipe(Effect.mapError(() => failed('destination_invalid', false)))
-		if (attempt.hadAmbiguousAttempt) {
-			yield* Effect.logWarning('Slack output retried after an attempt that may have posted').pipe(
-				Effect.annotateLogs({ delivery_id: attempt.deliveryId, operation_id: attempt.operationId }),
-			)
-		}
-
-		/** Log a Slack failure with the operation it belongs to, then report it as retryable or not. */
-		const reportSlackFailure =
-			(message: string, safeCode: string) =>
-			<A>(effect: Effect.Effect<A, SlackApiError>) =>
-				effect.pipe(
-					Effect.tapError((error) =>
-						Effect.logWarning(message, error).pipe(
-							Effect.annotateLogs({ delivery_id: attempt.deliveryId, operation_id: attempt.operationId }),
+			/** Log a Slack failure with the operation it belongs to, then report it as retryable or not. */
+			const reportSlackFailure =
+				(message: string, safeCode: string) =>
+				<A>(effect: Effect.Effect<A, SlackApiError>) =>
+					effect.pipe(
+						Effect.tapError((error) =>
+							Effect.logWarning(message, error).pipe(
+								Effect.annotateLogs({
+									delivery_id: attempt.deliveryId,
+									operation_id: attempt.operationId,
+								}),
+							),
 						),
-					),
-					Effect.mapError((error) => failed(safeCode, isRetryableSlackApiError(error))),
+						Effect.mapError((error) => failed(safeCode, isRetryableSlackApiError(error))),
+					)
+
+			/** Post Markdown to the thread; the receipt is the posted message. */
+			const post = (markdown: string) =>
+				slackApi
+					.postToThread({ thread: destination.thread, content: SlackMarkdownContent.make({ markdown }) })
+					.pipe(
+						reportSlackFailure('Slack output post failed', 'slack_post_failed'),
+						Effect.flatMap(({ ref }) =>
+							Schema.encodeEffect(SlackOutputReceiptJson)(SlackOutputReceipt.make({ message: ref })).pipe(
+								Effect.mapError(() => failed('receipt_unencodable', false)),
+							),
+						),
+						Effect.map((receipt) => DeliveryOutputApplied.make({ receipt })),
+					)
+
+			/** The posted message a reference names. */
+			const postedMessage = (reference: Schema.Json) =>
+				Schema.decodeUnknownEffect(SlackOutputReceiptJson)(reference).pipe(
+					Effect.map(({ message }) => message),
+					Effect.mapError(() => failed('message_reference_invalid', false)),
 				)
 
-		/** Post Markdown to the thread; the receipt is the posted message. */
-		const post = (markdown: string) =>
-			slackApi
-				.postToThread({ thread: destination.thread, content: SlackMarkdownContent.make({ markdown }) })
-				.pipe(
-					reportSlackFailure('Slack output post failed', 'slack_post_failed'),
-					Effect.flatMap(({ ref }) =>
-						Schema.encodeEffect(SlackOutputReceiptJson)(SlackOutputReceipt.make({ message: ref })).pipe(
-							Effect.mapError(() => failed('receipt_unencodable', false)),
+			const applied = DeliveryOutputApplied.make({})
+
+			/** Clear the thread's status line. */
+			const clearStatus = slackApi
+				.clearThreadStatus({ thread: destination.thread })
+				.pipe(reportSlackFailure('Slack thread status clear failed', 'slack_status_failed'), Effect.as(applied))
+
+			/** The message a reaction goes on: the one that started the delivery, or one the delivery posted. */
+			const reactionMessage = (target: ProviderReactionTarget) =>
+				ProviderReactionTarget.match(target, {
+					ActivationTarget: () =>
+						Effect.fromOption(Option.fromUndefinedOr(attempt.prepared.activationTarget)).pipe(
+							Effect.mapError(() => failed('activation_target_missing', false)),
+							Effect.flatMap((encoded) =>
+								Schema.decodeUnknownEffect(SlackActivationTargetJson)(encoded).pipe(
+									Effect.tapError((error) =>
+										Effect.logWarning(
+											'Slack output activation target could not be read',
+											error,
+										).pipe(
+											Effect.annotateLogs({
+												delivery_id: attempt.deliveryId,
+												operation_id: attempt.operationId,
+											}),
+										),
+									),
+									Effect.mapError(() => failed('activation_target_invalid', false)),
+								),
+							),
+							Effect.map(({ message }) => message),
 						),
-					),
+					MessageTarget: ({ reference }) => postedMessage(reference),
+				})
+
+			/**
+			 * Add or remove the bot's reaction. Slack answers `already_reacted` and `no_reaction` when the
+			 * reaction is already as asked, and `message_not_found` when a removal's message is gone.
+			 */
+			const setReaction = ({ target, reaction, active }: ProviderSetMessageReaction) =>
+				reactionMessage(target).pipe(
+					Effect.flatMap((message) => {
+						const request = { message, reaction: slackPortableReactions[reaction] }
+						const done: ReadonlySet<string> = active
+							? new Set(['already_reacted'])
+							: new Set(['no_reaction', 'message_not_found'])
+						return (active ? slackApi.addReaction(request) : slackApi.removeReaction(request)).pipe(
+							Effect.catchIf(
+								(error) => done.has(error.message),
+								(error) =>
+									Effect.logInfo('Slack reaction was already as asked; counting it as done').pipe(
+										Effect.annotateLogs({ slack_error: error.message }),
+									),
+							),
+							reportSlackFailure('Slack output reaction failed', 'slack_reaction_failed'),
+						)
+					}),
+					Effect.as(applied),
+					Effect.withSpan('slack.output.set_reaction', { attributes: { reaction, active } }),
+				)
+
+			/** The plan message a saved presentation names. One that cannot be read is logged and treated as none. */
+			const planMessage = (presentation: Schema.Json | undefined) =>
+				Predicate.isUndefined(presentation)
+					? Effect.succeedNone
+					: Schema.decodeUnknownEffect(SlackPlanPresentationJson)(presentation).pipe(
+							Effect.map(({ message }) => Option.some(message)),
+							Effect.catchTag('SchemaError', (error) =>
+								Effect.logWarning(
+									'Slack plan presentation could not be read; posting the plan again',
+									error,
+								).pipe(
+									Effect.annotateLogs({
+										delivery_id: attempt.deliveryId,
+										operation_id: attempt.operationId,
+									}),
+									Effect.as(Option.none()),
+								),
+							),
+						)
+
+			/** The plan's presentation as the operation's receipt. */
+			const planReceipt = (message: SlackMessageRef) =>
+				Schema.encodeEffect(SlackPlanPresentationJson)(SlackPlanPresentation.make({ message })).pipe(
+					Effect.mapError(() => failed('receipt_unencodable', false)),
 					Effect.map((receipt) => DeliveryOutputApplied.make({ receipt })),
 				)
 
-		/** The posted message a reference names. */
-		const postedMessage = (reference: Schema.Json) =>
-			Schema.decodeUnknownEffect(SlackOutputReceiptJson)(reference).pipe(
-				Effect.map(({ message }) => message),
-				Effect.mapError(() => failed('message_reference_invalid', false)),
-			)
+			/** Post the plan as a new plan message. */
+			const postPlan = (plan: DeliveryPlan) =>
+				slackApi
+					.postPlanToThread({ thread: destination.thread, plan: slackPlan(plan) })
+					.pipe(
+						reportSlackFailure('Slack plan post failed', 'slack_plan_failed'),
+						Effect.flatMap(planReceipt),
+					)
 
-		const applied = DeliveryOutputApplied.make({})
-
-		/** Clear the thread's status line. */
-		const clearStatus = slackApi
-			.clearThreadStatus({ thread: destination.thread })
-			.pipe(reportSlackFailure('Slack thread status clear failed', 'slack_status_failed'), Effect.as(applied))
-
-		/** The message a reaction goes on: the one that started the delivery, or one the delivery posted. */
-		const reactionMessage = (target: ProviderReactionTarget) =>
-			ProviderReactionTarget.match(target, {
-				ActivationTarget: () =>
-					Effect.fromOption(Option.fromUndefinedOr(attempt.prepared.activationTarget)).pipe(
-						Effect.mapError(() => failed('activation_target_missing', false)),
-						Effect.flatMap((encoded) =>
-							Schema.decodeUnknownEffect(SlackActivationTargetJson)(encoded).pipe(
-								Effect.tapError((error) =>
-									Effect.logWarning('Slack output activation target could not be read', error).pipe(
-										Effect.annotateLogs({ delivery_id: attempt.deliveryId, operation_id: attempt.operationId }),
-									),
-								),
-								Effect.mapError(() => failed('activation_target_invalid', false)),
-							),
-						),
-						Effect.map(({ message }) => message),
-					),
-				MessageTarget: ({ reference }) => postedMessage(reference),
-			})
-
-		/**
-		 * Add or remove the bot's reaction. Slack answers `already_reacted` and `no_reaction` when the
-		 * reaction is already as asked, and `message_not_found` when a removal's message is gone.
-		 */
-		const setReaction = ({ target, reaction, active }: ProviderSetMessageReaction) =>
-			reactionMessage(target).pipe(
-				Effect.flatMap((message) => {
-					const request = { message, reaction: slackPortableReactions[reaction] }
-					const done: ReadonlySet<string> = active
-						? new Set(['already_reacted'])
-						: new Set(['no_reaction', 'message_not_found'])
-					return (active ? slackApi.addReaction(request) : slackApi.removeReaction(request)).pipe(
+			/**
+			 * Show the plan in one message: post it the first time, then replace its whole plan block. The same
+			 * plan makes no call; a plan message someone deleted is posted again.
+			 */
+			const renderPlan = ({ plan, rendered }: ProviderRenderPlan) =>
+				Effect.gen(function* () {
+					const shown = yield* planMessage(rendered?.presentation)
+					if (Predicate.isUndefined(rendered) || Option.isNone(shown)) return yield* postPlan(plan)
+					const message = shown.value
+					if (sameDeliveryPlan(rendered.plan, plan)) return yield* planReceipt(message)
+					const updated = yield* slackApi.updatePlan({ message, plan: slackPlan(plan) }).pipe(
+						Effect.as(true),
 						Effect.catchIf(
-							(error) => done.has(error.message),
+							(error) => error.message === 'message_not_found',
 							(error) =>
-								Effect.logInfo('Slack reaction was already as asked; counting it as done').pipe(
+								Effect.logInfo('Slack plan message is gone; posting the plan again').pipe(
 									Effect.annotateLogs({ slack_error: error.message }),
+									Effect.as(false),
 								),
 						),
-						reportSlackFailure('Slack output reaction failed', 'slack_reaction_failed'),
+						reportSlackFailure('Slack plan update failed', 'slack_plan_failed'),
 					)
-				}),
-				Effect.as(applied),
-				Effect.withSpan('slack.output.set_reaction', { attributes: { reaction, active } }),
-			)
+					return updated ? yield* planReceipt(message) : yield* postPlan(plan)
+				}).pipe(Effect.withSpan('slack.output.render_plan', { attributes: { item_count: plan.items.length } }))
 
-		/** The plan message a saved presentation names. One that cannot be read is logged and treated as none. */
-		const planMessage = (presentation: Schema.Json | undefined) =>
-			Predicate.isUndefined(presentation)
-				? Effect.succeedNone
-				: Schema.decodeUnknownEffect(SlackPlanPresentationJson)(presentation).pipe(
-						Effect.map(({ message }) => Option.some(message)),
-						Effect.catchTag('SchemaError', (error) =>
-							Effect.logWarning('Slack plan presentation could not be read; posting the plan again', error).pipe(
-								Effect.annotateLogs({ delivery_id: attempt.deliveryId, operation_id: attempt.operationId }),
-								Effect.as(Option.none()),
-							),
+			return yield* Match.value(attempt.operation).pipe(
+				Match.tagsExhaustive({
+					AddExternalLink: () => Effect.succeed(applied),
+					SetMessageReaction: setReaction,
+					RenderPlan: renderPlan,
+					PresentOutcome: ({ outcome, markdown, clearActivity }) =>
+						Predicate.isNotUndefined(markdown)
+							? post(outcomeMarkdown(outcome, markdown))
+							: clearActivity
+								? clearStatus
+								: Effect.succeed(applied),
+					SetActivity: ({ activity }) =>
+						Match.value(activity).pipe(
+							Match.tagsExhaustive({
+								Working: ({ message }) =>
+									slackApi
+										.setThreadStatus({ thread: destination.thread, status: message })
+										.pipe(
+											reportSlackFailure(
+												'Slack thread status update failed',
+												'slack_status_failed',
+											),
+											Effect.as(applied),
+										),
+								Idle: () => clearStatus,
+							}),
 						),
-					)
-
-		/** The plan's presentation as the operation's receipt. */
-		const planReceipt = (message: SlackMessageRef) =>
-			Schema.encodeEffect(SlackPlanPresentationJson)(SlackPlanPresentation.make({ message })).pipe(
-				Effect.mapError(() => failed('receipt_unencodable', false)),
-				Effect.map((receipt) => DeliveryOutputApplied.make({ receipt })),
-			)
-
-		/** Post the plan as a new plan message. */
-		const postPlan = (plan: DeliveryPlan) =>
-			slackApi
-				.postPlanToThread({ thread: destination.thread, plan: slackPlan(plan) })
-				.pipe(reportSlackFailure('Slack plan post failed', 'slack_plan_failed'), Effect.flatMap(planReceipt))
-
-		/**
-		 * Show the plan in one message: post it the first time, then replace its whole plan block. The same
-		 * plan makes no call; a plan message someone deleted is posted again.
-		 */
-		const renderPlan = ({ plan, rendered }: ProviderRenderPlan) =>
-			Effect.gen(function* () {
-				const shown = yield* planMessage(rendered?.presentation)
-				if (Predicate.isUndefined(rendered) || Option.isNone(shown)) return yield* postPlan(plan)
-				const message = shown.value
-				if (sameDeliveryPlan(rendered.plan, plan)) return yield* planReceipt(message)
-				const updated = yield* slackApi.updatePlan({ message, plan: slackPlan(plan) }).pipe(
-					Effect.as(true),
-					Effect.catchIf(
-						(error) => error.message === 'message_not_found',
-						(error) =>
-							Effect.logInfo('Slack plan message is gone; posting the plan again').pipe(
-								Effect.annotateLogs({ slack_error: error.message }),
-								Effect.as(false),
-							),
-					),
-					reportSlackFailure('Slack plan update failed', 'slack_plan_failed'),
-				)
-				return updated ? yield* planReceipt(message) : yield* postPlan(plan)
-			}).pipe(Effect.withSpan('slack.output.render_plan', { attributes: { item_count: plan.items.length } }))
-
-		return yield* Match.value(attempt.operation).pipe(
-			Match.tagsExhaustive({
-				AddExternalLink: () => Effect.succeed(applied),
-				SetMessageReaction: setReaction,
-				RenderPlan: renderPlan,
-				PresentOutcome: ({ outcome, markdown, clearActivity }) =>
-					Predicate.isNotUndefined(markdown)
-						? post(outcomeMarkdown(outcome, markdown))
-						: clearActivity
-							? clearStatus
-							: Effect.succeed(applied),
-				SetActivity: ({ activity }) =>
-					Match.value(activity).pipe(
-						Match.tagsExhaustive({
-							Working: ({ message }) =>
+					CreateMessage: ({ markdown }) => post(markdown),
+					UpdateMessage: ({ markdown, reference }) =>
+						postedMessage(reference).pipe(
+							Effect.flatMap((message) =>
 								slackApi
-									.setThreadStatus({ thread: destination.thread, status: message })
-									.pipe(
-										reportSlackFailure('Slack thread status update failed', 'slack_status_failed'),
-										Effect.as(applied),
-									),
-							Idle: () => clearStatus,
-						}),
-					),
-				CreateMessage: ({ markdown }) => post(markdown),
-				UpdateMessage: ({ markdown, reference }) =>
-					postedMessage(reference).pipe(
-						Effect.flatMap((message) =>
-							slackApi
-								.updateMessage({ message, content: SlackMarkdownContent.make({ markdown }) })
-								.pipe(reportSlackFailure('Slack output update failed', 'slack_update_failed')),
-						),
-						Effect.as(applied),
-					),
-				DeleteMessage: ({ reference }) =>
-					postedMessage(reference).pipe(
-						Effect.flatMap((message) =>
-							slackApi.deleteMessage({ message }).pipe(
-								Effect.catchIf(
-									(error) => error.message === 'message_not_found',
-									() => Effect.logInfo('Slack message was already gone; counting it as deleted'),
-								),
-								reportSlackFailure('Slack output delete failed', 'slack_delete_failed'),
+									.updateMessage({ message, content: SlackMarkdownContent.make({ markdown }) })
+									.pipe(reportSlackFailure('Slack output update failed', 'slack_update_failed')),
 							),
+							Effect.as(applied),
 						),
-						Effect.as(applied),
-					),
-			}),
-		)
-	})
+					DeleteMessage: ({ reference }) =>
+						postedMessage(reference).pipe(
+							Effect.flatMap((message) =>
+								slackApi.deleteMessage({ message }).pipe(
+									Effect.catchIf(
+										(error) => error.message === 'message_not_found',
+										() => Effect.logInfo('Slack message was already gone; counting it as deleted'),
+									),
+									reportSlackFailure('Slack output delete failed', 'slack_delete_failed'),
+								),
+							),
+							Effect.as(applied),
+						),
+				}),
+			)
+		})
 
-	return { namespace: input.namespace, providerName: 'slack', process } satisfies ProviderOutputProcessor
-})
+		return {
+			namespace: input.namespace,
+			providerName: 'slack',
+			process,
+		} satisfies ProviderOutputProcessor<SlackApi>
+	})

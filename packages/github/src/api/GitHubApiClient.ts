@@ -60,11 +60,8 @@ export class GitHubApiClient extends Context.Service<
 		) => Effect.Effect<string, GitHubApiError>
 		readonly botUserId: Effect.Effect<GitHubId, GitHubApiError>
 	}
->()('@humanlayer/channels-github/internal/GitHubApiClient') {}
-
-export const GitHubApiClientLive = Layer.effect(
-	GitHubApiClient,
-	Effect.gen(function* () {
+>()('@humanlayer/channels-github/internal/GitHubApiClient', {
+	make: Effect.gen(function* () {
 		const client = yield* HttpClient.HttpClient
 		const credentials = yield* GitHubAppCredentials
 		const config = yield* GitHubApiConfig
@@ -311,9 +308,11 @@ export const GitHubApiClientLive = Layer.effect(
 					}),
 			}),
 		)
-		return GitHubApiClient.of({ call, callVoid, list, paginate, text, botUserId })
+		return { call, callVoid, list, paginate, text, botUserId }
 	}),
-)
+}) {
+	static readonly layer = Layer.effect(this, this.make)
+}
 
 const parseNextLink = (response: HttpClientResponse.HttpClientResponse, apiOrigin: URL) => {
 	const link = response.headers.link

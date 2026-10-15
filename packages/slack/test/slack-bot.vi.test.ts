@@ -10,8 +10,8 @@ import {
 	type DeliveryContext,
 } from '@humanlayer/channels-delivery'
 import { Clock, Config, Deferred, Effect, Layer, Queue, Redacted, Ref, Schedule } from 'effect'
-import { TestClock } from 'effect/testing'
 import { FetchHttpClient, HttpRouter, HttpServerRequest } from 'effect/http'
+import { TestClock } from 'effect/testing'
 
 import {
 	SlackApi,
@@ -57,18 +57,6 @@ describe('SlackBot.make', () => {
 					SlackBot.make({
 						signingSecret: Config.succeed(Redacted.make(slackEmulatorSigningSecret)),
 						deliveryMode: QueueDeliveryMode.make({}),
-						slackApi: Layer.mock(SlackApi, {
-							resolveParticipant: (request) =>
-								Effect.succeed(
-									SlackParticipant.make({
-										userId: SlackUserId.make(request.userId ?? 'U_ALICE'),
-										userName: 'alice',
-										fullName: 'Alice Example',
-										isBot: false,
-										isMe: false,
-									}),
-								),
-						}),
 						handlers: {
 							onNewMention: (event) =>
 								Effect.gen(function* () {
@@ -85,7 +73,21 @@ describe('SlackBot.make', () => {
 				eventProcessing: { concurrency: 1, leaseMs: 30_000 },
 				storage: ChannelsMemory.make({ polling: { intervalMs: 1_000 } }),
 			})
-			const fetch = yield* HttpRouter.toHttpEffect(bot.routes).pipe(Effect.provide(NodeCrypto.layer))
+			const slackApi = Layer.mock(SlackApi, {
+				resolveParticipant: (request) =>
+					Effect.succeed(
+						SlackParticipant.make({
+							userId: SlackUserId.make(request.userId ?? 'U_ALICE'),
+							userName: 'alice',
+							fullName: 'Alice Example',
+							isBot: false,
+							isMe: false,
+						}),
+					),
+			})
+			const fetch = yield* HttpRouter.toHttpEffect(bot.routes).pipe(
+				Effect.provide(Layer.merge(NodeCrypto.layer, slackApi)),
+			)
 			const signed = yield* signedSlackInput(slackEmulatorSigningSecret, mention)
 
 			const response = yield* fetch.pipe(
@@ -150,7 +152,6 @@ const handOffMention = (slackApi: Layer.Layer<SlackApi>) =>
 				SlackBot.make({
 					signingSecret: Config.succeed(Redacted.make(slackEmulatorSigningSecret)),
 					deliveryMode: QueueDeliveryMode.make({}),
-					slackApi,
 					handlers: {
 						onNewMention: (_event, delivery) =>
 							Queue.offer(contexts, delivery).pipe(Effect.andThen(delivery.handoff())),
@@ -160,7 +161,7 @@ const handOffMention = (slackApi: Layer.Layer<SlackApi>) =>
 			eventProcessing: { concurrency: 1, leaseMs: 30_000 },
 			storage: ChannelsMemory.make({ polling: { intervalMs: 10 } }),
 		})
-		const started = yield* Effect.promise(() => bot.start(NodeCrypto.layer, bot.deliveryApi))
+		const started = yield* Effect.promise(() => bot.start(Layer.merge(NodeCrypto.layer, slackApi), bot.deliveryApi))
 		yield* Effect.addFinalizer(() => Effect.promise(started.stop))
 		const now = yield* Clock.currentTimeMillis
 		const signed = yield* signedSlackInput(slackEmulatorSigningSecret, mention, String(Math.floor(now / 1_000)))
@@ -191,37 +192,50 @@ const handOffMention = (slackApi: Layer.Layer<SlackApi>) =>
 	})
 
 describe('SlackBot.make remote delivery', () => {
-	it.live('posts a handed-off delivery\'s result to its thread, retrying Slack without running the callback again', ({ expect }) =>
-		Effect.gen(function* () {
-			const posts = yield* Queue.unbounded<SlackPostToThreadRequest>()
-			const postFailuresLeft = yield* Ref.make(1)
-			const { response, contexts, client, target, awaitRetired } = yield* handOffMention(
-				Layer.mock(SlackApi, {
-					resolveParticipant: () => Effect.succeed(participant),
-					postToThread: (request) =>
-						Effect.gen(function* () {
-							yield* Queue.offer(posts, request)
-							if (yield* Ref.modify(postFailuresLeft, (left) => [left > 0, Math.max(0, left - 1)])) {
-								return yield* SlackApiError.make({ operation: 'post', message: 'Could not reach Slack' })
-							}
-							return postedMessage(request, '1700000009.000009')
-						}),
-				}),
-			)
-			expect(response.status).toBe(200)
-			const receipt = yield* client.complete({ ...target, payload: { markdown: 'The fix is ready.' } })
-			expect(receipt.status).toBe('accepted')
+	it.live(
+		"posts a handed-off delivery's result to its thread, retrying Slack without running the callback again",
+		({ expect }) =>
+			Effect.gen(function* () {
+				const posts = yield* Queue.unbounded<SlackPostToThreadRequest>()
+				const postFailuresLeft = yield* Ref.make(1)
+				const { response, contexts, client, target, awaitRetired } = yield* handOffMention(
+					Layer.mock(SlackApi, {
+						resolveParticipant: () => Effect.succeed(participant),
+						postToThread: (request) =>
+							Effect.gen(function* () {
+								yield* Queue.offer(posts, request)
+								if (yield* Ref.modify(postFailuresLeft, (left) => [left > 0, Math.max(0, left - 1)])) {
+									return yield* SlackApiError.make({
+										operation: 'post',
+										message: 'Could not reach Slack',
+									})
+								}
+								return postedMessage(request, '1700000009.000009')
+							}),
+					}),
+				)
+				expect(response.status).toBe(200)
+				const receipt = yield* client.complete({ ...target, payload: { markdown: 'The fix is ready.' } })
+				expect(receipt.status).toBe('accepted')
 
-			const first = yield* Queue.take(posts)
-			const second = yield* Queue.take(posts)
-			for (const post of [first, second]) {
-				expect(post.thread.threadTs).toBe('1700000001.000001')
-				expect(post.content).toEqual({ _tag: 'SlackMarkdownContent', markdown: 'The fix is ready.' })
-			}
-			const retired = yield* awaitRetired
-			expect(retired.output).toEqual([{ operationId: 'outcome', kind: 'PresentOutcome', state: 'Delivered', attempts: 2, hadAmbiguousAttempt: false }])
-			expect(yield* Queue.size(contexts)).toBe(0)
-		}),
+				const first = yield* Queue.take(posts)
+				const second = yield* Queue.take(posts)
+				for (const post of [first, second]) {
+					expect(post.thread.threadTs).toBe('1700000001.000001')
+					expect(post.content).toEqual({ _tag: 'SlackMarkdownContent', markdown: 'The fix is ready.' })
+				}
+				const retired = yield* awaitRetired
+				expect(retired.output).toEqual([
+					{
+						operationId: 'outcome',
+						kind: 'PresentOutcome',
+						state: 'Delivered',
+						attempts: 2,
+						hadAmbiguousAttempt: false,
+					},
+				])
+				expect(yield* Queue.size(contexts)).toBe(0)
+			}),
 	)
 
 	it.live('posts, edits, and removes a progress message in the thread, then posts the result', ({ expect }) =>
@@ -238,8 +252,11 @@ describe('SlackBot.make remote delivery', () => {
 							return postedMessage(request, `1700000009.00000${count}`)
 						}),
 					updateMessage: ({ message, content }) =>
-						Queue.offer(calls, `update ${message.messageTs} ${JSON.stringify(content)}`).pipe(Effect.asVoid),
-					deleteMessage: ({ message }) => Queue.offer(calls, `delete ${message.messageTs}`).pipe(Effect.asVoid),
+						Queue.offer(calls, `update ${message.messageTs} ${JSON.stringify(content)}`).pipe(
+							Effect.asVoid,
+						),
+					deleteMessage: ({ message }) =>
+						Queue.offer(calls, `delete ${message.messageTs}`).pipe(Effect.asVoid),
 				}),
 			)
 			const messageId = MessageId.make('progress')
@@ -274,7 +291,10 @@ describe('SlackBot.make remote delivery', () => {
 					clearThreadStatus: () => Queue.offer(calls, 'clear').pipe(Effect.asVoid),
 				}),
 			)
-			yield* client.activity.set({ ...target, activity: DeliveryActivity.cases.Working.make({ message: 'Reading logs' }) })
+			yield* client.activity.set({
+				...target,
+				activity: DeliveryActivity.cases.Working.make({ message: 'Reading logs' }),
+			})
 			expect(yield* Queue.take(calls)).toBe('status Reading logs')
 			yield* client.complete(target)
 			const retired = yield* awaitRetired

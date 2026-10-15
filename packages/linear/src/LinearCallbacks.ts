@@ -1,5 +1,5 @@
 import type { DeliveryCallbackResult, DeliveryContext } from '@humanlayer/channels-delivery'
-import { Cause, Context, Effect, Layer, Option, Predicate, Schema } from 'effect'
+import { Cause, Effect, Option, Predicate, Schema } from 'effect'
 
 import type { LinearCallbackEventMap } from './LinearCallbackEvents'
 
@@ -76,44 +76,26 @@ const narrowCause = (callback: LinearCallbackName, cause: Cause.Cause<unknown>) 
 }
 
 const wrapCallback = <Name extends keyof LinearCallbackEventMap, E, R>(
-	context: Context.Context<R>,
 	callback: Name,
 	handler: LinearCallbackHandler<Name, E, R> | undefined,
-) =>
+): LinearCallbackHandler<Name, LinearCallbackError, R> | undefined =>
 	Predicate.isUndefined(handler)
 		? undefined
 		: Effect.fn(`linear.callbacks.${callback}`)((event: LinearCallbackEventMap[Name], delivery: DeliveryContext) =>
 				Effect.suspend(() => handler(event, delivery)).pipe(
-					Effect.provide(context),
 					Effect.catchCause((cause) => narrowCause(callback, cause)),
 				),
 			)
 
-export class LinearCallbacks extends Context.Service<
-	LinearCallbacks,
-	LinearCallbackHandlers<LinearCallbackError, never>
->()('@humanlayer/channels-linear/LinearCallbacks') {
-	static readonly layer = <E, R>(handlers: LinearCallbackHandlers<E, R>): Layer.Layer<LinearCallbacks, never, R> =>
-		Layer.effect(
-			LinearCallbacks,
-			Effect.gen(function* () {
-				const context = yield* Effect.context<R>()
-				return LinearCallbacks.of({
-					onAgentSessionCreated: wrapCallback(
-						context,
-						'onAgentSessionCreated',
-						handlers.onAgentSessionCreated,
-					),
-					onAgentSessionPrompted: wrapCallback(
-						context,
-						'onAgentSessionPrompted',
-						handlers.onAgentSessionPrompted,
-					),
-					onIssueCreated: wrapCallback(context, 'onIssueCreated', handlers.onIssueCreated),
-					onMentioned: wrapCallback(context, 'onMentioned', handlers.onMentioned),
-					onAssigned: wrapCallback(context, 'onAssigned', handlers.onAssigned),
-					onSubscribedEvent: wrapCallback(context, 'onSubscribedEvent', handlers.onSubscribedEvent),
-				})
-			}),
-		)
-}
+/** The application's handlers after `makeLinearCallbacks` has narrowed their failures to `LinearCallbackError`. */
+export type LinearCallbackOperations<R = never> = LinearCallbackHandlers<LinearCallbackError, R>
+
+export const makeLinearCallbacks = <E, R>(handlers: LinearCallbackHandlers<E, R>) =>
+	({
+		onAgentSessionCreated: wrapCallback('onAgentSessionCreated', handlers.onAgentSessionCreated),
+		onAgentSessionPrompted: wrapCallback('onAgentSessionPrompted', handlers.onAgentSessionPrompted),
+		onIssueCreated: wrapCallback('onIssueCreated', handlers.onIssueCreated),
+		onMentioned: wrapCallback('onMentioned', handlers.onMentioned),
+		onAssigned: wrapCallback('onAssigned', handlers.onAssigned),
+		onSubscribedEvent: wrapCallback('onSubscribedEvent', handlers.onSubscribedEvent),
+	}) satisfies LinearCallbackOperations<R>

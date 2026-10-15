@@ -9,7 +9,7 @@ import {
 	narrowLinearProviderStreamErrors,
 } from './api/LinearApiErrors'
 import { projectLinearUploadedFile } from './api/LinearApiProjections'
-import { LinearHttpClient, makeAuthenticatedLinearHttpClient } from './api/LinearHttpClient'
+import { LinearHttpClient } from './api/LinearHttpClient'
 import {
 	createAttachment,
 	createComment,
@@ -36,7 +36,6 @@ import { LinearApi, LinearApiError } from './LinearApi'
 import { LinearAuthenticationInput } from './LinearAuth'
 import * as LinearAuth from './LinearAuth'
 import {
-	LinearCredentialResolver,
 	LinearCredentialResolverClientCredentials,
 	LinearCredentialResolverDeveloperToken,
 } from './LinearCredentialResolver'
@@ -78,11 +77,10 @@ const readRetryPolicy = Schedule.exponential('50 millis').pipe(
 
 const uploadedAttachmentSubtitle = (size: number) => `${(size / 1024).toFixed(1)} KB`
 
-const apiService = (
-	client: LinearHttpClient['Service'],
-	http: HttpClient.HttpClient,
-	filePolicy: LinearFileTransferPolicy,
-) => {
+/** Builds `LinearApi` over the `LinearHttpClient` and `HttpClient` in context. */
+const makeLinearApi = Effect.fnUntraced(function* (filePolicy: LinearFileTransferPolicy) {
+	const client = yield* LinearHttpClient
+	const http = yield* HttpClient.HttpClient
 	const executeAuthenticated = <A>(
 		organizationId: LinearOrganizationId,
 		procedure: Effect.Effect<A, LinearProviderError | LinearApiError, LinearHttpClient>,
@@ -229,26 +227,14 @@ const apiService = (
 			)
 		},
 	})
-}
-
-const LinearHttpClientLive = Layer.effect(
-	LinearHttpClient,
-	Effect.gen(function* () {
-		return makeAuthenticatedLinearHttpClient(yield* HttpClient.HttpClient, yield* LinearCredentialResolver)
-	}),
-)
+})
 
 const makeLinearApiServiceLive = (filePolicy: LinearFileTransferPolicy) =>
-	Layer.effect(
-		LinearApi,
-		Effect.gen(function* () {
-			return apiService(yield* LinearHttpClient, yield* HttpClient.HttpClient, filePolicy)
-		}),
-	)
+	Layer.effect(LinearApi, makeLinearApi(filePolicy))
 
 /** Builds LinearApi from an injected HTTP transport and credential resolver. */
 export const LinearApiLiveFromResolver = makeLinearApiServiceLive(defaultLinearFileTransferPolicy).pipe(
-	Layer.provide(LinearHttpClientLive),
+	Layer.provide(LinearHttpClient.layer),
 )
 
 /** Injectable transport seam. Construction reads configuration and initializes local state but performs no I/O. */
@@ -280,7 +266,7 @@ export const makeLinearApiLiveBase = (options: LinearApiLiveOptions) => {
 			)
 		}),
 	)
-	const linearHttpLayer = LinearHttpClientLive.pipe(Layer.provide(resolverLayer))
+	const linearHttpLayer = LinearHttpClient.layer.pipe(Layer.provide(resolverLayer))
 	return makeLinearApiServiceLive(options.filePolicy ?? defaultLinearFileTransferPolicy).pipe(
 		Layer.provide(linearHttpLayer),
 	)

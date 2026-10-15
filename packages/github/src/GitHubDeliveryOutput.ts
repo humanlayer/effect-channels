@@ -194,14 +194,16 @@ const renderPlan = Effect.fn('github.output.render_plan')(function* (
 	const gitHubApi = yield* GitHubApi
 	const markdown = deliveryPlanMarkdown(plan)
 	const presentation = rendered?.presentation
-	if (Predicate.isUndefined(rendered) || Predicate.isUndefined(presentation)) return yield* postComment(destination, markdown)
+	if (Predicate.isUndefined(rendered) || Predicate.isUndefined(presentation))
+		return yield* postComment(destination, markdown)
 	if (sameDeliveryPlan(rendered.plan, plan)) return DeliveryOutputApplied.make({ receipt: presentation })
 	const comment = yield* postedComment(presentation)
 	const edited = yield* gitHubApi.updateComment({ comment, content: GitHubContent.make({ markdown }) }).pipe(
 		Effect.as(true),
 		Effect.catchIf(
 			(error) => error.reason === 'not_found',
-			(error) => Effect.logInfo('GitHub plan comment is gone; commenting the plan again', error).pipe(Effect.as(false)),
+			(error) =>
+				Effect.logInfo('GitHub plan comment is gone; commenting the plan again', error).pipe(Effect.as(false)),
 		),
 		reportGitHubFailure('GitHub plan comment update failed', 'github_comment_update_failed'),
 	)
@@ -222,10 +224,12 @@ const updateComment = Effect.fn('github.output.update_comment')(function* (refer
 const deleteComment = Effect.fn('github.output.delete_comment')(function* (reference: Schema.Json) {
 	const gitHubApi = yield* GitHubApi
 	const comment = yield* postedComment(reference)
-	yield* gitHubApi.deleteComment({ comment }).pipe(
-		countNotFoundAsDone('GitHub comment was already gone; counting it as deleted'),
-		reportGitHubFailure('GitHub output comment delete failed', 'github_comment_delete_failed'),
-	)
+	yield* gitHubApi
+		.deleteComment({ comment })
+		.pipe(
+			countNotFoundAsDone('GitHub comment was already gone; counting it as deleted'),
+			reportGitHubFailure('GitHub output comment delete failed', 'github_comment_delete_failed'),
+		)
 	return applied
 })
 
@@ -247,10 +251,12 @@ const removeActivityReaction = Effect.fn('github.output.remove_activity_reaction
 	target: GitHubActivationTarget,
 ) {
 	const gitHubApi = yield* GitHubApi
-	yield* gitHubApi.removeReaction({ target: activationReactionTarget(target), reaction: gitHubActivityReaction }).pipe(
-		countNotFoundAsDone('GitHub reaction target was already gone; counting the reaction as removed'),
-		reportGitHubFailure('GitHub activity reaction removal failed', 'github_reaction_failed'),
-	)
+	yield* gitHubApi
+		.removeReaction({ target: activationReactionTarget(target), reaction: gitHubActivityReaction })
+		.pipe(
+			countNotFoundAsDone('GitHub reaction target was already gone; counting the reaction as removed'),
+			reportGitHubFailure('GitHub activity reaction removal failed', 'github_reaction_failed'),
+		)
 })
 
 /** Show `Working` or `Idle` on the activation target. A delivery without one never lists `SetActivity`. */
@@ -277,7 +283,9 @@ const portableReactionTarget = (
 				Effect.map(activationReactionTarget),
 			),
 		MessageTarget: ({ reference }) =>
-			postedComment(reference).pipe(Effect.map((comment) => GitHubReactionTarget.cases.Comment.make({ comment }))),
+			postedComment(reference).pipe(
+				Effect.map((comment) => GitHubReactionTarget.cases.Comment.make({ comment })),
+			),
 	})
 
 /**
@@ -297,10 +305,12 @@ const setPortableReaction = Effect.fn('github.output.set_reaction')(function* (
 		? gitHubApi
 				.addReaction(request)
 				.pipe(reportGitHubFailure('GitHub output reaction failed', 'github_reaction_failed'))
-		: gitHubApi.removeReaction(request).pipe(
-				countNotFoundAsDone('GitHub reaction target was already gone; counting the reaction as removed'),
-				reportGitHubFailure('GitHub output reaction removal failed', 'github_reaction_failed'),
-			)
+		: gitHubApi
+				.removeReaction(request)
+				.pipe(
+					countNotFoundAsDone('GitHub reaction target was already gone; counting the reaction as removed'),
+					reportGitHubFailure('GitHub output reaction removal failed', 'github_reaction_failed'),
+				)
 	return applied
 })
 
@@ -320,53 +330,55 @@ const presentOutcome = Effect.fn('github.output.present_outcome')(function* (
 	return yield* postComment(destination, outcomeMarkdown(operation.outcome, operation.markdown))
 })
 
-/** Build GitHub's output half. Its `GitHubApi` is the bot's own. */
+/** Build GitHub's output half. It sends through the `GitHubApi` the host supplies while it runs. */
 export const makeGitHubOutputProcessor = Effect.fn('github.make_output_processor')(function* (input: {
 	readonly namespace: string
 }) {
-	const process = Effect.fn('github.process_delivery_output')(function* (attempt: ProviderOutputAttempt) {
-		if (attempt.prepared.presentationVersion !== gitHubPresentationVersion) {
-			return yield* failed('unsupported_presentation_version', false)
-		}
-		const destination = yield* Schema.decodeEffect(GitHubDeliveryDestinationJson)(
-			attempt.prepared.destination,
-		).pipe(reportUnreadable('GitHub output destination could not be read', 'destination_invalid'))
-		const activationTarget = yield* Effect.transposeOption(
-			Option.map(
-				Option.fromUndefinedOr(attempt.prepared.activationTarget),
-				Schema.decodeEffect(GitHubActivationTargetJson),
-			),
-		).pipe(reportUnreadable('GitHub output activation target could not be read', 'activation_target_invalid'))
-		if (attempt.hadAmbiguousAttempt) {
-			yield* Effect.logWarning('GitHub output retried after an attempt that may have been applied')
-		}
+	const process = Effect.fn('github.process_delivery_output')(
+		function* (attempt: ProviderOutputAttempt) {
+			if (attempt.prepared.presentationVersion !== gitHubPresentationVersion) {
+				return yield* failed('unsupported_presentation_version', false)
+			}
+			const destination = yield* Schema.decodeEffect(GitHubDeliveryDestinationJson)(
+				attempt.prepared.destination,
+			).pipe(reportUnreadable('GitHub output destination could not be read', 'destination_invalid'))
+			const activationTarget = yield* Effect.transposeOption(
+				Option.map(
+					Option.fromUndefinedOr(attempt.prepared.activationTarget),
+					Schema.decodeEffect(GitHubActivationTargetJson),
+				),
+			).pipe(reportUnreadable('GitHub output activation target could not be read', 'activation_target_invalid'))
+			if (attempt.hadAmbiguousAttempt) {
+				yield* Effect.logWarning('GitHub output retried after an attempt that may have been applied')
+			}
 
-		const discussion = destinationDiscussion(destination)
-		yield* Effect.annotateCurrentSpan({
-			'github.repository_id': discussion.ref.repositoryId,
-			'github.discussion_number': discussion.ref.number,
-		})
+			const discussion = destinationDiscussion(destination)
+			yield* Effect.annotateCurrentSpan({
+				'github.repository_id': discussion.ref.repositoryId,
+				'github.discussion_number': discussion.ref.number,
+			})
 
-		return yield* Match.value(attempt.operation).pipe(
-			Match.tagsExhaustive({
-				AddExternalLink: () => Effect.succeed(applied),
-				SetMessageReaction: (operation) => setPortableReaction(activationTarget, operation),
-				RenderPlan: (operation) => renderPlan(destination, operation),
-				PresentOutcome: (operation) => presentOutcome(destination, activationTarget, operation),
-				SetActivity: ({ activity }) =>
-					Match.value(activity).pipe(
-						Match.tagsExhaustive({
-							Working: () => setActivityReaction(activationTarget, true),
-							Idle: () => setActivityReaction(activationTarget, false),
-						}),
-					),
-				CreateMessage: ({ markdown }) => postComment(destination, markdown),
-				UpdateMessage: ({ markdown, reference }) => updateComment(reference, markdown),
-				DeleteMessage: ({ reference }) => deleteComment(reference),
-			}),
-		)
-	}, (effect, attempt) =>
-		effect.pipe(Effect.annotateLogs({ delivery_id: attempt.deliveryId, operation_id: attempt.operationId })),
+			return yield* Match.value(attempt.operation).pipe(
+				Match.tagsExhaustive({
+					AddExternalLink: () => Effect.succeed(applied),
+					SetMessageReaction: (operation) => setPortableReaction(activationTarget, operation),
+					RenderPlan: (operation) => renderPlan(destination, operation),
+					PresentOutcome: (operation) => presentOutcome(destination, activationTarget, operation),
+					SetActivity: ({ activity }) =>
+						Match.value(activity).pipe(
+							Match.tagsExhaustive({
+								Working: () => setActivityReaction(activationTarget, true),
+								Idle: () => setActivityReaction(activationTarget, false),
+							}),
+						),
+					CreateMessage: ({ markdown }) => postComment(destination, markdown),
+					UpdateMessage: ({ markdown, reference }) => updateComment(reference, markdown),
+					DeleteMessage: ({ reference }) => deleteComment(reference),
+				}),
+			)
+		},
+		(effect, attempt) =>
+			effect.pipe(Effect.annotateLogs({ delivery_id: attempt.deliveryId, operation_id: attempt.operationId })),
 	)
 
 	return { namespace: input.namespace, providerName: 'github', process } satisfies ProviderOutputProcessor<GitHubApi>

@@ -1,7 +1,7 @@
+import * as NodeCrypto from '@effect/platform-node/NodeCrypto'
 import { describe, it } from '@effect/vitest'
 import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Queue, Ref } from 'effect'
 import { TestClock } from 'effect/testing'
-import * as NodeCrypto from '@effect/platform-node/NodeCrypto'
 
 import {
 	BurstDeliveryMode,
@@ -11,17 +11,15 @@ import {
 	MailboxProcessing,
 	MailboxProcessingBackend,
 	MailboxProcessingClaimLost,
-	MailboxProcessingLive,
-	ProviderEventDispatcher,
 	ProviderEventExecutionFailed,
 	ProviderEventHandled,
-	ProviderOutputDispatcherLive,
 	QueueDeliveryMode,
 	SerialDeliveryMode,
 	type DeliveryAdmissionBatch,
 	type DeliveryMode,
 	type MailboxProcessingOptions,
-	type ProviderEventProcessingError,
+	type ProviderEventProcessor,
+	type ProviderEventProcessorError,
 	type ProviderEventResult,
 } from '../src'
 import { MailboxBackendMemory } from '../src/MailboxBackendMemory'
@@ -55,19 +53,16 @@ const temporaryFailure = new ProviderEventExecutionFailed({
 	retryable: true,
 })
 
-/** A dispatcher that records every batch it is handed, then runs the test's callback. */
-const recordingDispatcher = (
+/** A processor that records every batch it is handed, then runs the test's callback. */
+const recordingProcessor = (
 	dispatched: Queue.Queue<ReadonlyArray<string>>,
-	callback: (
-		batch: DeliveryAdmissionBatch,
-	) => Effect.Effect<ProviderEventResult, ProviderEventProcessingError> = () => handled,
-) =>
-	Layer.succeed(
-		ProviderEventDispatcher,
-		ProviderEventDispatcher.of({
-			process: (batch) => Queue.offer(dispatched, eventIds(batch)).pipe(Effect.andThen(callback(batch))),
-		}),
-	)
+	callback: (batch: DeliveryAdmissionBatch) => Effect.Effect<ProviderEventResult, ProviderEventProcessorError> = () =>
+		handled,
+): ProviderEventProcessor => ({
+	namespace: 'test',
+	providerName: 'example',
+	process: (batch) => Queue.offer(dispatched, eventIds(batch)).pipe(Effect.andThen(callback(batch))),
+})
 
 const processingOptions = (overrides: Partial<MailboxProcessingOptions> = {}): MailboxProcessingOptions => ({
 	concurrency: 2,
@@ -78,10 +73,8 @@ const processingOptions = (overrides: Partial<MailboxProcessingOptions> = {}): M
 })
 
 /** The real processing layer over the in-memory store, with the store's services left visible to the test. */
-const processingOver = (dispatcher: Layer.Layer<ProviderEventDispatcher>, options: MailboxProcessingOptions) =>
-	MailboxProcessingLive(options).pipe(
-		Layer.provide(dispatcher),
-		Layer.provide(ProviderOutputDispatcherLive([])),
+const processingOver = (processor: ProviderEventProcessor, options: MailboxProcessingOptions) =>
+	MailboxProcessing.layer(options, { events: [processor], outputs: [] }).pipe(
 		Layer.provide(NodeCrypto.layer),
 		Layer.provideMerge(MailboxBackendMemory),
 	)
@@ -102,7 +95,7 @@ describe('mailbox processing', () => {
 	it.effect('isolates a failed mailbox while processing distinct mailboxes concurrently', ({ expect }) =>
 		Effect.gen(function* () {
 			const dispatched = yield* Queue.unbounded<ReadonlyArray<string>>()
-			const dispatcher = recordingDispatcher(dispatched, (batch) =>
+			const processor = recordingProcessor(dispatched, (batch) =>
 				batch[0].resourceId === 'broken' ? Effect.die('simulated processor defect') : handled,
 			)
 			yield* Effect.gen(function* () {
@@ -112,17 +105,17 @@ describe('mailbox processing', () => {
 				expect(yield* (yield* MailboxProcessingBackend).findReadyMailboxes).toEqual([])
 				yield* TestClock.adjust(30_000)
 				expect(yield* (yield* MailboxProcessingBackend).findReadyMailboxes).toHaveLength(1)
-			}).pipe(Effect.provide(processingOver(dispatcher, processingOptions())))
+			}).pipe(Effect.provide(processingOver(processor, processingOptions())))
 		}),
 	)
 
 	it.effect('preserves interruption while isolating ordinary claim failures', ({ expect }) =>
 		Effect.gen(function* () {
 			const dispatched = yield* Queue.unbounded<ReadonlyArray<string>>()
-			const dispatcher = recordingDispatcher(dispatched, () => Effect.interrupt)
+			const processor = recordingProcessor(dispatched, () => Effect.interrupt)
 			const result = yield* deliver('a').pipe(
 				Effect.andThen(processReady),
-				Effect.provide(processingOver(dispatcher, processingOptions())),
+				Effect.provide(processingOver(processor, processingOptions())),
 				Effect.exit,
 			)
 			expect(Exit.isFailure(result) && Cause.hasInterruptsOnly(result.cause)).toBe(true)
@@ -133,7 +126,7 @@ describe('mailbox processing', () => {
 		Effect.gen(function* () {
 			const dispatched = yield* Queue.unbounded<ReadonlyArray<string>>()
 			const failuresLeft = yield* Ref.make(2)
-			const dispatcher = recordingDispatcher(dispatched, (batch) =>
+			const processor = recordingProcessor(dispatched, (batch) =>
 				batch[0].eventId === 'first'
 					? Ref.getAndUpdate(failuresLeft, (left) => left - 1).pipe(
 							Effect.flatMap((left) => (left > 0 ? Effect.fail(temporaryFailure) : handled)),
@@ -149,7 +142,7 @@ describe('mailbox processing', () => {
 				yield* processReady
 				yield* processReady
 				expect(yield* Queue.takeAll(dispatched)).toEqual([['first'], ['first'], ['later']])
-			}).pipe(Effect.provide(processingOver(dispatcher, processingOptions({ maxAttempts: 2 }))))
+			}).pipe(Effect.provide(processingOver(processor, processingOptions({ maxAttempts: 2 }))))
 		}),
 	)
 
@@ -157,7 +150,7 @@ describe('mailbox processing', () => {
 		Effect.gen(function* () {
 			const dispatched = yield* Queue.unbounded<ReadonlyArray<string>>()
 			const firstRun = yield* Ref.make(true)
-			const dispatcher = recordingDispatcher(dispatched, () =>
+			const processor = recordingProcessor(dispatched, () =>
 				Ref.getAndSet(firstRun, false).pipe(
 					Effect.flatMap((first) => (first ? Effect.die('simulated abandoned claim') : handled)),
 				),
@@ -170,7 +163,7 @@ describe('mailbox processing', () => {
 				expect((yield* processReady).claimed).toBe(1)
 				expect(yield* Queue.takeAll(dispatched)).toEqual([['stale'], ['stale']])
 				expect(yield* (yield* MailboxProcessingBackend).findReadyMailboxes).toEqual([])
-			}).pipe(Effect.provide(processingOver(dispatcher, processingOptions())))
+			}).pipe(Effect.provide(processingOver(processor, processingOptions())))
 		}),
 	)
 })
@@ -179,7 +172,7 @@ describe('attempt limit', () => {
 	it.effect('fails a batch that keeps killing its worker, without running it again', ({ expect }) =>
 		Effect.gen(function* () {
 			const dispatched = yield* Queue.unbounded<ReadonlyArray<string>>()
-			const dispatcher = recordingDispatcher(dispatched, (batch) =>
+			const processor = recordingProcessor(dispatched, (batch) =>
 				batch[0].eventId === 'poison' ? Effect.die('simulated worker crash') : handled,
 			)
 			yield* Effect.gen(function* () {
@@ -193,7 +186,7 @@ describe('attempt limit', () => {
 				expect(yield* Queue.takeAll(dispatched)).toEqual([['poison'], ['poison']])
 				expect((yield* processReady).claimed).toBe(1)
 				expect(yield* Queue.takeAll(dispatched)).toEqual([['next']])
-			}).pipe(Effect.provide(processingOver(dispatcher, processingOptions({ maxAttempts: 2 }))))
+			}).pipe(Effect.provide(processingOver(processor, processingOptions({ maxAttempts: 2 }))))
 		}),
 	)
 })
@@ -208,7 +201,7 @@ describe('delivery modes', () => {
 				yield* processReady
 				expect(yield* Queue.takeAll(dispatched)).toEqual([['a', 'b']])
 			}).pipe(
-				Effect.provide(processingOver(recordingDispatcher(dispatched), withMode(QueueDeliveryMode.make({})))),
+				Effect.provide(processingOver(recordingProcessor(dispatched), withMode(QueueDeliveryMode.make({})))),
 			)
 		}),
 	)
@@ -223,7 +216,7 @@ describe('delivery modes', () => {
 				yield* processReady
 				expect(yield* Queue.takeAll(dispatched)).toEqual([['a'], ['b']])
 			}).pipe(
-				Effect.provide(processingOver(recordingDispatcher(dispatched), withMode(SerialDeliveryMode.make({})))),
+				Effect.provide(processingOver(recordingProcessor(dispatched), withMode(SerialDeliveryMode.make({})))),
 			)
 		}),
 	)
@@ -245,7 +238,7 @@ describe('delivery modes', () => {
 			}).pipe(
 				Effect.provide(
 					processingOver(
-						recordingDispatcher(dispatched),
+						recordingProcessor(dispatched),
 						withMode(DebounceDeliveryMode.make({ quietPeriodMs: 2_000 })),
 					),
 				),
@@ -269,7 +262,7 @@ describe('delivery modes', () => {
 			}).pipe(
 				Effect.provide(
 					processingOver(
-						recordingDispatcher(dispatched),
+						recordingProcessor(dispatched),
 						withMode(DebounceDeliveryMode.make({ quietPeriodMs: 2_000, maxWaitMs: 3_000 })),
 					),
 				),
@@ -292,7 +285,7 @@ describe('delivery modes', () => {
 			}).pipe(
 				Effect.provide(
 					processingOver(
-						recordingDispatcher(dispatched),
+						recordingProcessor(dispatched),
 						withMode(BurstDeliveryMode.make({ windowMs: 2_000 })),
 					),
 				),
@@ -304,7 +297,7 @@ describe('delivery modes', () => {
 		Effect.gen(function* () {
 			const dispatched = yield* Queue.unbounded<ReadonlyArray<string>>()
 			const { store, delivery } = yield* buildMemoryStore
-			const dispatcher = recordingDispatcher(dispatched, (batch) =>
+			const processor = recordingProcessor(dispatched, (batch) =>
 				batch[0].eventId === 'a'
 					? delivery.deliver(admission('during-run')).pipe(Effect.orDie, Effect.andThen(handled))
 					: handled,
@@ -319,12 +312,10 @@ describe('delivery modes', () => {
 				expect(yield* Queue.takeAll(dispatched)).toEqual([['a'], ['during-run']])
 			}).pipe(
 				Effect.provide(
-					MailboxProcessingLive(withMode(DebounceDeliveryMode.make({ quietPeriodMs: 2_000 }))).pipe(
-						Layer.provide(dispatcher),
-						Layer.provide(ProviderOutputDispatcherLive([])),
-						Layer.provide(NodeCrypto.layer),
-						Layer.provideMerge(Layer.succeedContext(store)),
-					),
+					MailboxProcessing.layer(withMode(DebounceDeliveryMode.make({ quietPeriodMs: 2_000 })), {
+						events: [processor],
+						outputs: [],
+					}).pipe(Layer.provide(NodeCrypto.layer), Layer.provideMerge(Layer.succeedContext(store))),
 				),
 			)
 		}),
@@ -336,7 +327,7 @@ describe('claim lease', () => {
 		Effect.gen(function* () {
 			const dispatched = yield* Queue.unbounded<ReadonlyArray<string>>()
 			const finishCallback = yield* Deferred.make<void>()
-			const dispatcher = recordingDispatcher(dispatched, () =>
+			const processor = recordingProcessor(dispatched, () =>
 				Deferred.await(finishCallback).pipe(Effect.andThen(handled)),
 			)
 			yield* Effect.gen(function* () {
@@ -350,7 +341,7 @@ describe('claim lease', () => {
 				expect(yield* Fiber.join(pass)).toEqual({ claimed: 1, deferred: 0, output: 0 })
 				yield* TestClock.adjust(60_000)
 				expect(yield* backend.findReadyMailboxes).toEqual([])
-			}).pipe(Effect.provide(processingOver(dispatcher, processingOptions({ leaseMs: 3_000 }))))
+			}).pipe(Effect.provide(processingOver(processor, processingOptions({ leaseMs: 3_000 }))))
 		}),
 	)
 
@@ -372,16 +363,15 @@ describe('claim lease', () => {
 						),
 				}),
 			)
-			const dispatcher = Layer.succeed(
-				ProviderEventDispatcher,
-				ProviderEventDispatcher.of({
-					process: () =>
-						Deferred.succeed(callbackStarted, undefined).pipe(
-							Effect.andThen(Effect.never),
-							Effect.onInterrupt(() => Deferred.succeed(callbackInterrupted, undefined)),
-						),
-				}),
-			)
+			const processor: ProviderEventProcessor = {
+				namespace: 'test',
+				providerName: 'example',
+				process: () =>
+					Deferred.succeed(callbackStarted, undefined).pipe(
+						Effect.andThen(Effect.never),
+						Effect.onInterrupt(() => Deferred.succeed(callbackInterrupted, undefined)),
+					),
+			}
 			yield* Effect.gen(function* () {
 				yield* deliver('slow')
 				const pass = yield* processReady.pipe(Effect.forkChild)
@@ -392,11 +382,10 @@ describe('claim lease', () => {
 				expect(yield* Ref.get(recorded)).toBe(0)
 			}).pipe(
 				Effect.provide(
-					MailboxProcessingLive(processingOptions({ leaseMs: 3_000 })).pipe(
-						Layer.provide(
-							Layer.mergeAll(dispatcher, backendThatLosesClaims, ProviderOutputDispatcherLive([]), NodeCrypto.layer),
-						),
-					),
+					MailboxProcessing.layer(processingOptions({ leaseMs: 3_000 }), {
+						events: [processor],
+						outputs: [],
+					}).pipe(Layer.provide(Layer.mergeAll(backendThatLosesClaims, NodeCrypto.layer))),
 				),
 				Effect.provide(store),
 			)
@@ -440,20 +429,13 @@ describe('polling', () => {
 				expect(yield* Queue.take(dispatched)).toEqual(['c'])
 			}).pipe(
 				Effect.provide(
-					MailboxProcessingLive(
+					MailboxProcessing.layer(
 						processingOptions({
 							deliveryModeFor: () => SerialDeliveryMode.make({}),
 							polling: { intervalMs: 1_000 },
 						}),
-					).pipe(Layer.provide(
-							Layer.mergeAll(
-								recordingDispatcher(dispatched),
-								observedBackend,
-								ProviderOutputDispatcherLive([]),
-								NodeCrypto.layer,
-							),
-						),
-					),
+						{ events: [recordingProcessor(dispatched)], outputs: [] },
+					).pipe(Layer.provide(Layer.mergeAll(observedBackend, NodeCrypto.layer))),
 				),
 				Effect.provide(store),
 			)

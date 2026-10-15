@@ -1,10 +1,10 @@
 import { Effect, Layer } from 'effect'
 import * as FetchHttpClient from 'effect/http/FetchHttpClient'
 
-import { GitHubApiClient, GitHubApiClientLive } from './api/GitHubApiClient'
-import { GitHubAppCredentialsLive } from './api/GitHubAppCredentials'
+import { GitHubApiClient } from './api/GitHubApiClient'
+import { GitHubAppCredentials } from './api/GitHubAppCredentials'
 import { GitHubApi } from './GitHubApi'
-import { GitHubGitCredentialsLive } from './GitHubGitCredentials'
+import { GitHubGitCredentials } from './GitHubGitCredentials'
 export { GitHubAppSigner } from './api/GitHubAppSigner'
 import { GitHubAppSigner } from './api/GitHubAppSigner'
 import {
@@ -128,9 +128,9 @@ const GitHubApiOperationsLive = Layer.effect(
  * cache of installation tokens.
  */
 export const GitHubApiLiveBase = Layer.merge(
-	GitHubApiOperationsLive.pipe(Layer.provide(GitHubApiClientLive)),
-	GitHubGitCredentialsLive,
-).pipe(Layer.provide(GitHubAppCredentialsLive))
+	GitHubApiOperationsLive.pipe(Layer.provide(GitHubApiClient.layer)),
+	GitHubGitCredentials.layer,
+).pipe(Layer.provide(GitHubAppCredentials.layer))
 
 /** GitHub API and git credentials with Web Crypto signing and the standard Fetch transport. */
 export const GitHubApiLive = GitHubApiLiveBase.pipe(

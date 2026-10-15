@@ -199,10 +199,14 @@ describe('Linear file download', () => {
 	it.effect('attaches the credential only to HTTPS requests on the Linear upload origin', ({ expect }) =>
 		Effect.gen(function* () {
 			const requests = yield* Queue.unbounded<RecordedRequest>()
-			const client = makeFixedCredentialLinearHttpClient(
-				makeHttp(requests, () => new Response(null, { status: 200 })),
-				issue.organizationId,
-				Redacted.make('secret-token'),
+			const client = yield* makeFixedCredentialLinearHttpClient({
+				organizationId: issue.organizationId,
+				accessToken: Redacted.make('secret-token'),
+			}).pipe(
+				Effect.provideService(
+					HttpClient.HttpClient,
+					makeHttp(requests, () => new Response(null, { status: 200 })),
+				),
 			)
 			const execute = (url: string) =>
 				Effect.flatMap(LinearHttpClient, (transport) =>

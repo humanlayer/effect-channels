@@ -6,7 +6,7 @@ import type * as UrlParams from 'effect/http/UrlParams'
 import { completeSlackFileUpload, type SlackFileUploadDestination } from './api/CompleteSlackFileUpload'
 import { downloadSlackFile, readBoundedSlackFileBytes } from './api/DownloadSlackFile'
 import { getSlackFileUploadUrl } from './api/GetSlackFileUploadUrl'
-import { SlackHttpClient, SlackHttpClientLive, type SlackWebApiError } from './api/SlackHttpClient'
+import { SlackHttpClient, type SlackWebApiError } from './api/SlackHttpClient'
 import { uploadSlackFileBytes } from './api/UploadSlackFileBytes'
 import {
 	SlackApi,
@@ -803,9 +803,18 @@ const SlackApiService = Layer.effect(
 				).pipe(
 					Effect.flatMap((response) =>
 						Predicate.isUndefined(response.ts)
-							? Effect.fail(SlackApiError.make({ operation: 'post_plan', message: 'Slack did not return a message ID' }))
+							? Effect.fail(
+									SlackApiError.make({
+										operation: 'post_plan',
+										message: 'Slack did not return a message ID',
+									}),
+								)
 							: Effect.succeed(
-									SlackMessageRef.make({ teamId: thread.teamId, channelId: thread.channelId, messageTs: response.ts }),
+									SlackMessageRef.make({
+										teamId: thread.teamId,
+										channelId: thread.channelId,
+										messageTs: response.ts,
+									}),
 								),
 					),
 					Effect.withSpan('slack.api.post_plan'),
@@ -814,7 +823,12 @@ const SlackApiService = Layer.effect(
 				callSlack(
 					'update_plan',
 					'chat.update',
-					{ channel: message.channelId, ts: message.messageTs, text: planFallbackText(plan), blocks: planBlocks(plan) },
+					{
+						channel: message.channelId,
+						ts: message.messageTs,
+						text: planFallbackText(plan),
+						blocks: planBlocks(plan),
+					},
 					SlackResponse,
 				).pipe(Effect.asVoid, Effect.withSpan('slack.api.update_plan')),
 			addReaction: ({ message, reaction }) =>
@@ -929,7 +943,7 @@ const SlackApiService = Layer.effect(
 )
 
 /** Live Slack API implementation. Slack transport, decoding, pagination, and credentials stay private. */
-export const SlackApiLiveBase = SlackApiService.pipe(Layer.provide(SlackHttpClientLive))
+export const SlackApiLiveBase = SlackApiService.pipe(Layer.provide(SlackHttpClient.layer))
 
 /** Slack API implementation with the standard Fetch transport. */
 export const SlackApiLive = SlackApiLiveBase.pipe(Layer.provide(FetchHttpClient.layer))

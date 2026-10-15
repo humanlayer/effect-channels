@@ -31,7 +31,13 @@ import {
 	SlackSubscribedThreadEvents,
 	type SlackThreadEvent,
 } from './SlackCallbackEvents'
-import { type SlackCallbackError, SlackCallbackName, SlackCallbacks } from './SlackCallbacks'
+import {
+	type SlackCallbackError,
+	type SlackCallbackHandlers,
+	SlackCallbackName,
+	type SlackCallbackOperations,
+	makeSlackCallbacks,
+} from './SlackCallbacks'
 import {
 	SlackActivationTarget,
 	SlackActivationTargetJson,
@@ -434,7 +440,7 @@ const normalizeEnvelope = (envelope: SlackEnvelope, thread: SlackThreadRef) =>
 		)
 	})
 
-const runCallback = (effect: Effect.Effect<DeliveryCallbackResult, { readonly retryable: boolean }>) =>
+const runCallback = <R>(effect: Effect.Effect<DeliveryCallbackResult, { readonly retryable: boolean }, R>) =>
 	effect.pipe(
 		Effect.mapError((error) =>
 			ProviderEventExecutionFailed.make({
@@ -524,8 +530,8 @@ const CallbackSelection = Data.taggedEnum<CallbackSelection>()
  * `onNewMention`, even in a subscribed thread, so every mention starts the same way; other batches in a
  * subscribed thread run `onSubscribedThreadEvents`.
  */
-const selectInvocation = (input: {
-	readonly callbacks: typeof SlackCallbacks.Service
+const selectInvocation = <R>(input: {
+	readonly callbacks: SlackCallbackOperations<R>
 	readonly thread: SlackThread
 	readonly normalized: ReadonlyArray<NormalizedEvent>
 	readonly subscribed: boolean
@@ -548,7 +554,7 @@ const selectInvocation = (input: {
 	})
 }
 
-const isCallbackConfigured = (callbacks: typeof SlackCallbacks.Service, callback: SlackCallbackName) =>
+const isCallbackConfigured = <R>(callbacks: SlackCallbackOperations<R>, callback: SlackCallbackName) =>
 	Predicate.isNotUndefined(callbacks[callback])
 
 /** A new mention's trigger message; a subscribed batch has no single message that started it. */
@@ -609,11 +615,11 @@ const prepareInvocation = Effect.fn('slack.prepare_delivery')(function* (
 	)
 })
 
-const invokeCallback = (
-	callbacks: typeof SlackCallbacks.Service,
+const invokeCallback = <R>(
+	callbacks: SlackCallbackOperations<R>,
 	invocation: SlackInvocation,
 	delivery: DeliveryContext,
-): Option.Option<Effect.Effect<DeliveryCallbackResult, SlackCallbackError>> =>
+): Option.Option<Effect.Effect<DeliveryCallbackResult, SlackCallbackError, R>> =>
 	SlackInvocation.$match(invocation, {
 		NewMention: ({ event }) =>
 			Option.map(Option.fromUndefinedOr(callbacks.onNewMention), (callback) => callback(event, delivery)),
@@ -623,8 +629,8 @@ const invokeCallback = (
 			),
 	})
 
-const runInvocation = (
-	callbacks: typeof SlackCallbacks.Service,
+const runInvocation = <R>(
+	callbacks: SlackCallbackOperations<R>,
 	invocation: SlackInvocation,
 	delivery: DeliveryContext,
 ) =>
@@ -634,8 +640,8 @@ const runInvocation = (
 	})
 
 /** Run the callback an earlier attempt saved, without choosing again. */
-const runPreparedInvocation = Effect.fn('slack.run_prepared_invocation')(function* (input: {
-	readonly callbacks: typeof SlackCallbacks.Service
+const runPreparedInvocation = Effect.fn('slack.run_prepared_invocation')(function* <R>(input: {
+	readonly callbacks: SlackCallbackOperations<R>
 	readonly prepared: PreparedDeliveryCallback
 	readonly thread: SlackThread
 	readonly normalized: ReadonlyArray<NormalizedEvent>
@@ -667,7 +673,7 @@ const runPreparedInvocation = Effect.fn('slack.run_prepared_invocation')(functio
 	return yield* runInvocation(input.callbacks, invocation.value, input.delivery)
 })
 
-const processSlackBatch = (options: SlackEventProcessorOptions) =>
+const processSlackBatch = <R>(options: SlackEventProcessorOptions, callbacks: SlackCallbackOperations<R>) =>
 	Effect.fn('slack.process_event_batch')(function* (
 		admissions: DeliveryAdmissionBatch,
 		execution: ProviderDeliveryExecution,
@@ -678,7 +684,6 @@ const processSlackBatch = (options: SlackEventProcessorOptions) =>
 		) {
 			return yield* nonRetryableFailure('prepared_callback_invalid')
 		}
-		const callbacks = yield* SlackCallbacks
 		const first = admissions[0]
 		const envelopes = yield* Effect.forEach(admissions, decodeEnvelope)
 		const address = yield* parseResourceAddress(first.resourceId)
@@ -738,10 +743,14 @@ const processSlackBatch = (options: SlackEventProcessorOptions) =>
 		})
 	})
 
-export const makeSlackEventProcessor = (
-	options: SlackEventProcessorOptions,
-): ProviderEventProcessor<SlackCallbacks | SlackApi | MailboxSubscriptions> => ({
+/**
+ * Slack's callback half: runs the application's handlers for each batch. What the handlers need, with
+ * `SlackApi` and `MailboxSubscriptions`, stays in its requirements, for the host to supply.
+ */
+export const makeSlackEventProcessor = <E, R>(
+	options: SlackEventProcessorOptions & { readonly handlers: SlackCallbackHandlers<E, R> },
+): ProviderEventProcessor<SlackApi | MailboxSubscriptions | R> => ({
 	namespace: options.namespace,
 	providerName: 'slack',
-	process: processSlackBatch(options),
+	process: processSlackBatch(options, makeSlackCallbacks(options.handlers)),
 })

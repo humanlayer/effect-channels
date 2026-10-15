@@ -224,7 +224,8 @@ const githubRepositoryLogAnnotations = (ref: GitHubRepositoryRef) => ({
 
 /**
  * GitHub App callbacks. Creation labels public submissions; mentions require write access or higher.
- * `GitHubApiLive`, the default, reads the App ID and private key.
+ * The bot builds no GitHub client: the Worker provides `GitHubApiLive`, which reads the App ID and private
+ * key, to the routes, the mailbox objects and every callback.
  */
 export const githubHandlers = {
 	/** Here is where you would e.g. do code review / automatic triage */

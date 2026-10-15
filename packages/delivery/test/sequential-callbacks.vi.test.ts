@@ -13,7 +13,6 @@ import {
 	MailboxBackendMemory,
 	MailboxProcessingBackend,
 	PreparedDeliveryInvocation,
-	ProviderEventDispatcher,
 	ProviderEventHandled,
 	applyDeliverySlotMutation,
 	claimDeliveryOutput,
@@ -32,6 +31,7 @@ import {
 	type DeliveryContext,
 	type DeliveryMutation,
 	type DeliverySlot,
+	type ProviderEventProcessor,
 } from '../src'
 import { claimAll, claimFrozen, deliver, event, findWaiting, mailboxKey } from './backend-contract'
 
@@ -343,14 +343,16 @@ describe('sequential callbacks', () => {
 		({ expect }) =>
 			Effect.gen(function* () {
 				const contexts = yield* Queue.unbounded<{ readonly index: number; readonly context: DeliveryContext }>()
-				const dispatcher = ProviderEventDispatcher.of({
+				const processor: ProviderEventProcessor = {
+					namespace: 'contract',
+					providerName: 'example',
 					process: (_admissions, execution) =>
 						Effect.gen(function* () {
 							yield* execution.prepare(prepared)
 							yield* Queue.offer(contexts, { index: execution.callbackIndex, context: execution.context })
 							return ProviderEventHandled.make({})
 						}).pipe(Effect.orDie),
-				})
+				}
 				yield* deliver('first')
 				let claim = yield* claimAll(yield* findWaiting)
 				const initialToken = claim.accessToken
@@ -358,9 +360,7 @@ describe('sequential callbacks', () => {
 				const seenIds = new Set<string>()
 				for (const index of [0, 1, 2]) {
 					expect(claim.callbackIndex).toBe(index)
-					yield* processClaim({ claim, maxAttempts: 5, leaseMs: 100 }).pipe(
-						Effect.provideService(ProviderEventDispatcher, dispatcher),
-					)
+					yield* processClaim({ claim, maxAttempts: 5, leaseMs: 100, processors: [processor] })
 					const recorded = yield* Queue.take(contexts)
 					expect(recorded.index).toBe(index)
 					expect(recorded.context.deliveryId).toBe(

@@ -15,17 +15,17 @@ const { deliveryControl, processingBackend, subscriptions, deliveryControlBacken
 const MailboxBackendsLive = Layer.mergeAll(processingBackend, subscriptions, deliveryControlBackend).pipe(
 	Layer.provideMerge(storage),
 )
-const MailboxLive = Layer.merge(deliveryControl, MailboxBackendsLive).pipe(
-	Layer.provide(MailboxBackendsLive),
-)
+const MailboxLive = Layer.merge(deliveryControl, MailboxBackendsLive).pipe(Layer.provide(MailboxBackendsLive))
 
 /**
  * Construct the mailbox once for this Durable Object instance. Alchemy supplies RuntimeContext when
- * it evaluates the returned inner Effect and when it runs the returned methods.
+ * it evaluates the returned inner Effect and when it runs the returned methods. Alchemy takes no
+ * construction error, so a failure is logged with its cause before the object dies.
  */
 const MailboxImplementation = bot.mailbox({ rearmAfterMs: 1_000 }).pipe(
 	Effect.provide(MailboxLive),
 	Effect.map(Effect.succeed),
+	Effect.tapCause((cause) => Effect.logError('DeliveryMailbox could not start', cause)),
 	Effect.orDie,
 )
 

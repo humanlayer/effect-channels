@@ -10,7 +10,7 @@ import { Deferred, Effect, Layer } from 'effect'
 import { vi } from 'vite-plus/test'
 
 import { GitHubApi } from '../src/GitHubApi'
-import { GitHubCallbacks, type GitHubCallbackHandlers } from '../src/GitHubCallbacks'
+import type { GitHubCallbackHandlers } from '../src/GitHubCallbacks'
 import { GitHubBotConfiguration, makeGitHubEventProcessor } from '../src/GitHubEventProcessor'
 import { GitHubId } from '../src/GitHubIdentity'
 import { githubEmulatorEndpoints, makeGitHubEmulatorFixture, makeInMemoryMailboxFixture } from './fixtures'
@@ -26,6 +26,7 @@ describe('GitHub webhook routing', () => {
 			const processor = makeGitHubEventProcessor({
 				namespace: 'github-emulator-test',
 				bot: GitHubBotConfiguration.make({ mentionNames: ['agent'], botUserId: GitHubId.make(999) }),
+				handlers: { onIssueCreated },
 			})
 			const mailbox = yield* makeInMemoryMailboxFixture([processor])
 			const github = yield* makeGitHubEmulatorFixture({ mailboxDelivery: mailbox.mailboxDelivery })
@@ -39,7 +40,6 @@ describe('GitHub webhook routing', () => {
 
 			expect(onIssueCreated).not.toHaveBeenCalled()
 			const processingLayer = Layer.mergeAll(
-				GitHubCallbacks.layer({ onIssueCreated }),
 				Layer.mock(GitHubApi, {}),
 				Layer.mock(MailboxSubscriptions, { isSubscribed: () => Effect.succeed(false) }),
 			)

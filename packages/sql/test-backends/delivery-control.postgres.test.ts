@@ -19,11 +19,8 @@ import {
 	MailboxProcessing,
 	MailboxProcessingAttemptCompleted,
 	MailboxProcessingBackend,
-	MailboxProcessingLive,
 	PreparedDeliveryInvocation,
-	ProviderEventDispatcher,
 	ProviderEventHandled,
-	ProviderOutputDispatcherLive,
 	QueueDeliveryMode,
 	RecoverableMailbox,
 	Timestamp,
@@ -181,16 +178,18 @@ const processingFor = (input: {
 	readonly answer: (attempt: ProviderOutputAttempt) => Effect.Effect<DeliveryOutputApplied>
 }) =>
 	Layer.build(
-		MailboxProcessingLive({
-			concurrency: 4,
-			leaseMs,
-			deliveryModeFor: () => QueueDeliveryMode.make({}),
-			polling: 'disabled',
-		}).pipe(
-			Layer.provide(
-				Layer.succeed(
-					ProviderEventDispatcher,
-					ProviderEventDispatcher.of({
+		MailboxProcessing.layer(
+			{
+				concurrency: 4,
+				leaseMs,
+				deliveryModeFor: () => QueueDeliveryMode.make({}),
+				polling: 'disabled',
+			},
+			{
+				events: [
+					{
+						namespace: 'sql',
+						providerName: 'example',
 						process: (_admissions, execution) =>
 							Effect.gen(function* () {
 								yield* execution.prepare(preparation)
@@ -201,22 +200,18 @@ const processingFor = (input: {
 								})
 								return ProviderEventHandled.make({})
 							}).pipe(Effect.orDie),
-					}),
-				),
-			),
-			Layer.provide(
-				ProviderOutputDispatcherLive([
+					},
+				],
+				outputs: [
 					{
 						namespace: 'sql',
 						providerName: 'example',
 						process: (attempt) =>
 							Queue.offer(input.attempts, attempt).pipe(Effect.andThen(input.answer(attempt))),
 					},
-				]),
-			),
-			Layer.provide(NodeCrypto.layer),
-			Layer.provide(Layer.succeedContext(input.process)),
-		),
+				],
+			},
+		).pipe(Layer.provide(NodeCrypto.layer), Layer.provide(Layer.succeedContext(input.process))),
 	)
 
 const processReady = (processing: Context.Context<MailboxProcessing>) =>

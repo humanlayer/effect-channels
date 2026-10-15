@@ -71,7 +71,7 @@ const slack = SlackBot.make({
 })
 ```
 
-Add `slack` to the providers passed to `Channels.make` or a host-specific wrapper such as `ChannelsCloudflare.make`. See `examples/alchemy-cloudflare` for a complete Worker and Durable Object setup.
+Add `slack` to the providers passed to `Channels.make` or a host-specific wrapper such as `ChannelsCloudflare.make`. The bot builds no Slack client of its own: the webhook half, the callbacks, and sent output all use the `SlackApi` the application provides, usually `SlackApiLive` (for example `bot.start(Layer.merge(NodeCrypto.layer, SlackApiLive))`). Tests can provide a fake `SlackApi` layer instead. See `examples/alchemy-cloudflare` for a complete Worker and Durable Object setup.
 
 ## Files
 

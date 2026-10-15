@@ -176,10 +176,10 @@ const run = (
 			deletes: [],
 			reactions: [],
 		})
-		const processor = yield* makeSlackOutputProcessor({ namespace: 'slack-output-test' }).pipe(
-			Effect.provide(recordingSlackApi(calls, options.failWith)),
-		)
-		const result = yield* processor.process(attempt(operation, options.invocation)).pipe(Effect.result)
+		const processor = yield* makeSlackOutputProcessor({ namespace: 'slack-output-test' })
+		const result = yield* processor
+			.process(attempt(operation, options.invocation))
+			.pipe(Effect.provide(recordingSlackApi(calls, options.failWith)), Effect.result)
 		return { result, ...(yield* Ref.get(calls)) }
 	})
 

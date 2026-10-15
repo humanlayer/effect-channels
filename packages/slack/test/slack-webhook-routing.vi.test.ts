@@ -12,7 +12,6 @@ import { vi } from 'vite-plus/test'
 import { SlackApi } from '../src/SlackApi'
 import { SlackPostMessageRequest, SlackPostMessageResponse } from '../src/SlackApiLive'
 import type { SlackNewMention } from '../src/SlackCallbackEvents'
-import { SlackCallbacks } from '../src/SlackCallbacks'
 import { makeSlackEventProcessor } from '../src/SlackEventProcessor'
 import { SlackChannelId, SlackMessageTs, SlackTeamId } from '../src/SlackIdentity'
 import { SlackParticipant, SlackUserId } from '../src/SlackModels'
@@ -25,25 +24,23 @@ describe('Slack webhook routing', () => {
 		Effect.gen(function* () {
 			const onNewMention = vi.fn<(event: SlackNewMention) => Effect.Effect<void>>(() => Effect.void)
 			const callbackLayer = Layer.merge(
-				Layer.merge(
-					Layer.mock(SlackApi, {
-						resolveParticipant: (request) =>
-							Effect.succeed(
-								SlackParticipant.make({
-									userId: SlackUserId.make(request.userId ?? 'U_ALICE'),
-									userName: 'alice',
-									fullName: 'Alice Example',
-									isBot: false,
-									isMe: false,
-								}),
-							),
-					}),
-					SlackCallbacks.layer({ onNewMention }),
-				),
+				Layer.mock(SlackApi, {
+					resolveParticipant: (request) =>
+						Effect.succeed(
+							SlackParticipant.make({
+								userId: SlackUserId.make(request.userId ?? 'U_ALICE'),
+								userName: 'alice',
+								fullName: 'Alice Example',
+								isBot: false,
+								isMe: false,
+							}),
+						),
+				}),
 				MailboxSubscriptionsMemory,
 			)
 			const processor = makeSlackEventProcessor({
 				namespace: 'slack-emulator-test',
+				handlers: { onNewMention },
 			})
 			const mailbox = yield* makeInMemoryMailboxFixture([processor])
 			const slack = yield* makeSlackEmulatorFixture({

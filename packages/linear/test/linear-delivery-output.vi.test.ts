@@ -254,10 +254,9 @@ const run = (
 					Effect.andThen(commentAnswer),
 				),
 		})
-		const processor = yield* makeLinearOutputProcessor({ namespace: 'linear-output-test', bot }).pipe(
-			Effect.provide(api),
-		)
+		const processor = yield* makeLinearOutputProcessor({ namespace: 'linear-output-test', bot })
 		const result = yield* processor.process(input).pipe(
+			Effect.provide(api),
 			Effect.match({
 				onSuccess: (success) => ({ _tag: 'Success' as const, success }),
 				onFailure: (failure) => ({ _tag: 'Failure' as const, failure }),

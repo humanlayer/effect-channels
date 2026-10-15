@@ -4,7 +4,6 @@ import {
 	type GitHubAccessLevel,
 	GitHubApi,
 	GitHubApiError,
-	GitHubCallbacks,
 	GitHubContent,
 	GitHubDiscussionRef,
 	GitHubEventId,

@@ -40,7 +40,6 @@ describe('GitHubBot.make', () => {
 								webhookSecret: Config.succeed(Redacted.make(githubWebhookSecret)),
 								deliveryMode: QueueDeliveryMode.make({}),
 								bot: { mentionNames: ['channels-bot'], botUserId: GitHubId.make(999) },
-								gitHubApi: Layer.mock(GitHubApi, {}),
 								handlers: {
 									onIssueCreated: (event, delivery) =>
 										Effect.gen(function* () {
@@ -84,8 +83,9 @@ describe('GitHubBot.make', () => {
 					const scope = yield* Effect.scope
 					const fetch = yield* HttpRouter.toHttpEffect(Layer.merge(bot.routes, bot.deliveryApi)).pipe(
 						Effect.provide(
-							Layer.merge(
+							Layer.mergeAll(
 								NodeCrypto.layer,
+								Layer.mock(GitHubApi, {}),
 								Layer.succeed(HttpRouter.RouterConfig, Channels.routerConfig),
 							),
 						),
@@ -150,7 +150,6 @@ describe('GitHubBot.make', () => {
 					mentionNames: Config.String('GITHUB_BOT_MENTION_NAME').pipe(Config.map((name) => [name])),
 					botUserId: Config.schema(GitHubId, 'GITHUB_BOT_USER_ID'),
 				}),
-				gitHubApi: Layer.mock(GitHubApi, {}),
 				handlers: {},
 			})
 
@@ -162,7 +161,7 @@ describe('GitHubBot.make', () => {
 		}),
 	)
 
-	it.effect('reads the default API configuration while building the webhook provider', ({ expect }) =>
+	it.effect('builds every half without GitHub App configuration, which belongs to GitHubApiLive', ({ expect }) =>
 		Effect.gen(function* () {
 			const provider = GitHubBot.make({
 				webhookSecret: Config.succeed(Redacted.make(githubWebhookSecret)),
@@ -170,12 +169,17 @@ describe('GitHubBot.make', () => {
 				bot: { mentionNames: ['channels-bot'], botUserId: GitHubId.make(999) },
 				handlers: {},
 			})
+			const noConfiguration = ConfigProvider.layer(ConfigProvider.fromUnknown({}))
 
-			const error = yield* provider
+			const webhook = yield* provider
 				.webhookProvider({ namespace: 'github-bot-test' })
-				.pipe(Effect.scoped, Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({}))), Effect.flip)
+				.pipe(Effect.scoped, Effect.provide(noConfiguration))
+			const events = yield* provider
+				.eventProcessor({ namespace: 'github-bot-test' })
+				.pipe(Effect.scoped, Effect.provide(noConfiguration))
 
-			expect(error).toBeInstanceOf(Config.ConfigError)
+			expect(webhook.providerName).toBe('github')
+			expect(events.providerName).toBe('github')
 		}),
 	)
 
@@ -190,7 +194,6 @@ describe('GitHubBot.make', () => {
 						webhookSecret: Config.succeed(Redacted.make(githubWebhookSecret)),
 						deliveryMode: QueueDeliveryMode.make({}),
 						bot: { mentionNames: ['channels-bot'], botUserId: GitHubId.make(999) },
-						gitHubApi: Layer.mock(GitHubApi, {}),
 						handlers: {
 							onIssueCreated: (event) =>
 								Effect.gen(function* () {
@@ -204,7 +207,9 @@ describe('GitHubBot.make', () => {
 				eventProcessing: { concurrency: 1, leaseMs: 30_000 },
 				storage: ChannelsMemory.make({ polling: { intervalMs: 1_000 } }),
 			})
-			const fetch = yield* HttpRouter.toHttpEffect(bot.routes).pipe(Effect.provide(NodeCrypto.layer))
+			const fetch = yield* HttpRouter.toHttpEffect(bot.routes).pipe(
+				Effect.provide(Layer.merge(NodeCrypto.layer, Layer.mock(GitHubApi, {}))),
+			)
 			const signed = signedGitHubInput('issues', issuePayload('opened'))
 
 			const response = yield* fetch.pipe(

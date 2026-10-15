@@ -57,10 +57,13 @@ const decodeProcedureRequest = decodeGraphqlRequest(
 )
 
 const procedureLayer = (http: HttpClient.HttpClient) =>
-	Layer.succeed(
+	Layer.effect(
 		LinearHttpClient,
-		makeFixedCredentialLinearHttpClient(http, issue.organizationId, Redacted.make('test-token')),
-	)
+		makeFixedCredentialLinearHttpClient({
+			organizationId: issue.organizationId,
+			accessToken: Redacted.make('test-token'),
+		}),
+	).pipe(Layer.provide(Layer.succeed(HttpClient.HttpClient, http)))
 
 describe('Linear GraphQL procedures', () => {
 	it.effect('owns its document, variables, decoding, and domain projection', ({ expect }) =>

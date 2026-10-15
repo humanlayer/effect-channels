@@ -11,7 +11,7 @@
  * past `readyAt` when that output settled, and the mailbox never woke again. So the handler keeps
  * passing while a pass finds work, and when it ends it moves any alarm at or before now forward.
  */
-import { MailboxProcessing, type MailboxProcessingOperations } from '@humanlayer/channels-delivery'
+import { MailboxProcessing } from '@humanlayer/channels-delivery'
 import { Cause, Clock, Effect, Predicate, Schema } from 'effect'
 
 import { DurableMailboxState, mailboxStateKey } from './MailboxState'
@@ -25,11 +25,11 @@ export type MailboxAlarmHandlerOptions = {
 /** The most processing passes one alarm runs. Work still due after them waits for the next alarm. */
 export const MAX_PASSES_PER_ALARM = 20
 
-/** Build the alarm handler over the current Durable Object's storage and its mailbox processing. */
-export const makeMailboxAlarmHandlerWith = <R>(
-	options: MailboxAlarmHandlerOptions,
-	processing: MailboxProcessingOperations<R>,
-) =>
+/**
+ * Build the alarm handler over the current Durable Object's storage. Each alarm runs the
+ * `MailboxProcessing` it is given while it runs.
+ */
+export const makeMailboxAlarmHandler = (options: MailboxAlarmHandlerOptions) =>
 	Effect.gen(function* () {
 		const storage = yield* MailboxStorage
 
@@ -52,7 +52,7 @@ export const makeMailboxAlarmHandlerWith = <R>(
 		})
 
 		/** One pass. Reports whether it found work, so the handler knows to look again. */
-		const pass = processing.processReady.pipe(
+		const pass = Effect.flatMap(MailboxProcessing, (processing) => processing.processReady).pipe(
 			Effect.map(({ claimed, output }) => claimed > 0 || output > 0),
 			Effect.catchCauseIf(
 				(cause) => !Cause.hasInterruptsOnly(cause),
@@ -68,6 +68,3 @@ export const makeMailboxAlarmHandlerWith = <R>(
 			yield* rearmWhenDueWithoutLiveAlarm
 		})
 	})
-
-export const makeMailboxAlarmHandler = (options: MailboxAlarmHandlerOptions) =>
-	Effect.flatMap(MailboxProcessing, (processing) => makeMailboxAlarmHandlerWith(options, processing))

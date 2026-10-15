@@ -1,5 +1,5 @@
 import type { DeliveryCallbackResult, DeliveryContext } from '@humanlayer/channels-delivery'
-import { Cause, Context, Effect, Layer, Option, Predicate, Schema } from 'effect'
+import { Cause, Effect, Option, Predicate, Schema } from 'effect'
 
 import type { SlackNewMention, SlackSubscribedThreadEvents } from './SlackCallbackEvents'
 
@@ -73,36 +73,19 @@ const narrowSlackCallbackCause = (input: {
 	)
 }
 
-const wrapCallback = <A, E, R>(
-	context: Context.Context<R>,
-	callback: SlackCallbackName,
-	handler: SlackCallbackHandler<A, E, R> | undefined,
-) => {
+const wrapCallback = <A, E, R>(callback: SlackCallbackName, handler: SlackCallbackHandler<A, E, R> | undefined) => {
 	if (Predicate.isUndefined(handler)) return undefined
 	return Effect.fn(`slack.callbacks.${callback}`)((event: A, delivery: DeliveryContext) =>
 		Effect.suspend(() => handler(event, delivery)).pipe(
-			Effect.provide(context),
 			Effect.catchCause((cause) => narrowSlackCallbackCause({ callback, cause })),
 		),
 	)
 }
 
-export class SlackCallbacks extends Context.Service<SlackCallbacks, SlackCallbackHandlers<SlackCallbackError, never>>()(
-	'@humanlayer/channels-slack/SlackCallbacks',
-) {
-	static readonly layer = <E, R>(handlers: SlackCallbackHandlers<E, R>): Layer.Layer<SlackCallbacks, never, R> =>
-		Layer.effect(
-			SlackCallbacks,
-			Effect.gen(function* () {
-				const context = yield* Effect.context<R>()
-				return SlackCallbacks.of({
-					onNewMention: wrapCallback(context, 'onNewMention', handlers.onNewMention),
-					onSubscribedThreadEvents: wrapCallback(
-						context,
-						'onSubscribedThreadEvents',
-						handlers.onSubscribedThreadEvents,
-					),
-				})
-			}),
-		)
-}
+/** The application's callbacks after wrapping: each failure is narrowed to a `SlackCallbackError`. */
+export type SlackCallbackOperations<R = never> = SlackCallbackHandlers<SlackCallbackError, R>
+
+export const makeSlackCallbacks = <E, R>(handlers: SlackCallbackHandlers<E, R>): SlackCallbackOperations<R> => ({
+	onNewMention: wrapCallback('onNewMention', handlers.onNewMention),
+	onSubscribedThreadEvents: wrapCallback('onSubscribedThreadEvents', handlers.onSubscribedThreadEvents),
+})

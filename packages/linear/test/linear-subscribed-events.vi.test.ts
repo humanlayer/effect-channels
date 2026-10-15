@@ -9,7 +9,7 @@ import { Effect, Layer } from 'effect'
 import { vi } from 'vite-plus/test'
 
 import { LinearApi } from '../src/LinearApi'
-import { type LinearCallbackHandler, LinearCallbacks } from '../src/LinearCallbacks'
+import type { LinearCallbackHandler, LinearCallbackHandlers } from '../src/LinearCallbacks'
 import { makeLinearEventProcessor } from '../src/LinearEventProcessor'
 import {
 	firstAttempt,
@@ -107,8 +107,8 @@ describe('Linear subscribed events', () => {
 					payload,
 				}),
 			)
+			const handlers: LinearCallbackHandlers<never, never> = { onSubscribedEvent: callback }
 			const services = Layer.mergeAll(
-				LinearCallbacks.layer({ onSubscribedEvent: callback }),
 				Layer.mock(LinearApi, {}),
 				Layer.mock(MailboxSubscriptions, {
 					subscribe: () => Effect.die('not used'),
@@ -118,6 +118,7 @@ describe('Linear subscribed events', () => {
 			)
 			const result = yield* makeLinearEventProcessor({
 				namespace,
+				handlers,
 				bot: { organizationId: linearOrganizationId, appUserId: linearAppUserId },
 				oauthClientId: linearOauthClientId,
 			})
@@ -185,12 +186,12 @@ describe('Linear subscribed events', () => {
 					payload,
 				}),
 			)
+			const handlers: LinearCallbackHandlers<never, never> = { onSubscribedEvent: callback }
 			const services = Layer.mergeAll(
-				LinearCallbacks.layer({ onSubscribedEvent: callback }),
 				Layer.mock(LinearApi, {}),
 				Layer.mock(MailboxSubscriptions, { isSubscribed: () => Effect.succeed(true) }),
 			)
-			yield* makeLinearEventProcessor({ namespace })
+			yield* makeLinearEventProcessor({ namespace, handlers })
 				.process([admissions[0]!, admissions[1]!], yield* firstAttempt())
 				.pipe(Effect.provide(services))
 			const event = callback.mock.calls[0]?.[0]
@@ -229,7 +230,7 @@ describe('Linear subscribed events', () => {
 					},
 				},
 			})
-			yield* makeLinearEventProcessor({ namespace })
+			yield* makeLinearEventProcessor({ namespace, handlers })
 				.process([attachmentAdmission], yield* firstAttempt())
 				.pipe(Effect.provide(services))
 			const reducedIssue = callback.mock.calls[1]?.[0].issue
@@ -238,7 +239,7 @@ describe('Linear subscribed events', () => {
 			expect(callback.mock.calls[1]?.[0].events[0]).toMatchObject({
 				attachment: { _tag: 'LinearIssueAttachment', issueId, id: 'attachment-1' },
 			})
-			yield* makeLinearEventProcessor({ namespace })
+			yield* makeLinearEventProcessor({ namespace, handlers })
 				.process([attachmentAdmission, admissions[0]!], yield* firstAttempt())
 				.pipe(Effect.provide(services))
 			const recoveredIssue = callback.mock.calls[2]?.[0].issue
@@ -278,12 +279,15 @@ describe('Linear subscribed events', () => {
 					payload,
 				}),
 			)
+			const handlers: LinearCallbackHandlers<never, never> = {
+				onAgentSessionCreated: () => Effect.void,
+				onSubscribedEvent: callback,
+			}
 			const services = Layer.mergeAll(
-				LinearCallbacks.layer({ onAgentSessionCreated: () => Effect.void, onSubscribedEvent: callback }),
 				Layer.mock(LinearApi, {}),
 				Layer.mock(MailboxSubscriptions, { isSubscribed: () => Effect.succeed(true) }),
 			)
-			const result = yield* makeLinearEventProcessor({ namespace })
+			const result = yield* makeLinearEventProcessor({ namespace, handlers })
 				.process([admissions[0]!, admissions[1]!], yield* firstAttempt())
 				.pipe(Effect.provide(services))
 			expect(result).toEqual(ProviderEventHandled.make({}))
@@ -323,12 +327,12 @@ describe('Linear subscribed events', () => {
 					payload,
 				}),
 			)
+			const handlers: LinearCallbackHandlers<never, never> = { onMentioned, onSubscribedEvent }
 			const services = Layer.mergeAll(
-				LinearCallbacks.layer({ onMentioned, onSubscribedEvent }),
 				Layer.mock(LinearApi, {}),
 				Layer.mock(MailboxSubscriptions, { isSubscribed: () => Effect.succeed(true) }),
 			)
-			const result = yield* makeLinearEventProcessor({ namespace })
+			const result = yield* makeLinearEventProcessor({ namespace, handlers })
 				.process([admissions[0]!, admissions[1]!], yield* firstAttempt())
 				.pipe(Effect.provide(services))
 			expect(result).toEqual(ProviderEventHandled.make({}))
@@ -365,8 +369,8 @@ describe('Linear subscribed events', () => {
 					actor: { id: linearAppUserId, name: 'App', type: 'user' },
 				},
 			})
+			const handlers: LinearCallbackHandlers<never, never> = { onIssueCreated: createdCallback }
 			const services = Layer.mergeAll(
-				LinearCallbacks.layer({ onIssueCreated: createdCallback }),
 				Layer.mock(LinearApi, {}),
 				Layer.mock(MailboxSubscriptions, {
 					isSubscribed: () => Effect.succeed(true),
@@ -375,6 +379,7 @@ describe('Linear subscribed events', () => {
 			)
 			const processor = makeLinearEventProcessor({
 				namespace,
+				handlers,
 				bot: { organizationId: linearOrganizationId, appUserId: linearAppUserId },
 			})
 			const createResult = yield* processor

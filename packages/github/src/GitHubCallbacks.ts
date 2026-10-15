@@ -1,5 +1,5 @@
 import type { DeliveryCallbackResult, DeliveryContext } from '@humanlayer/channels-delivery'
-import { Cause, Context, Effect, Layer, Option, Predicate, Schema } from 'effect'
+import { Cause, Effect, Option, Predicate, Schema } from 'effect'
 
 import type {
 	GitHubIssueCreated,
@@ -109,33 +109,3 @@ export const makeGitHubCallbacks = <E, R>(handlers: GitHubCallbackHandlers<E, R>
 	onSubscribedIssueEvents: wrapCallback('onSubscribedIssueEvents', handlers.onSubscribedIssueEvents),
 	onSubscribedPrEvents: wrapCallback('onSubscribedPrEvents', handlers.onSubscribedPrEvents),
 })
-
-export class GitHubCallbacks extends Context.Service<
-	GitHubCallbacks,
-	GitHubCallbackHandlers<GitHubCallbackError, never>
->()('@humanlayer/channels-github/GitHubCallbacks') {
-	static readonly layer = <E, R>(handlers: GitHubCallbackHandlers<E, R>): Layer.Layer<GitHubCallbacks, never, R> =>
-		Layer.effect(
-			GitHubCallbacks,
-			Effect.gen(function* () {
-				const context = yield* Effect.context<R>()
-				const callbacks = makeGitHubCallbacks(handlers)
-				const provide = <A, Error>(
-					callback:
-						| ((event: A, delivery: DeliveryContext) => Effect.Effect<DeliveryCallbackResult, Error, R>)
-						| undefined,
-				) =>
-					Predicate.isUndefined(callback)
-						? undefined
-						: (event: A, delivery: DeliveryContext) =>
-								callback(event, delivery).pipe(Effect.provide(context))
-				return GitHubCallbacks.of({
-					onIssueCreated: provide(callbacks.onIssueCreated),
-					onPrCreated: provide(callbacks.onPrCreated),
-					onMentioned: provide(callbacks.onMentioned),
-					onSubscribedIssueEvents: provide(callbacks.onSubscribedIssueEvents),
-					onSubscribedPrEvents: provide(callbacks.onSubscribedPrEvents),
-				})
-			}),
-		)
-}

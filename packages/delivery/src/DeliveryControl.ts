@@ -30,7 +30,9 @@ export const DeliveryMarkdown = Schema.String.check(Schema.isMaxLength(DELIVERY_
 
 /** End the turn with a question. The user's reply starts a new delivery. */
 export const AwaitingInputRequest = Schema.Struct({
-	options: Schema.optionalKey(Schema.Array(Schema.NonEmptyString.check(Schema.isMaxLength(200))).check(Schema.isMaxLength(25))),
+	options: Schema.optionalKey(
+		Schema.Array(Schema.NonEmptyString.check(Schema.isMaxLength(200))).check(Schema.isMaxLength(25)),
+	),
 })
 
 export const CompleteDelivery = Schema.TaggedStruct('CompleteDelivery', {
@@ -74,7 +76,11 @@ export const DeleteDeliveryMessage = Schema.TaggedStruct('DeleteDeliveryMessage'
 export type DeleteDeliveryMessage = typeof DeleteDeliveryMessage.Type
 
 /** A change to one of the delivery's messages. */
-export const DeliveryMessageMutation = Schema.Union([CreateDeliveryMessage, UpdateDeliveryMessage, DeleteDeliveryMessage])
+export const DeliveryMessageMutation = Schema.Union([
+	CreateDeliveryMessage,
+	UpdateDeliveryMessage,
+	DeleteDeliveryMessage,
+])
 export type DeliveryMessageMutation = typeof DeliveryMessageMutation.Type
 
 /** Show what the agent is doing now. The latest request wins; the state already desired is a replay. */
@@ -265,7 +271,28 @@ export class DeliveryControl extends Context.Service<
 			readonly mutation: DeliveryMutation
 		}) => Effect.Effect<DeliveryMutationReceipt, DeliveryMutationError>
 	}
->()('@humanlayer/channels-delivery/DeliveryControl') {}
+>()('@humanlayer/channels-delivery/DeliveryControl', {
+	/** Delivery control over the store's own `DeliveryControlBackend`. */
+	make: Effect.gen(function* () {
+		const backend = yield* DeliveryControlBackend
+		return {
+			status: Effect.fn('delivery.control.status')(function* (input) {
+				const reference = yield* referenceOrNotFound(input.deliveryId)
+				return yield* backend.readDeliveryStatus({ reference, accessToken: Redacted.value(input.accessToken) })
+			}),
+			apply: Effect.fn('delivery.control.apply')(function* (input) {
+				const reference = yield* referenceOrNotFound(input.deliveryId)
+				return yield* backend.applyDeliveryMutation({
+					reference,
+					accessToken: Redacted.value(input.accessToken),
+					mutation: input.mutation,
+				})
+			}),
+		}
+	}),
+}) {
+	static readonly layer = Layer.effect(this, this.make)
+}
 
 /** The result a complete or fail request asks for. */
 export const terminalFromMutation = (mutation: CompleteDelivery | FailDelivery): DeliveryTerminal => {
@@ -292,25 +319,3 @@ const referenceOrNotFound = (deliveryId: string) =>
 		onNone: () => Effect.fail(new DeliveryNotFound()),
 		onSome: Effect.succeed,
 	})
-
-/** `DeliveryControl` over the store's own `DeliveryControlBackend`. */
-export const DeliveryControlLive = Layer.effect(
-	DeliveryControl,
-	Effect.gen(function* () {
-		const backend = yield* DeliveryControlBackend
-		return DeliveryControl.of({
-			status: Effect.fn('delivery.control.status')(function* (input) {
-				const reference = yield* referenceOrNotFound(input.deliveryId)
-				return yield* backend.readDeliveryStatus({ reference, accessToken: Redacted.value(input.accessToken) })
-			}),
-			apply: Effect.fn('delivery.control.apply')(function* (input) {
-				const reference = yield* referenceOrNotFound(input.deliveryId)
-				return yield* backend.applyDeliveryMutation({
-					reference,
-					accessToken: Redacted.value(input.accessToken),
-					mutation: input.mutation,
-				})
-			}),
-		})
-	}),
-)
