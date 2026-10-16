@@ -9,7 +9,7 @@ import {
 	LinearCredentialResolverClientCredentials,
 	LinearCredentialResolverDeveloperToken,
 } from './LinearCredentialResolver'
-import { LinearFileTransferPolicy } from './LinearFiles'
+import { LinearFileTransferPolicy } from './LinearFileModels'
 import { LinearOrganizationId, LinearUserId } from './LinearIdentity'
 
 const LinearOrganizationIdConfig = Schema.declare<Config.Config<LinearOrganizationId>>(

@@ -11,6 +11,7 @@ import {
 	GitHubIssue,
 	GitHubIssueComment,
 	GitHubIssueCommentCreated,
+	GitHubIssueCommentRecord,
 	GitHubIssueMentioned,
 	GitHubIssueOpened,
 	GitHubIssueRef,
@@ -59,7 +60,7 @@ const discussionComment = (
 	body = maintainerOnlyNotice,
 	id = 500,
 ) =>
-	GitHubIssueComment.make({
+	GitHubIssueCommentRecord.make({
 		ref: { discussion, id: GitHubId.make(id) },
 		body,
 		url: 'https://github.com/humanlayer/effect-channels/issues/42#issuecomment-500',
@@ -74,13 +75,13 @@ const fixtures = (actor = person(1)) => {
 		issue,
 		actor,
 		eventId,
-		comment: discussionComment(issueDiscussion, actor, '@agent help', actor.id),
+		comment: GitHubIssueComment.make(discussionComment(issueDiscussion, actor, '@agent help', actor.id)),
 	})
 	const prComment = GitHubPrCommentCreated.make({
 		pullRequest,
 		actor,
 		eventId,
-		comment: discussionComment(prDiscussion, actor, '@agent help', actor.id),
+		comment: GitHubIssueComment.make(discussionComment(prDiscussion, actor, '@agent help', actor.id)),
 	})
 	const reviewComment = GitHubPrReviewCommentCreated.make({
 		pullRequest,
@@ -150,13 +151,13 @@ interface ApiState {
 	readonly reactions: ReadonlyArray<GitHubReactionRequest>
 	readonly lists: ReadonlyArray<GitHubDiscussionRef>
 	readonly posts: ReadonlyArray<{ readonly discussion: GitHubDiscussionRef; readonly content: GitHubContent }>
-	readonly comments: ReadonlyArray<GitHubIssueComment>
+	readonly comments: ReadonlyArray<GitHubIssueCommentRecord>
 }
 
 const makeApi = (
 	access: Effect.Effect<GitHubAccessLevel, GitHubApiError>,
 	options: {
-		readonly comments?: ReadonlyArray<GitHubIssueComment>
+		readonly comments?: ReadonlyArray<GitHubIssueCommentRecord>
 		readonly lookupFailure?: GitHubApiError
 		readonly ambiguousPostFailure?: GitHubApiError
 	} = {},

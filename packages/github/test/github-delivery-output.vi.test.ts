@@ -41,7 +41,7 @@ import {
 	GitHubDeliveryDestination,
 	GitHubDeliveryDestinationJson,
 	GitHubId,
-	GitHubIssueComment,
+	GitHubIssueCommentRecord,
 	GitHubIssueCommentRef,
 	GitHubIssueRef,
 	GitHubOutputReceipt,
@@ -126,7 +126,7 @@ const run = (
 				Effect.andThen(Option.match(failure, { onNone: () => Effect.void, onSome: Effect.fail })),
 			)
 		const commentOn = (discussion: GitHubIssueCommentRef['discussion'], markdown: string) =>
-			GitHubIssueComment.make({
+			GitHubIssueCommentRecord.make({
 				ref: { discussion, id: GitHubId.make(900) },
 				body: markdown,
 				url: 'https://github.com/alice/project/issues/42#issuecomment-900',
@@ -213,7 +213,7 @@ describe('GitHub delivery output', () => {
 				postIssueComment: ({ issue: target, content }) =>
 					Ref.update(calls, (all) => [...all, 'post']).pipe(
 						Effect.as(
-							GitHubIssueComment.make({
+							GitHubIssueCommentRecord.make({
 								ref: { discussion: { _tag: 'Issue', ref: target }, id: GitHubId.make(901) },
 								body: content.markdown,
 								url: 'https://github.com/alice/project/issues/42#issuecomment-901',

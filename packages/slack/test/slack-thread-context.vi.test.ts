@@ -8,16 +8,17 @@ import { Effect, Layer, Option, Queue, Stream } from 'effect'
 
 import { SlackApi } from '../src/SlackApi'
 import { SlackChannelId, SlackMessageTs, SlackTeamId } from '../src/SlackIdentity'
+import { SlackMessage, slackSentMessageFromRecord } from '../src/SlackMessage'
 import {
 	SlackChannelInfo,
 	SlackMarkdownContent,
-	SlackMessage,
 	SlackMessageCount,
+	SlackMessageRecord,
 	SlackMessageRef,
 	SlackParticipant,
 	SlackPlainTextContent,
 	SlackReaction,
-	SlackSentMessage,
+	SlackSentMessageRecord,
 	SlackThreadInfo,
 	SlackThreadRef,
 	SlackUserId,
@@ -45,7 +46,7 @@ const arbitraryMessageRef = SlackMessageRef.make({
 	channelId,
 	messageTs: SlackMessageTs.make('1700000001.000001'),
 })
-const message = SlackMessage.make({
+const messageRecord = SlackMessageRecord.make({
 	ref: rootMessageRef,
 	thread: threadRef,
 	author: participant,
@@ -53,7 +54,9 @@ const message = SlackMessage.make({
 	files: [],
 	metadata: { source: 'test', ordinal: 1 },
 })
-const sent = SlackSentMessage.make({ ref: rootMessageRef, message })
+const sentRecord = SlackSentMessageRecord.make({ ref: rootMessageRef, message: messageRecord })
+const message = SlackMessage.fromRecord(messageRecord)
+const sent = slackSentMessageFromRecord(sentRecord)
 const threadInfo = SlackThreadInfo.make({ thread: threadRef, title: 'Context thread' })
 const channelInfo = SlackChannelInfo.make({
 	channel: { teamId, channelId, isDm: false },
@@ -70,11 +73,11 @@ const makeApi = (
 	listParticipants: (request) =>
 		Queue.offer(calls, { operation: 'listParticipants', request }).pipe(Effect.as([participant])),
 	listThreadMessages: (request) =>
-		Queue.offer(calls, { operation: 'listThreadMessages', request }).pipe(Effect.as([message])),
+		Queue.offer(calls, { operation: 'listThreadMessages', request }).pipe(Effect.as([messageRecord])),
 	listChannelMessagesBeforeThread: (request) =>
-		Queue.offer(calls, { operation: 'listChannelMessagesBeforeThread', request }).pipe(Effect.as([message])),
-	postToThread: (request) => Queue.offer(calls, { operation: 'postToThread', request }).pipe(Effect.as(sent)),
-	postToChannel: (request) => Queue.offer(calls, { operation: 'postToChannel', request }).pipe(Effect.as(sent)),
+		Queue.offer(calls, { operation: 'listChannelMessagesBeforeThread', request }).pipe(Effect.as([messageRecord])),
+	postToThread: (request) => Queue.offer(calls, { operation: 'postToThread', request }).pipe(Effect.as(sentRecord)),
+	postToChannel: (request) => Queue.offer(calls, { operation: 'postToChannel', request }).pipe(Effect.as(sentRecord)),
 	updateMessage: () => unexpected('updateMessage'),
 	setThreadStatus: () => unexpected('setThreadStatus'),
 	clearThreadStatus: () => unexpected('clearThreadStatus'),
@@ -85,7 +88,7 @@ const makeApi = (
 			Effect.flatMap((collected) =>
 				Queue.offer(calls, { operation: 'stream', thread: requestedThread, chunks: Array.from(collected) }),
 			),
-			Effect.as(sent),
+			Effect.as(sentRecord),
 		),
 	postPlanToThread: () => unexpected('postPlanToThread'),
 	updatePlan: () => unexpected('updatePlan'),

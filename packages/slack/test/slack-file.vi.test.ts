@@ -3,13 +3,13 @@ import { Effect, Exit, Layer, Queue, Schema, Stream } from 'effect'
 
 import { SlackApi, SlackDownloadFileBytesRequest, SlackDownloadFileRequest } from '../src/SlackApi'
 import { SlackChannel } from '../src/SlackChannel'
+import { SlackFile, slackFileFromMetadata } from '../src/SlackFile'
+import { SlackMessage } from '../src/SlackMessage'
 import {
-	SlackFile,
 	SlackFileId,
 	SlackFileRef,
-	slackFileFromMetadata,
+	slackFileRecordFromMetadata,
 	SlackMarkdownContent,
-	SlackMessage,
 	SlackMessageRef,
 	SlackParticipant,
 	SlackUploadFileInput,
@@ -32,6 +32,7 @@ import {
 
 const ref = SlackFileRef.make({ teamId, fileId: SlackFileId.make(fileId) })
 const file = slackFileFromMetadata(teamId, slackFileMetadata)
+const fileRecord = slackFileRecordFromMetadata(teamId, slackFileMetadata)
 const bytes = new TextEncoder().encode('hello')
 
 describe('SlackFile values', () => {
@@ -112,9 +113,9 @@ describe('Slack file resources', () => {
 				downloadFileBytes: (request) =>
 					Queue.offer(calls, { operation: 'downloadFileBytes', request }).pipe(Effect.as(bytes)),
 				uploadFileToChannel: (request) =>
-					Queue.offer(calls, { operation: 'uploadFileToChannel', request }).pipe(Effect.as(file)),
+					Queue.offer(calls, { operation: 'uploadFileToChannel', request }).pipe(Effect.as(fileRecord)),
 				uploadFileToThread: (request) =>
-					Queue.offer(calls, { operation: 'uploadFileToThread', request }).pipe(Effect.as(file)),
+					Queue.offer(calls, { operation: 'uploadFileToThread', request }).pipe(Effect.as(fileRecord)),
 			})
 			const input = SlackUploadFileInput.make({ filename: 'notes.txt', bytes })
 			const download = {
@@ -126,10 +127,13 @@ describe('Slack file resources', () => {
 
 			expect(yield* file.download().pipe(Effect.flatMap(Stream.runCollect), Effect.provide(api))).toHaveLength(1)
 			yield* file.downloadBytes({ maxBytes: 100 }).pipe(Effect.provide(api))
-			yield* SlackChannel.make({ ref: channelRef }).uploadFile(input).pipe(Effect.provide(api))
-			yield* SlackThread.make({ ref: threadRef, mailboxKey: 'mailbox:file' })
+			expect(yield* SlackChannel.make({ ref: channelRef }).uploadFile(input).pipe(Effect.provide(api))).toEqual(
+				file,
+			)
+			const threadUpload = yield* SlackThread.make({ ref: threadRef, mailboxKey: 'mailbox:file' })
 				.uploadFile(input)
 				.pipe(Effect.provide(api))
+			expect(threadUpload).toBeInstanceOf(SlackFile)
 
 			expect(Array.from(yield* Queue.clear(calls))).toEqual([
 				{ operation: 'downloadFile', request: SlackDownloadFileRequest.make(download) },

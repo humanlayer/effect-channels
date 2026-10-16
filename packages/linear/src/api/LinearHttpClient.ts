@@ -7,7 +7,7 @@ import type { HttpClientResponse } from 'effect/http/HttpClientResponse'
 
 import type { LinearApiError, LinearApiOperation } from '../LinearApiContract'
 import { LinearCredentialResolver } from '../LinearCredential'
-import { isLinearFileOrigin } from '../LinearFiles'
+import { isLinearFileOrigin } from '../LinearFileModels'
 import type { LinearOrganizationId } from '../LinearIdentity'
 import { LinearFileOriginRejectedError, LinearTransportError, linearProviderErrorDetails } from './LinearApiErrors'
 

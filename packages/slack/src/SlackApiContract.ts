@@ -8,12 +8,12 @@ import { Schema } from 'effect'
 import { SlackMessageTs, SlackTeamId } from './SlackIdentity'
 import type {
 	SlackChannelInfo,
-	SlackFile,
-	SlackMessage,
-	SlackMessages,
+	SlackFileRecord,
+	SlackMessageRecord,
+	SlackMessageRecords,
 	SlackParticipant,
 	SlackParticipants,
-	SlackSentMessage,
+	SlackSentMessageRecord,
 	SlackThreadInfo,
 } from './SlackModels'
 import {
@@ -190,15 +190,18 @@ export const SlackFileDownloadError = Schema.Union([
 ])
 export type SlackFileDownloadError = typeof SlackFileDownloadError.Type
 
-/** Application-wide Slack operations. Behavior-bearing Slack values pass their stored refs here. */
+/**
+ * Application-wide Slack operations. They take and return plain records; `SlackThread`, `SlackChannel`,
+ * `SlackMessage`, and `SlackFile` call them with their stored refs and wrap the records they get back.
+ */
 export type SlackApiOperations = {
 	readonly listParticipants: (request: SlackThreadRequest) => Effect.Effect<SlackParticipants, SlackApiError>
-	readonly listThreadMessages: (request: SlackThreadRequest) => Effect.Effect<SlackMessages, SlackApiError>
+	readonly listThreadMessages: (request: SlackThreadRequest) => Effect.Effect<SlackMessageRecords, SlackApiError>
 	readonly listChannelMessagesBeforeThread: (
 		request: SlackListChannelMessagesBeforeThreadRequest,
-	) => Effect.Effect<SlackMessages, SlackApiError>
-	readonly postToThread: (request: SlackPostToThreadRequest) => Effect.Effect<SlackSentMessage, SlackApiError>
-	readonly postToChannel: (request: SlackPostToChannelRequest) => Effect.Effect<SlackSentMessage, SlackApiError>
+	) => Effect.Effect<SlackMessageRecords, SlackApiError>
+	readonly postToThread: (request: SlackPostToThreadRequest) => Effect.Effect<SlackSentMessageRecord, SlackApiError>
+	readonly postToChannel: (request: SlackPostToChannelRequest) => Effect.Effect<SlackSentMessageRecord, SlackApiError>
 	/** `chat.update`: replace the text of a message the bot posted. */
 	readonly updateMessage: (request: SlackUpdateMessageRequest) => Effect.Effect<void, SlackApiError>
 	/** `chat.delete`: remove a message the bot posted. */
@@ -211,7 +214,7 @@ export type SlackApiOperations = {
 	readonly stream: <E, R>(
 		thread: SlackThreadRef,
 		chunks: Stream.Stream<SlackStreamChunk, E, R>,
-	) => Effect.Effect<SlackSentMessage, SlackApiError | E, R>
+	) => Effect.Effect<SlackSentMessageRecord, SlackApiError | E, R>
 	/** `chat.postMessage` with one plan block: post a task list to a thread. */
 	readonly postPlanToThread: (request: SlackPostPlanRequest) => Effect.Effect<SlackMessageRef, SlackApiError>
 	/** `chat.update` with one plan block: replace the whole task list a plan message shows. */
@@ -219,7 +222,7 @@ export type SlackApiOperations = {
 	readonly addReaction: (request: SlackReactionRequest) => Effect.Effect<void, SlackApiError>
 	readonly removeReaction: (request: SlackReactionRequest) => Effect.Effect<void, SlackApiError>
 	readonly resolveParticipant: (request: SlackParticipantRequest) => Effect.Effect<SlackParticipant, SlackApiError>
-	readonly getMessage: (request: SlackMessageRequest) => Effect.Effect<SlackMessage, SlackApiError>
+	readonly getMessage: (request: SlackMessageRequest) => Effect.Effect<SlackMessageRecord, SlackApiError>
 	readonly resolveReactionThread: (
 		request: SlackResolveReactionThreadRequest,
 	) => Effect.Effect<SlackMessageTs, SlackApiError>
@@ -227,10 +230,10 @@ export type SlackApiOperations = {
 	readonly getChannelInfo: (request: SlackChannelRequest) => Effect.Effect<SlackChannelInfo, SlackApiError>
 	readonly uploadFileToChannel: (
 		request: SlackUploadFileToChannelRequest,
-	) => Effect.Effect<SlackFile, SlackFileUploadError>
+	) => Effect.Effect<SlackFileRecord, SlackFileUploadError>
 	readonly uploadFileToThread: (
 		request: SlackUploadFileToThreadRequest,
-	) => Effect.Effect<SlackFile, SlackFileUploadError>
+	) => Effect.Effect<SlackFileRecord, SlackFileUploadError>
 	readonly downloadFile: (
 		request: SlackDownloadFileRequest,
 	) => Effect.Effect<Stream.Stream<Uint8Array, SlackApiError>, SlackFileDownloadError>

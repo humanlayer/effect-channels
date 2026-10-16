@@ -65,7 +65,8 @@ import {
 	LinearIssueDestination,
 	encodeLinearDeliveryPreparation,
 } from './LinearDeliveryDestination'
-import { discoverLinearFiles, LinearFileRef } from './LinearFiles'
+import { LinearFileRef } from './LinearFileModels'
+import { discoverLinearFiles } from './LinearFiles'
 import {
 	LinearAgentActivityId,
 	LinearAgentSessionId,

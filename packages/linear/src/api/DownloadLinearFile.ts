@@ -9,7 +9,7 @@ import {
 	type LinearDownloadFileRequest,
 	LinearFileSizeLimitExceeded,
 	type LinearFileTransferPolicy,
-} from '../LinearFiles'
+} from '../LinearFileModels'
 import {
 	LinearFileOriginRejectedError,
 	LinearFileRedirectError,

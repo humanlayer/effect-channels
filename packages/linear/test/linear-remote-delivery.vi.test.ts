@@ -28,7 +28,7 @@ import {
 	LinearIssueRef,
 	type LinearCreateAgentActivityRequest,
 } from '../src/LinearModels'
-import { LinearComment } from '../src/LinearResources'
+import { LinearCommentRecord } from '../src/LinearResourceRecords'
 import {
 	agentSessionPayloads,
 	issueCreatePayload,
@@ -72,7 +72,7 @@ const makeFakeLinear = (options: FakeLinearOptions = {}) =>
 		const answersLost = yield* Ref.make(0)
 		const commentCount = yield* Ref.make(0)
 		const commentOn = (issueId: LinearIssueId, commentId: string, markdown: string) =>
-			LinearComment.make({
+			LinearCommentRecord.make({
 				ref: LinearCommentRef.make({
 					organizationId: linearOrganizationId,
 					teamId: null,

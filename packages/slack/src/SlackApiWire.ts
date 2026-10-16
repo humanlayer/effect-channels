@@ -6,7 +6,7 @@ import { Effect, Match, Option, Predicate, Schema } from 'effect'
 
 import { isSlackTokenRejected, type SlackApiError } from './SlackApiContract'
 import { SlackMessageTs, SlackTeamId } from './SlackIdentity'
-import type { SlackChannelRef, SlackContent, SlackMessages, SlackPlan, SlackUserId } from './SlackModels'
+import type { SlackChannelRef, SlackContent, SlackMessageRecords, SlackPlan, SlackUserId } from './SlackModels'
 import type { SlackStreamChunk } from './SlackStreamChunk'
 import { SlackFileMetadata } from './SlackWebhookEventSchemas'
 
@@ -243,5 +243,5 @@ export const nextCursor = (metadata: typeof SlackResponseMetadata.Type | undefin
 	return Predicate.isUndefined(cursor) || cursor.length === 0 ? Option.none<string>() : Option.some(cursor)
 }
 
-export const chronological = (messages: SlackMessages): SlackMessages =>
+export const chronological = (messages: SlackMessageRecords): SlackMessageRecords =>
 	Array.from(messages).sort((left, right) => left.ref.messageTs.localeCompare(right.ref.messageTs))

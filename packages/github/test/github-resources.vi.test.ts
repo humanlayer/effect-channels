@@ -6,9 +6,11 @@ import { GitHubId } from '../src/GitHubIdentity'
 import {
 	GitHubActionsJobInfo,
 	GitHubActionsJobRef,
+	GitHubActionsJobRecord,
 	GitHubCheckAnnotation,
 	GitHubCheckRunInfo,
 	GitHubCheckRunRef,
+	GitHubCheckRunRecord,
 	GitHubCommit,
 	GitHubContent,
 	GitHubIssueInfo,
@@ -18,6 +20,7 @@ import {
 	GitHubPullRequestFile,
 	GitHubPullRequestInfo,
 	GitHubPullRequestRef,
+	GitHubReviewCommentRecord,
 } from '../src/GitHubModels'
 import {
 	GitHubActionsJob,
@@ -108,7 +111,7 @@ const commits = [
 	}),
 ]
 
-const reviewComment = GitHubReviewComment.make({
+const reviewCommentRecord = GitHubReviewCommentRecord.make({
 	ref: { pullRequest: pullRequestRef, id: GitHubId.make(500) },
 	nodeId: 'PRRC_500',
 	body: 'Review body',
@@ -125,7 +128,7 @@ const reviewComment = GitHubReviewComment.make({
 })
 
 const mergeResult = GitHubMergeResult.make({ merged: true, sha: 'merge-sha', message: 'Merged' })
-const checkRuns = [GitHubCheckRun.make({ ref: checkRunRef })]
+const checkRunRecords = [GitHubCheckRunRecord.make({ ref: checkRunRef })]
 
 const checkRunInfo = GitHubCheckRunInfo.make({
 	ref: checkRunRef,
@@ -160,7 +163,7 @@ const annotations = [
 	}),
 ]
 
-const job = GitHubActionsJob.make({ ref: jobRef })
+const jobRecord = GitHubActionsJobRecord.make({ ref: jobRef })
 
 const jobInfo = GitHubActionsJobInfo.make({
 	ref: jobRef,
@@ -238,7 +241,7 @@ describe('GitHub resource capability delegation', () => {
 			const layer = Layer.mock(GitHubApi, {
 				postPullRequestReviewComment: (input) =>
 					Queue.offer(calls, { operation: 'postPullRequestReviewComment', input }).pipe(
-						Effect.as(reviewComment),
+						Effect.as(reviewCommentRecord),
 					),
 				listPullRequestFiles: (input) =>
 					Queue.offer(calls, { operation: 'listPullRequestFiles', input }).pipe(Effect.as(files)),
@@ -259,7 +262,7 @@ describe('GitHub resource capability delegation', () => {
 				fetchPullRequest: (input) =>
 					Queue.offer(calls, { operation: 'fetchPullRequest', input }).pipe(Effect.as(pullRequestInfo)),
 				listCheckRunsForRef: (input) =>
-					Queue.offer(calls, { operation: 'listCheckRunsForRef', input }).pipe(Effect.as(checkRuns)),
+					Queue.offer(calls, { operation: 'listCheckRunsForRef', input }).pipe(Effect.as(checkRunRecords)),
 				closePullRequest: (input) =>
 					Queue.offer(calls, { operation: 'closePullRequest', input }).pipe(Effect.as(pullRequestInfo)),
 				reopenPullRequest: (input) =>
@@ -299,8 +302,12 @@ describe('GitHub resource capability delegation', () => {
 				}
 			}).pipe(Effect.provide(layer))
 
+			const checkRuns = checkRunRecords.map((record) => GitHubCheckRun.make(record))
+			expect(results.reviewComment).toBeInstanceOf(GitHubReviewComment)
+			expect(results.currentChecks[0]).toBeInstanceOf(GitHubCheckRun)
+			expect(results.exactChecks[0]).toBeInstanceOf(GitHubCheckRun)
 			expect(results).toMatchObject({
-				reviewComment,
+				reviewComment: GitHubReviewComment.make(reviewCommentRecord),
 				files,
 				diff: 'complete diff',
 				commits,
@@ -368,7 +375,7 @@ describe('GitHub resource capability delegation', () => {
 				listCheckRunAnnotations: (input) =>
 					Queue.offer(calls, { operation: 'listCheckRunAnnotations', input }).pipe(Effect.as(annotations)),
 				resolveActionsJob: (input) =>
-					Queue.offer(calls, { operation: 'resolveActionsJob', input }).pipe(Effect.as(job)),
+					Queue.offer(calls, { operation: 'resolveActionsJob', input }).pipe(Effect.as(jobRecord)),
 				fetchActionsJob: (input) =>
 					Queue.offer(calls, { operation: 'fetchActionsJob', input }).pipe(Effect.as(jobInfo)),
 				downloadActionsJobLog: (input) =>
@@ -387,7 +394,14 @@ describe('GitHub resource capability delegation', () => {
 				}
 			}).pipe(Effect.provide(layer))
 
-			expect(results).toEqual({ checkInfo: checkRunInfo, annotations, job, jobInfo, log: 'job log' })
+			expect(results.job).toBeInstanceOf(GitHubActionsJob)
+			expect(results).toEqual({
+				checkInfo: checkRunInfo,
+				annotations,
+				job: GitHubActionsJob.make(jobRecord),
+				jobInfo,
+				log: 'job log',
+			})
 			expect(Array.from(yield* Queue.takeAll(calls))).toEqual([
 				{ operation: 'fetchCheckRun', input: { checkRun: checkRunRef } },
 				{ operation: 'listCheckRunAnnotations', input: { checkRun: checkRunRef } },

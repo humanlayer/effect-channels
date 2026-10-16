@@ -5,10 +5,10 @@ import { Hex } from 'effect/encoding'
 import { SlackApi } from '../src/SlackApi'
 import { SlackApiLive } from '../src/SlackApiLive'
 import { SlackChannel } from '../src/SlackChannel'
+import { SlackFile } from '../src/SlackFile'
 import { SlackChannelId, SlackMessageTs, SlackTeamId } from '../src/SlackIdentity'
 import {
 	SlackChannelRef,
-	type SlackFile,
 	SlackMarkdownContent,
 	SlackPlainTextContent,
 	SlackReaction,
@@ -105,7 +105,7 @@ const verifyKnownThreadFile = Effect.fn('slack.api.live_smoke.verify_known_threa
 	if (known === undefined) {
 		return yield* new SlackLiveSmokeError({ message: 'The smoke-test thread does not contain a file' })
 	}
-	const downloaded = yield* downloadedSha256(known)
+	const downloaded = yield* downloadedSha256(SlackFile.make(known))
 	if (downloaded.sha256 !== expectedSha256.toLowerCase()) {
 		return yield* new SlackLiveSmokeError({ message: `Known file ${known.ref.fileId} has a different SHA-256` })
 	}

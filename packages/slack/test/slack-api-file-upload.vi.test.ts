@@ -2,7 +2,7 @@ import { describe, it } from '@effect/vitest'
 import { Effect, Match, Queue, Schema } from 'effect'
 
 import { SlackApi, SlackApiError, SlackFileAuthorizationError, type SlackFileUploadError } from '../src/SlackApi'
-import { SlackFile, SlackFileId, SlackFileRef, type SlackUploadFileInput } from '../src/SlackModels'
+import { SlackFileId, SlackFileRecord, SlackFileRef, type SlackUploadFileInput } from '../src/SlackModels'
 import {
 	botToken,
 	channelRef,
@@ -49,7 +49,7 @@ const runUpload = <A, E>(
 	script: UploadScript,
 	target: UploadTarget,
 	uploadInput: SlackUploadFileInput,
-	finish: (effect: Effect.Effect<SlackFile, SlackFileUploadError, SlackApi>) => Effect.Effect<A, E, SlackApi>,
+	finish: (effect: Effect.Effect<SlackFileRecord, SlackFileUploadError, SlackApi>) => Effect.Effect<A, E, SlackApi>,
 ) =>
 	Effect.gen(function* () {
 		const requests = yield* Queue.unbounded<RecordedSlackRequest>()
@@ -107,7 +107,7 @@ describe('Slack file upload', () => {
 				initial_comment: 'Here it is',
 			})
 			expect(file).toEqual(
-				SlackFile.make({
+				SlackFileRecord.make({
 					ref: SlackFileRef.make({ teamId, fileId: SlackFileId.make(fileId) }),
 					name: 'notes.txt',
 					contentType: 'text/plain',

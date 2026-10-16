@@ -1,6 +1,6 @@
 import { Effect, Schema } from 'effect'
 
-import { LinearFileUrl, type LinearUploadFileRequest } from '../LinearFiles'
+import { LinearFileUrl, type LinearUploadFileRequest } from '../LinearFileModels'
 import { failLinearMutation } from './LinearApiErrors'
 import { linearGraphql } from './LinearGraphql'
 

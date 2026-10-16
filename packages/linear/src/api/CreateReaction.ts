@@ -2,7 +2,7 @@ import { Effect, Match, Schema } from 'effect'
 
 import { LinearCreateReactionRequest } from '../LinearApiContract'
 import { LinearCommentId, LinearIssueId, LinearReactionId } from '../LinearIdentity'
-import { LinearReaction } from '../LinearResources'
+import { LinearReactionRecord } from '../LinearResourceRecords'
 import { failLinearMutation } from './LinearApiErrors'
 import { projectLinearParticipant } from './LinearApiProjections'
 import { LinearApiReaction } from './LinearApiSchemas'
@@ -46,7 +46,7 @@ export const createReaction = Effect.fn('linear.api.create_reaction')((input: Li
 		Effect.flatMap(({ reactionCreate }) => {
 			if (!reactionCreate.success) return failLinearMutation('create_reaction')
 			return Effect.succeed(
-				LinearReaction.make({
+				LinearReactionRecord.make({
 					id: reactionCreate.reaction.id,
 					issueId: target.issue.issueId,
 					commentId: target.commentId,

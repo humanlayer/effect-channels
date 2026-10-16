@@ -2,7 +2,7 @@ import { Effect, Schema } from 'effect'
 
 import type { LinearApiError, LinearIssueRequest } from '../LinearApiContract'
 import { LinearIssueId } from '../LinearIdentity'
-import type { LinearComment } from '../LinearResources'
+import type { LinearCommentRecord } from '../LinearResourceRecords'
 import { type LinearProviderError, LinearResponseDecodeError, linearProviderErrorDetails } from './LinearApiErrors'
 import { projectLinearComment } from './LinearApiProjections'
 import { LinearApiComment, LinearApiPageInfo } from './LinearApiSchemas'
@@ -20,8 +20,8 @@ const ListIssueCommentsResponse = Schema.Struct({
 export const listIssueComments = Effect.fn('linear.api.list_issue_comments')((input: LinearIssueRequest) => {
 	const page = (
 		variables: typeof ListIssueCommentsVariables.Type,
-		accumulated: ReadonlyArray<LinearComment>,
-	): Effect.Effect<ReadonlyArray<LinearComment>, LinearProviderError | LinearApiError, LinearHttpClient> =>
+		accumulated: ReadonlyArray<LinearCommentRecord>,
+	): Effect.Effect<ReadonlyArray<LinearCommentRecord>, LinearProviderError | LinearApiError, LinearHttpClient> =>
 		linearGraphql({
 			operation: 'list_issue_comments',
 			query: document,

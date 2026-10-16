@@ -11,6 +11,7 @@ import {
 	LinearWorkflowStateId,
 } from '../src/LinearIdentity'
 import { LinearCommentRef, LinearContent } from '../src/LinearModels'
+import { LinearCommentRecord, LinearIssueAttachmentRecord, LinearReactionRecord } from '../src/LinearResourceRecords'
 import { LinearComment, LinearIssue, LinearIssueAttachment, LinearReaction } from '../src/LinearResources'
 import { issue } from './api-test-fixtures'
 
@@ -31,7 +32,7 @@ describe('Linear resource methods', () => {
 				delegate: null,
 			}
 			const commentRef = LinearCommentRef.make({ ...issue, commentId: LinearCommentId.make('comment-1') })
-			const comment = LinearComment.make({
+			const commentRecord = LinearCommentRecord.make({
 				ref: commentRef,
 				issue,
 				parentCommentId: null,
@@ -39,7 +40,7 @@ describe('Linear resource methods', () => {
 				author: null,
 				files: [],
 			})
-			const reaction = LinearReaction.make({
+			const reactionRecord = LinearReactionRecord.make({
 				id: LinearReactionId.make('reaction-1'),
 				issueId: issue.issueId,
 				commentId: null,
@@ -47,7 +48,7 @@ describe('Linear resource methods', () => {
 				author: null,
 				ref: { issue, reactionId: LinearReactionId.make('reaction-1') },
 			})
-			const attachment = LinearIssueAttachment.make({
+			const attachmentRecord = LinearIssueAttachmentRecord.make({
 				id: LinearAttachmentId.make('attachment-1'),
 				issueId: issue.issueId,
 				title: 'Card',
@@ -55,6 +56,9 @@ describe('Linear resource methods', () => {
 				url: 'https://example.com',
 				ref: { issue, attachmentId: LinearAttachmentId.make('attachment-1') },
 			})
+			const comment = LinearComment.fromRecord(commentRecord)
+			const reaction = LinearReaction.make(reactionRecord)
+			const attachment = LinearIssueAttachment.make(attachmentRecord)
 			const record =
 				<Input, A>(method: string, output: A) =>
 				(input: Input) =>
@@ -77,15 +81,15 @@ describe('Linear resource methods', () => {
 					canAccessAnyPublicTeam: false,
 					teamIds: [],
 				}),
-				listIssueComments: record('listIssueComments', [comment]),
-				listIssueAttachments: record('listIssueAttachments', [attachment]),
-				createComment: record('createComment', comment),
-				updateComment: record('updateComment', comment),
+				listIssueComments: record('listIssueComments', [commentRecord]),
+				listIssueAttachments: record('listIssueAttachments', [attachmentRecord]),
+				createComment: record('createComment', commentRecord),
+				updateComment: record('updateComment', commentRecord),
 				deleteComment: record('deleteComment', undefined),
-				createReaction: record('createReaction', reaction),
+				createReaction: record('createReaction', reactionRecord),
 				deleteReaction: record('deleteReaction', undefined),
-				createAttachment: record('createAttachment', attachment),
-				updateAttachment: record('updateAttachment', attachment),
+				createAttachment: record('createAttachment', attachmentRecord),
+				updateAttachment: record('updateAttachment', attachmentRecord),
 				deleteAttachment: record('deleteAttachment', undefined),
 			})
 			const resource = LinearIssue.make({
@@ -106,23 +110,29 @@ describe('Linear resource methods', () => {
 			yield* run(resource.listAssignableUsers({ first: 10, query: 'u' }))
 			yield* run(resource.listAppUsers({ after: 'cursor' }))
 			yield* run(resource.getUser(LinearUserId.make('user-1')))
-			yield* run(resource.listComments())
-			yield* run(resource.listAttachments())
-			yield* run(resource.postComment({ markdown: 'new' }))
+			const listed = yield* run(resource.listComments())
+			expect(listed[0]).toBeInstanceOf(LinearComment)
+			const attachments = yield* run(resource.listAttachments())
+			expect(attachments[0]).toBeInstanceOf(LinearIssueAttachment)
+			expect(yield* run(resource.postComment({ markdown: 'new' }))).toBeInstanceOf(LinearComment)
 			yield* run(resource.setStatus(LinearWorkflowStateId.make('done')))
 			yield* run(resource.setPriority(2))
 			yield* run(resource.addLabels([LinearIssueLabelId.make('label')]))
 			yield* run(resource.removeLabels([LinearIssueLabelId.make('label')]))
 			yield* run(resource.assignTo(LinearUserId.make('human')))
 			yield* run(resource.delegateTo(LinearUserId.make('app')))
-			yield* run(resource.addReaction('eyes'))
-			yield* run(resource.createAttachment({ url: 'https://example.com', title: 'Card' }))
-			yield* run(comment.reply({ markdown: 'reply' }))
-			yield* run(comment.update({ markdown: 'edit' }))
+			expect(yield* run(resource.addReaction('eyes'))).toBeInstanceOf(LinearReaction)
+			expect(yield* run(resource.createAttachment({ url: 'https://example.com', title: 'Card' }))).toBeInstanceOf(
+				LinearIssueAttachment,
+			)
+			expect(yield* run(comment.reply({ markdown: 'reply' }))).toBeInstanceOf(LinearComment)
+			expect(yield* run(comment.update({ markdown: 'edit' }))).toBeInstanceOf(LinearComment)
 			yield* run(comment.remove())
 			yield* run(comment.addReaction('thumbsup'))
 			yield* run(reaction.remove())
-			yield* run(attachment.update({ title: 'Renamed', subtitle: null }))
+			expect(yield* run(attachment.update({ title: 'Renamed', subtitle: null }))).toBeInstanceOf(
+				LinearIssueAttachment,
+			)
 			yield* run(attachment.remove())
 
 			const recorded = Array.from(yield* Queue.takeAll(calls))

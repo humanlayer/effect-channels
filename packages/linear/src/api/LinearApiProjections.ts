@@ -1,5 +1,5 @@
 import type { LinearIssueRequest } from '../LinearApiContract'
-import { discoverLinearFiles, LinearFile, LinearFileRef } from '../LinearFiles'
+import { discoverLinearFileRecords, LinearFileRecord, LinearFileRef } from '../LinearFileModels'
 import {
 	LinearCommentRef,
 	LinearIssueInfo,
@@ -8,7 +8,7 @@ import {
 	LinearUser,
 	LinearWorkflowState,
 } from '../LinearModels'
-import { LinearComment, LinearIssueAttachment } from '../LinearResources'
+import { LinearCommentRecord, LinearIssueAttachmentRecord } from '../LinearResourceRecords'
 import { LinearApiAttachment, LinearApiComment, LinearApiIssue, LinearApiParticipant } from './LinearApiSchemas'
 import type { LinearUploadTarget } from './RequestLinearFileUpload'
 
@@ -38,13 +38,13 @@ export const projectLinearIssue = (ref: LinearIssueRequest['issue'], value: type
 	})
 
 export const projectLinearComment = (issue: LinearIssueRequest['issue'], value: typeof LinearApiComment.Type) =>
-	LinearComment.make({
+	LinearCommentRecord.make({
 		ref: LinearCommentRef.make({ ...issue, commentId: value.id }),
 		issue,
 		parentCommentId: value.parent?.id ?? null,
 		content: { markdown: value.body },
 		author: projectLinearParticipant(value.user),
-		files: discoverLinearFiles(
+		files: discoverLinearFileRecords(
 			LinearFileRef.make({ organizationId: issue.organizationId, issueId: issue.issueId }),
 			value.body,
 		),
@@ -56,7 +56,7 @@ export const projectLinearUploadedFile = (
 	filename: string,
 	target: LinearUploadTarget,
 ) =>
-	LinearFile.make({
+	LinearFileRecord.make({
 		ref: LinearFileRef.make({ organizationId: issue.organizationId, issueId: issue.issueId }),
 		url: target.assetUrl,
 		name: filename,
@@ -65,7 +65,7 @@ export const projectLinearUploadedFile = (
 	})
 
 export const projectLinearAttachment = (issue: LinearIssueRequest['issue'], value: typeof LinearApiAttachment.Type) =>
-	LinearIssueAttachment.make({ ...value, issueId: issue.issueId, ref: { issue, attachmentId: value.id } })
+	LinearIssueAttachmentRecord.make({ ...value, issueId: issue.issueId, ref: { issue, attachmentId: value.id } })
 
 export const projectLinearUser = (value: typeof LinearApiParticipant.Type) =>
 	LinearUser.make({

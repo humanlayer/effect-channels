@@ -17,7 +17,6 @@ import {
 	type SlackMessageRequest,
 	type SlackParticipantRequest,
 } from './SlackApiContract'
-import { slackApiKey } from './SlackApiHandle'
 import {
 	chronological,
 	contentText,
@@ -48,12 +47,12 @@ import {
 	SlackChannelInfo,
 	SlackChannelRef,
 	type SlackContent,
-	slackFileFromMetadata,
+	slackFileRecordFromMetadata,
 	SlackMarkdownContent,
-	SlackMessage,
+	SlackMessageRecord,
 	SlackMessageRef,
 	SlackParticipant,
-	SlackSentMessage,
+	SlackSentMessageRecord,
 	SlackThreadInfo,
 	SlackThreadRef,
 	type SlackUploadFileInput,
@@ -64,11 +63,12 @@ import { SlackFileMetadata } from './SlackWebhookEventSchemas'
 export * from './SlackApiContract'
 
 /**
- * Application-wide Slack operations. Behavior-bearing Slack values pass their stored refs here.
+ * Application-wide Slack operations on plain records. Callback objects such as `SlackThread` call it and wrap
+ * the records it returns.
  *
  * `layer` needs `SlackHttpClient` and `HttpClient`; `SlackApiLive` provides both.
  */
-export class SlackApi extends Context.Service<SlackApi, SlackApiOperations>()(slackApiKey, {
+export class SlackApi extends Context.Service<SlackApi, SlackApiOperations>()('@humanlayer/channels-slack/SlackApi', {
 	/** Reads the optional `SLACK_BOT_USER_ID`; without it the first call that needs the bot's user ID asks `auth.test`. */
 	make: Effect.gen(function* () {
 		const client = yield* SlackHttpClient
@@ -216,7 +216,7 @@ export class SlackApi extends Context.Service<SlackApi, SlackApiOperations>()(sl
 								isMe: false,
 							}),
 						)
-			return SlackMessage.make({
+			return SlackMessageRecord.make({
 				ref: SlackMessageRef.make({
 					teamId: thread.teamId,
 					channelId: thread.channelId,
@@ -225,7 +225,7 @@ export class SlackApi extends Context.Service<SlackApi, SlackApiOperations>()(sl
 				thread,
 				author,
 				content: SlackMarkdownContent.make({ markdown: snapshot.text ?? '' }),
-				files: (snapshot.files ?? []).map((file) => slackFileFromMetadata(thread.teamId, file)),
+				files: (snapshot.files ?? []).map((file) => slackFileRecordFromMetadata(thread.teamId, file)),
 				metadata: {},
 				...Struct.renameKeys(Struct.pick(snapshot, ['user_team']), { user_team: 'authorTeamId' }),
 			})
@@ -259,7 +259,7 @@ export class SlackApi extends Context.Service<SlackApi, SlackApiOperations>()(sl
 				Effect.provideService(HttpClient.HttpClient, http),
 			)
 			const metadata = yield* requireFilesWrite(completeSlackFileUpload({ target, destination, input }))
-			const file = slackFileFromMetadata(
+			const file = slackFileRecordFromMetadata(
 				destination.channel.teamId,
 				SlackFileMetadata.make({ ...metadata, name: input.filename, size: input.bytes.byteLength }),
 			)
@@ -380,7 +380,7 @@ export class SlackApi extends Context.Service<SlackApi, SlackApiOperations>()(sl
 					),
 				)
 			}
-			return SlackSentMessage.make({ ref: message.ref, message })
+			return SlackSentMessageRecord.make({ ref: message.ref, message })
 		})
 
 		const service: SlackApiOperations = {
@@ -579,7 +579,7 @@ export class SlackApi extends Context.Service<SlackApi, SlackApiOperations>()(sl
 					const ownUserId = yield* authUserId
 					const snapshot = stopped.message ?? SlackMessageSnapshot.make({ ts: stopped.ts, user: ownUserId })
 					const message = yield* normalizeMessage(thread, snapshot)
-					return SlackSentMessage.make({ ref: message.ref, message })
+					return SlackSentMessageRecord.make({ ref: message.ref, message })
 				}),
 			postPlanToThread: ({ thread, plan }) =>
 				callSlack(

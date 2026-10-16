@@ -4,14 +4,17 @@ import type { GitHubPostPullRequestReviewComment } from '../GitHubApiContract'
 import {
 	GitHubAccessLevel,
 	GitHubActionsJobInfo,
+	GitHubActionsJobRecord,
 	type GitHubActionsJobRef,
 	GitHubCheckAnnotation,
 	GitHubCheckRunInfo,
+	GitHubCheckRunRecord,
 	type GitHubCheckRunRef,
 	type GitHubCommentRef,
 	type GitHubDiscussionRef,
 	GitHubCommit,
 	type GitHubIssueCommentRef,
+	GitHubIssueCommentRecord,
 	GitHubIssueInfo,
 	type GitHubIssueRef,
 	GitHubLabel,
@@ -23,9 +26,9 @@ import {
 	type GitHubRepositoryRef,
 	GitHubReview,
 	GitHubReviewCommentRef,
+	GitHubReviewCommentRecord,
 	type GitHubReviewState,
 } from '../GitHubModels'
-import { GitHubActionsJob, GitHubCheckRun, GitHubIssueComment, GitHubReviewComment } from '../GitHubResources'
 import * as Api from './GitHubApiSchemas'
 
 export const repositoryPath = (ref: GitHubRepositoryRef) =>
@@ -73,7 +76,7 @@ export const pullRequestInfo = (ref: GitHubPullRequestRef, value: typeof Api.Pul
 		baseSha: value.base.sha,
 	})
 export const issueComment = (discussion: GitHubIssueCommentRef['discussion'], value: typeof Api.IssueComment.Type) =>
-	GitHubIssueComment.make({
+	GitHubIssueCommentRecord.make({
 		ref: { discussion, id: value.id },
 		body: value.body,
 		url: value.html_url,
@@ -97,7 +100,7 @@ export const review = (pullRequest: GitHubPullRequestRef, value: typeof Api.Revi
 		url: value.html_url,
 	})
 export const reviewComment = (pullRequest: GitHubPullRequestRef, value: typeof Api.ReviewComment.Type) =>
-	GitHubReviewComment.make({
+	GitHubReviewCommentRecord.make({
 		ref: { pullRequest, id: value.id },
 		nodeId: value.node_id,
 		body: value.body,
@@ -170,7 +173,7 @@ export const checkRunInfo = (ref: GitHubCheckRunRef, value: typeof Api.CheckRun.
 		annotationCount: value.output.annotations_count,
 	})
 export const checkRun = (repository: GitHubRepositoryRef, value: typeof Api.CheckRun.Type) =>
-	GitHubCheckRun.make({
+	GitHubCheckRunRecord.make({
 		ref: {
 			installationId: repository.installationId,
 			repositoryId: repository.repositoryId,
@@ -219,7 +222,7 @@ export const actionsJobInfo = (ref: GitHubActionsJobRef, value: typeof Api.Actio
 	return GitHubActionsJobInfo.make(info)
 }
 export const actionsJob = (repository: GitHubRepositoryRef, value: typeof Api.ActionsJob.Type) =>
-	GitHubActionsJob.make({
+	GitHubActionsJobRecord.make({
 		ref: {
 			installationId: repository.installationId,
 			repositoryId: repository.repositoryId,

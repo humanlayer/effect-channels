@@ -47,11 +47,11 @@ import {
 	slackReactionTargets,
 	slackThreadSupportedOperations,
 } from './SlackDeliveryDestination'
+import { slackFileFromMetadata } from './SlackFile'
 import { SlackChannelId, SlackMessageTs, SlackTeamId, slackThreadResourceId } from './SlackIdentity'
+import { SlackMessage } from './SlackMessage'
 import {
-	slackFileFromMetadata,
 	SlackMarkdownContent,
-	SlackMessage,
 	SlackMessageRef,
 	type SlackParticipant,
 	SlackReaction,
@@ -385,7 +385,7 @@ const normalizeEnvelope = (envelope: SlackEnvelope, thread: SlackThreadRef) =>
 						})
 						const message = yield* Effect.flatMap(SlackApi, (api) =>
 							api.getMessage({ thread, message: messageRef }),
-						)
+						).pipe(Effect.map((record) => SlackMessage.fromRecord(record)))
 						return Option.some<NormalizedEvent>({
 							event: SlackReactionAdded.make({
 								eventId,
@@ -407,7 +407,7 @@ const normalizeEnvelope = (envelope: SlackEnvelope, thread: SlackThreadRef) =>
 						})
 						const message = yield* Effect.flatMap(SlackApi, (api) =>
 							api.getMessage({ thread, message: messageRef }),
-						)
+						).pipe(Effect.map((record) => SlackMessage.fromRecord(record)))
 						return Option.some<NormalizedEvent>({
 							event: SlackReactionRemoved.make({
 								eventId,

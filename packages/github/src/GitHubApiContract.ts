@@ -5,15 +5,24 @@ import {
 	type GitHubAccessLevel,
 	GitHubActionsJobRef,
 	type GitHubActionsJobInfo,
+	type GitHubActionsJobRecord,
+	type GitHubCheckAnnotations,
 	GitHubCheckRunRef,
 	type GitHubCheckRunInfo,
+	type GitHubCheckRunRecords,
 	GitHubCommentRef,
+	type GitHubCommentRecord,
+	type GitHubCommits,
 	GitHubContent,
 	GitHubIssueCommentRef,
+	type GitHubIssueCommentRecord,
+	type GitHubIssueCommentRecords,
 	type GitHubIssueInfo,
+	type GitHubLabelsResult,
 	GitHubIssueRef,
 	GitHubMergeMethod,
 	type GitHubMergeResult,
+	type GitHubPullRequestFiles,
 	type GitHubPullRequestInfo,
 	GitHubPullRequestRef,
 	GitHubReaction,
@@ -21,21 +30,10 @@ import {
 	GitHubReviewCommentLocation,
 	GitHubRepositoryRef,
 	GitHubReviewCommentRef,
+	type GitHubReviewCommentRecord,
+	type GitHubReviewCommentRecords,
+	type GitHubReviews,
 } from './GitHubModels'
-import type {
-	GitHubActionsJob,
-	GitHubCheckAnnotations,
-	GitHubCheckRuns,
-	GitHubComment,
-	GitHubCommits,
-	GitHubIssueComment,
-	GitHubIssueComments,
-	GitHubLabelsResult,
-	GitHubPullRequestFiles,
-	GitHubReviewComment,
-	GitHubReviewComments,
-	GitHubReviews,
-} from './GitHubResources'
 
 export const GitHubIssueRequest = Schema.Struct({ issue: GitHubIssueRef })
 export interface GitHubIssueRequest extends Schema.Schema.Type<typeof GitHubIssueRequest> {}
@@ -269,14 +267,14 @@ export class GitHubApiError extends Schema.TaggedError<GitHubApiError>()('GitHub
 export type GitHubApiOperations = {
 	readonly fetchIssue: (input: GitHubIssueRequest) => Effect.Effect<GitHubIssueInfo, GitHubApiError>
 	readonly fetchPullRequest: (input: GitHubPullRequestRequest) => Effect.Effect<GitHubPullRequestInfo, GitHubApiError>
-	readonly listIssueComments: (input: GitHubIssueRequest) => Effect.Effect<GitHubIssueComments, GitHubApiError>
+	readonly listIssueComments: (input: GitHubIssueRequest) => Effect.Effect<GitHubIssueCommentRecords, GitHubApiError>
 	readonly listPullRequestComments: (
 		input: GitHubPullRequestRequest,
-	) => Effect.Effect<GitHubIssueComments, GitHubApiError>
+	) => Effect.Effect<GitHubIssueCommentRecords, GitHubApiError>
 	readonly listPullRequestReviews: (input: GitHubPullRequestRequest) => Effect.Effect<GitHubReviews, GitHubApiError>
 	readonly listPullRequestReviewComments: (
 		input: GitHubPullRequestRequest,
-	) => Effect.Effect<GitHubReviewComments, GitHubApiError>
+	) => Effect.Effect<GitHubReviewCommentRecords, GitHubApiError>
 	readonly listPullRequestFiles: (
 		input: GitHubPullRequestRequest,
 	) => Effect.Effect<GitHubPullRequestFiles, GitHubApiError>
@@ -301,17 +299,19 @@ export type GitHubApiOperations = {
 	) => Effect.Effect<GitHubLabelsResult, GitHubApiError>
 	readonly removeAllIssueLabels: (input: GitHubIssueRequest) => Effect.Effect<void, GitHubApiError>
 	readonly removeAllPullRequestLabels: (input: GitHubPullRequestRequest) => Effect.Effect<void, GitHubApiError>
-	readonly postIssueComment: (input: GitHubPostIssueComment) => Effect.Effect<GitHubIssueComment, GitHubApiError>
+	readonly postIssueComment: (
+		input: GitHubPostIssueComment,
+	) => Effect.Effect<GitHubIssueCommentRecord, GitHubApiError>
 	readonly postPullRequestComment: (
 		input: GitHubPostPullRequestComment,
-	) => Effect.Effect<GitHubIssueComment, GitHubApiError>
+	) => Effect.Effect<GitHubIssueCommentRecord, GitHubApiError>
 	readonly postPullRequestReviewComment: (
 		input: GitHubPostPullRequestReviewComment,
-	) => Effect.Effect<GitHubReviewComment, GitHubApiError>
+	) => Effect.Effect<GitHubReviewCommentRecord, GitHubApiError>
 	readonly replyToReviewComment: (
 		input: GitHubReplyToReviewComment,
-	) => Effect.Effect<GitHubReviewComment, GitHubApiError>
-	readonly updateComment: (input: GitHubUpdateComment) => Effect.Effect<GitHubComment, GitHubApiError>
+	) => Effect.Effect<GitHubReviewCommentRecord, GitHubApiError>
+	readonly updateComment: (input: GitHubUpdateComment) => Effect.Effect<GitHubCommentRecord, GitHubApiError>
 	readonly deleteComment: (input: GitHubDeleteComment) => Effect.Effect<void, GitHubApiError>
 	/** Add the bot's reaction to a comment, issue, or pull request. Already present counts as added. */
 	readonly addReaction: (input: GitHubReactionRequest) => Effect.Effect<void, GitHubApiError>
@@ -329,12 +329,16 @@ export type GitHubApiOperations = {
 		input: GitHubListPullRequestsForBranch,
 	) => Effect.Effect<ReadonlyArray<GitHubPullRequestInfo>, GitHubApiError>
 	readonly createPullRequest: (input: GitHubCreatePullRequest) => Effect.Effect<GitHubPullRequestInfo, GitHubApiError>
-	readonly listCheckRunsForRef: (input: GitHubListCheckRunsForRef) => Effect.Effect<GitHubCheckRuns, GitHubApiError>
+	readonly listCheckRunsForRef: (
+		input: GitHubListCheckRunsForRef,
+	) => Effect.Effect<GitHubCheckRunRecords, GitHubApiError>
 	readonly fetchCheckRun: (input: GitHubCheckRunRequest) => Effect.Effect<GitHubCheckRunInfo, GitHubApiError>
 	readonly listCheckRunAnnotations: (
 		input: GitHubCheckRunRequest,
 	) => Effect.Effect<GitHubCheckAnnotations, GitHubApiError>
-	readonly resolveActionsJob: (input: GitHubCheckRunRequest) => Effect.Effect<GitHubActionsJob | null, GitHubApiError>
+	readonly resolveActionsJob: (
+		input: GitHubCheckRunRequest,
+	) => Effect.Effect<GitHubActionsJobRecord | null, GitHubApiError>
 	readonly fetchActionsJob: (input: GitHubActionsJobRequest) => Effect.Effect<GitHubActionsJobInfo, GitHubApiError>
 	readonly downloadActionsJobLog: (input: GitHubActionsJobRequest) => Effect.Effect<string, GitHubApiError>
 	/** A user's access to a repository. An account that is not a GitHub user fails with `not_found`. */
