@@ -4,16 +4,15 @@
  */
 import { type Effect, Schema, type Stream } from 'effect'
 
-import type {
-	LinearDownloadFileBytesRequest,
-	LinearDownloadFileRequest,
-	LinearFile,
-	LinearFileError,
-	LinearUploadAttachmentRequest,
-	LinearUploadFileRequest,
-} from './LinearFiles'
 import {
-	LinearAttachmentId,
+	type LinearDownloadFileBytesRequest,
+	type LinearDownloadFileRequest,
+	type LinearFileRecord,
+	LinearFileSizeLimitExceeded,
+	type LinearUploadAttachmentRequest,
+	type LinearUploadFileRequest,
+} from './LinearFileModels'
+import {
 	LinearCommentId,
 	LinearIssueLabelId,
 	LinearReactionId,
@@ -23,6 +22,7 @@ import {
 import {
 	LinearAgentActivityReceipt,
 	LinearAppUserPage,
+	LinearAttachmentRef,
 	LinearCommentRef,
 	LinearContent,
 	LinearCreateAgentActivityRequest,
@@ -32,7 +32,7 @@ import {
 	LinearUser,
 	LinearUserPage,
 } from './LinearModels'
-import type { LinearComment, LinearIssueAttachment, LinearReaction } from './LinearResources'
+import type { LinearCommentRecord, LinearIssueAttachmentRecord, LinearReactionRecord } from './LinearResourceRecords'
 
 export const LinearIssueRequest = Schema.Struct({ issue: LinearIssueRef })
 export type LinearIssueRequest = typeof LinearIssueRequest.Type
@@ -109,8 +109,6 @@ export const LinearCreateAttachmentRequest = Schema.Struct({
 	input: LinearCreateAttachmentInput,
 })
 export type LinearCreateAttachmentRequest = typeof LinearCreateAttachmentRequest.Type
-export const LinearAttachmentRef = Schema.Struct({ issue: LinearIssueRef, attachmentId: LinearAttachmentId })
-export type LinearAttachmentRef = typeof LinearAttachmentRef.Type
 export const LinearUpdateAttachmentInput = Schema.Struct({
 	title: Schema.String,
 	subtitle: Schema.optionalKey(Schema.NullOr(Schema.String)),
@@ -177,6 +175,9 @@ export class LinearApiError extends Schema.TaggedError<LinearApiError>()('Linear
 	retryAfterMs: Schema.optionalKey(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
 }) {}
 
+export const LinearFileError = Schema.Union([LinearApiError, LinearFileSizeLimitExceeded])
+export type LinearFileError = typeof LinearFileError.Type
+
 /** The operations `LinearApi` provides. */
 export type LinearApiOperations = {
 	readonly createAgentActivity: (
@@ -192,26 +193,28 @@ export type LinearApiOperations = {
 	readonly getUser: (request: LinearGetUserRequest) => Effect.Effect<LinearUser, LinearApiError>
 	readonly listIssueComments: (
 		request: LinearIssueRequest,
-	) => Effect.Effect<ReadonlyArray<LinearComment>, LinearApiError>
+	) => Effect.Effect<ReadonlyArray<LinearCommentRecord>, LinearApiError>
 	readonly listIssueAttachments: (
 		request: LinearIssueRequest,
-	) => Effect.Effect<ReadonlyArray<LinearIssueAttachment>, LinearApiError>
-	readonly createComment: (request: LinearCreateCommentRequest) => Effect.Effect<LinearComment, LinearApiError>
-	readonly updateComment: (request: LinearUpdateCommentRequest) => Effect.Effect<LinearComment, LinearApiError>
+	) => Effect.Effect<ReadonlyArray<LinearIssueAttachmentRecord>, LinearApiError>
+	readonly createComment: (request: LinearCreateCommentRequest) => Effect.Effect<LinearCommentRecord, LinearApiError>
+	readonly updateComment: (request: LinearUpdateCommentRequest) => Effect.Effect<LinearCommentRecord, LinearApiError>
 	readonly deleteComment: (request: LinearDeleteCommentRequest) => Effect.Effect<void, LinearApiError>
-	readonly createReaction: (request: LinearCreateReactionRequest) => Effect.Effect<LinearReaction, LinearApiError>
+	readonly createReaction: (
+		request: LinearCreateReactionRequest,
+	) => Effect.Effect<LinearReactionRecord, LinearApiError>
 	readonly deleteReaction: (request: LinearDeleteReactionRequest) => Effect.Effect<void, LinearApiError>
 	readonly createAttachment: (
 		request: LinearCreateAttachmentRequest,
-	) => Effect.Effect<LinearIssueAttachment, LinearApiError>
+	) => Effect.Effect<LinearIssueAttachmentRecord, LinearApiError>
 	readonly updateAttachment: (
 		request: LinearUpdateAttachmentRequest,
-	) => Effect.Effect<LinearIssueAttachment, LinearApiError>
+	) => Effect.Effect<LinearIssueAttachmentRecord, LinearApiError>
 	readonly deleteAttachment: (request: LinearDeleteAttachmentRequest) => Effect.Effect<void, LinearApiError>
-	readonly uploadFile: (request: LinearUploadFileRequest) => Effect.Effect<LinearFile, LinearApiError>
+	readonly uploadFile: (request: LinearUploadFileRequest) => Effect.Effect<LinearFileRecord, LinearApiError>
 	readonly uploadAttachment: (
 		request: LinearUploadAttachmentRequest,
-	) => Effect.Effect<LinearIssueAttachment, LinearApiError>
+	) => Effect.Effect<LinearIssueAttachmentRecord, LinearApiError>
 	readonly downloadFile: (
 		request: LinearDownloadFileRequest,
 	) => Effect.Effect<Stream.Stream<Uint8Array, LinearApiError>, LinearApiError>

@@ -1,6 +1,7 @@
 import { Schema } from 'effect'
 
-import { SlackMessage, SlackMessageRef, SlackParticipant, SlackReaction } from './SlackModels'
+import { SlackMessage } from './SlackMessage'
+import { SlackMessageRef, SlackParticipant, SlackReaction } from './SlackModels'
 import { SlackThread } from './SlackThread'
 
 export const SlackEventId = Schema.NonEmptyString.pipe(Schema.brand('SlackEventId'))

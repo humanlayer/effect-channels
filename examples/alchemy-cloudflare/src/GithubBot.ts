@@ -22,7 +22,7 @@ import {
 	type GitHubApiError,
 	type GitHubCallbackHandlers,
 	type GitHubCheckConclusion,
-	type GitHubIssueComment,
+	type GitHubIssueCommentRecord,
 	type GitHubIssueCreated,
 	type GitHubMentioned,
 	type GitHubParticipant,
@@ -30,7 +30,7 @@ import {
 	type GitHubPrCreated,
 	type GitHubPrEvent,
 	type GitHubRepositoryRef,
-	type GitHubReviewComment,
+	type GitHubReviewCommentRecord,
 } from '@humanlayer/channels-github'
 import type { RuntimeContext } from 'alchemy/RuntimeContext'
 import { Array as Arr, Config, Effect, Match, Predicate, Schema } from 'effect'
@@ -114,14 +114,14 @@ interface RequestItem {
 
 const authorOf = (author: GitHubParticipant | null) => (author === null ? 'a deleted user' : `@${author.login}`)
 
-const commentItem = (comment: GitHubIssueComment): RequestItem => ({
+const commentItem = (comment: GitHubIssueCommentRecord): RequestItem => ({
 	comment: RequestComment.cases.Comment.make({ id: comment.ref.id }),
 	body: comment.body,
 	text: `${authorOf(comment.author)} commented (comment ${comment.ref.id}):\n${comment.body}`,
 })
 
 /** A line comment with where it is in the diff and the thread to reply in: GitHub threads replies under the first. */
-const lineCommentItem = (comment: GitHubReviewComment): RequestItem => {
+const lineCommentItem = (comment: GitHubReviewCommentRecord): RequestItem => {
 	const line = comment.line ?? comment.startLine
 	const where = Predicate.isNullish(line) ? comment.path : `${comment.path}:${line}`
 	const thread = comment.inReplyToId ?? comment.ref.id

@@ -2,7 +2,7 @@ import { Effect, Schema } from 'effect'
 
 import type { LinearApiError, LinearIssueRequest } from '../LinearApiContract'
 import { LinearIssueId } from '../LinearIdentity'
-import type { LinearIssueAttachment } from '../LinearResources'
+import type { LinearIssueAttachmentRecord } from '../LinearResourceRecords'
 import { type LinearProviderError, LinearResponseDecodeError, linearProviderErrorDetails } from './LinearApiErrors'
 import { projectLinearAttachment } from './LinearApiProjections'
 import { LinearApiAttachment, LinearApiPageInfo } from './LinearApiSchemas'
@@ -23,8 +23,12 @@ const ListIssueAttachmentsResponse = Schema.Struct({
 export const listIssueAttachments = Effect.fn('linear.api.list_issue_attachments')((input: LinearIssueRequest) => {
 	const page = (
 		variables: typeof ListIssueAttachmentsVariables.Type,
-		accumulated: ReadonlyArray<LinearIssueAttachment>,
-	): Effect.Effect<ReadonlyArray<LinearIssueAttachment>, LinearProviderError | LinearApiError, LinearHttpClient> =>
+		accumulated: ReadonlyArray<LinearIssueAttachmentRecord>,
+	): Effect.Effect<
+		ReadonlyArray<LinearIssueAttachmentRecord>,
+		LinearProviderError | LinearApiError,
+		LinearHttpClient
+	> =>
 		linearGraphql({
 			operation: 'list_issue_attachments',
 			query: document,

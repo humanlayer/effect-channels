@@ -5,10 +5,9 @@ import {
 } from '@humanlayer/channels-delivery'
 import { Effect, Predicate, Schema } from 'effect'
 
-import type { LinearApi } from './LinearApi'
 import {
+	LinearApi,
 	type LinearApiError,
-	LinearAttachmentRef,
 	LinearCreateAttachmentRequest,
 	type LinearCreateAttachmentInput,
 	LinearCreateCommentRequest,
@@ -26,17 +25,15 @@ import {
 	LinearUpdateCommentRequest,
 	LinearUpdateIssueRequest,
 	type LinearUserPageOptions,
-} from './LinearApiContract'
-import { LinearApiHandle } from './LinearApiHandle'
+} from './LinearApi'
 import {
-	LinearFile,
 	LinearUploadAttachmentRequest,
 	LinearUploadFileRequest,
 	type LinearUploadAttachmentInput,
 	type LinearUploadFileInput,
-} from './LinearFiles'
+} from './LinearFileModels'
+import { LinearFile } from './LinearFiles'
 import type { LinearAgentActivityId, LinearIssueLabelId, LinearUserId, LinearWorkflowStateId } from './LinearIdentity'
-import { LinearReactionId } from './LinearIdentity'
 import { LinearWebhookDeliveryId } from './LinearIdentity'
 import {
 	LinearActivityContent,
@@ -46,14 +43,13 @@ import {
 	LinearContent,
 	LinearCreateAgentActivityRequest,
 	LinearIssueSnapshot,
-	LinearIssueRef,
-	LinearIssueAttachmentSnapshot,
-	LinearReactionSnapshot,
+	type LinearIssueRef,
 	type LinearAppUserPage,
 	type LinearIssueInfo,
 	type LinearUser,
 	type LinearUserPage,
 } from './LinearModels'
+import { type LinearCommentRecord, LinearIssueAttachmentRecord, LinearReactionRecord } from './LinearResourceRecords'
 
 const issueAttributes = (issueId: string) => ({ 'linear.issue_id': issueId })
 
@@ -84,40 +80,36 @@ export class LinearIssue extends Schema.TaggedClass<LinearIssue>()('LinearIssue'
 	}
 
 	fetchInfo(): Effect.Effect<LinearIssueInfo, LinearApiError, LinearApi> {
-		return Effect.flatMap(LinearApiHandle, (api) =>
-			api.getIssue(LinearIssueRequest.make({ issue: this.ref })),
-		).pipe(Effect.withSpan('linear.issue.fetch_info', { attributes: issueAttributes(this.ref.issueId) }))
+		return Effect.flatMap(LinearApi, (api) => api.getIssue(LinearIssueRequest.make({ issue: this.ref }))).pipe(
+			Effect.withSpan('linear.issue.fetch_info', { attributes: issueAttributes(this.ref.issueId) }),
+		)
 	}
 	listAssignableUsers(options: LinearUserPageOptions = {}): Effect.Effect<LinearUserPage, LinearApiError, LinearApi> {
-		return Effect.flatMap(LinearApiHandle, (api) =>
-			api.listAssignableUsers(linearListUsersRequest(this.ref, options)),
-		)
+		return Effect.flatMap(LinearApi, (api) => api.listAssignableUsers(linearListUsersRequest(this.ref, options)))
 	}
 	listAppUsers(options: LinearUserPageOptions = {}): Effect.Effect<LinearAppUserPage, LinearApiError, LinearApi> {
-		return Effect.flatMap(LinearApiHandle, (api) => api.listAppUsers(linearListUsersRequest(this.ref, options)))
+		return Effect.flatMap(LinearApi, (api) => api.listAppUsers(linearListUsersRequest(this.ref, options)))
 	}
 	getUser(userId: LinearUserId): Effect.Effect<LinearUser, LinearApiError, LinearApi> {
-		return Effect.flatMap(LinearApiHandle, (api) =>
-			api.getUser(LinearGetUserRequest.make({ issue: this.ref, userId })),
-		)
+		return Effect.flatMap(LinearApi, (api) => api.getUser(LinearGetUserRequest.make({ issue: this.ref, userId })))
 	}
 	listComments(): Effect.Effect<ReadonlyArray<LinearComment>, LinearApiError, LinearApi> {
-		return Effect.flatMap(LinearApiHandle, (api) =>
+		return Effect.flatMap(LinearApi, (api) =>
 			api.listIssueComments(LinearIssueRequest.make({ issue: this.ref })),
-		)
+		).pipe(Effect.map((records) => records.map((record) => LinearComment.fromRecord(record))))
 	}
 	listAttachments(): Effect.Effect<ReadonlyArray<LinearIssueAttachment>, LinearApiError, LinearApi> {
-		return Effect.flatMap(LinearApiHandle, (api) =>
+		return Effect.flatMap(LinearApi, (api) =>
 			api.listIssueAttachments(LinearIssueRequest.make({ issue: this.ref })),
-		)
+		).pipe(Effect.map((records) => records.map((record) => LinearIssueAttachment.make(record))))
 	}
 	postComment(content: LinearContent): Effect.Effect<LinearComment, LinearApiError, LinearApi> {
-		return Effect.flatMap(LinearApiHandle, (api) =>
+		return Effect.flatMap(LinearApi, (api) =>
 			api.createComment(LinearCreateCommentRequest.make({ issue: this.ref, content })),
-		)
+		).pipe(Effect.map((record) => LinearComment.fromRecord(record)))
 	}
 	update(update: LinearIssueUpdate): Effect.Effect<LinearIssueInfo, LinearApiError, LinearApi> {
-		return Effect.flatMap(LinearApiHandle, (api) =>
+		return Effect.flatMap(LinearApi, (api) =>
 			api.updateIssue(LinearUpdateIssueRequest.make({ issue: this.ref, update })),
 		)
 	}
@@ -140,35 +132,41 @@ export class LinearIssue extends Schema.TaggedClass<LinearIssue>()('LinearIssue'
 		return this.update({ delegateId })
 	}
 	addReaction(emoji: string): Effect.Effect<LinearReaction, LinearApiError, LinearApi> {
-		return Effect.flatMap(LinearApiHandle, (api) =>
+		return Effect.flatMap(LinearApi, (api) =>
 			api.createReaction(
 				LinearCreateReactionRequest.make({
 					target: LinearReactionTarget.cases.Issue.make({ issue: this.ref }),
 					emoji,
 				}),
 			),
-		)
+		).pipe(Effect.map((record) => LinearReaction.make(record)))
 	}
 	createAttachment(
 		input: LinearCreateAttachmentInput,
 	): Effect.Effect<LinearIssueAttachment, LinearApiError, LinearApi> {
-		return Effect.flatMap(LinearApiHandle, (api) =>
+		return Effect.flatMap(LinearApi, (api) =>
 			api.createAttachment(LinearCreateAttachmentRequest.make({ issue: this.ref, input })),
-		)
+		).pipe(Effect.map((record) => LinearIssueAttachment.make(record)))
 	}
 	/** Uploads bytes as a Linear asset. Place the returned `url` in issue or comment Markdown to show it. */
 	uploadFile(input: LinearUploadFileInput): Effect.Effect<LinearFile, LinearApiError, LinearApi> {
-		return Effect.flatMap(LinearApiHandle, (api) =>
+		return Effect.flatMap(LinearApi, (api) =>
 			api.uploadFile(LinearUploadFileRequest.make({ issue: this.ref, input })),
-		).pipe(Effect.withSpan('linear.issue.upload_file', { attributes: issueAttributes(this.ref.issueId) }))
+		).pipe(
+			Effect.map((record) => LinearFile.make(record)),
+			Effect.withSpan('linear.issue.upload_file', { attributes: issueAttributes(this.ref.issueId) }),
+		)
 	}
 	/** Uploads bytes and attaches the asset to this issue as a first-class Linear attachment card. */
 	uploadAttachment(
 		input: LinearUploadAttachmentInput,
 	): Effect.Effect<LinearIssueAttachment, LinearApiError, LinearApi> {
-		return Effect.flatMap(LinearApiHandle, (api) =>
+		return Effect.flatMap(LinearApi, (api) =>
 			api.uploadAttachment(LinearUploadAttachmentRequest.make({ issue: this.ref, input })),
-		).pipe(Effect.withSpan('linear.issue.upload_attachment', { attributes: issueAttributes(this.ref.issueId) }))
+		).pipe(
+			Effect.map((record) => LinearIssueAttachment.make(record)),
+			Effect.withSpan('linear.issue.upload_attachment', { attributes: issueAttributes(this.ref.issueId) }),
+		)
 	}
 }
 
@@ -176,41 +174,46 @@ export class LinearComment extends Schema.TaggedClass<LinearComment>()('LinearCo
 	...LinearCommentSnapshot.fields,
 	files: Schema.Array(LinearFile),
 }) {
+	/** Wraps a comment record from `LinearApi`, and each of its files. */
+	static fromRecord(record: LinearCommentRecord): LinearComment {
+		return LinearComment.make({ ...record, files: record.files.map((file) => LinearFile.make(file)) })
+	}
+
 	reply(content: LinearContent): Effect.Effect<LinearComment, LinearApiError, LinearApi> {
-		return Effect.flatMap(LinearApiHandle, (api) =>
+		return Effect.flatMap(LinearApi, (api) =>
 			api.createComment(
 				LinearCreateCommentRequest.make({ issue: this.issue, parentId: this.ref.commentId, content }),
 			),
-		)
+		).pipe(Effect.map((record) => LinearComment.fromRecord(record)))
 	}
 	update(content: LinearContent): Effect.Effect<LinearComment, LinearApiError, LinearApi> {
-		return Effect.flatMap(LinearApiHandle, (api) =>
+		return Effect.flatMap(LinearApi, (api) =>
 			api.updateComment(LinearUpdateCommentRequest.make({ comment: this.ref, content })),
-		)
+		).pipe(Effect.map((record) => LinearComment.fromRecord(record)))
 	}
 	remove(): Effect.Effect<void, LinearApiError, LinearApi> {
-		return Effect.flatMap(LinearApiHandle, (api) =>
+		return Effect.flatMap(LinearApi, (api) =>
 			api.deleteComment(LinearDeleteCommentRequest.make({ comment: this.ref })),
 		)
 	}
 	addReaction(emoji: string): Effect.Effect<LinearReaction, LinearApiError, LinearApi> {
-		return Effect.flatMap(LinearApiHandle, (api) =>
+		return Effect.flatMap(LinearApi, (api) =>
 			api.createReaction(
 				LinearCreateReactionRequest.make({
 					target: LinearReactionTarget.cases.Comment.make({ comment: this.ref }),
 					emoji,
 				}),
 			),
-		)
+		).pipe(Effect.map((record) => LinearReaction.make(record)))
 	}
 }
 
-export class LinearReaction extends Schema.TaggedClass<LinearReaction>()('LinearReaction', {
-	...LinearReactionSnapshot.fields,
-	ref: Schema.Struct({ issue: LinearIssueRef, reactionId: LinearReactionId }),
-}) {
+export class LinearReaction extends Schema.TaggedClass<LinearReaction>()(
+	'LinearReaction',
+	LinearReactionRecord.fields,
+) {
 	remove(): Effect.Effect<void, LinearApiError, LinearApi> {
-		return Effect.flatMap(LinearApiHandle, (api) =>
+		return Effect.flatMap(LinearApi, (api) =>
 			api.deleteReaction(
 				LinearDeleteReactionRequest.make({ issue: this.ref.issue, reactionId: this.ref.reactionId }),
 			),
@@ -218,17 +221,17 @@ export class LinearReaction extends Schema.TaggedClass<LinearReaction>()('Linear
 	}
 }
 
-export class LinearIssueAttachment extends Schema.TaggedClass<LinearIssueAttachment>()('LinearIssueAttachment', {
-	...LinearIssueAttachmentSnapshot.fields,
-	ref: LinearAttachmentRef,
-}) {
+export class LinearIssueAttachment extends Schema.TaggedClass<LinearIssueAttachment>()(
+	'LinearIssueAttachment',
+	LinearIssueAttachmentRecord.fields,
+) {
 	update(input: LinearUpdateAttachmentInput): Effect.Effect<LinearIssueAttachment, LinearApiError, LinearApi> {
-		return Effect.flatMap(LinearApiHandle, (api) =>
+		return Effect.flatMap(LinearApi, (api) =>
 			api.updateAttachment(LinearUpdateAttachmentRequest.make({ attachment: this.ref, input })),
-		)
+		).pipe(Effect.map((record) => LinearIssueAttachment.make(record)))
 	}
 	remove(): Effect.Effect<void, LinearApiError, LinearApi> {
-		return Effect.flatMap(LinearApiHandle, (api) =>
+		return Effect.flatMap(LinearApi, (api) =>
 			api.deleteAttachment(LinearDeleteAttachmentRequest.make({ attachment: this.ref })),
 		)
 	}
@@ -261,7 +264,7 @@ export class LinearAgentSession extends Schema.TaggedClass<LinearAgentSession>()
 			ephemeral,
 			deliveryId: this.deliveryId,
 		}
-		return Effect.flatMap(LinearApiHandle, (api) =>
+		return Effect.flatMap(LinearApi, (api) =>
 			api.createAgentActivity(
 				LinearCreateAgentActivityRequest.make(
 					Predicate.isUndefined(activityId) ? request : { ...request, activityId },

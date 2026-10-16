@@ -1,9 +1,9 @@
-import { Effect, Schema, type Stream } from 'effect'
+/**
+ * Plain Slack data: refs, ids, content, upload inputs, and the records `SlackApi` takes and returns. Nothing here
+ * calls a service, so this module imports neither `SlackApi` nor the callback objects built on it.
+ */
+import { Schema } from 'effect'
 
-import type { SlackApi } from './SlackApi'
-import type { SlackApiError, SlackFileDownloadError } from './SlackApiContract'
-import { SlackDownloadFileBytesRequest, SlackDownloadFileRequest } from './SlackApiContract'
-import { SlackApiHandle } from './SlackApiHandle'
 import { SlackChannelId, SlackMessageTs, SlackTeamId } from './SlackIdentity'
 import type { SlackFileMetadata } from './SlackWebhookEventSchemas'
 
@@ -117,63 +117,24 @@ export const SlackUploadFileInput = Schema.Struct({
 })
 export type SlackUploadFileInput = typeof SlackUploadFileInput.Type
 
-export class SlackFile extends Schema.TaggedClass<SlackFile>()('SlackFile', {
+/** A Slack file as `SlackApi` returns it: the fields of `SlackFile`, without its methods. */
+export const SlackFileRecord = Schema.Struct({
 	ref: SlackFileRef,
 	name: Schema.NullOr(Schema.String),
 	contentType: Schema.NullOr(Schema.String),
 	size: Schema.NullOr(Schema.Natural),
 	downloadUrl: Schema.NullOr(Schema.String),
-}) {
-	/** Streams the file with the bot token. The stream is not buffered. */
-	download(): Effect.Effect<Stream.Stream<Uint8Array, SlackApiError>, SlackFileDownloadError, SlackApi> {
-		return Effect.flatMap(SlackApiHandle, (api) =>
-			api.downloadFile(
-				SlackDownloadFileRequest.make({
-					file: this.ref,
-					downloadUrl: this.downloadUrl,
-					contentType: this.contentType,
-					size: this.size,
-				}),
-			),
-		).pipe(
-			Effect.withSpan('slack.file.download', {
-				attributes: { 'slack.team_id': this.ref.teamId, 'slack.file_id': this.ref.fileId },
-			}),
-		)
-	}
-
-	/** Buffers the file, failing before `maxBytes` is exceeded. */
-	downloadBytes(options: SlackDownloadBytesOptions): Effect.Effect<Uint8Array, SlackFileDownloadError, SlackApi> {
-		return Effect.flatMap(SlackApiHandle, (api) =>
-			api.downloadFileBytes(
-				SlackDownloadFileBytesRequest.make({
-					file: this.ref,
-					downloadUrl: this.downloadUrl,
-					contentType: this.contentType,
-					size: this.size,
-					maxBytes: options.maxBytes,
-				}),
-			),
-		).pipe(
-			Effect.withSpan('slack.file.download_bytes', {
-				attributes: {
-					'slack.team_id': this.ref.teamId,
-					'slack.file_id': this.ref.fileId,
-					'slack.max_bytes': options.maxBytes,
-				},
-			}),
-		)
-	}
-}
+})
+export type SlackFileRecord = typeof SlackFileRecord.Type
 
 const nonEmpty = (value: string | undefined) => (value === undefined || value.length === 0 ? null : value)
 
 /**
- * Normalizes Slack file metadata from webhooks, Web API messages, and upload completion into one public value.
+ * Normalizes Slack file metadata from webhooks, Web API messages, and upload completion into one record.
  * `url_private_download` wins over `url_private`; absent or empty provider fields become null.
  */
-export const slackFileFromMetadata = (teamId: SlackTeamId, metadata: SlackFileMetadata) =>
-	SlackFile.make({
+export const slackFileRecordFromMetadata = (teamId: SlackTeamId, metadata: SlackFileMetadata): SlackFileRecord =>
+	SlackFileRecord.make({
 		ref: SlackFileRef.make({ teamId, fileId: SlackFileId.make(metadata.id) }),
 		name: nonEmpty(metadata.name),
 		contentType: nonEmpty(metadata.mimetype),
@@ -181,7 +142,8 @@ export const slackFileFromMetadata = (teamId: SlackTeamId, metadata: SlackFileMe
 		downloadUrl: nonEmpty(metadata.url_private_download) ?? nonEmpty(metadata.url_private),
 	})
 
-export class SlackMessage extends Schema.TaggedClass<SlackMessage>()('SlackMessage', {
+/** A Slack message as `SlackApi` returns it: the fields of `SlackMessage`, without its methods. */
+export const SlackMessageRecord = Schema.Struct({
 	ref: SlackMessageRef,
 	thread: SlackThreadRef,
 	author: SlackParticipant,
@@ -191,45 +153,23 @@ export class SlackMessage extends Schema.TaggedClass<SlackMessage>()('SlackMessa
 	 */
 	authorTeamId: Schema.optionalKey(SlackTeamId),
 	content: SlackContent,
-	files: Schema.Array(SlackFile),
+	files: Schema.Array(SlackFileRecord),
 	metadata: SlackMetadata,
-}) {
-	addReaction(reaction: SlackReaction): Effect.Effect<void, SlackApiError, SlackApi> {
-		return Effect.flatMap(SlackApiHandle, (api) => api.addReaction({ message: this.ref, reaction })).pipe(
-			Effect.withSpan('slack.message.add_reaction', {
-				attributes: {
-					'slack.team_id': this.ref.teamId,
-					'slack.channel_id': this.ref.channelId,
-					'slack.message_ts': this.ref.messageTs,
-				},
-			}),
-		)
-	}
+})
+export type SlackMessageRecord = typeof SlackMessageRecord.Type
 
-	removeReaction(reaction: SlackReaction): Effect.Effect<void, SlackApiError, SlackApi> {
-		return Effect.flatMap(SlackApiHandle, (api) => api.removeReaction({ message: this.ref, reaction })).pipe(
-			Effect.withSpan('slack.message.remove_reaction', {
-				attributes: {
-					'slack.team_id': this.ref.teamId,
-					'slack.channel_id': this.ref.channelId,
-					'slack.message_ts': this.ref.messageTs,
-				},
-			}),
-		)
-	}
-}
-
-export const SlackMessages = Schema.Array(SlackMessage)
-export type SlackMessages = typeof SlackMessages.Type
+export const SlackMessageRecords = Schema.Array(SlackMessageRecord)
+export type SlackMessageRecords = typeof SlackMessageRecords.Type
 
 export const SlackParticipants = Schema.Array(SlackParticipant)
 export type SlackParticipants = typeof SlackParticipants.Type
 
-export const SlackSentMessage = Schema.Struct({
+/** A message `SlackApi` posted, as it returns it. */
+export const SlackSentMessageRecord = Schema.Struct({
 	ref: SlackMessageRef,
-	message: SlackMessage,
+	message: SlackMessageRecord,
 })
-export type SlackSentMessage = typeof SlackSentMessage.Type
+export type SlackSentMessageRecord = typeof SlackSentMessageRecord.Type
 
 export const SlackThreadInfo = Schema.Struct({
 	thread: SlackThreadRef,

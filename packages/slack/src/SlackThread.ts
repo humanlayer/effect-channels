@@ -8,16 +8,15 @@ import { Effect, Schema, Stream } from 'effect'
 import type { SlackApiError, SlackFileUploadError } from './SlackApi'
 import { SlackApi } from './SlackApi'
 import { SlackChannel } from './SlackChannel'
+import { SlackFile } from './SlackFile'
+import { SlackMessage, type SlackMessages, type SlackSentMessage, slackSentMessageFromRecord } from './SlackMessage'
 import {
 	type SlackChannelInfo,
 	SlackChannelRef,
 	type SlackContent,
-	type SlackFile,
 	type SlackMessageCount,
-	type SlackMessages,
 	type SlackParticipants,
-	type SlackSentMessage,
-	SlackThreadInfo,
+	type SlackThreadInfo,
 	SlackThreadRef,
 	type SlackUploadFileInput,
 } from './SlackModels'
@@ -57,6 +56,7 @@ export class SlackThread extends Schema.TaggedClass<SlackThread>()('SlackThread'
 
 	listMessages(): Effect.Effect<SlackMessages, SlackApiError, SlackApi> {
 		return Effect.flatMap(SlackApi, (api) => api.listThreadMessages({ thread: this.ref })).pipe(
+			Effect.map((records) => records.map((record) => SlackMessage.fromRecord(record))),
 			Effect.withSpan('slack.thread.list_messages', { attributes: spanAttributes(this.ref) }),
 		)
 	}
@@ -72,6 +72,7 @@ export class SlackThread extends Schema.TaggedClass<SlackThread>()('SlackThread'
 			)
 		}
 		return Effect.flatMap(SlackApi, (api) => api.listChannelMessagesBeforeThread({ thread: this.ref, count })).pipe(
+			Effect.map((records) => records.map((record) => SlackMessage.fromRecord(record))),
 			Effect.withSpan('slack.thread.list_channel_messages_before_thread', {
 				attributes: spanAttributes(this.ref),
 			}),
@@ -80,6 +81,7 @@ export class SlackThread extends Schema.TaggedClass<SlackThread>()('SlackThread'
 
 	post(content: SlackContent): Effect.Effect<SlackSentMessage, SlackApiError, SlackApi> {
 		return Effect.flatMap(SlackApi, (api) => api.postToThread({ thread: this.ref, content })).pipe(
+			Effect.map(slackSentMessageFromRecord),
 			Effect.withSpan('slack.thread.post', { attributes: spanAttributes(this.ref) }),
 		)
 	}
@@ -87,6 +89,7 @@ export class SlackThread extends Schema.TaggedClass<SlackThread>()('SlackThread'
 	/** Uploads bytes and shares the file as a reply in this thread. */
 	uploadFile(input: SlackUploadFileInput): Effect.Effect<SlackFile, SlackFileUploadError, SlackApi> {
 		return Effect.flatMap(SlackApi, (api) => api.uploadFileToThread({ thread: this.ref, input })).pipe(
+			Effect.map((record) => SlackFile.make(record)),
 			Effect.withSpan('slack.thread.upload_file', { attributes: spanAttributes(this.ref) }),
 		)
 	}
@@ -101,6 +104,7 @@ export class SlackThread extends Schema.TaggedClass<SlackThread>()('SlackThread'
 		chunks: Stream.Stream<SlackStreamChunk, E, R>,
 	): Effect.Effect<SlackSentMessage, SlackApiError | E, SlackApi | R> {
 		return Effect.flatMap(SlackApi, (api) => api.stream(this.ref, chunks)).pipe(
+			Effect.map(slackSentMessageFromRecord),
 			Effect.withSpan('slack.thread.stream', { attributes: spanAttributes(this.ref) }),
 		)
 	}

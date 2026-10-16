@@ -25,7 +25,7 @@ import {
 	GitHubApiError,
 	GitHubBot,
 	GitHubId,
-	GitHubIssueComment,
+	GitHubIssueCommentRecord,
 	GitHubReviewCommentRef,
 	type GitHubCommentRef,
 	type GitHubDiscussionRef,
@@ -77,7 +77,7 @@ const makeFakeGitHub = (options: FakeGitHubOptions = {}) =>
 				if (options.during !== undefined && options.during.body === markdown) yield* options.during.run
 				const id = 900 + (yield* Ref.updateAndGet(commentCount, (n) => n + 1))
 				yield* Queue.offer(shown, `post ${describeDiscussion(discussion)}: ${markdown}`)
-				return GitHubIssueComment.make({
+				return GitHubIssueCommentRecord.make({
 					ref: { discussion, id: GitHubId.make(id) },
 					body: markdown,
 					url: `https://github.com/alice/project/issues/42#issuecomment-${id}`,
@@ -106,7 +106,7 @@ const makeFakeGitHub = (options: FakeGitHubOptions = {}) =>
 					? Effect.die(new Error('the delivery never edits review comments'))
 					: Queue.offer(shown, `edit ${describeComment(comment)}: ${content.markdown}`).pipe(
 							Effect.as(
-								GitHubIssueComment.make({
+								GitHubIssueCommentRecord.make({
 									ref: comment,
 									body: content.markdown,
 									url: 'https://github.com/alice/project/issues/42',

@@ -5,16 +5,17 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from 'effect/http'
 import { SlackApi } from '../src/SlackApi'
 import { SlackApiLiveBase } from '../src/SlackApiLive'
 import { SlackChannelId, SlackMessageTs, SlackTeamId } from '../src/SlackIdentity'
+import { SlackMessage, slackSentMessageFromRecord } from '../src/SlackMessage'
 import {
 	SlackChannelInfo,
 	SlackChannelRef,
-	slackFileFromMetadata,
+	slackFileRecordFromMetadata,
 	SlackMarkdownContent,
-	SlackMessage,
 	SlackMessageCount,
+	SlackMessageRecord,
 	SlackMessageRef,
 	SlackParticipant,
-	SlackSentMessage,
+	SlackSentMessageRecord,
 	SlackThreadRef,
 	SlackUserId,
 } from '../src/SlackModels'
@@ -59,16 +60,16 @@ const me = SlackParticipant.make({
 
 const message = (timestamp: string, author = alice) => {
 	const ref = SlackMessageRef.make({ teamId, channelId, messageTs: SlackMessageTs.make(timestamp) })
-	return SlackMessage.make({ ref, thread: threadRef, author, content, files: [], metadata: {} })
+	return SlackMessageRecord.make({ ref, thread: threadRef, author, content, files: [], metadata: {} })
 }
 
 const rootMessage = message(threadTs)
 const sentMessage = message(threadTs, me)
-const sent = SlackSentMessage.make({ ref: sentMessage.ref, message: sentMessage })
+const sent = SlackSentMessageRecord.make({ ref: sentMessage.ref, message: sentMessage })
 const channelInfo = SlackChannelInfo.make({ channel: channelRef, name: 'pagination', memberCount: 4 })
 
 type SlackMessagePage = {
-	readonly messages: ReadonlyArray<SlackMessage>
+	readonly messages: ReadonlyArray<SlackMessageRecord>
 	readonly nextCursor?: string
 }
 
@@ -256,12 +257,12 @@ describe('SlackApi paginated thread layer', () => {
 			const harness = yield* makeHarness()
 			const plain = message('1700000001.000000')
 			const base = message('1700000002.000000')
-			const withFile = SlackMessage.make({
+			const withFile = SlackMessageRecord.make({
 				ref: base.ref,
 				thread: base.thread,
 				author: base.author,
 				content: base.content,
-				files: [slackFileFromMetadata(teamId, slackFileMetadata)],
+				files: [slackFileRecordFromMetadata(teamId, slackFileMetadata)],
 				metadata: base.metadata,
 			})
 			yield* Queue.offer(harness.threadPages, { messages: [withFile, plain] })
@@ -334,8 +335,10 @@ describe('SlackApi paginated thread layer', () => {
 				yield* thread
 					.listChannelMessagesBeforeThread(SlackMessageCount.make(1))
 					.pipe(Effect.provide(harness.layer)),
-			).toEqual([prior])
-			expect(yield* thread.channel.post(content).pipe(Effect.provide(harness.layer))).toEqual(sent)
+			).toEqual([SlackMessage.fromRecord(prior)])
+			expect(yield* thread.channel.post(content).pipe(Effect.provide(harness.layer))).toEqual(
+				slackSentMessageFromRecord(sent),
+			)
 			expect(yield* thread.channel.fetchInfo().pipe(Effect.provide(harness.layer))).toEqual(channelInfo)
 
 			expect(yield* Queue.take(harness.calls)).toEqual({

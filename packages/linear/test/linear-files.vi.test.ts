@@ -6,14 +6,8 @@ import { LinearApi } from '../src/LinearApi'
 import type { LinearIssueCreated, LinearSubscribedEvents } from '../src/LinearCallbackEvents'
 import type { LinearCallbackHandlers } from '../src/LinearCallbacks'
 import { makeLinearEventProcessor } from '../src/LinearEventProcessor'
-import {
-	canonicalLinearFileUrl,
-	discoverLinearFiles,
-	LinearFile,
-	LinearFileRef,
-	LinearFileUrl,
-	LinearUploadFileInput,
-} from '../src/LinearFiles'
+import { canonicalLinearFileUrl, LinearFileRef, LinearFileUrl, LinearUploadFileInput } from '../src/LinearFileModels'
+import { discoverLinearFiles, LinearFile } from '../src/LinearFiles'
 import { LinearAttachmentId } from '../src/LinearIdentity'
 import { LinearIssueAttachment, LinearIssue } from '../src/LinearResources'
 import { issue } from './api-test-fixtures'

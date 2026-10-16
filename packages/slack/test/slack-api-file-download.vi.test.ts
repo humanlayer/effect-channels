@@ -2,7 +2,7 @@ import { describe, it } from '@effect/vitest'
 import { Effect, Queue, Stream } from 'effect'
 
 import { SlackApiError, SlackFileAuthorizationError, SlackFileSizeLimitExceeded } from '../src/SlackApi'
-import { SlackFile, slackFileFromMetadata } from '../src/SlackModels'
+import { SlackFile, slackFileFromMetadata } from '../src/SlackFile'
 import {
 	botToken,
 	makeRecordingSlackHttp,

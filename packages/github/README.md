@@ -130,6 +130,17 @@ Add `github` to the providers passed to `Channels.make` or the host-specific wra
 
 Callbacks provide `GitHubIssue` and `GitHubPullRequest` resources. Their methods require `GitHubApi`, which the application provides, usually with `GitHubApiLive`; the bot builds no GitHub client of its own. List methods follow GitHub pagination automatically with 100 items per request.
 
+`GitHubApi` itself returns plain records with no methods: `GitHubIssueCommentRecord`, `GitHubReviewCommentRecord`, `GitHubCheckRunRecord`, `GitHubActionsJobRecord`, and lists of them. Resource methods wrap these in the `GitHubIssueComment`, `GitHubReviewComment`, `GitHubCheckRun`, and `GitHubActionsJob` objects, so `issue.postComment(...)` returns a comment with `addReaction()`. Code that calls `GitHubApi` directly and needs those methods wraps the record, as in `GitHubIssueComment.make(record)`, or `commentFromRecord(record)` for an `updateComment` result.
+
+```ts
+const comment = yield * issue.postComment(content) // GitHubIssueComment
+yield * comment.addReaction('eyes')
+
+const api = yield * GitHubApi
+const record = yield * api.postIssueComment({ issue: issue.ref, content }) // GitHubIssueCommentRecord
+yield * GitHubIssueComment.make(record).addReaction('eyes')
+```
+
 ### Issues
 
 In addition to `fetchInfo()`, comment operations, and subscription operations, an issue supports:

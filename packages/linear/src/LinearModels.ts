@@ -93,6 +93,9 @@ export const LinearIssueAttachmentSnapshot = Schema.Struct({
 })
 export type LinearIssueAttachmentSnapshot = typeof LinearIssueAttachmentSnapshot.Type
 
+export const LinearAttachmentRef = Schema.Struct({ issue: LinearIssueRef, attachmentId: LinearAttachmentId })
+export type LinearAttachmentRef = typeof LinearAttachmentRef.Type
+
 export const LinearWorkflowState = Schema.Struct({
 	id: LinearWorkflowStateId,
 	name: Schema.String,

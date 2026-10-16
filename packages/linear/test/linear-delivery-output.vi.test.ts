@@ -64,7 +64,7 @@ import {
 	LinearReactionId,
 	LinearUserId,
 } from '../src/LinearIdentity'
-import { LinearComment, LinearReaction } from '../src/LinearResources'
+import { LinearCommentRecord, LinearReactionRecord } from '../src/LinearResourceRecords'
 import { linearAppUserId, linearOrganizationId } from './fixtures'
 
 const idempotencyKey = '5b0c3a1e-8d2f-4c61-9a57-1f2e3d4c5b6a'
@@ -180,7 +180,7 @@ const run = (
 				record('reactions', request).pipe(
 					Effect.andThen(reactionAnswer),
 					Effect.as(
-						LinearReaction.make({
+						LinearReactionRecord.make({
 							id: request.reactionId ?? LinearReactionId.make('assigned-by-linear'),
 							issueId,
 							commentId: null,
@@ -224,7 +224,7 @@ const run = (
 				record('comments', request).pipe(
 					Effect.andThen(commentAnswer),
 					Effect.as(
-						LinearComment.make({
+						LinearCommentRecord.make({
 							ref: commentRef,
 							issue: LinearIssueRef.make({ organizationId: linearOrganizationId, teamId: null, issueId }),
 							parentCommentId: null,
@@ -238,7 +238,7 @@ const run = (
 				record('commentUpdates', request).pipe(
 					Effect.andThen(commentAnswer),
 					Effect.as(
-						LinearComment.make({
+						LinearCommentRecord.make({
 							ref: request.comment,
 							issue: LinearIssueRef.make({ organizationId: linearOrganizationId, teamId: null, issueId }),
 							parentCommentId: null,

@@ -34,14 +34,9 @@ import {
 } from '../src/SlackCallbackEvents'
 import { type SlackCallbackHandler, type SlackCallbackHandlers } from '../src/SlackCallbacks'
 import { makeSlackEventProcessor } from '../src/SlackEventProcessor'
+import { slackFileFromMetadata } from '../src/SlackFile'
 import { SlackChannelId, SlackMessageTs, SlackTeamId, slackThreadResourceId } from '../src/SlackIdentity'
-import {
-	slackFileFromMetadata,
-	SlackMarkdownContent,
-	SlackMessage,
-	SlackParticipant,
-	SlackUserId,
-} from '../src/SlackModels'
+import { SlackMarkdownContent, SlackMessageRecord, SlackParticipant, SlackUserId } from '../src/SlackModels'
 import { makeSlackWebhookProvider } from '../src/SlackWebhookProvider'
 import {
 	SlackAgentSessionStoppedEnvelope,
@@ -139,7 +134,7 @@ const apiLayer = Layer.mock(SlackApi, {
 	resolveParticipant: (request) => Effect.succeed(request.userId === agent.userId ? agent : alice),
 	getMessage: (request) =>
 		Effect.succeed(
-			SlackMessage.make({
+			SlackMessageRecord.make({
 				ref: request.message,
 				thread: request.thread,
 				author: alice,

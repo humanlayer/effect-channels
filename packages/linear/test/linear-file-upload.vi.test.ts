@@ -6,8 +6,8 @@ import { narrowLinearProviderErrors } from '../src/api/LinearApiErrors'
 import { LinearHttpClient } from '../src/api/LinearHttpClient'
 import { requestLinearFileUpload } from '../src/api/RequestLinearFileUpload'
 import { LinearApi } from '../src/LinearApi'
-import { LinearFile } from '../src/LinearFiles'
-import { LinearIssueAttachment } from '../src/LinearResources'
+import { LinearFileRecord } from '../src/LinearFileModels'
+import { LinearIssueAttachmentRecord } from '../src/LinearResourceRecords'
 import { apiLayer, issue, viewer } from './api-test-fixtures'
 
 const assetUrl =
@@ -151,7 +151,7 @@ describe('Linear file upload', () => {
 			expect(recorded.slice(0, 2).every((request) => request.authorization === 'Bearer token-never-log')).toBe(
 				true,
 			)
-			expect(file).toBeInstanceOf(LinearFile)
+			expect(Schema.is(LinearFileRecord)(file)).toBe(true)
 			expect(file).toMatchObject({
 				ref: { organizationId: issue.organizationId, issueId: issue.issueId },
 				url: assetUrl,
@@ -185,7 +185,7 @@ describe('Linear file upload', () => {
 					metadata: { contentType: 'text/plain', size: bytes.byteLength, source: 'test' },
 				},
 			})
-			expect(attachment).toBeInstanceOf(LinearIssueAttachment)
+			expect(Schema.is(LinearIssueAttachmentRecord)(attachment)).toBe(true)
 			expect(attachment.url).toBe(assetUrl)
 		}),
 	)

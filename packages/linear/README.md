@@ -78,6 +78,8 @@ const linearApi = makeLinearApiLive(LinearApiLiveOptions.make({ auth, ...bot }))
 
 `auth` stays on the bot because webhooks carry the app's OAuth client ID, which the bot checks. `makeLinearApiLiveBase` and `LinearApiLiveBase` leave `HttpClient` for the application to provide.
 
+`LinearApi` takes and returns plain records: `LinearCommentRecord`, `LinearReactionRecord`, `LinearIssueAttachmentRecord`, and `LinearFileRecord`. The resources on callback events wrap them, so `issue.listComments()` gives `LinearComment`s with methods. Code that calls `LinearApi` itself can wrap a record the same way, as with `LinearComment.fromRecord(record)` or `LinearFile.make(record)`.
+
 ## Files
 
 Linear keeps three representations separate:

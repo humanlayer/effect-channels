@@ -3,10 +3,10 @@ import {
 	GitHubApi,
 	GitHubDiscussionRef,
 	GitHubId,
-	GitHubIssueComment,
+	GitHubIssueCommentRecord,
 	GitHubPullRequest,
 	GitHubPullRequestRef,
-	GitHubReviewComment,
+	GitHubReviewCommentRecord,
 	type GitHubReplyToReviewComment,
 } from '@humanlayer/channels-github'
 import { ToolResultText } from '@humanlayer/fold-core'
@@ -26,7 +26,7 @@ const pullRequest = GitHubPullRequest.make({
 })
 
 const lineComment = (id: number, inReplyToId?: number) =>
-	GitHubReviewComment.make({
+	GitHubReviewCommentRecord.make({
 		ref: { pullRequest: pullRequest.ref, id: GitHubId.make(id) },
 		nodeId: `review-comment-${id}`,
 		body: 'This can be null.',
@@ -54,7 +54,7 @@ const post = (request: { readonly markdown: string; readonly replyTo?: number })
 					postPullRequestComment: ({ content }) =>
 						Ref.update(posts, (all) => [...all, content.markdown]).pipe(
 							Effect.as(
-								GitHubIssueComment.make({
+								GitHubIssueCommentRecord.make({
 									ref: {
 										discussion: GitHubDiscussionRef.cases.PullRequest.make({
 											ref: pullRequest.ref,

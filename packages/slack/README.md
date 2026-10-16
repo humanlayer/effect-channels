@@ -75,7 +75,7 @@ Add `slack` to the providers passed to `Channels.make` or a host-specific wrappe
 
 ## Files
 
-Messages carry `files: ReadonlyArray<SlackFile>`, whether they come from a webhook or from `SlackApi` reads. Each `SlackFile` has a stable `ref` (`teamId` and `fileId`) plus a nullable `name`, `contentType`, `size`, and `downloadUrl`. Slack's `url_private_download` wins over `url_private`.
+Messages carry `files: ReadonlyArray<SlackFile>`, whether they come from a webhook or from `SlackThread` reads such as `listMessages()`. `SlackApi` itself returns plain records (`SlackMessageRecord`, `SlackFileRecord`) with the same fields and no methods; `slackMessageFromRecord` and `slackFileFromRecord` wrap them. Each `SlackFile` has a stable `ref` (`teamId` and `fileId`) plus a nullable `name`, `contentType`, `size`, and `downloadUrl`. Slack's `url_private_download` wins over `url_private`.
 
 ```ts
 onSubscribedThreadEvents: (event) =>

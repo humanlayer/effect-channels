@@ -7,9 +7,9 @@ import {
 	GitHubApi,
 	GitHubRepositoryRef,
 	type GitHubIssue,
-	type GitHubIssueComment,
+	type GitHubIssueCommentRecord,
 	type GitHubPullRequest,
-	type GitHubReviewComment,
+	type GitHubReviewCommentRecord,
 } from '@humanlayer/channels-github'
 import { defineTool, ToolResultFailure, ToolResultText, type FoldTool } from '@humanlayer/fold-core'
 import { Data, Effect, Match, Predicate, Schema } from 'effect'
@@ -36,7 +36,7 @@ const POST_COMMENT_DESCRIPTION =
 	'Post a GitHub Markdown comment. Your final answer is posted for you when you finish, so use this only for something else, such as a reply in a review thread or an update while you work.'
 
 /** A comment as the agent sees it: what it needs to read it, link to it, and answer it. */
-const commentSummary = (comment: GitHubIssueComment) => ({
+const commentSummary = (comment: GitHubIssueCommentRecord) => ({
 	id: comment.ref.id,
 	author: comment.author?.login ?? null,
 	url: comment.url,
@@ -44,7 +44,7 @@ const commentSummary = (comment: GitHubIssueComment) => ({
 })
 
 /** A line comment as the agent sees it, with the thread to reply in: GitHub threads replies under the first comment. */
-const reviewCommentSummary = (comment: GitHubReviewComment) => ({
+const reviewCommentSummary = (comment: GitHubReviewCommentRecord) => ({
 	id: comment.ref.id,
 	thread: comment.inReplyToId ?? comment.ref.id,
 	author: comment.author?.login ?? null,

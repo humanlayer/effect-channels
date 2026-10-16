@@ -98,7 +98,7 @@ import {
 	GitHubReviewThread,
 	GitHubTeam,
 } from './GitHubModels'
-import { GitHubIssue, GitHubIssueComment, GitHubPullRequest } from './GitHubResources'
+import { GitHubIssue, GitHubIssueComment, GitHubPullRequest, GitHubReviewComment } from './GitHubResources'
 import type {
 	GitHubIssueCommentWebhook,
 	GitHubIssuesWebhook,
@@ -505,7 +505,7 @@ const normalizeWebhook = (
 			const ref = pullRequestRef(payload)
 			const pullRequest = GitHubPullRequest.make({ ref, mailboxKey })
 			const actor = participant(payload.sender)
-			const comment = reviewComment(ref, payload.comment)
+			const comment = GitHubReviewComment.make(reviewComment(ref, payload.comment))
 			const event = Match.value(payload.action).pipe(
 				Match.when('created', () =>
 					GitHubPrReviewCommentCreated.make({ eventId, pullRequest, actor, comment }),

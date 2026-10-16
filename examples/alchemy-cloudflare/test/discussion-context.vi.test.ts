@@ -4,14 +4,14 @@ import {
 	GitHubDiscussionRef,
 	GitHubId,
 	GitHubIssue,
-	GitHubIssueComment,
+	GitHubIssueCommentRecord,
 	GitHubIssueInfo,
 	GitHubIssueRef,
 	GitHubParticipant,
 	GitHubPullRequest,
 	GitHubPullRequestInfo,
 	GitHubPullRequestRef,
-	GitHubReviewComment,
+	GitHubReviewCommentRecord,
 } from '@humanlayer/channels-github'
 import { Effect, Layer, Option } from 'effect'
 
@@ -37,7 +37,7 @@ const bob = GitHubParticipant.make({ id: GitHubId.make(2), login: 'bob', type: '
 const bot = GitHubParticipant.make({ id: GitHubId.make(BOT_USER_ID), login: 'agent[bot]', type: 'Bot' })
 
 const comment = (discussion: GitHubDiscussionRef, id: number, author: GitHubParticipant, body: string) =>
-	GitHubIssueComment.make({
+	GitHubIssueCommentRecord.make({
 		ref: { discussion, id: GitHubId.make(id) },
 		body,
 		url: `https://github.com/humanlayer/effect-channels/issues/42#issuecomment-${id}`,
@@ -96,7 +96,7 @@ const api = Layer.mock(GitHubApi, {
 		]),
 	listPullRequestReviewComments: () =>
 		Effect.succeed([
-			GitHubReviewComment.make({
+			GitHubReviewCommentRecord.make({
 				ref: { pullRequest: pullRequest.ref, id: GitHubId.make(40) },
 				nodeId: 'review-comment-40',
 				body: 'This can be null.',
@@ -109,7 +109,7 @@ const api = Layer.mock(GitHubApi, {
 				diffHunk: '@@ -1 +1 @@',
 				line: 12,
 			}),
-			GitHubReviewComment.make({
+			GitHubReviewCommentRecord.make({
 				ref: { pullRequest: pullRequest.ref, id: GitHubId.make(41) },
 				nodeId: 'review-comment-41',
 				body: '@agent fix this',

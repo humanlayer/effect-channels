@@ -1,0 +1,239 @@
+import { Match, Predicate, Schema } from 'effect'
+import type { Nodes } from 'mdast'
+import { fromMarkdown } from 'mdast-util-from-markdown'
+import { gfmFromMarkdown } from 'mdast-util-gfm'
+import { gfm } from 'micromark-extension-gfm'
+
+import { LinearIssueId, LinearOrganizationId } from './LinearIdentity'
+import { LinearIssueRef } from './LinearModels'
+
+/** The only origin that receives the workspace credential for file downloads. */
+export const linearFileOrigin = 'https://uploads.linear.app'
+
+/** Upper bound for one in-memory upload; Linear's `fileUpload` requires the exact byte size up front. */
+export const linearMaxUploadBytes = 50 * 1024 * 1024
+
+const linearFilePathSegment = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/
+
+const isLinearFilePathSegment = (segment: string) => linearFilePathSegment.test(segment) && !segment.includes('..')
+
+/**
+ * Returns the canonical `https://uploads.linear.app/<workspace>/<asset>/<file>` form of a Linear upload URL, or
+ * null for every other URL, including lookalike hosts, other schemes, credentials, ports, and non-canonical paths.
+ */
+export const canonicalLinearFileUrl = (value: string): string | null => {
+	if (!URL.canParse(value)) return null
+	const url = new URL(value)
+	if (url.origin !== linearFileOrigin || url.username !== '' || url.password !== '') return null
+	const segments = url.pathname.split('/').slice(1)
+	if (segments.length !== 3 || !segments.every(isLinearFilePathSegment)) return null
+	return `${url.origin}${url.pathname}`
+}
+
+/** True only for HTTPS URLs on the approved Linear upload origin. */
+export const isLinearFileOrigin = (value: string) => URL.canParse(value) && new URL(value).origin === linearFileOrigin
+
+export const LinearFileUrl = Schema.String.check(
+	Schema.makeFilter((value: string) =>
+		canonicalLinearFileUrl(value) === value ? undefined : 'expected a canonical uploads.linear.app file URL',
+	),
+).pipe(Schema.brand('LinearFileUrl'))
+export type LinearFileUrl = typeof LinearFileUrl.Type
+
+export const LinearFileRef = Schema.Struct({
+	organizationId: LinearOrganizationId,
+	issueId: LinearIssueId,
+})
+export type LinearFileRef = typeof LinearFileRef.Type
+
+export const LinearByteCount = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
+
+export const LinearDownloadBytesOptions = Schema.Struct({
+	maxBytes: Schema.Int.check(Schema.isGreaterThan(0)),
+})
+export type LinearDownloadBytesOptions = typeof LinearDownloadBytesOptions.Type
+
+export const LinearDownloadFileRequest = Schema.Struct({
+	file: LinearFileRef,
+	url: LinearFileUrl,
+	size: Schema.NullOr(LinearByteCount),
+})
+export type LinearDownloadFileRequest = typeof LinearDownloadFileRequest.Type
+
+export const LinearDownloadFileBytesRequest = Schema.Struct({
+	...LinearDownloadFileRequest.fields,
+	...LinearDownloadBytesOptions.fields,
+})
+export type LinearDownloadFileBytesRequest = typeof LinearDownloadFileBytesRequest.Type
+
+export const LinearUploadBytes = Schema.Uint8Array.check(
+	Schema.makeFilter((bytes: Uint8Array) =>
+		bytes.byteLength <= linearMaxUploadBytes ? undefined : `expected at most ${linearMaxUploadBytes} bytes`,
+	),
+)
+
+export const LinearUploadFileInput = Schema.Struct({
+	filename: Schema.NonEmptyString,
+	contentType: Schema.NonEmptyString,
+	bytes: LinearUploadBytes,
+})
+export type LinearUploadFileInput = typeof LinearUploadFileInput.Type
+
+export const LinearUploadFileRequest = Schema.Struct({ issue: LinearIssueRef, input: LinearUploadFileInput })
+export type LinearUploadFileRequest = typeof LinearUploadFileRequest.Type
+
+export const LinearUploadAttachmentInput = Schema.Struct({
+	...LinearUploadFileInput.fields,
+	title: Schema.optionalKey(Schema.String),
+	subtitle: Schema.optionalKey(Schema.String),
+	metadata: Schema.optionalKey(Schema.Record(Schema.String, Schema.Json)),
+})
+export type LinearUploadAttachmentInput = typeof LinearUploadAttachmentInput.Type
+
+export const LinearUploadAttachmentRequest = Schema.Struct({
+	issue: LinearIssueRef,
+	input: LinearUploadAttachmentInput,
+})
+export type LinearUploadAttachmentRequest = typeof LinearUploadAttachmentRequest.Type
+
+/** Transport limits for authenticated downloads. Redirects are followed manually and never inherit credentials. */
+export const LinearFileTransferPolicy = Schema.Struct({
+	maxRedirects: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(10)),
+	timeoutMs: Schema.Int.check(Schema.isGreaterThan(0)),
+})
+export type LinearFileTransferPolicy = typeof LinearFileTransferPolicy.Type
+
+export const defaultLinearFileTransferPolicy = LinearFileTransferPolicy.make({ maxRedirects: 3, timeoutMs: 60_000 })
+
+export class LinearFileSizeLimitExceeded extends Schema.TaggedError<LinearFileSizeLimitExceeded>()(
+	'LinearFileSizeLimitExceeded',
+	{
+		maxBytes: Schema.Int,
+		observedBytes: LinearByteCount,
+		source: Schema.Literals(['declared_size', 'content_length', 'received_bytes']),
+	},
+) {}
+
+const contentTypeByExtension = new Map([
+	['csv', 'text/csv'],
+	['gif', 'image/gif'],
+	['gz', 'application/gzip'],
+	['html', 'text/html'],
+	['jpeg', 'image/jpeg'],
+	['jpg', 'image/jpeg'],
+	['json', 'application/json'],
+	['log', 'text/plain'],
+	['md', 'text/markdown'],
+	['mov', 'video/quicktime'],
+	['mp3', 'audio/mpeg'],
+	['mp4', 'video/mp4'],
+	['pdf', 'application/pdf'],
+	['png', 'image/png'],
+	['svg', 'image/svg+xml'],
+	['txt', 'text/plain'],
+	['wav', 'audio/wav'],
+	['webm', 'video/webm'],
+	['webp', 'image/webp'],
+	['xml', 'application/xml'],
+	['yaml', 'application/yaml'],
+	['yml', 'application/yaml'],
+	['zip', 'application/zip'],
+])
+
+const contentTypeFromName = (name: string | null) => {
+	if (name === null) return null
+	const extension = /\.([A-Za-z0-9]+)$/.exec(name)?.[1]?.toLowerCase()
+	if (Predicate.isUndefined(extension)) return null
+	return contentTypeByExtension.get(extension) ?? null
+}
+
+type LinearFileCandidate = {
+	readonly url: string
+	readonly label: string | null
+}
+
+const childrenOf = (node: Nodes): ReadonlyArray<Nodes> =>
+	Match.value<Nodes>(node).pipe(
+		Match.when({ children: Match.defined }, (parent) => parent.children),
+		Match.orElse(() => []),
+	)
+
+const textOf = (node: Nodes): string =>
+	Match.value(node).pipe(
+		Match.discriminator('type')('text', 'inlineCode', (literal) => literal.value),
+		Match.discriminator('type')('image', (image) => image.alt ?? ''),
+		Match.orElse((other) => childrenOf(other).map(textOf).join('')),
+	)
+
+const safeLabel = (label: string | null | undefined, url: string) => {
+	const trimmed = label?.trim() ?? ''
+	if (trimmed.length === 0 || trimmed === url) return null
+	return trimmed.slice(0, 255)
+}
+
+const collectDefinitions = (node: Nodes, definitions: Map<string, string>) => {
+	if (node.type === 'definition' && !definitions.has(node.identifier)) definitions.set(node.identifier, node.url)
+	for (const child of childrenOf(node)) collectDefinitions(child, definitions)
+}
+
+const candidatesOf = (node: Nodes, definitions: ReadonlyMap<string, string>): ReadonlyArray<LinearFileCandidate> =>
+	Match.value(node).pipe(
+		Match.discriminator('type')('link', (link) => [{ url: link.url, label: safeLabel(textOf(link), link.url) }]),
+		Match.discriminator('type')('image', (image) => [{ url: image.url, label: safeLabel(image.alt, image.url) }]),
+		Match.discriminator('type')('linkReference', 'imageReference', (reference) => {
+			const url = definitions.get(reference.identifier)
+			return Predicate.isUndefined(url) ? [] : [{ url, label: safeLabel(textOf(reference), url) }]
+		}),
+		Match.orElse(() => []),
+	)
+
+const collectCandidates = (
+	node: Nodes,
+	definitions: ReadonlyMap<string, string>,
+	candidates: Array<LinearFileCandidate>,
+) => {
+	candidates.push(...candidatesOf(node, definitions))
+	for (const child of childrenOf(node)) collectCandidates(child, definitions, candidates)
+}
+
+/** A Linear-hosted file as plain data. `LinearFile` adds the methods that download it. */
+export const LinearFileRecord = Schema.Struct({
+	ref: LinearFileRef,
+	url: LinearFileUrl,
+	name: Schema.NullOr(Schema.String),
+	contentType: Schema.NullOr(Schema.String),
+	size: Schema.NullOr(LinearByteCount),
+})
+export type LinearFileRecord = typeof LinearFileRecord.Type
+
+/**
+ * Finds Linear-hosted files linked or embedded in Markdown. Links, images, reference links, autolinks, and GFM bare
+ * URLs are parsed structurally; only canonical `uploads.linear.app` URLs become files, in first-occurrence order.
+ */
+export const discoverLinearFileRecords = (
+	ref: LinearFileRef,
+	markdown: string | null,
+): ReadonlyArray<LinearFileRecord> => {
+	if (markdown === null || !markdown.toLowerCase().includes('uploads.linear.app')) return []
+	const tree = fromMarkdown(markdown, { extensions: [gfm()], mdastExtensions: [gfmFromMarkdown()] })
+	const definitions = new Map<string, string>()
+	collectDefinitions(tree, definitions)
+	const candidates: Array<LinearFileCandidate> = []
+	collectCandidates(tree, definitions, candidates)
+	const files = new Map<string, LinearFileRecord>()
+	for (const candidate of candidates) {
+		const url = canonicalLinearFileUrl(candidate.url)
+		if (url === null || files.has(url)) continue
+		files.set(
+			url,
+			LinearFileRecord.make({
+				ref,
+				url: LinearFileUrl.make(url),
+				name: candidate.label,
+				contentType: contentTypeFromName(candidate.label),
+				size: null,
+			}),
+		)
+	}
+	return Array.from(files.values())
+}

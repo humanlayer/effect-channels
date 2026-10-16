@@ -326,3 +326,66 @@ export const hasGitHubAccess = (input: {
 	readonly access: GitHubAccessLevel
 	readonly minimum: GitHubAccessLevel
 }): boolean => Order.isGreaterThanOrEqualTo(GitHubAccessLevelOrder)(input.access, input.minimum)
+
+/** A comment on an issue or pull request conversation, as `GitHubApi` returns it. `GitHubIssueComment` adds its methods. */
+export const GitHubIssueCommentRecord = Schema.Struct({
+	ref: GitHubIssueCommentRef,
+	body: Schema.String,
+	url: Schema.String,
+	author: Schema.NullOr(GitHubParticipant),
+})
+export interface GitHubIssueCommentRecord extends Schema.Schema.Type<typeof GitHubIssueCommentRecord> {}
+
+/** A comment on a pull request diff, as `GitHubApi` returns it. `GitHubReviewComment` adds its methods. */
+export const GitHubReviewCommentRecord = Schema.Struct({
+	ref: GitHubReviewCommentRef,
+	nodeId: Schema.NonEmptyString,
+	body: Schema.String,
+	url: Schema.String,
+	author: Schema.NullOr(GitHubParticipant),
+	reviewId: Schema.NullOr(GitHubId),
+	path: Schema.String,
+	commitId: Schema.String,
+	originalCommitId: Schema.String,
+	diffHunk: Schema.String,
+	inReplyToId: Schema.optionalKey(Schema.NullOr(GitHubId)),
+	line: Schema.optionalKey(Schema.NullOr(GitHubDiffLine)),
+	startLine: Schema.optionalKey(Schema.NullOr(GitHubDiffLine)),
+	side: Schema.optionalKey(GitHubDiffSide),
+})
+export interface GitHubReviewCommentRecord extends Schema.Schema.Type<typeof GitHubReviewCommentRecord> {}
+
+export const GitHubCommentRecord = Schema.Union([GitHubIssueCommentRecord, GitHubReviewCommentRecord])
+export type GitHubCommentRecord = typeof GitHubCommentRecord.Type
+
+/** A check run, as `GitHubApi` returns it. `GitHubCheckRun` adds its methods. */
+export const GitHubCheckRunRecord = Schema.Struct({ ref: GitHubCheckRunRef })
+export interface GitHubCheckRunRecord extends Schema.Schema.Type<typeof GitHubCheckRunRecord> {}
+
+/** A GitHub Actions job, as `GitHubApi` returns it. `GitHubActionsJob` adds its methods. */
+export const GitHubActionsJobRecord = Schema.Struct({ ref: GitHubActionsJobRef })
+export interface GitHubActionsJobRecord extends Schema.Schema.Type<typeof GitHubActionsJobRecord> {}
+
+export const GitHubIssueCommentRecords = Schema.Array(GitHubIssueCommentRecord)
+export type GitHubIssueCommentRecords = typeof GitHubIssueCommentRecords.Type
+
+export const GitHubReviewCommentRecords = Schema.Array(GitHubReviewCommentRecord)
+export type GitHubReviewCommentRecords = typeof GitHubReviewCommentRecords.Type
+
+export const GitHubCheckRunRecords = Schema.Array(GitHubCheckRunRecord)
+export type GitHubCheckRunRecords = typeof GitHubCheckRunRecords.Type
+
+export const GitHubReviews = Schema.Array(GitHubReview)
+export type GitHubReviews = typeof GitHubReviews.Type
+
+export const GitHubLabelsResult = Schema.Array(GitHubLabel)
+export type GitHubLabelsResult = typeof GitHubLabelsResult.Type
+
+export const GitHubPullRequestFiles = Schema.Array(GitHubPullRequestFile)
+export type GitHubPullRequestFiles = typeof GitHubPullRequestFiles.Type
+
+export const GitHubCommits = Schema.Array(GitHubCommit)
+export type GitHubCommits = typeof GitHubCommits.Type
+
+export const GitHubCheckAnnotations = Schema.Array(GitHubCheckAnnotation)
+export type GitHubCheckAnnotations = typeof GitHubCheckAnnotations.Type

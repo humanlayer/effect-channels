@@ -822,8 +822,7 @@ describe('GitHubApiLive agent capabilities', () => {
 				}
 			}).pipe(Effect.provide(makeLayer(httpClient)))
 
-			expect(result.checks).toHaveLength(1)
-			expect(result.checks[0]?.ref).toEqual(checkRun)
+			expect(result.checks).toEqual([{ ref: checkRun }])
 			expect(result.info).toMatchObject({
 				ref: checkRun,
 				name: 'build',
@@ -957,7 +956,7 @@ describe('GitHubApiLive agent capabilities', () => {
 				}
 			}).pipe(Effect.provide(makeLayer(httpClient)))
 
-			expect(result.resolved?.ref).toEqual(actionsJob)
+			expect(result.resolved).toEqual({ ref: actionsJob })
 			expect(result.info).toMatchObject({
 				ref: actionsJob,
 				runId: 850,

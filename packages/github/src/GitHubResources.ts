@@ -13,30 +13,30 @@ import type {
 	GitHubPostReviewCommentOptions,
 } from './GitHubApi'
 import { GitHubApi } from './GitHubApi'
-import { GitHubId } from './GitHubIdentity'
 import {
 	type GitHubAccessLevel,
 	GitHubActionsJobRef,
 	type GitHubActionsJobInfo,
-	GitHubCheckAnnotation,
+	GitHubActionsJobRecord,
+	type GitHubCheckAnnotations,
 	GitHubCheckRunRef,
 	type GitHubCheckRunInfo,
-	GitHubCommit,
+	GitHubCheckRunRecord,
+	type GitHubCommentRecord,
+	type GitHubCommits,
 	type GitHubContent,
-	GitHubDiffLine,
-	GitHubIssueCommentRef,
+	GitHubIssueCommentRecord,
 	type GitHubIssueInfo,
 	GitHubIssueRef,
-	GitHubLabel,
+	type GitHubLabelsResult,
 	type GitHubMergeResult,
-	GitHubPullRequestFile,
+	type GitHubPullRequestFiles,
 	type GitHubPullRequestInfo,
 	GitHubPullRequestRef,
 	type GitHubReaction,
 	GitHubReactionTarget,
-	GitHubReview,
-	GitHubReviewCommentRef,
-	GitHubParticipant,
+	GitHubReviewCommentRecord,
+	type GitHubReviews,
 } from './GitHubModels'
 
 const issueSpanAttributes = (ref: GitHubIssueRef) => ({
@@ -93,12 +93,14 @@ export class GitHubIssue extends Schema.TaggedClass<GitHubIssue>()('GitHubIssue'
 
 	listComments(): Effect.Effect<GitHubIssueComments, GitHubApiError, GitHubApi> {
 		return Effect.flatMap(GitHubApi, (api) => api.listIssueComments({ issue: this.ref })).pipe(
+			Effect.map(issueComments),
 			Effect.withSpan('github.issue.list_comments', { attributes: issueSpanAttributes(this.ref) }),
 		)
 	}
 
 	postComment(content: GitHubContent): Effect.Effect<GitHubIssueComment, GitHubApiError, GitHubApi> {
 		return Effect.flatMap(GitHubApi, (api) => api.postIssueComment({ issue: this.ref, content })).pipe(
+			Effect.map((record) => GitHubIssueComment.make(record)),
 			Effect.withSpan('github.issue.post_comment', { attributes: issueSpanAttributes(this.ref) }),
 		)
 	}
@@ -185,6 +187,7 @@ export class GitHubPullRequest extends Schema.TaggedClass<GitHubPullRequest>()('
 
 	listComments(): Effect.Effect<GitHubIssueComments, GitHubApiError, GitHubApi> {
 		return Effect.flatMap(GitHubApi, (api) => api.listPullRequestComments({ pullRequest: this.ref })).pipe(
+			Effect.map(issueComments),
 			Effect.withSpan('github.pull_request.list_comments', { attributes: pullRequestSpanAttributes(this.ref) }),
 		)
 	}
@@ -197,6 +200,7 @@ export class GitHubPullRequest extends Schema.TaggedClass<GitHubPullRequest>()('
 
 	listReviewComments(): Effect.Effect<GitHubReviewComments, GitHubApiError, GitHubApi> {
 		return Effect.flatMap(GitHubApi, (api) => api.listPullRequestReviewComments({ pullRequest: this.ref })).pipe(
+			Effect.map(reviewComments),
 			Effect.withSpan('github.pull_request.list_review_comments', {
 				attributes: pullRequestSpanAttributes(this.ref),
 			}),
@@ -205,6 +209,7 @@ export class GitHubPullRequest extends Schema.TaggedClass<GitHubPullRequest>()('
 
 	postComment(content: GitHubContent): Effect.Effect<GitHubIssueComment, GitHubApiError, GitHubApi> {
 		return Effect.flatMap(GitHubApi, (api) => api.postPullRequestComment({ pullRequest: this.ref, content })).pipe(
+			Effect.map((record) => GitHubIssueComment.make(record)),
 			Effect.withSpan('github.pull_request.post_comment', { attributes: pullRequestSpanAttributes(this.ref) }),
 		)
 	}
@@ -221,6 +226,7 @@ export class GitHubPullRequest extends Schema.TaggedClass<GitHubPullRequest>()('
 				location: input.location,
 			}),
 		).pipe(
+			Effect.map((record) => GitHubReviewComment.make(record)),
 			Effect.withSpan('github.pull_request.post_review_comment', {
 				attributes: pullRequestSpanAttributes(this.ref),
 			}),
@@ -282,7 +288,8 @@ export class GitHubPullRequest extends Schema.TaggedClass<GitHubPullRequest>()('
 		return Effect.gen(function* () {
 			const api = yield* GitHubApi
 			const pullRequest = yield* api.fetchPullRequest({ pullRequest: ref })
-			return yield* api.listCheckRunsForRef({ pullRequest: ref, sha: pullRequest.headSha })
+			const records = yield* api.listCheckRunsForRef({ pullRequest: ref, sha: pullRequest.headSha })
+			return checkRuns(records)
 		}).pipe(
 			Effect.withSpan('github.pull_request.list_check_runs', {
 				attributes: pullRequestSpanAttributes(this.ref),
@@ -292,6 +299,7 @@ export class GitHubPullRequest extends Schema.TaggedClass<GitHubPullRequest>()('
 
 	listCheckRunsForRef(sha: string): Effect.Effect<GitHubCheckRuns, GitHubApiError, GitHubApi> {
 		return Effect.flatMap(GitHubApi, (api) => api.listCheckRunsForRef({ pullRequest: this.ref, sha })).pipe(
+			Effect.map(checkRuns),
 			Effect.withSpan('github.pull_request.list_check_runs_for_ref', {
 				attributes: pullRequestSpanAttributes(this.ref),
 			}),
@@ -326,9 +334,10 @@ export class GitHubPullRequest extends Schema.TaggedClass<GitHubPullRequest>()('
 	}
 }
 
-export class GitHubCheckRun extends Schema.TaggedClass<GitHubCheckRun>()('GitHubCheckRun', {
-	ref: GitHubCheckRunRef,
-}) {
+export class GitHubCheckRun extends Schema.TaggedClass<GitHubCheckRun>()(
+	'GitHubCheckRun',
+	GitHubCheckRunRecord.fields,
+) {
 	fetchInfo(): Effect.Effect<GitHubCheckRunInfo, GitHubApiError, GitHubApi> {
 		return Effect.flatMap(GitHubApi, (api) => api.fetchCheckRun({ checkRun: this.ref })).pipe(
 			Effect.withSpan('github.check_run.fetch_info', { attributes: checkRunSpanAttributes(this.ref) }),
@@ -343,14 +352,16 @@ export class GitHubCheckRun extends Schema.TaggedClass<GitHubCheckRun>()('GitHub
 
 	resolveActionsJob(): Effect.Effect<GitHubActionsJob | null, GitHubApiError, GitHubApi> {
 		return Effect.flatMap(GitHubApi, (api) => api.resolveActionsJob({ checkRun: this.ref })).pipe(
+			Effect.map((record) => (record === null ? null : GitHubActionsJob.make(record))),
 			Effect.withSpan('github.check_run.resolve_actions_job', { attributes: checkRunSpanAttributes(this.ref) }),
 		)
 	}
 }
 
-export class GitHubActionsJob extends Schema.TaggedClass<GitHubActionsJob>()('GitHubActionsJob', {
-	ref: GitHubActionsJobRef,
-}) {
+export class GitHubActionsJob extends Schema.TaggedClass<GitHubActionsJob>()(
+	'GitHubActionsJob',
+	GitHubActionsJobRecord.fields,
+) {
 	fetchInfo(): Effect.Effect<GitHubActionsJobInfo, GitHubApiError, GitHubApi> {
 		return Effect.flatMap(GitHubApi, (api) => api.fetchActionsJob({ job: this.ref })).pipe(
 			Effect.withSpan('github.actions_job.fetch_info', { attributes: actionsJobSpanAttributes(this.ref) }),
@@ -364,14 +375,13 @@ export class GitHubActionsJob extends Schema.TaggedClass<GitHubActionsJob>()('Gi
 	}
 }
 
-export class GitHubIssueComment extends Schema.TaggedClass<GitHubIssueComment>()('GitHubIssueComment', {
-	ref: GitHubIssueCommentRef,
-	body: Schema.String,
-	url: Schema.String,
-	author: Schema.NullOr(GitHubParticipant),
-}) {
+export class GitHubIssueComment extends Schema.TaggedClass<GitHubIssueComment>()(
+	'GitHubIssueComment',
+	GitHubIssueCommentRecord.fields,
+) {
 	update(content: GitHubContent): Effect.Effect<GitHubComment, GitHubApiError, GitHubApi> {
 		return Effect.flatMap(GitHubApi, (api) => api.updateComment({ comment: this.ref, content })).pipe(
+			Effect.map(commentFromRecord),
 			Effect.withSpan('github.comment.update'),
 		)
 	}
@@ -395,30 +405,22 @@ export class GitHubIssueComment extends Schema.TaggedClass<GitHubIssueComment>()
 	}
 }
 
-export class GitHubReviewComment extends Schema.TaggedClass<GitHubReviewComment>()('GitHubReviewComment', {
-	ref: GitHubReviewCommentRef,
-	nodeId: Schema.NonEmptyString,
-	body: Schema.String,
-	url: Schema.String,
-	author: Schema.NullOr(GitHubParticipant),
-	reviewId: Schema.NullOr(GitHubId),
-	path: Schema.String,
-	commitId: Schema.String,
-	originalCommitId: Schema.String,
-	diffHunk: Schema.String,
-	inReplyToId: Schema.optionalKey(Schema.NullOr(GitHubId)),
-	line: Schema.optionalKey(Schema.NullOr(GitHubDiffLine)),
-	startLine: Schema.optionalKey(Schema.NullOr(GitHubDiffLine)),
-	side: Schema.optionalKey(Schema.Literals(['LEFT', 'RIGHT'])),
-}) {
+export class GitHubReviewComment extends Schema.TaggedClass<GitHubReviewComment>()(
+	'GitHubReviewComment',
+	GitHubReviewCommentRecord.fields,
+) {
 	reply(content: GitHubContent): Effect.Effect<GitHubReviewComment, GitHubApiError, GitHubApi> {
 		return Effect.flatMap(GitHubApi, (api) =>
 			api.replyToReviewComment({ pullRequest: this.ref.pullRequest, comment: this.ref, content }),
-		).pipe(Effect.withSpan('github.review_comment.reply'))
+		).pipe(
+			Effect.map((record) => GitHubReviewComment.make(record)),
+			Effect.withSpan('github.review_comment.reply'),
+		)
 	}
 
 	update(content: GitHubContent): Effect.Effect<GitHubComment, GitHubApiError, GitHubApi> {
 		return Effect.flatMap(GitHubApi, (api) => api.updateComment({ comment: this.ref, content })).pipe(
+			Effect.map(commentFromRecord),
 			Effect.withSpan('github.review_comment.update'),
 		)
 	}
@@ -448,23 +450,21 @@ export type GitHubComment = typeof GitHubComment.Type
 export const GitHubIssueComments = Schema.Array(GitHubIssueComment)
 export type GitHubIssueComments = typeof GitHubIssueComments.Type
 
-export const GitHubReviews = Schema.Array(GitHubReview)
-export type GitHubReviews = typeof GitHubReviews.Type
-
 export const GitHubReviewComments = Schema.Array(GitHubReviewComment)
 export type GitHubReviewComments = typeof GitHubReviewComments.Type
-
-export const GitHubLabelsResult = Schema.Array(GitHubLabel)
-export type GitHubLabelsResult = typeof GitHubLabelsResult.Type
-
-export const GitHubPullRequestFiles = Schema.Array(GitHubPullRequestFile)
-export type GitHubPullRequestFiles = typeof GitHubPullRequestFiles.Type
-
-export const GitHubCommits = Schema.Array(GitHubCommit)
-export type GitHubCommits = typeof GitHubCommits.Type
 
 export const GitHubCheckRuns = Schema.Array(GitHubCheckRun)
 export type GitHubCheckRuns = typeof GitHubCheckRuns.Type
 
-export const GitHubCheckAnnotations = Schema.Array(GitHubCheckAnnotation)
-export type GitHubCheckAnnotations = typeof GitHubCheckAnnotations.Type
+const issueComments = (records: ReadonlyArray<GitHubIssueCommentRecord>): GitHubIssueComments =>
+	records.map((record) => GitHubIssueComment.make(record))
+
+const reviewComments = (records: ReadonlyArray<GitHubReviewCommentRecord>): GitHubReviewComments =>
+	records.map((record) => GitHubReviewComment.make(record))
+
+const checkRuns = (records: ReadonlyArray<GitHubCheckRunRecord>): GitHubCheckRuns =>
+	records.map((record) => GitHubCheckRun.make(record))
+
+/** The comment object for a comment `GitHubApi` returned. */
+const commentFromRecord = (record: GitHubCommentRecord): GitHubComment =>
+	Schema.is(GitHubReviewCommentRecord)(record) ? GitHubReviewComment.make(record) : GitHubIssueComment.make(record)

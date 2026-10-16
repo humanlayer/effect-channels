@@ -8,11 +8,11 @@ import {
 	type GitHubApi,
 	type GitHubApiError,
 	type GitHubIssue,
-	type GitHubIssueComment,
+	type GitHubIssueCommentRecord,
 	type GitHubParticipant,
 	type GitHubPullRequest,
 	type GitHubReview,
-	type GitHubReviewComment,
+	type GitHubReviewCommentRecord,
 } from '@humanlayer/channels-github'
 import { Array as Arr, Effect, Match, Option, Predicate, Schema } from 'effect'
 
@@ -55,7 +55,7 @@ const clip = (body: string) =>
 		? body
 		: `${body.slice(0, MAX_BODY_LENGTH)}\n[Cut off at ${MAX_BODY_LENGTH} of ${body.length} characters.]`
 
-const commentEntry = (comment: GitHubIssueComment): Entry => ({
+const commentEntry = (comment: GitHubIssueCommentRecord): Entry => ({
 	id: comment.ref.id,
 	text: `${author(comment.author)} commented (comment ${comment.ref.id}):\n${clip(comment.body)}`,
 })
@@ -65,7 +65,7 @@ const reviewEntry = (review: GitHubReview): Entry => ({
 	text: `${author(review.author)} reviewed (${review.state.replace('_', ' ')})${review.body ? `:\n${clip(review.body)}` : '.'}`,
 })
 
-const reviewCommentEntry = (comment: GitHubReviewComment): Entry => {
+const reviewCommentEntry = (comment: GitHubReviewCommentRecord): Entry => {
 	const line = comment.line ?? comment.startLine
 	const where = line === null || line === undefined ? comment.path : `${comment.path}:${line}`
 	const thread = comment.inReplyToId ?? comment.ref.id

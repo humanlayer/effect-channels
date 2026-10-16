@@ -1,8 +1,8 @@
 import { describe, it } from '@effect/vitest'
 import {
-	GitHubActionsJob,
+	GitHubActionsJobRecord,
 	GitHubApi,
-	GitHubCheckRun,
+	GitHubCheckRunRecord,
 	GitHubCheckRunInfo,
 	GitHubEventId,
 	GitHubId,
@@ -86,7 +86,7 @@ const apiWithLog = (log: string) =>
 					baseSha: 'def',
 				}),
 			),
-		listCheckRunsForRef: () => Effect.succeed(infos.map((info) => GitHubCheckRun.make({ ref: info.ref }))),
+		listCheckRunsForRef: () => Effect.succeed(infos.map((info) => GitHubCheckRunRecord.make({ ref: info.ref }))),
 		fetchCheckRun: ({ checkRun }) => Effect.succeed(infos.find((info) => info.ref.id === checkRun.id) ?? infos[0]!),
 		listCheckRunAnnotations: () =>
 			Effect.succeed([
@@ -104,7 +104,7 @@ const apiWithLog = (log: string) =>
 				},
 			]),
 		resolveActionsJob: () =>
-			Effect.succeed(GitHubActionsJob.make({ ref: { ...repository, id: GitHubId.make(900) } })),
+			Effect.succeed(GitHubActionsJobRecord.make({ ref: { ...repository, id: GitHubId.make(900) } })),
 		fetchActionsJob: () =>
 			Effect.succeed({
 				ref: { ...repository, id: GitHubId.make(900) },
